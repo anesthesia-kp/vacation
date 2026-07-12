@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 4;        // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 5;        // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -319,14 +319,13 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
 
     <!-- FTE AVAILABILITY -->
     <div class="panel" id="panel-slots">
-      <div class="page-head"><div class="page-title">FTE Availability</div><div class="page-sub">Set how much FTE is available each week. Leave a box blank to use the built-in default (3 normal · 4 summer · 5 holiday weeks). Whatever you set here is used everywhere — user bidding boards, the dashboard, draws &amp; reviews, and outcome calculations.</div></div>
+      <div class="page-head"><div class="page-title">FTE Availability</div><div class="page-sub">Set how much FTE is available each week. Every week shows its current value — change a number and save. These values are used everywhere: user bidding boards, the dashboard, draws &amp; reviews, and outcome calculations.</div></div>
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
         <button class="btn btn-primary" onclick="saveAllSlots()">💾 Save All Weeks</button>
-        <button class="btn" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="resetAllSlots()">↺ Reset All to Default</button>
         <span id="slotsStatus" style="font-size:12px;color:var(--t2)"></span>
       </div>
-      <div style="overflow-x:auto;max-height:640px;overflow-y:auto;border:1px solid var(--b1)">
-        <table><thead><tr><th>Week</th><th>Dates</th><th>Default</th><th>FTE Available</th><th></th></tr></thead><tbody id="slotsBody"></tbody></table>
+      <div style="overflow-x:auto;max-height:640px;overflow-y:auto;border:1px solid var(--b1);display:inline-block">
+        <table style="width:auto;border-collapse:collapse"><thead><tr><th style="padding:5px 8px">Week</th><th style="padding:5px 8px">FTE Available</th><th style="padding:5px 6px"></th></tr></thead><tbody id="slotsBody"></tbody></table>
       </div>
     </div>
 
@@ -906,7 +905,23 @@ function getPriorPhaseFteWon(wk){
   for(const u of getPriorPhaseWinners(wk)) total+=getUserFTE(u);
   return total;
 }
-function getUserBidPhaseAdmin(u,wk){ const p=bidPhaseData[u]?.[wk]; return p===undefined?Number(phasesData.currentPhase||1):Number(p); }
+function getUserBidPhaseAdmin(u,wk){
+  const p=bidPhaseData[u]?.[wk];
+  if(p!==undefined) return Number(p);
+  // No explicit phase record. Infer from completed-phase snapshots: if this
+  // bid already existed when phase N was completed, it was placed in (or
+  // before) phase N — return the EARLIEST such phase. Without this, a bid with
+  // no record is assumed to belong to whatever phase is active at VIEW time,
+  // which silently reclassifies every old bid as current the moment the phase
+  // advances (and empties the "Phase 1" dashboard view).
+  const cp=phasesData.completedPhases||{};
+  const phNums=Object.keys(cp).map(Number).filter(n=>!isNaN(n)).sort((a,b)=>a-b);
+  for(const n of phNums){
+    const snapSched=cp[n]?.schedule;
+    if(snapSched&&snapSched[u]&&snapSched[u][wk]!==undefined) return n;
+  }
+  return Number(phasesData.currentPhase||1);
+}
 function isCurrentPhaseBidAdmin(u,wk){ return getUserBidPhaseAdmin(u,wk)===Number(phasesData.currentPhase||1); }
 
 // Populate a phase filter <select> with "All phases" + each phase up to current.
@@ -934,10 +949,13 @@ function populatePhaseFilter(sel){
 // Uses bidPhaseData (live bids) plus completedPhases (historical). Denied and empty entries always excluded.
 function bidMatchesPhaseFilter(user,wk,filterVal){
   if(scheduleData[user]?.[wk]===undefined) return false;
-  if(Array.isArray(deniedData?.[wk])&&deniedData[wk].includes(user)) return false;
   const cur=Number(phasesData.currentPhase||1);
   const bidPh=getUserBidPhaseAdmin(user,wk);
-  if(filterVal==='current'||!filterVal) return bidPh===cur;
+  const isDenied=Array.isArray(deniedData?.[wk])&&deniedData[wk].includes(user);
+  // Denied bids are hidden from the CURRENT-phase view (they're out of the
+  // running), but must still appear in completed-phase views — a denial IS
+  // that phase's result (a loss), not something to hide.
+  if(filterVal==='current'||!filterVal) return !isDenied&&bidPh===cur;
   if(filterVal==='all') return true;
   const m=filterVal.match(/^ph(\d+)$/);
   if(m){
@@ -1077,6 +1095,11 @@ function updateStats(){
 }
 
 // ── Overview ──
+// Must be reachable from the inline onchange on #dashPhaseFilter. This module
+// scope isn't global, so without the window binding the dropdown's
+// onchange="renderOverview()" throws ReferenceError and the dashboard silently
+// never re-renders — which is exactly "changing the phase does nothing".
+window.renderOverview=renderOverview;
 function renderOverview(){
   const ap=computeApprovals();
   const g=document.getElementById("ovgrid"); if(!g)return;
@@ -3230,72 +3253,54 @@ window.saveFte=async function(u){
 };
 
 // ── FTE Availability (per-week slots) ──
+// Every week's box shows its CURRENT effective value (saved value, or the
+// built-in starting value if never saved). Saving writes explicit numbers —
+// there is no blank/default concept in the UI.
 function renderSlotsPanel(){
   const tb=document.getElementById("slotsBody"); if(!tb) return;
   tb.innerHTML=mondays.map(d=>{
     const wk=dateKey(d);
-    const def=getDefaultSlots(wk);
-    const ov=slotsData?slotsData[wk]:undefined;
-    const hasOv=ov!==undefined&&ov!==null&&ov!=='';
-    const val=hasOv?ov:'';
+    const val=getSlots(wk); // current effective value
     return `<tr>
-      <td class="mono" style="white-space:nowrap">${wLabel(d)}</td>
-      <td style="font-size:11px;color:var(--t2);white-space:nowrap">${wRange(d)}</td>
-      <td class="mono" style="text-align:center;color:var(--t2)">${def}</td>
-      <td><input type="number" id="slot_${wk}" class="inp" style="width:90px" value="${val}" placeholder="${def} (default)" step="0.1" min="0"></td>
-      <td><button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveOneSlot('${wk}')">Save</button></td>
+      <td class="mono" style="white-space:nowrap;padding:3px 8px;font-size:12px">${wLabel(d)} <span style="color:var(--t2);font-size:10px;font-weight:400">${wRange(d)}</span></td>
+      <td style="padding:3px 8px"><input type="number" id="slot_${wk}" class="inp" style="width:72px;padding:3px 6px" value="${val}" step="0.1" min="0"></td>
+      <td style="padding:3px 6px"><button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveOneSlot('${wk}')">Save</button></td>
     </tr>`;
   }).join('');
   const st=document.getElementById("slotsStatus");
-  if(st){ const n=Object.keys(slotsData||{}).length; st.textContent=n?`${n} week${n!==1?'s':''} customized`:'All weeks on default'; }
+  if(st) st.textContent='';
 }
 
-// Read + validate one week input. Returns {ok, blank, value} without saving.
+// Read + validate one week input. Returns {ok, value}.
 function readSlotInput(wk){
   const el=document.getElementById(`slot_${wk}`);
   if(!el) return {ok:false};
   const raw=el.value.trim();
-  if(raw==="") return {ok:true, blank:true};
+  if(raw==="") return {ok:false};
   const n=parseFloat(raw);
   if(isNaN(n)||n<0) return {ok:false};
-  return {ok:true, blank:false, value:Math.round(n*10)/10};
+  return {ok:true, value:Math.round(n*10)/10};
 }
 
 window.saveOneSlot=async function(wk){
   const r=readSlotInput(wk);
-  if(!r.ok){toast("FTE availability must be 0 or higher (or blank for default)","err");return;}
-  if(r.blank){
-    await setDoc(slotsRef,{[wk]:deleteField()},{merge:true}).catch(async()=>{ await updateDoc(slotsRef,{[wk]:deleteField()}).catch(()=>{}); });
-    toast(`${wLabel(wkDate(wk))} set to default (${getDefaultSlots(wk)})`,"ok");
-  } else {
-    await setDoc(slotsRef,{[wk]:r.value},{merge:true});
-    toast(`${wLabel(wkDate(wk))} FTE availability set to ${r.value}`,"ok");
-  }
+  if(!r.ok){toast("Enter an FTE availability of 0 or higher","err");return;}
+  await setDoc(slotsRef,{[wk]:r.value},{merge:true});
+  toast(`${wLabel(wkDate(wk))} FTE availability set to ${r.value}`,"ok");
 };
 
 window.saveAllSlots=async function(){
   const updates={};
-  let bad=0, count=0;
+  let bad=0;
   mondays.forEach(d=>{
     const wk=dateKey(d);
     const r=readSlotInput(wk);
     if(!r.ok){bad++;return;}
-    if(r.blank){ updates[wk]=deleteField(); }
-    else { updates[wk]=r.value; count++; }
+    updates[wk]=r.value;
   });
-  if(bad){toast(`${bad} week(s) have invalid values — fix them (0 or higher, or blank)`,"err");return;}
+  if(bad){toast(`${bad} week(s) have invalid values — every week needs a number 0 or higher`,"err");return;}
   await setDoc(slotsRef,updates,{merge:true});
-  toast(`💾 Saved — ${count} week${count!==1?'s':''} customized, the rest on default`,"ok");
-};
-
-window.resetAllSlots=function(){
-  openConfirm({
-    title:'↺ Reset All FTE Availability',
-    body:`<div>Clear every custom weekly FTE availability value and go back to the built-in defaults (3 normal · 4 summer · 5 holiday)?</div>
-          <div class="cmodal-warn" style="margin-top:8px">This affects the user bidding boards and all outcome calculations.</div>`,
-    okText:'Reset to Defaults', danger:true,
-    onConfirm:async()=>{ await setDoc(slotsRef,{}); toast("↺ All weeks reset to default","warn"); }
-  });
+  toast(`💾 Saved FTE availability for all ${mondays.length} weeks`,"ok");
 };
 
 
