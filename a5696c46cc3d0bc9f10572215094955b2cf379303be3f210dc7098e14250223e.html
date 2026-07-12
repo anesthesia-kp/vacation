@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 16;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 17;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -328,7 +328,7 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
         <button class="btn btn-primary" onclick="saveAllSlots()">💾 Save All Weeks</button>
         <span id="slotsStatus" style="font-size:12px;color:var(--t2)"></span>
       </div>
-      <div style="overflow-x:auto;max-height:640px;overflow-y:auto;border:1px solid var(--b1);display:inline-block">
+      <div style="overflow-x:auto;max-height:640px;overflow-y:auto;border:1px solid var(--b1)">
         <table style="width:auto;border-collapse:collapse"><thead><tr><th style="padding:5px 8px">Week</th><th style="padding:5px 8px">FTE Available</th><th style="padding:5px 6px"></th></tr></thead><tbody id="slotsBody"></tbody></table>
       </div>
     </div>
@@ -466,6 +466,22 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
             <div class="trow-desc">When ON, users can only upgrade their bid priority, never downgrade. When OFF, users can freely change to any priority.</div>
           </div>
           <div class="tog" id="prioLockToggle" onclick="togglePrioLock()"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Maximum Bids Per Phase</div>
+        <div class="trow" style="align-items:flex-start;flex-direction:column;gap:8px">
+          <div>
+            <div class="trow-label">Bids allowed per user, per phase</div>
+            <div class="trow-desc">Whole numbers 1–10, or tick "No limit" — with no limit, users are bounded only by the bid numbers they have available (1,2,3 · 1,2 · 1–10 · NP). Applies when placing a NEW bid; editing an existing bid is always allowed.</div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <input type="number" id="maxBidsInput" class="inp" style="width:80px" min="1" max="10" step="1" value="3">
+            <label style="font-size:12px;color:var(--t2);display:flex;align-items:center;gap:6px;cursor:pointer">
+              <input type="checkbox" id="maxBidsNoLimit" onchange="document.getElementById('maxBidsInput').disabled=this.checked"> No limit
+            </label>
+            <button class="btn btn-primary" onclick="saveMaxBids()">Save</button>
+          </div>
         </div>
       </div>
       <div class="card">
@@ -656,7 +672,6 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
       <div class="card">
         <div class="card-title">Reset</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <button class="btn btn-danger" onclick="clearAllSimData()">🗑️ Remove Bids &amp; Locks (keep approvals)</button>
           <button class="btn btn-danger" style="background:rgba(220,38,38,.25);border-color:rgba(220,38,38,.6)" onclick="clearEverything()">💣 Remove ALL Data incl. Approvals &amp; Denials</button>
         </div>
       </div>
@@ -1339,6 +1354,15 @@ function renderOverview(){
 
 // ── Controls ──
 function syncControls(){
+  // Maximum bids per phase control (starts at 3; 'none' = no limit)
+  (function(){
+    const inp=document.getElementById('maxBidsInput'); const cb=document.getElementById('maxBidsNoLimit');
+    if(!inp||!cb) return;
+    if(document.activeElement===inp) return; // don't clobber mid-typing
+    const raw=adminSettings?.maxBidsPerPhase;
+    if(raw==='none'){ cb.checked=true; inp.disabled=true; }
+    else { cb.checked=false; inp.disabled=false; inp.value=(raw===undefined||raw===null)?3:raw; }
+  })();
   const gl=document.getElementById("globalLockToggle");
   if(gl) gl.className="tog"+(locksData.globalLock?" on":"");
   const et=document.getElementById("emailNotifsToggle");
@@ -1418,6 +1442,19 @@ window.toggleGlobalLock=async function(){
   // Single-field update — preserves weeks map
   await setDoc(locksRef,{globalLock:v},{merge:true});
   toast(v?"🔒 Globally locked":"🔓 Lock removed",v?"warn":"ok");
+};
+
+window.saveMaxBids=async function(){
+  const noLim=document.getElementById('maxBidsNoLimit')?.checked;
+  if(noLim){
+    await setDoc(adminRef,{maxBidsPerPhase:'none'},{merge:true});
+    toast('Bid limit: no limit — users bounded only by their available bid numbers','ok');
+    return;
+  }
+  const raw=(document.getElementById('maxBidsInput')?.value||'').trim();
+  if(!/^([1-9]|10)$/.test(raw)){ toast('Enter a whole number from 1 to 10','err'); return; }
+  await setDoc(adminRef,{maxBidsPerPhase:Number(raw)},{merge:true});
+  toast('Bid limit set to '+raw+' per phase','ok');
 };
 
 window.toggleEmailNotifs=async function(){
@@ -1502,8 +1539,7 @@ window.lockAllExceptHighDemand=function(){
 
 
 // ── Simulator ──
-const SIM_HIGH_PRIORITY_ALLOWED=["1","2","3","1,2","1,2,3"];
-const SIM_SUMMER_ALLOWED=["1","2","3","4","5","6","7","1,2","1,2,3"];
+const SIM_HIGH_PRIORITY_ALLOWED=["1","2","3","4","1,2","1,2,3"];
 const SIM_ALL_BIDS=["1","2","3","4","5","6","7","8","9","10","NP","1,2","1,2,3"];
 const SIM_SUMMER_START=new Date('2027-05-30T00:00:00');
 const SIM_SUMMER_END  =new Date('2027-08-22T00:00:00');
@@ -1512,8 +1548,7 @@ function simRandItem(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
 
 function simGetAllowedBids(wk){
   if(HIGH_DEMAND_WEEKS.has(wk)) return SIM_HIGH_PRIORITY_ALLOWED;
-  const d=wkDate(wk);
-  if(d>=SIM_SUMMER_START&&d<=SIM_SUMMER_END) return SIM_SUMMER_ALLOWED;
+  // Summer restriction removed 12 Jul 2026 — all bids allowed on summer weeks.
   return SIM_ALL_BIDS;
 }
 
@@ -1758,38 +1793,6 @@ window.runSimulation=async function(){
   }
 };
 
-window.clearAllSimData=function(){
-  openConfirm({
-    title:'🗑️ Remove All Bids & Locks',
-    body:`<div style="font-size:14px;line-height:1.55"><strong style="color:var(--yellow)">Deletes bids and locks — admin approvals and denials are preserved:</strong></div>
-          <ul style="margin:8px 0 10px 18px;color:var(--t2);font-size:13px;line-height:1.65">
-            <li>Every bid placed by every user on every week</li>
-            <li>Every priority lock (best bids stored)</li>
-            <li>All bid timestamps</li>
-          </ul>
-          <div class="cmodal-info">Admin approvals and denials are NOT removed.</div>
-          <div class="cmodal-danger" style="margin-top:8px"><strong>Cannot be undone.</strong></div>`,
-    okText:'Remove Bids & Locks', danger:true,
-    onConfirm:async()=>{
-      try {
-        await Promise.all([
-          setDoc(scheduleRef,{}),
-          setDoc(worstBidsRef,{}),
-          setDoc(bidTimesRef,{}),
-          setDoc(bidPhaseRef,{}),
-          // NOTE: approvalsRef is intentionally NOT cleared here
-        ]);
-        try { await adminLog('ALL','ALL','admin-bulk-remove-bids'); } catch(_){}
-        toast('🗑️ Bids and locks removed (approvals preserved)','ok');
-        const log=document.getElementById('simLog');
-        if(log){ log.style.display='block'; log.innerHTML='<div style="color:#34d399">✅ Bids and locks cleared. Approvals preserved.</div>'; }
-        renderSimPanel();
-        const approveBtn=document.getElementById('runSimApprovalsBtn');
-        if(approveBtn) approveBtn.style.display='none';
-      } catch(e){ toast('Error: '+e.message,'warn'); }
-    }
-  });
-};
 
 
 window.clearEverything=function(){

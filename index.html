@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 6;        // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 7;        // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -390,11 +390,9 @@ body{zoom:1.15}
         <li>Vacation selections are now called "bids" — the process now works like an auction, where bids compete for limited slots based on priority</li>
         <li>Enter your bids early, it benefits everyone</li>
         <li>Sniping is not possible, do not try it</li>
-        <li>Only 3 bids may be used per phase — only bid for the number of weeks your accrued vacation and ATO will allow for</li>
-        <li>While there is no limit to the number of NP bids placed, only 3 bids including NP bids may be used per phase</li>
+        <li id="ruleMaxBids">Only 3 bids (including NP bids) may be used per phase — only bid for the number of weeks your accrued vacation and ATO will allow for</li>
         <li>Bid priorities can only increase, not decrease — once you bid 5 on a week, you can only re-bid 4 or better</li>
-        <li>On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 1,2, or 1,2,3 may be used</li>
-        <li>On summer weeks (May 30 – Aug 22), only bids of 7 or better may be used</li>
+        <li>On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used</li>
         <li>To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week</li>
         <li style="margin-top:10px;color:#cbd5e1;font-weight:600">Understanding Outcomes</li>
       </ul>
@@ -609,9 +607,8 @@ const SPECIAL_WEEKS={
   "2027-12-26":{label:"🎆 New Year's",slots:5,color:"#60a5fa",bg:"rgba(96,165,250,.12)",border:"rgba(96,165,250,.25)",highPriorityOnly:true},
 };
 // High-priority-only bids: 1,2,3,1,2,1,2,3
-const HIGH_PRIORITY_ALLOWED=new Set(["1","2","3","1,2","1,2,3"]);
-// Summer weeks: only bid 7 or better (1-7) plus combo bids, no NP, no 8/9/10
-const SUMMER_NOT_ALLOWED=new Set(["8","9","10"]);
+const HIGH_PRIORITY_ALLOWED=new Set(["1","2","3","4","1,2","1,2,3"]);
+// (Summer bid restriction removed 12 Jul 2026 — all bids allowed on summer weeks.)
 const summerStart=new Date('2027-05-30T00:00:00');
 const summerEnd  =new Date('2027-08-22T00:00:00');
 const fmt={month:'short',day:'numeric'};
@@ -873,7 +870,23 @@ onSnapshot(locksRef,  snap=>{ locksData=snap.exists()?snap.data():{globalLock:fa
 onSnapshot(changesRef,snap=>{ changesData=snap.exists()?snap.data():{log:[]}; if(!changesData.log)changesData.log=[]; scheduleRender(); });
 onSnapshot(emailsRef, snap=>{ emailsData=snap.exists()?snap.data():{}; _emailsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
 onSnapshot(bestBidsRef,snap=>{ bestBidsData=snap.exists()?snap.data():{}; });
-onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
+onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); updateBidLimitRule(); });
+
+// ── Maximum bids per phase (admin-set; 'none' = no limit) ──
+function getMaxBidsPerPhase(){
+  const raw=adminSettings?.maxBidsPerPhase;
+  if(raw==='none') return null;               // no limit
+  const n=parseInt(raw,10);
+  if(isNaN(n)||n<1||n>10) return 3;           // starting value
+  return n;
+}
+function updateBidLimitRule(){
+  const el=document.getElementById('ruleMaxBids'); if(!el) return;
+  const lim=getMaxBidsPerPhase();
+  el.textContent=lim===null
+    ? 'There is no per-phase bid limit — you are limited only by the bid numbers you have available'
+    : 'Only '+lim+' bid'+(lim!==1?'s':'')+' (including NP bids) may be used per phase — only bid for the number of weeks your accrued vacation and ATO will allow for';
+}
 onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; });
 onSnapshot(passcodesRef,snap=>{ passcodesData=snap.exists()?snap.data():{}; _passcodesReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
 onSnapshot(fteRef,      snap=>{ if(snap.exists()){ fteData=snap.data(); } else { setDoc(fteRef,FTE_MAP).catch(()=>{}); return; } scheduleRender(); });
@@ -921,6 +934,7 @@ async function relayMailQueue(){
   } finally { _mqBusy=false; scheduleMailQueueRelay(); }
 }
 window._relayMailQueue=relayMailQueue; // exposed for testing
+window._persistScheduleChange=persistScheduleChange; // exposed for testing
 onSnapshot(userListRef, snap=>{
   if(snap.exists()&&snap.data().users){
     const newNames=snap.data().users;
@@ -1045,6 +1059,21 @@ let sheetDebounce=null;
 async function persistScheduleChange(user, wk, bid, prevSnapshot){
   // bid===null or undefined → remove. Otherwise → set.
   if(isAuctionClosed()){ showError("The auction has closed — no more changes allowed."); return; }
+  // Enforce the admin-set per-phase bid limit — NEW bids only (edits/removals always allowed).
+  if(bid!==null&&bid!==undefined&&prevSnapshot&&(prevSnapshot[user]===undefined||prevSnapshot[user][wk]===undefined)){
+    const lim=getMaxBidsPerPhase();
+    if(lim!==null){
+      const cur=Number(phasesData.currentPhase||1);
+      let count=0; const uw=prevSnapshot[user]||{};
+      for(const w in uw){ if(getUserBidPhase(user,w)===cur) count++; }
+      if(count>=lim){
+        if(data[user]&&prevSnapshot[user]?.[wk]===undefined) delete data[user][wk]; // undo optimistic add
+        scheduleRender();
+        showError("You have reached the maximum of "+lim+" bid"+(lim!==1?"s":"")+" for this phase. Remove a bid first.");
+        return;
+      }
+    }
+  }
   if(saveInProgress) return; saveInProgress=true;
   const safety=setTimeout(()=>{saveInProgress=false;},8000);
   try{
@@ -1115,8 +1144,6 @@ function openPriorityModal(wk){
     if(!v){opt.disabled=false;return;}
     // High-priority-only weeks: only allow 1, 2, 3, 1,2, 1,2,3
     if(isHighPrioOnly&&v!=="NP"&&!HIGH_PRIORITY_ALLOWED.has(v)){opt.disabled=true;return;}
-    // Summer weeks: only bid 7 or better — block 8, 9, 10
-    if(isSummerOnly&&SUMMER_NOT_ALLOWED.has(v)){opt.disabled=true;return;}
     if(v==="NP"){opt.disabled=hasCap||isHighPrioOnly||isSummerOnly;return;}
     if(v==="1,2"||v==="1,2,3"){
       const nums=v.split(',').map(Number);

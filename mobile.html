@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "mobile";  // this page's key in versions.json
-  var BUILD = 5;         // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 6;         // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -642,8 +642,8 @@ const SPECIAL_WEEKS={
   "2027-12-19":{label:"🎄 Christmas",slots:5,color:"#34d399",highPriorityOnly:true},
   "2027-12-26":{label:"🎆 New Year's",slots:5,color:"#60a5fa",highPriorityOnly:true},
 };
-const HIGH_PRIORITY_ALLOWED=new Set(["1","2","3","1,2","1,2,3"]);
-const SUMMER_NOT_ALLOWED=new Set(["8","9","10"]);
+const HIGH_PRIORITY_ALLOWED=new Set(["1","2","3","4","1,2","1,2,3"]);
+// (Summer bid restriction removed 12 Jul 2026 — all bids allowed on summer weeks.)
 const summerStart=new Date('2027-05-30T00:00:00');
 const summerEnd=new Date('2027-08-22T00:00:00');
 const fmt={month:'short',day:'numeric'};
@@ -761,6 +761,21 @@ function getOutcome(wk,user,ap){ const a=ap?.[wk];if(!a)return'lose';if(a.review
 
 // ── Phase visibility helpers (mirrors desktop site) ──
 function getUserBidPhase(u,wk){ const p=bidPhaseData[u]?.[wk]; return p===undefined?Number(phasesData.currentPhase||1):Number(p); }
+// ── Maximum bids per phase (admin-set; 'none' = no limit) ──
+function getMaxBidsPerPhase(){
+  const raw=adminSettings?.maxBidsPerPhase;
+  if(raw==='none') return null;
+  const n=parseInt(raw,10);
+  if(isNaN(n)||n<1||n>10) return 3;
+  return n;
+}
+function updateBidLimitRule(){
+  const el=document.getElementById('ruleMaxBids'); if(!el) return;
+  const lim=getMaxBidsPerPhase();
+  el.textContent=lim===null
+    ? 'There is no per-phase bid limit — you are limited only by the bid numbers you have available'
+    : 'Only '+lim+' bid'+(lim!==1?'s':'')+' (including NP bids) allowed per phase — bid only for weeks your accrued vacation or ATO allows you to take';
+}
 function isCurrentPhaseBid(u,wk){ return getUserBidPhase(u,wk)===Number(phasesData.currentPhase||1); }
 function isDeniedBid(u,wk){ const arr=deniedData[wk]; return Array.isArray(arr)&&arr.includes(u); }
 function isVisibleBid(u,wk){ return data[u]?.[wk]!==undefined && isCurrentPhaseBid(u,wk) && !isDeniedBid(u,wk); }
@@ -840,7 +855,7 @@ onSnapshot(changesRef,snap=>{changesData=snap.exists()?snap.data():{log:[]};if(!
 onSnapshot(emailsRef,snap=>{emailsData=snap.exists()?snap.data():{};_emailsReady=true;});
 onSnapshot(bestBidsRef,snap=>{bestBidsData=snap.exists()?snap.data():{};});
 onSnapshot(adminRef,snap=>{
-  adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false};
+  adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false}; updateBidLimitRule();
   _adminSettingsReady=true;
   _updateContinueBtn();
 });
@@ -881,6 +896,7 @@ async function relayMailQueue(){
   } finally { _mqBusy=false; scheduleMailQueueRelay(); }
 }
 window._relayMailQueue=relayMailQueue; // exposed for testing
+window._persistScheduleChange=persistScheduleChange; // exposed for testing
 onSnapshot(passcodesRef,snap=>{
   passcodesData=snap.exists()?snap.data():{};
   _passcodesReady=true;
@@ -938,6 +954,21 @@ async function logOwnChange(user,wk,action,bidValue){
 // ── Save ──
 async function persistScheduleChange(user,wk,bid,prevSnapshot){
   if(isAuctionClosed()){showError("The auction has closed — no more changes allowed.");return;}
+  // Enforce the admin-set per-phase bid limit — NEW bids only (edits/removals always allowed).
+  if(bid!==null&&bid!==undefined&&prevSnapshot&&(prevSnapshot[user]===undefined||prevSnapshot[user][wk]===undefined)){
+    const lim=getMaxBidsPerPhase();
+    if(lim!==null){
+      const cur=Number(phasesData.currentPhase||1);
+      let count=0; const uw=prevSnapshot[user]||{};
+      for(const w in uw){ if(getUserBidPhase(user,w)===cur) count++; }
+      if(count>=lim){
+        if(data[user]&&prevSnapshot[user]?.[wk]===undefined) delete data[user][wk];
+        scheduleRender();
+        showError("You have reached the maximum of "+lim+" bid"+(lim!==1?"s":"")+" for this phase. Remove a bid first.");
+        return;
+      }
+    }
+  }
   if(saveInProgress)return; saveInProgress=true;
   const safety=setTimeout(()=>{saveInProgress=false;},8000);
   try{
@@ -1085,11 +1116,9 @@ function renderMyBids(user,ap){
     <div class="rule-item">Vacation selections are called "bids" — it is an auction process where you compete for limited slots based on your bid priority</div>
     <div class="rule-item">Enter bids early — it benefits everyone to know who wants what weeks</div>
     <div class="rule-item">Sniping is not possible — the countdown resets when a bid is placed, so bidding late offers no advantage</div>
-    <div class="rule-item">Only 3 bids allowed per phase — bid only for weeks your accrued vacation or ATO allows you to take</div>
-    <div class="rule-item">NP (No Priority) bids are unlimited but still count toward your 3-bid maximum</div>
+    <div class="rule-item" id="ruleMaxBids">Only 3 bids (including NP bids) allowed per phase — bid only for weeks your accrued vacation or ATO allows you to take</div>
     <div class="rule-item">Bid priorities can only increase — once you bid 5, you can only re-bid at 4 or better (shown as 🔒 Min in calendar view)</div>
-    <div class="rule-item">High-demand weeks (Ski, Spring Break, Thanksgiving, Christmas, NYE) are restricted to bids of 1, 2, 3, 1,2, or 1,2,3 only</div>
-    <div class="rule-item">Summer weeks (May 30 – Aug 22) are restricted to bids of 7 or better — bids 8, 9, 10, and NP are not allowed</div>
+    <div class="rule-item">High-demand weeks (Ski, Spring Break, Thanksgiving, Christmas, NYE) are restricted to bids of 1, 2, 3, 4, 1,2, or 1,2,3 only</div>
     <div class="rule-item">Strategy tip: start with lower bids and increase as needed — avoid "overpaying" on a week you could have won cheaply</div>
     <div class="rule-item">If you are projected to lose, consider increasing your bid or switching to a different week</div>
     <div class="rule-item">You will receive email notifications when someone else's bid changes your outcome</div>
@@ -1166,7 +1195,7 @@ function renderCalendar(user,ap){
           <div style="font-size:.6rem;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">Week ${meta.weekNum}</div>
           <div class="wr-date-label">${meta.label}</div>
           <div class="wr-date-range">${meta.range.split(' – ')[1]||''}</div>
-          ${meta.special?`<div class="wr-special">${meta.special.label}${meta.highPriorityOnly?' · High demand':''}${meta.summerOnly?' · Bid 7+':''}</div>`:''}
+          ${meta.special?`<div class="wr-special">${meta.special.label}${meta.highPriorityOnly?' · High demand':''}</div>`:''}
         </div>
         <div class="wr-right">
           ${priorWon?`<span class="chip chip-win" style="background:rgba(52,211,153,.25);color:#34d399">🏆 WON P${wonInPhase}</span>`:''}
@@ -1403,7 +1432,7 @@ window.openBidSheet=function(wk){
   const bestEverForSheet=(bestBidsData[user]||{})[wk];
   const prioLockOnForSheet=adminSettings.priorityLockEnabled!==false;
   const hasCapForSheet=prioLockOnForSheet&&bestEverForSheet!==undefined&&bestEverForSheet!=='NP';
-  document.getElementById("bidWeekInfo").innerHTML=`<div style="font-weight:700;color:var(--t1)">${meta.range}</div>${meta.special?`<div style="color:${meta.special.color};font-size:.75rem;margin-top:3px">${meta.special.label}${meta.highPriorityOnly?' · High demand only':''}${meta.summerOnly?' · Bid 7 or better only':''}</div>`:''}${hasCapForSheet?`<div style="margin-top:6px;padding:5px 8px;border-radius:6px;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.3);color:var(--yellow);font-size:.72rem;font-weight:700">🔒 Priority lock: must bid ${bidLbl(bestEverForSheet)} or better</div>`:''}`;
+  document.getElementById("bidWeekInfo").innerHTML=`<div style="font-weight:700;color:var(--t1)">${meta.range}</div>${meta.special?`<div style="color:${meta.special.color};font-size:.75rem;margin-top:3px">${meta.special.label}${meta.highPriorityOnly?' · High demand only':''}</div>`:''}${hasCapForSheet?`<div style="margin-top:6px;padding:5px 8px;border-radius:6px;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.3);color:var(--yellow);font-size:.72rem;font-weight:700">🔒 Priority lock: must bid ${bidLbl(bestEverForSheet)} or better</div>`:''}`;
   document.getElementById("bidStep1").style.display="block";
   document.getElementById("bidStep2").style.display="none";
   const sel=document.getElementById("bidSelect"); sel.value="";
@@ -1412,7 +1441,6 @@ window.openBidSheet=function(wk){
   sel.querySelectorAll("option").forEach(opt=>{
     const v=opt.value; if(!v){opt.disabled=false;return;}
     if(isHighOnly&&v!=="NP"&&!HIGH_PRIORITY_ALLOWED.has(v)){opt.disabled=true;return;}
-    if(isSummerOnly&&SUMMER_NOT_ALLOWED.has(v)){opt.disabled=true;return;}
     if(v==="NP"){opt.disabled=hasCap||isHighOnly||isSummerOnly;return;}
     if(v==="1,2"||v==="1,2,3"){const nums=v.split(',').map(Number);opt.disabled=nums.some(n=>used.includes(n))||(hasCap&&priorityScore(nums)>capScore);}
     else{const num=parseInt(v);opt.disabled=used.includes(num)||(hasCap&&priorityScore(num)>capScore);}
