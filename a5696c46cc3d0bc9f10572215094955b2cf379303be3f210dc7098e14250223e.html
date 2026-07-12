@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 15;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 16;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -639,6 +639,8 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
           Assigns each user random bids at random weeks with random bid levels. High-demand weeks get only high-priority bids. Summer weeks get only bids 1–7.
           <br><br>
           <strong style="color:var(--yellow)">⚠️ Can only run when zero bids exist for any user.</strong>
+          <br><br>
+          <strong style="color:var(--t1)">Auto-Approve/Deny Results</strong> works in every phase (1–4) whenever the current phase has undecided bids: winners are approved, losers denied, reviews approved, and draws are decided at random — approving as many tied users as fit within the FTE cap plus the configured FTE overage, denying the rest.
         </p>
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
           <label style="font-size:12px;color:var(--t2);font-weight:600">Bids per user:</label>
@@ -1311,8 +1313,8 @@ function renderOverview(){
       <td class="mono" style="color:var(--green);text-align:center;padding:4px 5px">${fw||''}</td>
       <td class="mono" style="color:${fr>0?'var(--blue)':'var(--red)'};text-align:center;padding:4px 5px">${fr}</td>
       <td style="color:var(--green);font-size:10px;padding:4px 7px">${wStr}</td>
-      <td style="color:var(--yellow);font-size:10px;padding:4px 7px" title="2+ tied — runoff needed">${dStr?`⚖️ ${dStr}`:''}</td>
-      <td style="color:#c084fc;font-size:10px;padding:4px 7px" title="1 person slightly over cap — admin may approve">${rStr?`🔍 ${rStr}`:''}</td>
+      <td style="color:var(--yellow);font-size:10px;padding:4px 7px" title="2+ tied — runoff needed">${dStr}</td>
+      <td style="color:#c084fc;font-size:10px;padding:4px 7px" title="1 person slightly over cap — admin may approve">${rStr}</td>
       <td style="color:var(--red);font-size:10px;padding:4px 7px">${lStr}</td>
     </tr>`;
   }).join('');
@@ -1320,15 +1322,15 @@ function renderOverview(){
   weekEl.innerHTML=`<div style="margin-top:24px">
     <div style="font-size:14px;font-weight:700;color:var(--t1);margin-bottom:6px">Weekly Summary</div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px;color:var(--t2)">
-      <span><span style="color:var(--yellow);font-weight:600">⚖️ Draw</span> — 2+ tied, runoff needed</span>
-      <span><span style="color:#c084fc;font-weight:600">🔍 Review</span> — 1 person, ≤${getReviewThreshold().toFixed(1)} FTE over cap, admin may approve</span>
+      <span><span style="color:var(--yellow);font-weight:600">Draw</span> — 2+ tied, runoff needed</span>
+      <span><span style="color:#c084fc;font-weight:600">Review</span> — 1 person, ≤${getReviewThreshold().toFixed(1)} FTE over cap, admin may approve</span>
     </div>
     <div style="overflow-x:auto;max-height:600px;overflow-y:auto;border:1px solid var(--b1)">
       <table style="font-size:11px;width:68%;min-width:640px;border-collapse:collapse"><thead><tr>
         <th style="padding:5px 7px">Week</th><th style="padding:5px 3px"></th><th style="padding:5px 5px">Cap</th><th style="padding:5px 5px;color:var(--green)">Won</th><th style="padding:5px 5px">Rem</th>
         <th style="padding:5px 7px;color:var(--green)">Winners</th>
-        <th style="padding:5px 7px;color:var(--yellow)" title="2+ tied — runoff needed">⚖️ Draw</th>
-        <th style="padding:5px 7px;color:#c084fc" title="Admin decides">🔍 Review</th>
+        <th style="padding:5px 7px;color:var(--yellow)" title="2+ tied — runoff needed">Draw</th>
+        <th style="padding:5px 7px;color:#c084fc" title="Admin decides">Review</th>
         <th style="padding:5px 7px;color:var(--red)">Lost</th>
       </tr></thead><tbody>${rows}</tbody></table>
     </div>
@@ -1546,12 +1548,35 @@ function simHasBids(){
   return false;
 }
 
+// True when any CURRENT-phase bid has neither an approval nor a denial yet.
+function simHasUndecidedBids(){
+  for(const d of mondays){
+    const wk=dateKey(d);
+    const approvedHere=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
+    const deniedHere=Array.isArray(deniedData?.[wk])?deniedData[wk]:[];
+    for(const u in scheduleData){
+      if(scheduleData[u]?.[wk]===undefined) continue;
+      if(!isCurrentPhaseBidAdmin(u,wk)) continue;
+      if(!approvedHere.includes(u)&&!deniedHere.includes(u)) return true;
+    }
+  }
+  return false;
+}
+
 function renderSimPanel(){
   const btn=document.getElementById('runSimBtn');
   const banner=document.getElementById('simStatusBanner');
   if(!btn||!banner) return;
   const hasBids=simHasBids();
   const cur=Number(phasesData.currentPhase||1);
+  // Auto-Approve/Deny is available in EVERY phase (1–4) whenever the current
+  // phase has undecided bids — not just right after running a simulation.
+  const apBtn=document.getElementById('runSimApprovalsBtn');
+  if(apBtn){
+    const pending=simHasUndecidedBids();
+    apBtn.style.display=pending?'':'none';
+    apBtn.textContent=`✅ Auto-Approve/Deny Results (Phase ${cur})`;
+  }
   const lockedCount=locksData?.weeks?Object.keys(locksData.weeks).filter(k=>locksData.weeks[k]).length:0;
   const globalLocked=!!locksData?.globalLock;
   if(hasBids){
@@ -2598,12 +2623,12 @@ window.runSimulationApprovals=async function(){
         logLines.push('✓ Approved '+u+' for Wk '+(_wkNumByISO[wk]||wk));
       }
     }
-    // Deny all losers
+    // Deny all losers (current-phase bids only — prior phases are settled)
     const deniedHere=Array.isArray(deniedData?.[wk])?deniedData[wk]:[];
     // Get all bidders who are NOT winners, draws, or reviews
     for(const u in scheduleData){
-      if(!scheduleData[u]?.[wk]===undefined) continue;
       if(scheduleData[u]?.[wk]===undefined) continue;
+      if(!isCurrentPhaseBidAdmin(u,wk)) continue;
       if(!a.winners.has(u)&&!a.draws.has(u)&&!a.reviews.has(u)){
         if(!deniedHere.includes(u)){
           await updateDoc(deniedRef,{[wk]:arrayUnion(u)}).catch(async()=>setDoc(deniedRef,{[wk]:[u]},{merge:true}));
@@ -3606,9 +3631,9 @@ window.renderDrawsReviews=function(){
     const lbl=p==='NP'?'NP':pl;
     let tag, actions;
     if(e.type==='draw'){
-      tag='<span class="pill p-yellow">⚖️ DRAW</span>';
+      tag='<span class="pill p-yellow">DRAW</span>';
     } else if(e.type==='review'){
-      tag='<span class="pill" style="background:rgba(168,85,247,.15);color:#c084fc">🔍 UNDER REVIEW</span>';
+      tag='<span class="pill" style="background:rgba(168,85,247,.15);color:#c084fc">UNDER REVIEW</span>';
     } else if(e.type==='denied'){
       tag='<span class="pill p-red">✕ DENIED</span>';
     } else {
@@ -3743,7 +3768,7 @@ window.confirmApprove=function(user,wk,type){
   openConfirm({
     title:'✓ Approve as Winner',
     body:`<div>Approve <strong>${user}</strong> (FTE ${ufte}) as winner for week of <strong>${wLabel(m)}</strong> (${wRange(m)})?</div>
-          <div style="margin-top:8px;font-size:12px;color:var(--t2)">Current status: ${type==='draw'?'⚖️ Draw':'🔍 Under Review'}</div>
+          <div style="margin-top:8px;font-size:12px;color:var(--t2)">Current status: ${type==='draw'?'Draw':'Under Review'}</div>
           ${overageHtml}`,
     okText:'Approve',
     onConfirm:async()=>{
