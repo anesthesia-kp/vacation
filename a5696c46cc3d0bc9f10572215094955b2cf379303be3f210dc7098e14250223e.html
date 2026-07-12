@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 12;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 13;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -29,6 +29,7 @@
 <title>Scheduler Admin</title>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
 <script>try{emailjs.init("M5DaguiYyyyR3VG6t");}catch(e){}</script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600;700&family=Geist:wght@400;500;600;700&display=swap');
 :root{
@@ -257,6 +258,8 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
         <label style="font-size:12px;color:var(--t2);font-weight:600">View phase:</label>
         <select id="dashPhaseFilter" class="sel" onchange="renderOverview()"></select>
+        <button class="btn" style="font-size:12px;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportDashboard('pdf')">📄 Export PDF</button>
+        <button class="btn" style="font-size:12px;background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportDashboard('xlsx')">📊 Export Excel</button>
         <button class="btn" style="margin-left:auto;background:rgba(251,191,36,.15);color:var(--yellow);border:1px solid rgba(251,191,36,.35)" title="Queued outbid alerts waiting to be emailed — click to send now" onclick="flushMailQueue()">🔔 Alert Queue: <span id="mqCountTop" style="font-family:var(--mono);font-weight:700">0</span></button>
         <button class="btn btn-primary" onclick="sendReminderEmails()">📧 Send Reminder E-mails</button>
         <button class="btn btn-success" onclick="sendPhaseResultsEmails()">📮 Send Phase Results E-mails</button>
@@ -618,7 +621,7 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
         <button class="btn btn-success" style="font-size:12px" onclick="adApproveAllWinners()">✓ Approve All Current Winners</button>
         <button class="btn btn-danger" style="font-size:12px" onclick="adDenyAllLosers()">✕ Deny All Current Losers</button>
         <button class="btn" style="font-size:12px;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3);margin-left:auto" onclick="exportPhaseResults('pdf')">📄 Export PDF</button>
-        <button class="btn" style="font-size:12px;background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportPhaseResults('csv')">📊 Export CSV (for Sheets)</button>
+        <button class="btn" style="font-size:12px;background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportPhaseResults('xlsx')">📊 Export Excel</button>
       </div>
       <div id="adBody"></div>
     </div>
@@ -1302,15 +1305,15 @@ function renderOverview(){
     const hasBids=bidders.length>0;
     const rowStyle=hasBids?'':'opacity:.45';
     return `<tr style="${rowStyle}">
-      <td class="mono" style="white-space:nowrap;font-size:11px;padding:5px 8px">${label}</td>
-      <td style="font-size:10px;text-align:center;padding:5px 4px">${tag}</td>
-      <td class="mono" style="text-align:center;padding:5px 4px">${cap}</td>
-      <td class="mono" style="color:var(--green);text-align:center;padding:5px 4px">${fw||''}</td>
-      <td class="mono" style="color:${fr>0?'var(--blue)':'var(--red)'};text-align:center;padding:5px 4px">${fr}</td>
-      <td style="color:var(--green);font-size:10px;padding:5px 6px">${wStr}</td>
-      <td style="color:var(--yellow);font-size:10px;padding:5px 6px" title="2+ tied — runoff needed">${dStr?`⚖️ ${dStr}`:''}</td>
-      <td style="color:#c084fc;font-size:10px;padding:5px 6px" title="1 person slightly over cap — admin may approve">${rStr?`🔍 ${rStr}`:''}</td>
-      <td style="color:var(--red);font-size:10px;padding:5px 6px">${lStr}</td>
+      <td class="mono" style="white-space:nowrap;font-size:11px;padding:4px 7px">${label}</td>
+      <td style="font-size:10px;text-align:center;padding:4px 3px">${tag}</td>
+      <td class="mono" style="text-align:center;padding:4px 5px">${cap}</td>
+      <td class="mono" style="color:var(--green);text-align:center;padding:4px 5px">${fw||''}</td>
+      <td class="mono" style="color:${fr>0?'var(--blue)':'var(--red)'};text-align:center;padding:4px 5px">${fr}</td>
+      <td style="color:var(--green);font-size:10px;padding:4px 7px">${wStr}</td>
+      <td style="color:var(--yellow);font-size:10px;padding:4px 7px" title="2+ tied — runoff needed">${dStr?`⚖️ ${dStr}`:''}</td>
+      <td style="color:#c084fc;font-size:10px;padding:4px 7px" title="1 person slightly over cap — admin may approve">${rStr?`🔍 ${rStr}`:''}</td>
+      <td style="color:var(--red);font-size:10px;padding:4px 7px">${lStr}</td>
     </tr>`;
   }).join('');
 
@@ -1320,13 +1323,13 @@ function renderOverview(){
       <span><span style="color:var(--yellow);font-weight:600">⚖️ Draw</span> — 2+ tied, runoff needed</span>
       <span><span style="color:#c084fc;font-weight:600">🔍 Review</span> — 1 person, ≤${getReviewThreshold().toFixed(1)} FTE over cap, admin may approve</span>
     </div>
-    <div style="overflow-x:auto;max-height:600px;overflow-y:auto;border:1px solid var(--b1)">
-      <table style="font-size:11px"><thead><tr>
-        <th style="padding:6px 8px">Week</th><th style="padding:6px 4px"></th><th style="padding:6px 4px">Cap</th><th style="padding:6px 4px;color:var(--green)">Won FTE</th><th style="padding:6px 4px">Rem</th>
-        <th style="padding:6px 6px;color:var(--green)">Winners</th>
-        <th style="padding:6px 6px;color:var(--yellow)">⚖️ Draw (runoff needed)</th>
-        <th style="padding:6px 6px;color:#c084fc">🔍 Under Review (admin decides)</th>
-        <th style="padding:6px 6px;color:var(--red)">Lost</th>
+    <div style="overflow-x:auto;max-height:600px;overflow-y:auto;border:1px solid var(--b1);display:inline-block;max-width:100%">
+      <table style="font-size:11px;width:auto;border-collapse:collapse"><thead><tr>
+        <th style="padding:5px 7px">Week</th><th style="padding:5px 3px"></th><th style="padding:5px 5px">Cap</th><th style="padding:5px 5px;color:var(--green)">Won</th><th style="padding:5px 5px">Rem</th>
+        <th style="padding:5px 7px;color:var(--green)">Winners</th>
+        <th style="padding:5px 7px;color:var(--yellow)" title="2+ tied — runoff needed">⚖️ Draw</th>
+        <th style="padding:5px 7px;color:#c084fc" title="Admin decides">🔍 Review</th>
+        <th style="padding:5px 7px;color:var(--red)">Lost</th>
       </tr></thead><tbody>${rows}</tbody></table>
     </div>
   </div>`;
@@ -2105,24 +2108,33 @@ window.exportPhaseResults=function(format){
   rows.sort((a,b)=>a.wn-b.wn||a.user.localeCompare(b.user));
   const now=new Date();
   const stamp=now.toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
-  if(format==='csv'){
-    // CSV-quote every field. Combo bids ("1,2" / "1,2,3") contain commas — a
-    // bid is ONE value and must stay in ONE cell; without quoting, its commas
-    // split it across columns and shift Phase/Outcome into the wrong ones.
-    const csvEsc=v=>{ const s=String(v); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
-    const lines=['Week #,Week Date,User,FTE,Bid,Phase,Outcome'];
-    rows.forEach(r=>{
+  if(format==='csv'||format==='xlsx'){
+    const header=['Week #','Week Date','User','FTE','Bid','Phase','Outcome'];
+    const dataRows=rows.map(r=>{
       const m=wkDate(r.wk); const wLbl=`${MS[m.getMonth()]} ${m.getDate()}`;
-      lines.push([r.wn,wLbl,r.user,getUserFTE(r.user),r.bid,r.phase,r.outcome].map(csvEsc).join(','));
+      // Bid stays a STRING so combo bids ("1,2,3") remain one cell, one bid.
+      return [r.wn,wLbl,r.user,getUserFTE(r.user),String(r.bid),r.phase,r.outcome];
     });
-    const csv=`# Vacation Auction — ${exportLabel} — exported ${stamp}\n`+lines.join('\n');
+    const fname=`vacation-auction-phase${exportPhase}-${now.toISOString().slice(0,10)}`;
+    if(typeof XLSX!=='undefined'){
+      const ws=XLSX.utils.aoa_to_sheet([[`Vacation Auction — ${exportLabel} — exported ${stamp}`],header,...dataRows]);
+      ws['!cols']=[{wch:7},{wch:10},{wch:8},{wch:5},{wch:8},{wch:6},{wch:10}];
+      const wb=XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb,ws,'Approvals & Denials');
+      XLSX.writeFile(wb,fname+'.xlsx');
+      toast('📊 Excel exported','ok');
+      return;
+    }
+    // Fallback if the Excel library couldn't load: properly quoted CSV.
+    const csvEsc=v=>{ const s=String(v); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+    const csv=`# Vacation Auction — ${exportLabel} — exported ${stamp}\n`+[header,...dataRows].map(r=>r.map(csvEsc).join(',')).join('\n');
     const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
     const url=URL.createObjectURL(blob);
     const a=document.createElement('a');
-    a.href=url; a.download=`vacation-auction-phase${exportPhase}-${now.toISOString().slice(0,10)}.csv`;
+    a.href=url; a.download=fname+'.csv';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    toast('📊 CSV exported','ok');
+    toast('📊 Excel library unavailable — exported CSV instead','warn');
     return;
   }
   // PDF via new-window print (browser Save as PDF)
@@ -2150,6 +2162,109 @@ window.exportPhaseResults=function(format){
       <thead><tr><th>Wk #</th><th>Date</th><th>User</th><th>FTE</th><th>Bid</th><th>Phase</th><th>Outcome</th></tr></thead>
       <tbody>${tbody}</tbody>
     </table>
+    <script>setTimeout(()=>window.print(),300);<\/script>
+    </body></html>`);
+  w.document.close();
+  toast('📄 Preview opened — use browser "Print → Save as PDF"','ok');
+};
+
+// ── Dashboard export (weekly summary as a table → Excel or PDF) ──
+// Mirrors the Weekly Summary's data selection, honoring the dashboard's phase
+// dropdown (current / all / locked phase with snapshot + live fallback).
+function buildDashboardRows(phaseFilter){
+  const ap=computeApprovals();
+  const curPhase=Number(phasesData.currentPhase||1);
+  const specLabels={"2027-02-14":"Ski Week","2027-03-28":"Spring Break","2027-04-04":"Spring Break","2027-11-21":"Thanksgiving","2027-12-19":"Christmas","2027-12-26":"New Year's"};
+  return mondays.map(d=>{
+    const wk=dateKey(d);
+    let a,loserSet;
+    const m=phaseFilter&&phaseFilter.match(/^ph(\d+)$/);
+    if(m&&Number(m[1])<curPhase){
+      const wantPh=Number(m[1]);
+      const phSnap=phasesData.completedPhases?.[wantPh]||{};
+      let phSched=phSnap.schedule||{}, phAp=phSnap.approvals||{};
+      if(Object.keys(phSched).length===0){
+        phSched={};
+        for(const u in scheduleData){ if(scheduleData[u]?.[wk]===undefined) continue; if(getUserBidPhaseAdmin(u,wk)!==wantPh) continue; phSched[u]=scheduleData[u]; }
+        phAp=approvalsData||{};
+      }
+      const winners=new Set(Array.isArray(phAp[wk])?phAp[wk]:[]);
+      const losers=new Set();
+      for(const u in phSched){ if(phSched[u]?.[wk]===undefined) continue; if(!winners.has(u)) losers.add(u); }
+      let fteWonHist=0; for(const u of winners) fteWonHist+=getUserFTE(u);
+      a={winners,draws:new Set(),reviews:new Set(),fteWon:Math.round(fteWonHist*10)/10};
+      loserSet=losers;
+    } else {
+      a=ap[wk]||{winners:new Set(),draws:new Set(),reviews:new Set(),fteWon:0};
+      const bidders=Object.keys(scheduleData).filter(u=>{
+        if(scheduleData[u]?.[wk]===undefined) return false;
+        if(Array.isArray(deniedData?.[wk])&&deniedData[wk].includes(u)) return false;
+        if(a.priorWinners?.has(u)) return true;
+        if(phaseFilter==='all') return true;
+        return isCurrentPhaseBidAdmin(u,wk);
+      });
+      loserSet=new Set(bidders.filter(u=>!a.winners?.has(u)&&!a.draws?.has(u)&&!a.reviews?.has(u)));
+    }
+    const cap=getSlots(wk);
+    const fw=Math.round((a.fteWon||0)*10)/10;
+    const isSummer=d>=new Date('2027-05-30T00:00:00')&&d<=new Date('2027-08-22T00:00:00');
+    const tag=specLabels[wk]||(isSummer?'Summer':'');
+    return { wn:_wkNumByISO[wk]||'', date:`${MS[d.getMonth()]} ${d.getDate()}`, tag, cap,
+      won:fw, rem:Math.round((cap-fw)*10)/10,
+      winners:[...(a.winners||[])].join(', '), draws:[...(a.draws||[])].join(', '),
+      reviews:[...(a.reviews||[])].join(', '), losers:[...loserSet].join(', ') };
+  });
+}
+window.exportDashboard=function(format){
+  const phaseSel=document.getElementById('dashPhaseFilter');
+  const phaseFilter=phaseSel?.value||'current';
+  const curPhase=Number(phasesData.currentPhase||1);
+  const mm=phaseFilter.match(/^ph(\d+)$/);
+  const exportLabel=phaseFilter==='all'?'All Phases':(mm?`Phase ${mm[1]} (locked)`:`Phase ${curPhase} (current)`);
+  const rows=buildDashboardRows(phaseFilter);
+  const now=new Date();
+  const stamp=now.toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
+  const header=['Week #','Date','Type','FTE Available','FTE Won','FTE Remaining','Winners','Draws','Under Review','Lost'];
+  const dataRows=rows.map(r=>[r.wn,r.date,r.tag,r.cap,r.won,r.rem,r.winners,r.draws,r.reviews,r.losers]);
+  const fname=`vacation-dashboard-${now.toISOString().slice(0,10)}`;
+  if(format==='xlsx'){
+    if(typeof XLSX!=='undefined'){
+      const ws=XLSX.utils.aoa_to_sheet([[`Vacation Auction Dashboard — ${exportLabel} — exported ${stamp}`],header,...dataRows]);
+      ws['!cols']=[{wch:7},{wch:9},{wch:12},{wch:12},{wch:9},{wch:12},{wch:28},{wch:20},{wch:20},{wch:28}];
+      const wb=XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb,ws,'Weekly Summary');
+      XLSX.writeFile(wb,fname+'.xlsx');
+      toast('📊 Excel exported','ok');
+    } else {
+      const csvEsc=v=>{ const s=String(v); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+      const csv=`# Vacation Auction Dashboard — ${exportLabel} — exported ${stamp}\n`+[header,...dataRows].map(r=>r.map(csvEsc).join(',')).join('\n');
+      const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a'); a.href=url; a.download=fname+'.csv';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast('📊 Excel library unavailable — exported CSV instead','warn');
+    }
+    return;
+  }
+  // PDF via print window (same pattern as approvals/denials export)
+  const tbody=dataRows.map(r=>`<tr>${r.map((c,i)=>`<td${i>=6?' style="font-size:10px"':''}>${c}</td>`).join('')}</tr>`).join('');
+  const w=window.open('','_blank');
+  if(!w){ toast('Pop-up blocked — allow pop-ups for this site','warn'); return; }
+  w.document.write(`<!doctype html><html><head><title>Vacation Auction Dashboard — ${exportLabel}</title>
+    <style>
+      body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:24px;color:#0f172a}
+      h1{margin:0 0 4px 0;font-size:20px}
+      .stamp{color:#64748b;font-size:12px;margin-bottom:16px}
+      table{border-collapse:collapse;width:100%;font-size:11px}
+      th,td{border:1px solid #e2e8f0;padding:5px 7px;text-align:left;vertical-align:top}
+      th{background:#f8fafc;font-weight:600}
+      tbody tr:nth-child(even){background:#fafafa}
+      @media print { body { margin: 10mm } }
+    </style></head><body>
+    <h1>Vacation Auction Dashboard — ${exportLabel}</h1>
+    <div class="stamp">Exported ${stamp}</div>
+    <table><thead><tr>${header.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${tbody}</tbody></table>
     <script>setTimeout(()=>window.print(),300);<\/script>
     </body></html>`);
   w.document.close();
