@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 1;        // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 3;        // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -761,7 +761,7 @@ onSnapshot(changesRef,  snap=>{
   const p=document.getElementById("panel-changelog"); 
   if(p&&p.classList.contains("on")) renderChangelog();
 });
-onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{}; syncControls(); });
+onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{}; syncControls(); refreshAll(); });
 onSnapshot(timerRef,    snap=>{ timerData=snap.exists()?snap.data():{enabled:false,lastChange:null}; syncTimer(); startTick(); refreshAll(); });
 onSnapshot(worstBidsRef, snap=>{ 
   worstBidsData=snap.exists()?snap.data():{}; 
@@ -1065,7 +1065,7 @@ function renderOverview(){
     <span style="font-weight:600;color:var(--t2)">Legend:</span>
     <span><span class="wtag win">WIN</span> Approved</span>
     <span><span class="wtag draw">DRAW</span> 2+ tied, runoff needed</span>
-    <span><span class="wtag review">REVIEW</span> 1 person, ≤0.5 over</span>
+    <span><span class="wtag review">REVIEW</span> 1 person, ≤${getReviewThreshold().toFixed(1)} over</span>
     <span><span class="wtag lose">LOSE</span> Not approved</span>
   </div>`;
 
@@ -1185,7 +1185,7 @@ function renderOverview(){
     <div style="font-size:14px;font-weight:700;color:var(--t1);margin-bottom:6px">Weekly Summary</div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px;color:var(--t2)">
       <span><span style="color:var(--yellow);font-weight:600">⚖️ Draw</span> — 2+ tied, runoff needed</span>
-      <span><span style="color:#c084fc;font-weight:600">🔍 Review</span> — 1 person, ≤0.5 FTE over cap, admin may approve</span>
+      <span><span style="color:#c084fc;font-weight:600">🔍 Review</span> — 1 person, ≤${getReviewThreshold().toFixed(1)} FTE over cap, admin may approve</span>
     </div>
     <div style="overflow-x:auto;max-height:600px;overflow-y:auto;border:1px solid var(--b1)">
       <table style="font-size:11px"><thead><tr>
@@ -2364,15 +2364,16 @@ window.runSimulationApprovals=async function(){
         }
       }
     }
-    // Draws: pick random winner(s) within FTE cap
+    // Draws: pick random winner(s) within FTE cap + configured review threshold
     if(a.draws.size>0){
       const drawArr=[...a.draws];
       const cap=getSlots(wk); let fteUsed=a.fteWon;
+      const T=getReviewThreshold();
       // Shuffle draws
       drawArr.sort(()=>Math.random()-.5);
       for(const u of drawArr){
         const ufte=getUserFTE(u);
-        if(Math.round((fteUsed+ufte)*10)/10<=cap+0.5){
+        if(Math.round((fteUsed+ufte)*10)/10<=cap+T){
           await updateDoc(approvalsRef,{[wk]:arrayUnion(u)}).catch(async()=>setDoc(approvalsRef,{[wk]:[u]},{merge:true}));
           fteUsed=Math.round((fteUsed+ufte)*10)/10;
           approvalCount++; logLines.push('✓ Draw winner: '+u+' for Wk '+(_wkNumByISO[wk]||wk));
@@ -2382,7 +2383,7 @@ window.runSimulationApprovals=async function(){
         }
       }
     }
-    // Reviews: approve all (overage ≤ 0.5)
+    // Reviews: approve all (overage ≤ configured review threshold)
     for(const u of a.reviews){
       if(!approvedHere.includes(u)){
         await updateDoc(approvalsRef,{[wk]:arrayUnion(u)}).catch(async()=>setDoc(approvalsRef,{[wk]:[u]},{merge:true}));
