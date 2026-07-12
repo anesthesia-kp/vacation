@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "mobile";  // this page's key in versions.json
-  var BUILD = 1;         // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 2;         // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -556,6 +556,7 @@ const approvalsRef=doc(db,"vacations","approvals");
 const phasesRef=doc(db,"vacations","phases");
 const bidPhaseRef=doc(db,"vacations","bidPhase");
 const deniedRef=doc(db,"vacations","denials");
+const slotsRef=doc(db,"vacations","slots"); // admin per-week FTE availability overrides
 // ── Auth gate ───────────────────────────────────────────────────────────────
 // Firestore listeners MUST NOT attach before anonymous sign-in resolves.
 // Without a token every listener is rejected with permission-denied — and a
@@ -596,6 +597,14 @@ let emailsData={}, bestBidsData={}, fteData={}, adminSettings={emailNotifsEnable
 function getReviewThreshold(){ const raw=adminSettings?.reviewThreshold; if(raw===undefined||raw===null)return 0.5; const n=Number(raw); if(isNaN(n))return 0.5; const clamped=Math.max(0,Math.min(2,n)); return Math.round(clamped*10)/10; }
 let phasesData={currentPhase:1,completedPhases:{}};
 let bidPhaseData={}, deniedData={};
+let slotsData={}; // admin-entered per-week FTE availability overrides {wk:number}
+function applySlotOverrides(){
+  for(const wk in weekMeta){
+    const ov=slotsData?slotsData[wk]:undefined;
+    if(ov!==undefined&&ov!==null&&ov!==''&&!isNaN(Number(ov))&&Number(ov)>=0){ weekMeta[wk].slots=Math.round(Number(ov)*10)/10; }
+    else { weekMeta[wk].slots=weekMeta[wk].defaultSlots; }
+  }
+}
 // Track whether security-critical collections have loaded from Firestore
 let _adminSettingsReady=false, _passcodesReady=false, _emailsReady=false;
 // Fallback: unlock Continue button after 1.5s if Firestore hasn't fired by then.
@@ -643,7 +652,7 @@ mondays.forEach((d,idx)=>{
   const sat=new Date(d); sat.setDate(sat.getDate()+6);
   const isSummer=d>=summerStart&&d<=summerEnd;
   const special=SPECIAL_WEEKS[wk]||(isSummer?{label:"☀️ Summer",slots:4,color:"#fbbf24",summerOnly:true}:null);
-  weekMeta[wk]={weekNum:idx+1,date:d,label:d.toLocaleDateString('en-US',fmtWkd),range:d.toLocaleDateString('en-US',fmtWkd)+' – '+sat.toLocaleDateString('en-US',fmtWkd),shortDate:d.toLocaleDateString('en-US',fmt),slots:special?special.slots:3,highPriorityOnly:special?.highPriorityOnly||false,summerOnly:special?.summerOnly||false,special};
+  weekMeta[wk]={weekNum:idx+1,date:d,label:d.toLocaleDateString('en-US',fmtWkd),range:d.toLocaleDateString('en-US',fmtWkd)+' – '+sat.toLocaleDateString('en-US',fmtWkd),shortDate:d.toLocaleDateString('en-US',fmt),slots:special?special.slots:3,defaultSlots:special?special.slots:3,highPriorityOnly:special?.highPriorityOnly||false,summerOnly:special?.summerOnly||false,special};
 });
 function groupByMonth(){ const g={}; mondays.forEach(d=>{ const k=d.toLocaleDateString('en-US',{month:'long',year:'numeric'}); if(!g[k])g[k]=[]; g[k].push(d); }); return g; }
 function formatShort(wk){ return weekMeta[wk]?.shortDate||wk; }
@@ -737,7 +746,7 @@ function computeApprovals(src){
     for(const u of draws)reviews.delete(u);
     const approvedHere=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
     approvedHere.forEach(u=>{if(!reqs.some(r=>r.user===u))return;if(!winners.has(u)){draws.delete(u);reviews.delete(u);winners.add(u);fteWon+=getUserFTE(u);}});
-    if(draws.size===1){const loneUser=[...draws][0];const loneFte=getUserFTE(loneUser);const overage=Math.round(((fteWon+loneFte)-cap)*10)/10;draws.delete(loneUser);if(overage>0&&overage<=T)reviews.add(loneUser);}
+    /* No lone-draw collapse: a remaining draw participant stays a DRAW (pending) until the admin explicitly approves or denies them — never auto-resolved. Must match admin computeApprovals. */
     const fteDraws=[...draws].reduce((s,u)=>s+getUserFTE(u),0);
     const fteReviews=[...reviews].reduce((s,u)=>s+getUserFTE(u),0);
     const allBidders=new Set([...priorWinners,...reqs.map(r=>r.user)]);
@@ -838,6 +847,7 @@ onSnapshot(bidTimesRef,snap=>{bidTimesData=snap.exists()?snap.data():{};});
 onSnapshot(phasesRef,snap=>{phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{}};renderPhaseLabel();scheduleRender();});
 onSnapshot(bidPhaseRef,snap=>{bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{});scheduleRender();});
 onSnapshot(deniedRef,snap=>{deniedData=normalizeWkArrayMap(snap.exists()?snap.data():{});scheduleRender();});
+onSnapshot(slotsRef,snap=>{slotsData=snap.exists()?snap.data():{};applySlotOverrides();scheduleRender();});
 onSnapshot(passcodesRef,snap=>{
   passcodesData=snap.exists()?snap.data():{};
   _passcodesReady=true;

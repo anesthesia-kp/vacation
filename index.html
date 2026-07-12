@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 1;        // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 2;        // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -481,6 +481,7 @@ const approvalsRef  = doc(db,"vacations","approvals");
 const phasesRef     = doc(db,"vacations","phases");
 const bidPhaseRef   = doc(db,"vacations","bidPhase");
 const deniedRef      = doc(db,"vacations","denials");
+const slotsRef       = doc(db,"vacations","slots"); // admin per-week FTE availability overrides
 
 // ── State ──
 let data={}, locksData={globalLock:false,weeks:{}};
@@ -501,6 +502,19 @@ function getReviewThreshold(){
 }
 let phasesData={currentPhase:1,completedPhases:{}};
 let bidPhaseData={}, deniedData={};
+let slotsData={}; // admin-entered per-week FTE availability overrides {wk:number}
+// Apply per-week FTE availability overrides onto weekMeta.slots. A present
+// override wins; a blank/missing one falls back to the built-in default.
+function applySlotOverrides(){
+  for(const wk in weekMeta){
+    const ov=slotsData?slotsData[wk]:undefined;
+    if(ov!==undefined&&ov!==null&&ov!==''&&!isNaN(Number(ov))&&Number(ov)>=0){
+      weekMeta[wk].slots=Math.round(Number(ov)*10)/10;
+    } else {
+      weekMeta[wk].slots=weekMeta[wk].defaultSlots;
+    }
+  }
+}
 // Track whether security-critical collections have loaded from Firestore.
 // Defaults assume passcodes ON / email prompt ON — but until snapshots fire we
 // don't actually know the admin's settings. Confirm button waits for both.
@@ -614,6 +628,7 @@ mondays.forEach((d,idx)=>{
     range:d.toLocaleDateString('en-US',fmtWkd)+' – '+sat.toLocaleDateString('en-US',fmtWkd),
     shortDate:d.toLocaleDateString('en-US',fmt),
     slots:special?special.slots:3,
+    defaultSlots:special?special.slots:3, // built-in default; admin FTE Availability may override .slots
     highPriorityOnly:special?.highPriorityOnly||false,
     summerOnly:special?.summerOnly||false,
     special
@@ -783,16 +798,11 @@ function computeApprovals(src){
       }
     });
 
-    // Lone-draw collapse: uses the same threshold as the initial draw/review classification.
-    if(draws.size===1){
-      const loneUser=[...draws][0];
-      const loneFte=getUserFTE(loneUser);
-      const overage=Math.round(((fteWon+loneFte)-cap)*10)/10;
-      draws.delete(loneUser);
-      if(overage>0&&overage<=T){
-        reviews.add(loneUser);
-      }
-    }
+    // NOTE: We intentionally do NOT auto-collapse a lone remaining draw into a
+    // review or a loss. When one member of a draw is approved by the admin, the
+    // remaining participant(s) stay a DRAW (pending) until the admin explicitly
+    // approves or denies them — a draw participant is never auto-resolved. This
+    // must match the admin site's computeApprovals exactly.
 
     const fteDraws=[...draws].reduce((s,u)=>s+getUserFTE(u),0);
     const fteReviews=[...reviews].reduce((s,u)=>s+getUserFTE(u),0);
@@ -871,6 +881,7 @@ onSnapshot(approvalsRef,snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()?
 onSnapshot(phasesRef,  snap=>{ phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{}}; renderPhaseLabel(); scheduleRender(); });
 onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); scheduleRender(); });
 onSnapshot(deniedRef,  snap=>{ deniedData=normalizeWkArrayMap(snap.exists()?snap.data():{}); scheduleRender(); });
+onSnapshot(slotsRef,   snap=>{ slotsData=snap.exists()?snap.data():{}; applySlotOverrides(); scheduleRender(); });
 onSnapshot(userListRef, snap=>{
   if(snap.exists()&&snap.data().users){
     const newNames=snap.data().users;
