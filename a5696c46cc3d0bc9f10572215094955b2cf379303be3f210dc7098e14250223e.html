@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 5;        // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 6;        // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -2037,10 +2037,14 @@ window.exportPhaseResults=function(format){
   const now=new Date();
   const stamp=now.toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
   if(format==='csv'){
+    // CSV-quote every field. Combo bids ("1,2" / "1,2,3") contain commas — a
+    // bid is ONE value and must stay in ONE cell; without quoting, its commas
+    // split it across columns and shift Phase/Outcome into the wrong ones.
+    const csvEsc=v=>{ const s=String(v); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
     const lines=['Week #,Week Date,User,FTE,Bid,Phase,Outcome'];
     rows.forEach(r=>{
       const m=wkDate(r.wk); const wLbl=`${MS[m.getMonth()]} ${m.getDate()}`;
-      lines.push([r.wn,wLbl,r.user,getUserFTE(r.user),r.bid,r.phase,r.outcome].join(','));
+      lines.push([r.wn,wLbl,r.user,getUserFTE(r.user),r.bid,r.phase,r.outcome].map(csvEsc).join(','));
     });
     const csv=`# Vacation Auction — ${exportLabel} — exported ${stamp}\n`+lines.join('\n');
     const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
