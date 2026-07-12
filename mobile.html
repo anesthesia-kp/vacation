@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "mobile";  // this page's key in versions.json
-  var BUILD = 3;         // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 4;         // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -557,6 +557,7 @@ const phasesRef=doc(db,"vacations","phases");
 const bidPhaseRef=doc(db,"vacations","bidPhase");
 const deniedRef=doc(db,"vacations","denials");
 const slotsRef=doc(db,"vacations","slots"); // admin per-week FTE availability overrides
+const mailQueueRef=doc(db,"vacations","mailQueue"); // outbox for projection-change alerts
 // ── Auth gate ───────────────────────────────────────────────────────────────
 // Firestore listeners MUST NOT attach before anonymous sign-in resolves.
 // Without a token every listener is rejected with permission-denied — and a
@@ -1039,7 +1040,7 @@ function renderMyBids(user,ap){
         </div>
         ${!isL&&!closed?`<div class="mbc-actions">
           <button class="act-btn act-edit" onclick="openBidSheet('${wk}')">✎ Edit</button>
-          ${o==='win'?'<span style="font-size:.68rem;color:#34d399;font-style:italic;padding:6px 8px">Cannot cancel — projected win</span>':`<button class="act-btn act-remove" onclick="openRemoveSheet('${wk}')">✕</button>`}
+          ${`<button class="act-btn act-remove" onclick="openRemoveSheet('${wk}')">✕</button>`}
         </div>`:''}
       </div>`;
     list.appendChild(card);
@@ -1057,7 +1058,6 @@ function renderMyBids(user,ap){
     <div class="rule-item">Bid priorities can only increase — once you bid 5, you can only re-bid at 4 or better (shown as 🔒 Min in calendar view)</div>
     <div class="rule-item">High-demand weeks (Ski, Spring Break, Thanksgiving, Christmas, NYE) are restricted to bids of 1, 2, 3, 1,2, or 1,2,3 only</div>
     <div class="rule-item">Summer weeks (May 30 – Aug 22) are restricted to bids of 7 or better — bids 8, 9, 10, and NP are not allowed</div>
-    <div class="rule-item">You cannot cancel a bid on a week you are currently projected to win. You may still edit it.</div>
     <div class="rule-item">Strategy tip: start with lower bids and increase as needed — avoid "overpaying" on a week you could have won cheaply</div>
     <div class="rule-item">If you are projected to lose, consider increasing your bid or switching to a different week</div>
     <div class="rule-item">You will receive email notifications when someone else's bid changes your outcome</div>
@@ -1163,7 +1163,7 @@ function renderCalendar(user,ap){
         </div>`:''}
         ${isSel&&!isLocked&&!closed?`<div class="wr-mybid">
           <button class="act-btn act-edit" onclick="openBidSheet('${wk}');event.stopPropagation()">✎ Edit</button>
-          ${o==='win'?'<span style="font-size:.68rem;color:#34d399;font-style:italic;padding:6px 8px">Cannot cancel — projected win</span>':`<button class="act-btn act-remove" onclick="openRemoveSheet('${wk}');event.stopPropagation()">✕ Remove</button>`}
+          ${`<button class="act-btn act-remove" onclick="openRemoveSheet('${wk}');event.stopPropagation()">✕ Remove</button>`}
         </div>`:''}
       </div>`;
 
@@ -1454,15 +1454,7 @@ window.confirmPriority=async function(){
 window.openRemoveSheet=function(wk){
   pendingRemoveWeek=wk;
   const user=getCurrentUser();
-  // Cannot cancel a bid on a projected-win week
-  try {
-    const ap=computeApprovals();
-    if(ap[wk]?.winners?.has(user)){
-      showError("You cannot cancel a bid on a week you are projected to win. You may still edit it.");
-      pendingRemoveWeek=null;
-      return;
-    }
-  } catch(_){}
+  // (Rule removed 12 Jul 2026: cancel is allowed even on projected-win weeks.)
   const prio=data[user]?.[wk];
   const meta=weekMeta[wk];
   const prioLockOn=adminSettings.priorityLockEnabled!==false;
@@ -1508,7 +1500,15 @@ async function sendEmailNotifications(prevSnap,newSnap,actor){
       const email=emailsData[user];
       if(!email||email==="__skip__")continue;
       const bodyText=`Hi ${user},\n\nThere was activity on weeks you've bid on:\n\n`+changes.join("\n"); // intro lives in code, not the EmailJS template
-      if(typeof emailjs!=="undefined")await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:bodyText});
+      // Outbox pattern: persist first, then send; admin panel flushes anything left behind.
+      const qid=`${Date.now()}_${user}_${Math.floor(Math.random()*1e6)}`;
+      try{ await setDoc(mailQueueRef,{[qid]:{user,email,body:bodyText,ts:Date.now()}},{merge:true}); }catch(_){}
+      try{
+        if(typeof emailjs!=="undefined"){
+          await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:bodyText});
+          updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
+        }
+      }catch(_){/* stays queued */}
     }
   }catch(e){console.error("Email failed:",e);}
 }

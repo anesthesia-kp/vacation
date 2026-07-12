@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 9;        // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 10;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -506,6 +506,13 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
           </div>
           <div class="tog" id="emailNotifsToggle" onclick="toggleEmailNotifs()"></div>
         </div>
+        <div class="trow">
+          <div>
+            <div class="trow-label">Outbid Alert Queue: <span id="mqCount" style="font-family:var(--mono)">0</span> pending</div>
+            <div class="trow-desc">Alerts are saved to a queue the moment a bid changes, then emailed. If a user's browser closes before sending, they wait here. This panel auto-sends anything pending after 30 seconds; the button flushes immediately.</div>
+          </div>
+          <button class="btn btn-primary" style="flex:unset" onclick="flushMailQueue()">📮 Send Pending</button>
+        </div>
       </div>
     </div>
 
@@ -721,6 +728,7 @@ const phasesRef    = doc(db,"vacations","phases");
 const deniedRef    = doc(db,"vacations","denials");
 const bidPhaseRef  = doc(db,"vacations","bidPhase");
 const slotsRef     = doc(db,"vacations","slots"); // per-week FTE availability overrides {wk: number}
+const mailQueueRef = doc(db,"vacations","mailQueue"); // outbox for projection-change alerts
 
 let names = ["AD","ADG","AF","AN","AQ","AS","BC","CC","CZ","DNS","DR","EC","GL","GV","HR","JLO","KN","KQ","LF","LO","LP","MA","MCL","MG","MK","MKA","MTN","MW","NG","RL","SC","SFI","SL","SMJ","SYK","TL","XJ"];
 const MS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -792,6 +800,50 @@ onSnapshot(phasesRef,   snap=>{ phasesData=snap.exists()?snap.data():{currentPha
 onSnapshot(deniedRef,   snap=>{ deniedData=normalizeWkArrayMap(snap.exists()?snap.data():{}); refreshAll(); });
 onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); });
 onSnapshot(slotsRef,    snap=>{ slotsData=snap.exists()?snap.data():{}; refreshAll(); });
+onSnapshot(mailQueueRef,snap=>{ mailQueueData=snap.exists()?snap.data():{}; updateMailQueueBadge(); scheduleMailQueueSweep(); });
+
+// ── Outbid-alert outbox ──
+// User pages write each alert here BEFORE trying to send it, and remove it on
+// success. Anything left behind (bidder closed their browser, send blocked)
+// gets sent from this panel: automatically once an entry is >30s old, or
+// immediately via the "Send Pending" button. The age gate avoids racing a
+// bidder whose own send is still in flight.
+let mailQueueData={}, _mqBusy=false, _mqTimer=null;
+function updateMailQueueBadge(){
+  const el=document.getElementById('mqCount');
+  if(el) el.textContent=Object.keys(mailQueueData||{}).length;
+}
+function scheduleMailQueueSweep(){
+  if(_mqTimer) clearTimeout(_mqTimer);
+  if(!Object.keys(mailQueueData||{}).length) return;
+  _mqTimer=setTimeout(()=>{ processMailQueue(30000).catch(()=>{}); },31000);
+}
+async function processMailQueue(minAgeMs){
+  if(_mqBusy) return; _mqBusy=true;
+  try{
+    const now=Date.now();
+    let sent=0;
+    for(const [qid,e] of Object.entries(mailQueueData||{})){
+      if(!e||typeof e!=='object') { await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
+      if(now-(e.ts||0)<minAgeMs) continue;
+      const email=e.email||emailsDataAdmin[e.user];
+      if(!email||email==='__skip__'){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
+      try{
+        await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:e.body||''});
+        await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
+        sent++;
+      }catch(err){ console.warn('Queue send failed for',e.user,err); }
+    }
+    if(sent) toast(`📮 Sent ${sent} queued outbid alert${sent!==1?'s':''}`,'ok');
+    return sent;
+  } finally { _mqBusy=false; }
+}
+window.flushMailQueue=async function(){
+  const n=Object.keys(mailQueueData||{}).length;
+  if(!n){ toast('Outbid alert queue is empty','ok'); return; }
+  const sent=await processMailQueue(5000); // 5s guard against racing an in-flight bidder send
+  if(!sent) toast('Nothing old enough to send yet — try again in a few seconds','warn');
+};
 
 // ── Nav ──
 window.nav = function(id, el) {

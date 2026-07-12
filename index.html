@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 4;        // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 5;        // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -396,7 +396,6 @@ body{zoom:1.15}
         <li>On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 1,2, or 1,2,3 may be used</li>
         <li>On summer weeks (May 30 – Aug 22), only bids of 7 or better may be used</li>
         <li>To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week</li>
-        <li>You cannot cancel a bid on a week you are currently projected to win. You may still edit the bid.</li>
         <li style="margin-top:10px;color:#cbd5e1;font-weight:600">Understanding Outcomes</li>
       </ul>
       <div style="margin-top:8px;background:rgba(15,23,42,.5);border:1px solid #334155;border-radius:10px;padding:10px 12px;display:grid;grid-template-columns:auto 1fr;gap:8px 14px;align-items:start">
@@ -482,6 +481,7 @@ const phasesRef     = doc(db,"vacations","phases");
 const bidPhaseRef   = doc(db,"vacations","bidPhase");
 const deniedRef      = doc(db,"vacations","denials");
 const slotsRef       = doc(db,"vacations","slots"); // admin per-week FTE availability overrides
+const mailQueueRef   = doc(db,"vacations","mailQueue"); // outbox for projection-change alerts
 
 // ── State ──
 let data={}, locksData={globalLock:false,weeks:{}};
@@ -1177,17 +1177,8 @@ window.confirmPriority=async function(){
 async function removeSelection(wk){
   if(isAuctionClosed()){ showError("The auction has closed — no more changes allowed."); return; }
   const user=getCurrentUser(); if(!data[user])return;
-  // New rule: cannot cancel a bid on a week you are currently projected to win.
-  // Edits (via openPriorityModal) are still allowed. If they later drop out of
-  // the winning set through others' bids or admin decisions, they'll be able to
-  // remove it then.
-  try {
-    const ap=computeApprovals();
-    if(ap[wk]?.winners?.has(user)){
-      showError("You cannot cancel a bid on a week you are projected to win. You may still edit it.");
-      return;
-    }
-  } catch(_){}
+  // (Rule removed 12 Jul 2026: users may cancel any bid, including on weeks
+  // they are currently projected to win.)
   const prio=data[user][wk];
   const meta=weekMeta[wk];
   const prioLockOn=adminSettings.priorityLockEnabled!==false;
@@ -1555,18 +1546,11 @@ function renderCalendar(user,ap){
               eb.title="Edit bid";
               eb.onclick=(e)=>{e.stopPropagation();openPriorityModal(wk);};
               row.appendChild(eb);
-              // Only show cancel button if not projected to win
-              if(!isProjWin){
-                const cb=document.createElement("button"); cb.className="cancel-btn"; cb.textContent="✕";
-                cb.title="Cancel bid";
-                cb.onclick=(e)=>{e.stopPropagation();removeSelection(wk);};
-                row.appendChild(cb);
-              } else {
-                const lockNote=document.createElement("span");
-                lockNote.style.cssText="font-size:.6rem;color:#34d399;font-style:italic;margin-left:4px";
-                lockNote.textContent="(cannot cancel — projected win)";
-                row.appendChild(lockNote);
-              }
+              // Cancel is always available — including on projected-win weeks.
+              const cb=document.createElement("button"); cb.className="cancel-btn"; cb.textContent="✕";
+              cb.title="Cancel bid";
+              cb.onclick=(e)=>{e.stopPropagation();removeSelection(wk);};
+              row.appendChild(cb);
             }
             list.appendChild(row);
           });
@@ -1757,7 +1741,17 @@ async function sendEmailNotifications(prevSnap,newSnap,actor){
       // Greeting/context lives HERE now (not in the EmailJS template) so other
       // emails (phase results, reminders) aren't forced to carry this intro.
       const bodyText=`Hi ${user},\n\nThere was activity on weeks you've bid on:\n\n`+changes.join("\n");
-      if(typeof emailjs!=="undefined") await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:bodyText});
+      // Outbox pattern: persist the alert FIRST (as reliable as the bid write
+      // itself), then try to send. On success the entry is removed; if this
+      // browser dies mid-send, the admin panel flushes the queue later.
+      const qid=`${Date.now()}_${user}_${Math.floor(Math.random()*1e6)}`;
+      try{ await setDoc(mailQueueRef,{[qid]:{user,email,body:bodyText,ts:Date.now()}},{merge:true}); }catch(_){}
+      try{
+        if(typeof emailjs!=="undefined"){
+          await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:bodyText});
+          updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
+        }
+      }catch(_){/* leave queued — admin panel will send it */}
     }
   }catch(e){ console.error("Email failed:",e); }
 }
