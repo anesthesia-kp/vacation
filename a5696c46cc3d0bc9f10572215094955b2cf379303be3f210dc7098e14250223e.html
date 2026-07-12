@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 10;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 11;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -509,7 +509,7 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
         <div class="trow">
           <div>
             <div class="trow-label">Outbid Alert Queue: <span id="mqCount" style="font-family:var(--mono)">0</span> pending</div>
-            <div class="trow-desc">Alerts are saved to a queue the moment a bid changes, then emailed. If a user's browser closes before sending, they wait here. This panel auto-sends anything pending after 30 seconds; the button flushes immediately.</div>
+            <div class="trow-desc">Alerts are saved to a queue the moment a bid changes, then emailed. If the sender's browser closes first, ANY open page (user or admin) delivers them within about a minute using a claim system that prevents duplicates. The button flushes immediately from here.</div>
           </div>
           <button class="btn btn-primary" style="flex:unset" onclick="flushMailQueue()">📮 Send Pending</button>
         </div>
@@ -802,33 +802,43 @@ onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?sn
 onSnapshot(slotsRef,    snap=>{ slotsData=snap.exists()?snap.data():{}; refreshAll(); });
 onSnapshot(mailQueueRef,snap=>{ mailQueueData=snap.exists()?snap.data():{}; updateMailQueueBadge(); scheduleMailQueueSweep(); });
 
-// ── Outbid-alert outbox ──
+// ── Outbid-alert outbox (claim protocol) ──
 // User pages write each alert here BEFORE trying to send it, and remove it on
 // success. Anything left behind (bidder closed their browser, send blocked)
-// gets sent from this panel: automatically once an entry is >30s old, or
-// immediately via the "Send Pending" button. The age gate avoids racing a
-// bidder whose own send is still in flight.
+// is delivered by ANY open page — user or admin — via the shared claim
+// protocol: wait a random delay, write a claim on the entry, wait for the
+// claim to settle, verify it wasn't overwritten, then send. Claims expire
+// after 90s so a page that dies mid-send doesn't strand an alert.
 let mailQueueData={}, _mqBusy=false, _mqTimer=null;
+const MQ_ID='adm_'+Math.random().toString(36).slice(2);
 function updateMailQueueBadge(){
   const el=document.getElementById('mqCount');
   if(el) el.textContent=Object.keys(mailQueueData||{}).length;
 }
+function _mqEligible(e,now,minAgeMs){
+  return e&&typeof e==='object'&&(now-(e.ts||0))>=minAgeMs&&(!e.claimedAt||(now-e.claimedAt)>90000);
+}
 function scheduleMailQueueSweep(){
-  if(_mqTimer) clearTimeout(_mqTimer);
-  if(!Object.keys(mailQueueData||{}).length) return;
-  _mqTimer=setTimeout(()=>{ processMailQueue(30000).catch(()=>{}); },31000);
+  if(_mqTimer||_mqBusy) return;
+  const now=Date.now();
+  if(!Object.values(mailQueueData||{}).some(e=>_mqEligible(e,now,30000))) return;
+  _mqTimer=setTimeout(()=>{ _mqTimer=null; processMailQueue(30000).catch(()=>{}); },5000+Math.random()*10000);
 }
 async function processMailQueue(minAgeMs){
-  if(_mqBusy) return; _mqBusy=true;
+  if(_mqBusy) return 0; _mqBusy=true;
   try{
-    const now=Date.now();
     let sent=0;
-    for(const [qid,e] of Object.entries(mailQueueData||{})){
-      if(!e||typeof e!=='object') { await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
-      if(now-(e.ts||0)<minAgeMs) continue;
+    for(const qid of Object.keys(mailQueueData||{})){
+      const e=mailQueueData[qid];
+      if(!e||typeof e!=='object'){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
+      if(!_mqEligible(e,Date.now(),minAgeMs)) continue;
       const email=e.email||emailsDataAdmin[e.user];
       if(!email||email==='__skip__'){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
       try{
+        // Claim, let the claim settle, verify we still own it, then send.
+        await updateDoc(mailQueueRef,{[qid+'.claimedAt']:Date.now(),[qid+'.claimedBy']:MQ_ID});
+        await new Promise(r=>setTimeout(r,2500));
+        if(mailQueueData[qid]?.claimedBy!==MQ_ID) continue; // another page won this one
         await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:e.body||''});
         await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
         sent++;
@@ -836,13 +846,13 @@ async function processMailQueue(minAgeMs){
     }
     if(sent) toast(`📮 Sent ${sent} queued outbid alert${sent!==1?'s':''}`,'ok');
     return sent;
-  } finally { _mqBusy=false; }
+  } finally { _mqBusy=false; scheduleMailQueueSweep(); }
 }
 window.flushMailQueue=async function(){
   const n=Object.keys(mailQueueData||{}).length;
   if(!n){ toast('Outbid alert queue is empty','ok'); return; }
   const sent=await processMailQueue(5000); // 5s guard against racing an in-flight bidder send
-  if(!sent) toast('Nothing old enough to send yet — try again in a few seconds','warn');
+  if(!sent) toast('Nothing old enough to send yet (or another page just took it) — try again shortly','warn');
 };
 
 // ── Nav ──

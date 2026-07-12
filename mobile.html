@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "mobile";  // this page's key in versions.json
-  var BUILD = 4;         // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 5;         // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -849,6 +849,38 @@ onSnapshot(phasesRef,snap=>{phasesData=snap.exists()?snap.data():{currentPhase:1
 onSnapshot(bidPhaseRef,snap=>{bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{});scheduleRender();});
 onSnapshot(deniedRef,snap=>{deniedData=normalizeWkArrayMap(snap.exists()?snap.data():{});scheduleRender();});
 onSnapshot(slotsRef,snap=>{slotsData=snap.exists()?snap.data():{};applySlotOverrides();scheduleRender();});
+onSnapshot(mailQueueRef,snap=>{mailQueueData=snap.exists()?snap.data():{};scheduleMailQueueRelay();});
+
+// ── Outbid-alert queue relay (same claim protocol as index/admin) ──
+let mailQueueData={}, _mqTimer=null, _mqBusy=false;
+const MQ_ID='mob_'+Math.random().toString(36).slice(2);
+function _mqEligible(e,now){ return e&&typeof e==='object'&&(now-(e.ts||0))>=30000&&(!e.claimedAt||(now-e.claimedAt)>90000); }
+function scheduleMailQueueRelay(){
+  if(_mqTimer||_mqBusy) return;
+  const now=Date.now();
+  if(!Object.values(mailQueueData||{}).some(e=>_mqEligible(e,now))) return;
+  _mqTimer=setTimeout(()=>{ _mqTimer=null; relayMailQueue().catch(()=>{}); },5000+Math.random()*10000);
+}
+async function relayMailQueue(){
+  if(_mqBusy) return; _mqBusy=true;
+  try{
+    for(const qid of Object.keys(mailQueueData||{})){
+      const e=mailQueueData[qid];
+      if(!_mqEligible(e,Date.now())) continue;
+      const email=e.email||emailsData[e.user];
+      if(!email||email==='__skip__'){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
+      try{
+        await updateDoc(mailQueueRef,{[qid+'.claimedAt']:Date.now(),[qid+'.claimedBy']:MQ_ID});
+        await new Promise(r=>setTimeout(r,2500));
+        if(mailQueueData[qid]?.claimedBy!==MQ_ID) continue;
+        if(typeof emailjs==='undefined') continue;
+        await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:e.body||''});
+        updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
+      }catch(_){}
+    }
+  } finally { _mqBusy=false; scheduleMailQueueRelay(); }
+}
+window._relayMailQueue=relayMailQueue; // exposed for testing
 onSnapshot(passcodesRef,snap=>{
   passcodesData=snap.exists()?snap.data():{};
   _passcodesReady=true;
