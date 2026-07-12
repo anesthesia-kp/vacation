@@ -1,90 +1,94 @@
-# Vacation Auction — deploy notes
+# Vacation Auction — deploy & maintenance notes
 
-Three static HTML files. No build step, no dependencies.
+Three static HTML pages backed by Firebase Firestore (project `vacation-25e8e`).
+No build step, no dependencies.
 
 | File | What it is |
 |---|---|
 | `index.html` | Desktop user site |
 | `mobile.html` | Mobile user site |
-| `a5696c46...html` | Admin panel (obscure filename is deliberate) |
+| `a5696c46...html` | Admin panel (obscure filename is deliberate — do not rename) |
+| `versions.json` | Auto-refresh version numbers (see below) |
+| `.nojekyll` | Empty file — tells GitHub Pages to serve files as-is. Keep it. |
+| `netlify.toml` | Legacy — only matters if we ever move back to Netlify |
 
-Live at **vacation-kp.netlify.app**.
+## Current hosting: GitHub Pages
 
----
+Live at **https://vacation-kp.github.io/** — served from this private repo
+(`vacation-kp/vacation-kp.github.io`, GitHub Pro account).
 
-## One-time setup
+**Every push to `main` deploys automatically** (rebuild takes ~60 seconds).
+There is no per-deploy cost and no deploy cap. Push freely.
 
-Run these once, in this folder.
+### The everyday workflow
 
-```bash
-# 1. Start tracking history
-git init
-git add .
-git commit -m "Baseline: auth gate, letter badges, simulator fixes"
+1. Describe the change to the assistant (Claude) in plain language.
+2. The assistant edits the files in this folder, bumps the changed page's
+   `BUILD` number **and** the matching entry in `versions.json`, and runs its
+   checks.
+3. Open **GitHub Desktop** → review the changed files → type a short commit
+   message → **Commit to main** → **Push origin**.
+4. ~60s later the site is live. Open pages reload themselves (see below).
 
-# 2. Install and log in to Netlify
-npm install -g netlify-cli
-netlify login          # opens a browser, no password typed anywhere
+### Auto-refresh system
 
-# 3. Point this folder at the existing site
-netlify link           # choose vacation-kp
-```
+Each page has a `BUILD` number in its first `<script>` block and checks
+`versions.json` on load. If the deployed number is newer, the page reloads
+itself once — so nobody has to hard-refresh after a deploy.
 
-That's it. **Do not** connect this repo to Netlify's git auto-deploy in the
-dashboard — see the warning below.
+**Rule: any edit to a page must bump that page's `BUILD` and the same key in
+`versions.json`.** Keys: `index.html` → `"index"`, `mobile.html` → `"mobile"`,
+admin file → `"admin"`. The assistant handles this; humans don't touch
+`versions.json`.
 
----
+Deliberately **no service worker** — `versions.json` was chosen as the
+lighter, non-sticky alternative.
 
-## Everyday use
+## Firebase
 
-**Save a version** (free, unlimited — do this often):
+All data lives in Firestore under the `vacations` collection (schedule, locks,
+approvals, denials, phases, bidPhase, fteMap, slots, userList, emails,
+passcodes, bidTimes, bestBids, adminSettings, timer, changes, mailQueue).
+`vacation-kp.github.io` is in Firebase's authorized domains. Emails go
+through EmailJS (template `template_rss3fn3`) — the email *wrapper* is edited
+at emailjs.com, not in this repo.
 
-```bash
-git add .
-git commit -m "what changed"
-```
-
-**Push it live** (costs credits — do this rarely, in batches):
-
-```bash
-netlify deploy --prod
-```
-
-**Undo a bad change** — this is the whole point of the repo:
-
-```bash
-git log --oneline           # find the last good commit
-git checkout <hash> -- .    # restore those files
-netlify deploy --prod       # push the good version live
-```
-
----
-
-## Why deploys are manual
-
-Netlify's free plan is credit-based: **300 credits/month**, and a production
-deploy costs **15 credits** — about **20 deploys per month**.
-
-Git auto-deploy would fire on every push, so a typo fixed twice costs 30
-credits. Worse: if the account runs out of credits, **every project on it is
-paused until the next billing cycle** — the auction would go dark mid-bidding.
-
-So: commit freely, deploy deliberately. Batch a session's changes into one
-deploy rather than shipping after each tweak.
-
-> **Check first:** if this Netlify account was created before 4 Sept 2025 it's
-> on the legacy plan (100 GB bandwidth, 300 build minutes, no deploy cap) and
-> none of the above applies. Look under Team settings → Billing → Usage.
-> Migrating to credit pricing is permanent — don't do it without checking.
-
----
-
-## Things that must not be undone
+## Things that must NOT be undone
 
 - **The auth gate.** All three files defer Firestore listeners until anonymous
-  sign-in resolves (`authReady` + the wrapped `onSnapshot`). Without it,
-  listeners fire without a token, get `permission-denied`, and never retry —
-  which looks fine in a normal browser and breaks completely in incognito.
+  sign-in resolves (`authReady` + the wrapped `onSnapshot`). Without it the
+  site silently breaks in incognito/private windows.
 - **Priority scoring** uses a sorted join in all three files. Never revert to
-  the `.includes()` form.
+  the `.includes()` form, and never let the three files' scoring drift apart.
 - **Week keys are Sunday-anchored** and parsed as local time, never UTC.
+- **Draws never auto-resolve.** Approving one member of a draw must leave the
+  others as DRAW until the admin explicitly decides each one. No lone-draw
+  collapse — in any of the three files.
+- **`renderOverview` stays on `window`** (the dashboard phase dropdown breaks
+  silently without it — every inline `onclick`/`onchange` handler needs its
+  function window-bound).
+- **The outbid-alert mail queue** (`mailQueue` doc + claim protocol in all
+  three files). Alerts are written to the queue before sending; any open page
+  delivers stranded ones. Don't remove the claim/verify steps — they're what
+  prevents duplicate emails.
+- **Per-week FTE availability** comes from the `slots` doc via `getSlots()`
+  (admin) / `weekMeta[wk].slots` (user sites). Don't reintroduce hardcoded caps.
+
+## If we move back to Netlify someday
+
+`netlify.toml` is already set up (publish root, no build command). The old
+process was: `netlify login`, `netlify link` (site `vacation-kp`), then
+`netlify deploy --prod` to ship.
+
+**Big caveat that made us leave:** Netlify's credit-based free plan gives
+~300 credits/month and a production deploy costs 15 (~20 deploys/month). Do
+**not** connect git auto-deploy on that plan — every push would burn credits,
+and running out pauses every project on the account until the next cycle.
+Commit freely, deploy deliberately, in batches. (Accounts created before
+4 Sept 2025 may be on the legacy plan — 100 GB bandwidth, no deploy cap —
+check Team settings → Billing before assuming either way. Migrating to credit
+pricing is permanent.)
+
+Also remember to add the Netlify domain to Firebase's authorized domains
+before cutting over, and update any bookmarks — the auto-refresh system works
+the same on any host.
