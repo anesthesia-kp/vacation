@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 11;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 12;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -257,7 +257,8 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
         <label style="font-size:12px;color:var(--t2);font-weight:600">View phase:</label>
         <select id="dashPhaseFilter" class="sel" onchange="renderOverview()"></select>
-        <button class="btn btn-primary" style="margin-left:auto" onclick="sendReminderEmails()">📧 Send Reminder E-mails</button>
+        <button class="btn" style="margin-left:auto;background:rgba(251,191,36,.15);color:var(--yellow);border:1px solid rgba(251,191,36,.35)" title="Queued outbid alerts waiting to be emailed — click to send now" onclick="flushMailQueue()">🔔 Alert Queue: <span id="mqCountTop" style="font-family:var(--mono);font-weight:700">0</span></button>
+        <button class="btn btn-primary" onclick="sendReminderEmails()">📧 Send Reminder E-mails</button>
         <button class="btn btn-success" onclick="sendPhaseResultsEmails()">📮 Send Phase Results E-mails</button>
       </div>
       <div class="stats">
@@ -812,8 +813,12 @@ onSnapshot(mailQueueRef,snap=>{ mailQueueData=snap.exists()?snap.data():{}; upda
 let mailQueueData={}, _mqBusy=false, _mqTimer=null;
 const MQ_ID='adm_'+Math.random().toString(36).slice(2);
 function updateMailQueueBadge(){
+  const n=Object.keys(mailQueueData||{}).length;
   const el=document.getElementById('mqCount');
-  if(el) el.textContent=Object.keys(mailQueueData||{}).length;
+  if(el) el.textContent=n;
+  // Compact copy on the dashboard header — same count, same flush button.
+  const top=document.getElementById('mqCountTop');
+  if(top) top.textContent=n;
 }
 function _mqEligible(e,now,minAgeMs){
   return e&&typeof e==='object'&&(now-(e.ts||0))>=minAgeMs&&(!e.claimedAt||(now-e.claimedAt)>90000);
