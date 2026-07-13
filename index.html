@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 17;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 18;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -290,13 +290,18 @@ body{zoom:1.15}
       <button class="btn-primary" id="quickContinueBtn" style="width:100%;padding:13px;font-size:1rem" onclick="quickContinue()">Continue</button>
       <div style="margin-top:14px"><a onclick="signinShowPicker()" style="cursor:pointer;color:#006ba6;text-decoration:underline;font-size:.85rem">Sign in as someone else</a></div>
     </div>
-    <!-- Picker: search + browsable list -->
+    <!-- Picker: single combobox (input + dropdown that only opens while interacting) -->
     <div id="signinPicker">
-      <h2 class="modal-title" style="margin-bottom:12px">Sign in</h2>
-      <input id="signinSearch" type="text" placeholder="Type your initials…" autocomplete="off" oninput="filterNameList()" onkeydown="if(event.key==='Enter')pickFirstMatch()" style="width:100%;padding:12px 14px;font-size:1.05rem;font-weight:600;border:2px solid #9fb4c6;border-radius:10px;background:#fff;color:#111827;margin-bottom:10px;box-sizing:border-box">
-      <div id="nameList" style="max-height:260px;overflow-y:auto;border:2px solid #9fb4c6;border-radius:10px;background:#eef2f6"></div>
-      <div id="signinNoMatch" style="display:none;text-align:center;color:#48607a;font-size:.85rem;padding:12px">No initials match that — check your spelling or scroll the list.</div>
-      <label style="display:flex;align-items:center;gap:8px;font-size:.85rem;color:#3b566d;cursor:pointer;margin-top:12px"><input type="checkbox" id="rememberMe"> Remember me on this device</label>
+      <h2 class="modal-title" style="margin-bottom:4px">Sign in</h2>
+      <div style="font-size:.8rem;color:#48607a;margin-bottom:12px">Type your initials, or tap the box to browse the list.</div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:.85rem;color:#3b566d;cursor:pointer;margin-bottom:12px"><input type="checkbox" id="rememberMe"> Remember me on this device</label>
+      <div style="position:relative">
+        <input id="signinSearch" type="text" placeholder="Type your initials or tap to browse…" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="nameList"
+               onfocus="openNameList()" oninput="filterNameList()" onkeydown="signinKeydown(event)" onblur="scheduleCloseNameList()"
+               style="width:100%;padding:12px 40px 12px 14px;font-size:1.05rem;font-weight:600;border:2px solid #9fb4c6;border-radius:10px;background:#fff;color:#111827;box-sizing:border-box">
+        <span id="signinCaret" onclick="toggleNameList()" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);cursor:pointer;color:#48607a;font-size:.8rem;user-select:none">▼</span>
+        <div id="nameList" style="display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;max-height:240px;overflow-y:auto;border:2px solid #9fb4c6;border-radius:10px;background:#fff;z-index:30;box-shadow:0 14px 34px rgba(15,23,42,.2)"></div>
+      </div>
       <div id="signinLoading" style="display:none;text-align:center;color:#48607a;font-size:.8rem;margin-top:8px">Loading accounts…</div>
     </div>
   </div>
@@ -317,7 +322,7 @@ body{zoom:1.15}
   <div class="modal-content" style="max-width:380px;border-color:rgba(248,113,113,.4)">
     <div style="text-align:center;margin-bottom:8px;font-size:2.4rem">🚫</div>
     <div class="modal-title" style="color:#b91c1c;text-align:center">Bid Limit Reached</div>
-    <p style="color:#2c4257;line-height:1.5;text-align:center;margin:6px 0 4px;font-size:.92rem"><strong style="color:#7a4e00">Only 3 selections allowed per phase.</strong></p>
+    <p id="bidLimitModalMsg" style="color:#2c4257;line-height:1.5;text-align:center;margin:6px 0 4px;font-size:.92rem"><strong style="color:#7a4e00">You've reached the per-phase bid limit.</strong></p>
     <p style="color:#48607a;line-height:1.5;text-align:center;font-size:.82rem;margin-bottom:14px">To bid on this week, you'll need to remove one of your existing bids first.</p>
     <div class="modal-buttons" style="justify-content:center">
       <button class="btn-primary" onclick="document.getElementById('bidLimitModal').classList.remove('show')">Got It</button>
@@ -460,6 +465,10 @@ body{zoom:1.15}
   <div id="globalLockBanner">🔒 The schedule has been locked by the admin.</div>
   <div id="errorMessage" class="flash err"></div>
   <div class="notif-bar" id="notifBar"></div>
+  <div class="selections-bar" style="margin-bottom:14px">
+    <div class="selections-bar-title">My Bid Count</div>
+    <div id="bidPoolBox"></div>
+  </div>
   <div class="selections-bar">
     <div class="selections-bar-title">My Bids &amp; Projections <span style="font-size:.68rem;font-weight:400;color:#48607a;margin-left:8px">— Projections are likely outcomes, not guaranteed results</span></div>
     <div class="selections-list" id="selectionsList"></div>
@@ -930,6 +939,61 @@ function updateBidLimitRule(){
   el.textContent=lim===null
     ? 'There is no per-phase bid limit — you are limited only by the bid numbers you have available'
     : 'Only '+lim+' bid'+(lim!==1?'s':'')+' (including NP bids) may be used per phase — only bid for the number of weeks your accrued vacation and ATO will allow for';
+  if(typeof renderBidPool==='function'){ const u=getCurrentUser?.(); if(u) renderBidPool(u); }
+}
+
+// ── Per-phase bid-limit status ──
+// Each active (current-phase, non-denied) week counts as one bid. lim=null → no limit.
+function bidLimitStatus(user){
+  const lim=getMaxBidsPerPhase();
+  const count=myActiveWeeks(user).length;
+  return {lim, count, atLimit: lim!==null && count>=lim, remaining: lim===null?null:Math.max(0,lim-count)};
+}
+// Show the "bid limit reached" modal with text that matches the current admin limit.
+function showBidLimitModal(){
+  const lim=getMaxBidsPerPhase();
+  const msg=document.getElementById('bidLimitModalMsg');
+  if(msg) msg.innerHTML='<strong style="color:#7a4e00">Only '+lim+' bid'+(lim!==1?'s':'')+' allowed per phase.</strong>';
+  document.getElementById('bidLimitModal').classList.add('show');
+}
+// ── Bid-number pool ──
+// A compound bid (1,2,3)/(1,2) consumes each of its numbers (1,2,3 / 1,2).
+// Prior-phase wins consume their numbers permanently; NP is always available.
+function bidPoolInfo(user){
+  const usedNums=new Set(); let npCount=0;
+  for(const wk of myActiveWeeks(user)){
+    const p=data[user]?.[wk];
+    if(p==="NP"){ npCount++; continue; }
+    if(Array.isArray(p)) p.forEach(n=>usedNums.add(Number(n)));
+    else if(p!==undefined) usedNums.add(Number(p));
+  }
+  getPriorPhaseUsedPriorities(user).forEach(n=>{ if(n!=="NP") usedNums.add(Number(n)); });
+  const all=[1,2,3,4,5,6,7,8,9,10];
+  const remaining=all.filter(n=>!usedNums.has(n));
+  return {used:[...usedNums].sort((a,b)=>a-b), remaining, npCount};
+}
+function renderBidPool(user){
+  const box=document.getElementById('bidPoolBox'); if(!box||!user) return;
+  const pool=bidPoolInfo(user);
+  const st=bidLimitStatus(user);
+  const chip=(n,kind)=>`<span style="display:inline-block;font-weight:700;font-size:.78rem;padding:2px 9px;border-radius:7px;margin:2px;${kind==='used'?'background:rgba(239,68,68,.12);color:#b91c1c;border:1px solid rgba(239,68,68,.3)':'background:rgba(0,117,58,.1);color:#00713a;border:1px solid rgba(0,117,58,.3)'}">${n}</span>`;
+  const usedHtml=pool.used.length?pool.used.map(n=>chip(n,'used')).join(''):'<span style="color:#48607a;font-size:.8rem">None yet</span>';
+  const remHtml=(pool.remaining.length?pool.remaining.map(n=>chip(n,'rem')).join(''):'<span style="color:#48607a;font-size:.8rem">None</span>')+chip('NP','rem');
+  const phaseLine=st.lim===null
+    ? `<div style="font-size:.76rem;color:#48607a;margin-bottom:10px">No per-phase bid limit is set — you're limited only by the bid numbers you have available.</div>`
+    : `<div style="font-size:.8rem;color:#2c4257;margin-bottom:10px">You've placed <strong>${st.count}</strong> of <strong>${st.lim}</strong> allowed bid${st.lim!==1?'s':''} this phase${st.remaining>0?` — <strong style="color:#00713a">${st.remaining} remaining</strong>`:` — <strong style="color:#b91c1c">limit reached</strong>`}.</div>`;
+  box.innerHTML=`${phaseLine}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div>
+        <div style="font-size:.74rem;font-weight:700;color:#00713a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">My Bids Remaining</div>
+        <div>${remHtml}</div>
+      </div>
+      <div>
+        <div style="font-size:.74rem;font-weight:700;color:#b91c1c;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">My Bids Already Used</div>
+        <div>${usedHtml}</div>
+      </div>
+    </div>
+    <div style="font-size:.68rem;color:#8595a6;margin-top:8px">A combined bid like 1,2,3 uses bids 1, 2, and 3. Numbers from weeks you won in earlier phases stay used; NP is always available.</div>`;
 }
 onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; });
 onSnapshot(passcodesRef,snap=>{ passcodesData=snap.exists()?snap.data():{}; _passcodesReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
@@ -1128,7 +1192,7 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
     if(lim!==null){
       const cur=Number(phasesData.currentPhase||1);
       let count=0; const uw=prevSnapshot[user]||{};
-      for(const w in uw){ if(getUserBidPhase(user,w)===cur) count++; }
+      for(const w in uw){ if(getUserBidPhase(user,w)===cur && !isDeniedBid(user,w)) count++; }
       if(count>=lim){
         if(data[user]&&prevSnapshot[user]?.[wk]===undefined) delete data[user][wk]; // undo optimistic add
         scheduleRender();
@@ -1194,7 +1258,9 @@ function openPriorityModal(wk){
   }
   const existingPrio=isVisibleBid(user,wk)?data[user]?.[wk]:undefined;
   const isRebid=existingPrio!==undefined;
-  if(!isRebid&&myActiveWeeks(user).length>=3){ document.getElementById("bidLimitModal").classList.add("show"); return; }
+  // Alert as soon as the user tries to add a NEW bid beyond the per-phase limit —
+  // before they even pick a priority.
+  if(!isRebid&&bidLimitStatus(user).atLimit){ showBidLimitModal(); return; }
   // Priorities used in prior phases where the user WON are permanently unavailable to reuse.
   // Losses and denials return the bid to the user for the next phase.
   const priorUsedPrios=getPriorPhaseUsedPriorities(user);
@@ -1271,7 +1337,7 @@ window.reviewBid=function(){
     const conflicts=priorities.filter(p=>usedElsewhere.includes(p));
     if(conflicts.length){showError("Bid "+conflicts.join(",")+" already used on another week.");return;}
     const isNew=!isVisibleBid(user,pendingWeek);
-    if(isNew&&myActiveWeeks(user).length>=3){document.getElementById("bidLimitModal").classList.add("show");return;}
+    if(isNew&&bidLimitStatus(user).atLimit){showBidLimitModal();return;}
   }
   // Populate confirmation panel
   const meta=weekMeta[pendingWeek];
@@ -1306,7 +1372,7 @@ window.confirmPriority=async function(){
   const conflicts=priorities.filter(p=>usedElsewhere.includes(p));
   if(conflicts.length){showError("Bid "+conflicts.join(",")+" already used on another week.");return;}
   const isNew=!isVisibleBid(user,pendingWeek);
-  if(isNew&&myActiveWeeks(user).length>=3){document.getElementById("bidLimitModal").classList.add("show");window.closeModal();return;}
+  if(isNew&&bidLimitStatus(user).atLimit){showBidLimitModal();window.closeModal();return;}
   if(!data[user])data[user]={};
   const newPrio=priorities.length===1?priorities[0]:priorities;
   const isNewBid=data[user]?.[pendingWeek]===undefined;
@@ -1450,6 +1516,7 @@ function render(){
   document.getElementById("globalLockBanner").style.display=locksData.globalLock?"block":"none";
   const ap=computeApprovals();
   renderNotifications(user,ap);
+  renderBidPool(user);
   renderSelections(user,ap);
   renderCalendar(user,ap);
   // Populate dynamic threshold spans in rules text
@@ -1914,30 +1981,61 @@ function buildNameList(){
   nameList.innerHTML="";
   names.forEach(n=>{
     const item=document.createElement("div"); item.className="name-row"; item.dataset.name=n; item.textContent=n;
-    item.style.cssText="padding:12px 16px;cursor:pointer;color:#132f49;font-size:1.05rem;font-weight:600;border-bottom:1px solid #ffffff;transition:background .12s";
+    item.style.cssText="padding:12px 16px;cursor:pointer;color:#132f49;font-size:1.05rem;font-weight:600;border-bottom:1px solid #eef2f6;transition:background .12s";
     item.addEventListener("mouseenter",()=>item.style.background="rgba(0,107,166,.08)");
     item.addEventListener("mouseleave",()=>item.style.background="");
-    item.addEventListener("click",()=>selectName(n));
+    // Use mousedown so the selection fires before the input's blur closes the list.
+    item.addEventListener("mousedown",e=>{e.preventDefault();selectName(n);});
     nameList.appendChild(item);
   });
-  filterNameList();
+  // "No match" row, hidden unless a query matches nothing.
+  const nm=document.createElement("div"); nm.id="signinNoMatchRow"; nm.style.cssText="display:none;text-align:center;color:#48607a;font-size:.85rem;padding:14px";
+  nm.textContent="No initials match that — check your spelling.";
+  nameList.appendChild(nm);
   initSigninScreen();
 }
+let _closeListT=null;
+function openNameList(){
+  if(!nameList) return;
+  if(_closeListT){ clearTimeout(_closeListT); _closeListT=null; }
+  nameList.style.display="block";
+  const inp=document.getElementById("signinSearch"); if(inp) inp.setAttribute("aria-expanded","true");
+  filterNameList();
+}
+window.openNameList=openNameList;
+function closeNameList(){
+  if(!nameList) return;
+  nameList.style.display="none";
+  const inp=document.getElementById("signinSearch"); if(inp) inp.setAttribute("aria-expanded","false");
+}
+window.scheduleCloseNameList=function(){ _closeListT=setTimeout(closeNameList,150); };
+window.toggleNameList=function(){
+  const inp=document.getElementById("signinSearch");
+  if(nameList && nameList.style.display==="block"){ closeNameList(); }
+  else { if(inp) inp.focus(); openNameList(); }
+};
 window.filterNameList=function(){
+  if(nameList && nameList.style.display!=="block") openNameList();
   const q=(document.getElementById("signinSearch")?.value||"").trim().toUpperCase();
   let shown=0;
   nameList.querySelectorAll(".name-row").forEach(r=>{
     const match=r.dataset.name.toUpperCase().includes(q);
     r.style.display=match?"":"none"; if(match) shown++;
   });
-  const nm=document.getElementById("signinNoMatch"); if(nm) nm.style.display=(shown===0&&q)?"block":"none";
+  const nm=document.getElementById("signinNoMatchRow"); if(nm) nm.style.display=(shown===0&&q)?"block":"none";
 };
 window.pickFirstMatch=function(){
-  const first=[...nameList.querySelectorAll(".name-row")].find(r=>r.style.display!=="none");
+  const first=[...nameList.querySelectorAll(".name-row")].find(r=>r.style.display!=="none"&&r.classList.contains("name-row"));
   if(first) selectName(first.dataset.name);
+};
+window.signinKeydown=function(e){
+  if(e.key==='Enter'){ e.preventDefault(); pickFirstMatch(); }
+  else if(e.key==='Escape'){ closeNameList(); }
 };
 function selectName(n){
   selectedSignInName=n;
+  closeNameList();
+  const inp=document.getElementById("signinSearch"); if(inp) inp.value=n;
   if(!signinReady()){ _pendingSignIn=n; const l=document.getElementById("signinLoading"); if(l)l.style.display="block"; return; }
   confirmAccountSelection();
 }

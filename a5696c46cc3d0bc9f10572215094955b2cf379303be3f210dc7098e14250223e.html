@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 32;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 33;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -280,6 +280,7 @@ thead th{color:var(--t2)}
     <div class="nav">
       <a onclick="nav('overview',this)" class="on">📊 Dashboard</a>
       <a onclick="nav('appdenials',this)">✅ Approvals/Denials</a>
+      <a onclick="nav('bidsbyweek',this)">📋 Bids by Week</a>
       <a onclick="nav('drawsreviews',this)">⚖️ Draws &amp; Reviews</a>
       <a onclick="nav('locks',this)">🔒 Lock Weeks</a>
       <a onclick="nav('edits',this)">✏️ Edit Selections</a>
@@ -373,6 +374,14 @@ thead th{color:var(--t2)}
           <button class="btn btn-danger" id="clearTimerBtn" onclick="adminClearTimer()" disabled>✕ Clear Timer</button>
         </div>
         </div>
+      </div>
+
+      <div class="card" id="lockSummaryCard" style="margin-bottom:20px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+          <div class="card-title" style="margin:0">🔒 Lock Weeks Summary</div>
+          <button class="btn btn-ghost" style="font-size:12px" onclick="nav('locks',document.querySelector('.nav a[onclick*=\'locks\']'))">Open Lock Weeks settings →</button>
+        </div>
+        <div id="lockSummaryBody" style="font-size:13px;color:var(--t2)"></div>
       </div>
 
       <div style="display:flex;gap:10px;margin-bottom:14px">
@@ -678,6 +687,19 @@ thead th{color:var(--t2)}
       <div id="adBody"></div>
     </div>
 
+    <!-- BIDS BY WEEK -->
+    <div class="panel" id="panel-bidsbyweek">
+      <div class="page-head"><div class="page-title">📋 Bids by Week</div><div class="page-sub">Every bid placed, grouped by week, with each user's bid number and result. Live for the current phase; approved/denied for completed phases.</div></div>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+        <label style="font-size:11px;color:var(--t2)">Phase:</label>
+        <select id="bwPhaseFilter" class="sel" onchange="renderBidsByWeek()"></select>
+        <button class="btn" style="font-size:12px;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3);margin-left:auto" onclick="exportPhaseResults('pdf',document.getElementById('bwPhaseFilter').value)">📄 Export PDF</button>
+        <button class="btn" style="font-size:12px;background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportPhaseResults('xlsx',document.getElementById('bwPhaseFilter').value)">📊 Export Excel</button>
+      </div>
+      <div id="bwLegend" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;font-size:10px"></div>
+      <div id="bwBody"></div>
+    </div>
+
     <!-- SIMULATOR -->
     <div class="panel" id="panel-simulator">
       <div class="page-head">
@@ -937,6 +959,7 @@ window.nav = function(id, el) {
   if(id==='edits') renderEditTable();
   if(id==='simulator') renderSimPanel();
   if(id==='appdenials') renderAppDenials();
+  if(id==='bidsbyweek'&&typeof renderBidsByWeek==='function') renderBidsByWeek();
   if(id==='bestbids') renderBestBids();
   if(id==='drawsreviews') renderDrawsReviews();
   if(id==='changelog') renderChangelog();
@@ -1215,6 +1238,7 @@ function refreshAll(){
     if(isOn('edits')) renderEditTable();
     if(isOn('simulator')) renderSimPanel();
     if(isOn('appdenials')) renderAppDenials();
+    if(isOn('bidsbyweek')&&typeof renderBidsByWeek==='function') renderBidsByWeek();
     if(isOn('drawsreviews')) renderDrawsReviews();
     if(isOn('bestbids')) renderBestBids();
     if(isOn('changelog')) renderChangelog();
@@ -1297,9 +1321,42 @@ function renderPhaseProgress(){
        </div>`;
 }
 
+function renderLockSummary(){
+  const el=document.getElementById('lockSummaryBody'); if(!el) return;
+  const s=lockSummary();
+  const chipList=(arr,color)=>arr.map(w=>`<span style="display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;margin:2px;background:${color}22;color:${color};border:1px solid ${color}55">${w.label}${w.remaining!==undefined?` (${w.remaining})`:''}</span>`).join('');
+  let html='';
+  if(s.globalLock){
+    html+=`<div style="padding:8px 10px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;color:#b91c1c;font-weight:700;margin-bottom:10px">🌐 Global Lock is ON — all bidding is frozen for every week.</div>`;
+  }
+  html+=`<div style="margin-bottom:8px"><strong style="color:var(--t1);font-size:15px">${s.lockedCount}</strong> of ${s.total} week${s.total!==1?'s':''} individually locked.</div>`;
+  if(s.lockedCount){
+    html+=`<div style="margin-bottom:6px"><span style="font-size:11px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.04em">Locked weeks</span><br>${chipList(s.lockedWeeks,'#334155')}</div>`;
+  }
+  // Problem 1: locked but still winnable → should probably be unlocked
+  if(s.lockedWithAvailability.length){
+    html+=`<div style="margin-top:10px;padding:8px 10px;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.4);border-radius:8px">
+      <div style="font-weight:700;color:#946200;margin-bottom:4px">⚠️ ${s.lockedWithAvailability.length} locked week${s.lockedWithAvailability.length!==1?'s':''} still ${s.lockedWithAvailability.length!==1?'have':'has'} availability</div>
+      <div style="font-size:11px;color:var(--t2);margin-bottom:4px">These are locked but a user could still win them (remaining FTE, accounting for the allowed overage) — bidding is wrongly blocked.</div>
+      ${chipList(s.lockedWithAvailability,'#d97706')}</div>`;
+  }
+  // Problem 2: unlocked but no availability → should probably be locked
+  if(s.unlockedNoAvailability.length){
+    html+=`<div style="margin-top:10px;padding:8px 10px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px">
+      <div style="font-weight:700;color:#b91c1c;margin-bottom:4px">⚠️ ${s.unlockedNoAvailability.length} unlocked week${s.unlockedNoAvailability.length!==1?'s':''} ${s.unlockedNoAvailability.length!==1?'have':'has'} no availability</div>
+      <div style="font-size:11px;color:var(--t2);margin-bottom:4px">These are open for bidding but full (no room even with the allowed overage) — users could waste bids. Consider locking them.</div>
+      ${chipList(s.unlockedNoAvailability,'#dc2626')}</div>`;
+  }
+  if(!s.lockedWithAvailability.length&&!s.unlockedNoAvailability.length&&!s.globalLock){
+    html+=`<div style="margin-top:6px;color:var(--green);font-weight:600">✓ No lock problems detected — every full week is locked and every winnable week is open.</div>`;
+  }
+  el.innerHTML=html;
+}
+window.renderLockSummary=renderLockSummary;
+
 function renderOverview(){
   const ap=computeApprovals();
-  try{ renderPhasePanel(); renderNoBidders(); renderPhaseProgress(); }catch(e){ console.warn('dash',e); }
+  try{ renderPhasePanel(); renderNoBidders(); renderPhaseProgress(); renderLockSummary(); }catch(e){ console.warn('dash',e); }
   const g=document.getElementById("ovgrid"); if(!g)return;
   const legendEl=document.getElementById("dashLegend");
   const weekEl=document.getElementById("weekSummary");
@@ -2054,6 +2111,42 @@ window.completePhase=function(){
   });
 };
 
+async function _commitBeginPhase(next){
+  await setDoc(phasesRef,{currentPhase:next},{merge:true});
+  toast('▶ Phase '+next+' begun','ok');
+}
+// Override path: begin the phase WITHOUT applying lock fixes (admin's explicit choice).
+window._beginPhaseOverride=async function(next){
+  closeConfirm();
+  await _commitBeginPhase(next);
+};
+// Forced pre-phase lock decision: the phase does NOT start until the admin picks
+// Fix All & Begin, or explicitly overrides. Cancel aborts entirely.
+function _beginPhaseLockDecision(next){
+  const need=weeksNeedingLock(true).list;                 // should be locked
+  const wrongLocked=lockedWeeksWithAvailability().list;    // should be unlocked
+  if(!need.length&&!wrongLocked.length){ _commitBeginPhase(next); return; }
+  const secNeed=need.length?`<div style="font-weight:700;color:var(--red);margin-top:4px">🔒 ${need.length} full week${need.length!==1?'s':''} still UNLOCKED (no availability — users could waste bids):</div>
+          <ul style="margin:6px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.6;max-height:120px;overflow-y:auto">${need.map(w=>`<li>${w.label} <span style="color:var(--red)">(Remaining: ${w.remaining})</span></li>`).join('')}</ul>`:'';
+  const secWrong=wrongLocked.length?`<div style="font-weight:700;color:var(--yellow);margin-top:4px">🔓 ${wrongLocked.length} week${wrongLocked.length!==1?'s':''} LOCKED but still winnable (bidding is wrongly blocked):</div>
+          <ul style="margin:6px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.6;max-height:120px;overflow-y:auto">${wrongLocked.map(w=>`<li>${w.label} <span style="color:var(--green)">(Remaining: ${w.remaining})</span></li>`).join('')}</ul>`:'';
+  openConfirm({
+    title:'⚠️ Lock decision required before Phase '+next,
+    body:`<div style="margin-bottom:6px"><strong>Phase ${next} has not started yet.</strong> Decide how to handle these weeks first:</div>
+          ${secNeed}${secWrong}
+          <div class="cmodal-info">Choose <strong>Fix All & Begin</strong> to lock the full weeks and unlock the still-winnable weeks, then start Phase ${next}.</div>
+          <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="_beginPhaseOverride(${next})">▶ Begin Phase ${next} without changes (override)</button>`,
+    okText:'🔧 Fix All & Begin Phase '+next, danger:true,
+    onConfirm:async()=>{
+      const updates={};
+      need.forEach(w=>updates[w.wk]=true);
+      wrongLocked.forEach(w=>updates[w.wk]=false);
+      await setDoc(locksRef,{weeks:updates},{merge:true});
+      await _commitBeginPhase(next);
+      toast('🔧 Fixed '+(need.length+wrongLocked.length)+' week'+((need.length+wrongLocked.length)!==1?'s':''),'ok');
+    }
+  });
+}
 window.beginNextPhase=function(){
   const cur=Number(phasesData.currentPhase||1);
   const next=cur+1;
@@ -2061,29 +2154,9 @@ window.beginNextPhase=function(){
   openConfirm({
     title:'▶ Begin Phase '+next,
     body:`<div>Begin Phase <strong>${next}</strong>?</div>
-          <div class="cmodal-info" style="margin-top:10px">Users will see "Phase ${next}" on the bidding board and can place new bids. Previous approvals remain locked in.</div>`,
-    okText:'Begin Phase '+next,
-    onConfirm:async()=>{
-      await setDoc(phasesRef,{currentPhase:next},{merge:true});
-      toast('▶ Phase '+next+' begun','ok');
-      // Warn if any full weeks are still unlocked — users could bid on weeks with no room.
-      setTimeout(()=>{
-        const need=weeksNeedingLock(true).list;
-        if(!need.length) return;
-        openConfirm({
-          title:'⚠️ Lock full weeks before bidding starts',
-          body:`<div><strong>${need.length} week${need.length!==1?'s':''}</strong> now ${need.length!==1?'have':'has'} no availability left (approvals filled them past the FTE overage), but ${need.length!==1?'are':'is'} still <strong>unlocked</strong>. Users could waste bids on ${need.length!==1?'them':'it'} in Phase ${next}.</div>
-                <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.7;max-height:150px;overflow-y:auto">${need.map(w=>`<li>${w.label} <span style="color:var(--red)">(Remaining: ${w.remaining})</span></li>`).join('')}</ul>
-                <div class="cmodal-info">Click "Lock Them Now" to lock all of these in one step. (You can also do this any time from the Lock Weeks page via "Lock Weeks with No Availability".)</div>`,
-          okText:'🔒 Lock Them Now', danger:true,
-          onConfirm:async()=>{
-            const updates={}; need.forEach(w=>updates[w.wk]=true);
-            await setDoc(locksRef,{weeks:updates},{merge:true});
-            toast('🔒 Locked '+need.length+' full week'+(need.length!==1?'s':''),'warn');
-          }
-        });
-      },400);
-    }
+          <div class="cmodal-info" style="margin-top:10px">Users will see "Phase ${next}" on the bidding board and can place new bids. Previous approvals remain locked in. You'll confirm week locks before it starts.</div>`,
+    okText:'Continue',
+    onConfirm:()=>_beginPhaseLockDecision(next)
   });
 };
 
@@ -2225,76 +2298,107 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
 
 function bidLblAdmin(p){ if(p===undefined||p===null) return '—'; if(p==='NP') return 'NP'; if(Array.isArray(p)) return p.join(','); return String(p); }
 
-// Export current-phase approvals/denials to CSV or a printable HTML/PDF.
-// The generated document has a timestamp header.
-window.exportPhaseResults=function(format){
+// ── Canonical phase-aware "Bids by Week" model (FTE-free) ──
+// Powers the on-site Bids by Week grid AND the PDF/Excel exports so they always agree.
+// scope: 'current' | 'all' | 'phN'.
+//   current → only bids placed in the current phase (prior-phase carryover excluded),
+//             live outcomes: WINNING / LOSING / DRAW / REVIEW / APPROVED / DENIED.
+//   phN     → only bids placed in that completed phase, from its snapshot: APPROVED / DENIED.
+//   all     → every bid across all phases, each with its own phase's outcome.
+// "Currently winning" (live, provisional) is a distinct outcome from "approved"
+// (admin-confirmed or locked in a completed phase).
+function bwOutcomeRank(o){ const m={approved:0,winning:1,draw:2,review:3,losing:4,denied:5,lose:4}; return (o in m)?m[o]:9; }
+function bwOutcomeColor(o){
+  return o==='winning'?'#1d4ed8'        // provisional live win — blue
+    : o==='approved'?'#059669'          // confirmed / locked — green
+    : o==='denied'?'#dc2626'
+    : o==='draw'?'#d97706'
+    : o==='review'?'#7c3aed'
+    : /* losing/lose */ '#64748b';
+}
+function bwOutcomeLabel(o){ return o==='losing'?'LOSING':o==='lose'?'LOSING':o.toUpperCase(); }
+function bidsByWeekModel(scope){
   const cur=Number(phasesData.currentPhase||1);
-  const phaseSel=document.getElementById('adPhaseFilter');
-  const phaseFilterVal=phaseSel?.value||'current';
-  // Determine which phase we're exporting
-  let exportPhase=cur;
-  let exportLabel=`Phase ${cur} (current)`;
-  if(phaseFilterVal.match(/^ph(\d+)$/)){
-    exportPhase=Number(phaseFilterVal.match(/^ph(\d+)$/)[1]);
-    exportLabel=`Phase ${exportPhase} (locked)`;
-  } else if(phaseFilterVal==='all'){
-    exportPhase='all';
-    exportLabel='All Phases';
-  }
-  // Gather data — same shape used by renderAppDenials
   const ap=computeApprovals();
-  const rows=[]; // {wk, weekNum, user, bid, phase, outcome}
+  const mm=(typeof scope==='string')&&scope.match(/^ph(\d+)$/);
+  const lockedPhase=mm?Number(mm[1]):null;
+  const groups=[];
   mondays.forEach(d=>{
     const wk=dateKey(d);
     const wn=_wkNumByISO[wk]||'?';
     const approvedHere=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
     const deniedHere=Array.isArray(deniedData?.[wk])?deniedData[wk]:[];
+    const bids=[];
     for(const u in scheduleData){
       const p=scheduleData[u]?.[wk]; if(p===undefined) continue;
       const bp=getUserBidPhaseAdmin(u,wk);
-      // Phase filter
-      if(exportPhase==='all'){}
-      else if(bp!==exportPhase) continue;
+      if(lockedPhase!==null){ if(bp!==lockedPhase) continue; }
+      else if(scope==='current'){ if(bp!==cur) continue; }   // 'all' keeps everything
       let outcome;
       if(bp<cur){
         const phSnap=phasesData.completedPhases?.[bp]||{};
         const phAp=Array.isArray(phSnap.approvals?.[wk])?phSnap.approvals[wk]:[];
         const phDen=Array.isArray(phSnap.denials?.[wk])?phSnap.denials[wk]:[];
-        outcome=phAp.includes(u)?'approved':(phDen.includes(u)?'denied':'lose');
+        outcome=phAp.includes(u)?'approved':(phDen.includes(u)?'denied':'losing');
       } else {
         if(approvedHere.includes(u)) outcome='approved';
         else if(deniedHere.includes(u)) outcome='denied';
-        else if(ap[wk]?.winners?.has(u)) outcome='win';
+        else if(ap[wk]?.winners?.has(u)) outcome='winning';
         else if(ap[wk]?.draws?.has(u)) outcome='draw';
         else if(ap[wk]?.reviews?.has(u)) outcome='review';
-        else outcome='lose';
+        else outcome='losing';
       }
-      rows.push({wk,wn,user:u,bid:bidLblAdmin(p),phase:bp,outcome});
+      bids.push({user:u,bid:bidLblAdmin(p),phase:bp,outcome,score:pScore(p)});
     }
+    if(!bids.length) return;
+    bids.sort((a,b)=>bwOutcomeRank(a.outcome)-bwOutcomeRank(b.outcome)||a.score-b.score||a.user.localeCompare(b.user));
+    groups.push({wk,wn,date:`${MS[d.getMonth()]} ${d.getDate()}`,bids});
   });
-  rows.sort((a,b)=>a.wn-b.wn||a.user.localeCompare(b.user));
+  return groups;
+}
+// Resolve the export/grid scope label from a filter value.
+function bwScopeLabel(scope){
+  const cur=Number(phasesData.currentPhase||1);
+  const mm=(typeof scope==='string')&&scope.match(/^ph(\d+)$/);
+  if(scope==='all') return 'All Phases';
+  if(mm) return `Phase ${mm[1]} (completed)`;
+  return `Phase ${cur} (current)`;
+}
+
+// Export current-phase approvals/denials to CSV or a printable HTML/PDF.
+// The generated document has a timestamp header.
+window.exportPhaseResults=function(format,scopeOverride){
+  // scopeOverride lets the Bids-by-Week panel pass its own filter; otherwise use
+  // the Approvals/Denials phase dropdown. FTE columns intentionally omitted.
+  const scope=scopeOverride||document.getElementById('adPhaseFilter')?.value||'current';
+  const exportLabel=bwScopeLabel(scope);
+  const groups=bidsByWeekModel(scope);
+  const showPhaseCol=scope==='all';
   const now=new Date();
   const stamp=now.toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
+  const fnameScope=scope==='all'?'all':(String(scope).match(/^ph(\d+)$/)?('phase'+String(scope).match(/^ph(\d+)$/)[1]):('phase'+Number(phasesData.currentPhase||1)));
+  const totalBids=groups.reduce((s,g)=>s+g.bids.length,0);
   if(format==='csv'||format==='xlsx'){
-    const header=['Week #','Week Date','User','FTE','Bid','Phase','Outcome'];
-    const dataRows=rows.map(r=>{
-      const m=wkDate(r.wk); const wLbl=`${MS[m.getMonth()]} ${m.getDate()}`;
-      // Bid stays a STRING so combo bids ("1,2,3") remain one cell, one bid.
-      return [r.wn,wLbl,r.user,getUserFTE(r.user),String(r.bid),r.phase,r.outcome];
+    const header=showPhaseCol?['Week #','Date','User','Bid','Phase','Result']:['Week #','Date','User','Bid','Result'];
+    const dataRows=[];
+    groups.forEach(g=>{
+      g.bids.forEach(b=>{
+        const row=showPhaseCol?[g.wn,g.date,b.user,String(b.bid),'P'+b.phase,bwOutcomeLabel(b.outcome)]:[g.wn,g.date,b.user,String(b.bid),bwOutcomeLabel(b.outcome)];
+        dataRows.push(row);
+      });
     });
-    const fname=`vacation-auction-phase${exportPhase}-${now.toISOString().slice(0,10)}`;
+    const fname=`vacation-bids-${fnameScope}-${now.toISOString().slice(0,10)}`;
     if(typeof XLSX!=='undefined'){
-      const ws=XLSX.utils.aoa_to_sheet([[`Vacation Auction — ${exportLabel} — exported ${stamp}`],header,...dataRows]);
-      ws['!cols']=[{wch:7},{wch:10},{wch:8},{wch:5},{wch:8},{wch:6},{wch:10}];
+      const ws=XLSX.utils.aoa_to_sheet([[`Vacation Auction — Bids by Week — ${exportLabel} — exported ${stamp}`],header,...dataRows]);
+      ws['!cols']=showPhaseCol?[{wch:7},{wch:10},{wch:10},{wch:8},{wch:6},{wch:10}]:[{wch:7},{wch:10},{wch:10},{wch:8},{wch:10}];
       const wb=XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb,ws,'Approvals & Denials');
+      XLSX.utils.book_append_sheet(wb,ws,'Bids by Week');
       XLSX.writeFile(wb,fname+'.xlsx');
       toast('📊 Excel exported','ok');
       return;
     }
-    // Fallback if the Excel library couldn't load: properly quoted CSV.
     const csvEsc=v=>{ const s=String(v); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
-    const csv=`# Vacation Auction — ${exportLabel} — exported ${stamp}\n`+[header,...dataRows].map(r=>r.map(csvEsc).join(',')).join('\n');
+    const csv=`# Vacation Auction — Bids by Week — ${exportLabel} — exported ${stamp}\n`+[header,...dataRows].map(r=>r.map(csvEsc).join(',')).join('\n');
     const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
     const url=URL.createObjectURL(blob);
     const a=document.createElement('a');
@@ -2304,35 +2408,71 @@ window.exportPhaseResults=function(format){
     toast('📊 Excel library unavailable — exported CSV instead','warn');
     return;
   }
-  // PDF via new-window print (browser Save as PDF)
-  const tbody=rows.map(r=>{
-    const m=wkDate(r.wk); const wLbl=`${MS[m.getMonth()]} ${m.getDate()}`;
-    const color=r.outcome==='approved'?'#10b981':r.outcome==='win'?'#0d7a43':r.outcome==='denied'?'#dc2626':r.outcome==='draw'?'#d97706':r.outcome==='review'?'#5b4fb5':'#587690';
-    return `<tr><td>${r.wn}</td><td>${wLbl}</td><td><strong>${r.user}</strong></td><td>${getUserFTE(r.user)}</td><td>${r.bid}</td><td>P${r.phase}</td><td style="color:${color};font-weight:600">${r.outcome.toUpperCase()}</td></tr>`;
+  // PDF via print window — grouped by week, color-coded results, no FTE.
+  const sections=groups.map(g=>{
+    const rows=g.bids.map(b=>{
+      const c=bwOutcomeColor(b.outcome);
+      return `<tr><td><strong>${b.user}</strong></td><td>${b.bid}</td>${showPhaseCol?`<td>P${b.phase}</td>`:''}<td><span style="color:#fff;background:${c};font-weight:700;font-size:10px;padding:2px 8px;border-radius:10px">${bwOutcomeLabel(b.outcome)}</span></td></tr>`;
+    }).join('');
+    return `<div class="wk"><div class="wk-head">Week ${g.wn} · ${g.date}</div>
+      <table><thead><tr><th>User</th><th>Bid</th>${showPhaseCol?'<th>Phase</th>':''}<th>Result</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }).join('');
   const w=window.open('','_blank');
   if(!w){ toast('Pop-up blocked — allow pop-ups for this site','warn'); return; }
-  w.document.write(`<!doctype html><html><head><title>Vacation Auction — ${exportLabel}</title>
+  w.document.write(`<!doctype html><html><head><title>Vacation Auction — Bids by Week — ${exportLabel}</title>
     <style>
       body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:24px;color:#0f172a}
       h1{margin:0 0 4px 0;font-size:20px}
       .stamp{color:#587690;font-size:12px;margin-bottom:16px}
+      .wk{margin-bottom:16px;break-inside:avoid}
+      .wk-head{font-weight:700;font-size:13px;background:#0f2744;color:#fff;padding:5px 10px;border-radius:6px 6px 0 0}
       table{border-collapse:collapse;width:100%;font-size:12px}
-      th,td{border:1px solid #e2e8f0;padding:6px 8px;text-align:left}
+      th,td{border:1px solid #e2e8f0;padding:5px 9px;text-align:left}
       th{background:#f8fafc;font-weight:600}
       tbody tr:nth-child(even){background:#fafafa}
       @media print { body { margin: 12mm } }
     </style></head><body>
-    <h1>Vacation Auction — ${exportLabel}</h1>
-    <div class="stamp">Exported ${stamp} · ${rows.length} bid${rows.length!==1?'s':''}</div>
-    <table>
-      <thead><tr><th>Wk #</th><th>Date</th><th>User</th><th>FTE</th><th>Bid</th><th>Phase</th><th>Outcome</th></tr></thead>
-      <tbody>${tbody}</tbody>
-    </table>
+    <h1>Vacation Auction — Bids by Week</h1>
+    <div class="stamp">${exportLabel} · Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} across ${groups.length} week${groups.length!==1?'s':''}</div>
+    ${sections||'<p>No bids for this selection.</p>'}
     <script>setTimeout(()=>window.print(),300);<\/script>
     </body></html>`);
   w.document.close();
   toast('📄 Preview opened — use browser "Print → Save as PDF"','ok');
+};
+
+// ── Bids by Week — live on-site grid ──
+window.renderBidsByWeek=function(){
+  const sel=document.getElementById('bwPhaseFilter');
+  populatePhaseFilter(sel);
+  const scope=sel?.value||'current';
+  const legend=document.getElementById('bwLegend');
+  if(legend){
+    const items=[['WINNING','winning'],['APPROVED','approved'],['DRAW','draw'],['REVIEW','review'],['LOSING','losing'],['DENIED','denied']];
+    legend.innerHTML=items.map(([t,o])=>`<span style="display:inline-flex;align-items:center;gap:4px;color:var(--t2)"><span style="width:10px;height:10px;border-radius:3px;background:${bwOutcomeColor(o)};display:inline-block"></span>${t}</span>`).join('');
+  }
+  const body=document.getElementById('bwBody'); if(!body) return;
+  const groups=bidsByWeekModel(scope);
+  const showPhase=scope==='all';
+  if(!groups.length){ body.innerHTML='<div style="text-align:center;color:var(--t2);padding:30px;background:var(--card);border:1px solid var(--b1);border-radius:10px">No bids for this selection.</div>'; return; }
+  body.innerHTML=groups.map(g=>{
+    const rows=g.bids.map(b=>{
+      const c=bwOutcomeColor(b.outcome);
+      return `<div class="dr-row">
+        <div class="dr-user">${b.user}</div>
+        <div class="dr-bid">Bid ${b.bid}${showPhase?` · <span style="color:var(--t3)">P${b.phase}</span>`:''}</div>
+        <span class="pill" style="color:#fff;background:${c}">${bwOutcomeLabel(b.outcome)}</span>
+      </div>`;
+    }).join('');
+    const winners=g.bids.filter(b=>b.outcome==='winning'||b.outcome==='approved').length;
+    return `<div class="dr-card">
+      <div class="dr-card-head">
+        <div class="dr-week">Week ${g.wn} <span style="color:var(--t2);font-weight:400;font-size:11px">(${g.date})</span></div>
+        <div style="font-size:11px;color:var(--t2)">${g.bids.length} bid${g.bids.length!==1?'s':''} · ${winners} winning/approved</div>
+      </div>
+      ${rows}
+    </div>`;
+  }).join('');
 };
 
 // ── Dashboard export (weekly summary as a table → Excel or PDF) ──
@@ -2570,6 +2710,26 @@ window.renderAppDenials=function(){
   body.innerHTML=html||'<div style="text-align:center;color:var(--t2);padding:20px">No bids.</div>';
 };
 
+// Approvals/denials should ideally only happen once bidding is closed and every
+// week is locked. This reports readiness so we can warn (but still allow override).
+function approvalReadiness(){
+  const allWeeksLocked = !!locksData.globalLock || mondays.every(d=>!!locksData?.weeks?.[dateKey(d)]);
+  const timerRunning = !!(timerData?.enabled && timerData?.lastChange && (((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)>0));
+  const phaseOpen = timerRunning && !locksData.globalLock; // users can still change bids
+  const problems=[];
+  if(phaseOpen) problems.push('the bidding timer is still running — the phase is open and users can still change bids');
+  if(!allWeeksLocked) problems.push('not all weeks are locked — bids can still change on unlocked weeks');
+  return {ready:problems.length===0, problems};
+}
+window.approvalReadiness=approvalReadiness;
+// Warning banner injected into approve/deny confirm dialogs; empty when ready.
+function readinessWarnHtml(){
+  const r=approvalReadiness();
+  if(r.ready) return '';
+  return `<div class="cmodal-warn" style="margin-top:8px"><strong>⚠️ Bidding isn't fully closed yet.</strong> Approvals &amp; denials should ideally wait until the phase is closed and all weeks are locked. Right now:
+    <ul style="margin:6px 0 0 16px;line-height:1.6">${r.problems.map(p=>`<li>${p}</li>`).join('')}</ul>
+    <div style="margin-top:6px">You can override and proceed by confirming below.</div></div>`;
+}
 window.adApprove=function(user,wk,currentOutcome){
   const ap=computeApprovals(); const m=wkDate(wk);
   const cap=getSlots(wk); const fteWon=ap[wk]?.fteWon||0; const ufte=getUserFTE(user);
@@ -2581,7 +2741,7 @@ window.adApprove=function(user,wk,currentOutcome){
     body:`<div>Approve <strong>${user}</strong> as winner for <strong>${wLabel(m)}</strong>?</div>
           <div style="margin-top:6px;font-size:12px;color:var(--t2)">Current outcome: ${currentOutcome.toUpperCase()}</div>
           ${isDrawUser?`<div class="cmodal-info" style="margin-top:8px">User was in a DRAW — they will be notified when phase results are sent (see "Send Phase Results" button).</div>`:''}
-          ${overageHtml}`,
+          ${overageHtml}${readinessWarnHtml()}`,
     okText:'Approve',
     onConfirm:async()=>{
       await updateDoc(approvalsRef,{[wk]:arrayUnion(user)}).catch(async()=>setDoc(approvalsRef,{[wk]:[user]},{merge:true}));
@@ -2600,7 +2760,7 @@ window.adDeny=function(user,wk,currentOutcome){
     title:'✕ Deny '+user,
     body:`<div>Deny <strong>${user}</strong> for week of <strong>${wLabel(m)}</strong>?</div>
           ${isDrawUser?`<div class="cmodal-info" style="margin-top:8px">User was in a DRAW — they will be notified when phase results are sent.</div>`:''}
-          <div class="cmodal-warn" style="margin-top:8px">Their bid number will be returned for use in the next phase. Email notification is sent via the "Send Phase Results" button.</div>`,
+          <div class="cmodal-warn" style="margin-top:8px">Their bid number will be returned for use in the next phase. Email notification is sent via the "Send Phase Results" button.</div>${readinessWarnHtml()}`,
     okText:'Deny',danger:true,
     onConfirm:async()=>{
       await updateDoc(deniedRef,{[wk]:arrayUnion(user)}).catch(async()=>setDoc(deniedRef,{[wk]:[user]},{merge:true}));
@@ -2666,7 +2826,7 @@ window.adApproveAllWinners=function(){
   openConfirm({
     title:'✓ Approve All Current Winners',
     body:`<div>This will approve <strong>${toApprove.length}</strong> winning bid${toApprove.length!==1?'s':''} across all weeks.</div>
-          <div class="cmodal-info" style="margin-top:10px">Only bids currently showing as WIN (not already approved or denied) will be approved. Draw, Review, and Lose bids are not affected.</div>`,
+          <div class="cmodal-info" style="margin-top:10px">Only bids currently showing as WIN (not already approved or denied) will be approved. Draw, Review, and Lose bids are not affected.</div>${readinessWarnHtml()}`,
     okText:'Approve All '+toApprove.length+' Winners',
     onConfirm:async()=>{
       let count=0;
@@ -2706,7 +2866,7 @@ window.adDenyAllLosers=function(){
   openConfirm({
     title:'✕ Deny All Current Losers',
     body:`<div>This will deny <strong>${toDeny.length}</strong> losing bid${toDeny.length!==1?'s':''} across all weeks.</div>
-          <div class="cmodal-info" style="margin-top:10px">Only bids currently showing as LOSE (not already approved or denied) will be denied. Their bid numbers will be returned for the next phase.</div>`,
+          <div class="cmodal-info" style="margin-top:10px">Only bids currently showing as LOSE (not already approved or denied) will be denied. Their bid numbers will be returned for the next phase.</div>${readinessWarnHtml()}`,
     okText:'Deny All '+toDeny.length+' Losers', danger:true,
     onConfirm:async()=>{
       let count=0;
@@ -2745,6 +2905,43 @@ function weeksNeedingLock(unlockedOnly){
 }
 
 window.weeksNeedingLock=weeksNeedingLock; // exposed for testing
+
+// Weeks that are LOCKED (per-week, not the deliberate global freeze) yet still
+// have real availability — a user could still win them, so locking wrongly blocks
+// bidding. The inverse problem to weeksNeedingLock. Global lock is intentional and
+// never flagged here.
+function lockedWeeksWithAvailability(){
+  const ap=computeApprovals();
+  const T=getReviewThreshold();
+  const lowestFte=getLowestFTE();
+  const cutoff=Math.round((-(T-lowestFte))*10)/10;
+  const list=[];
+  mondays.forEach(d=>{
+    const wk=dateKey(d);
+    if(!locksData?.weeks?.[wk]) return;         // only per-week locked weeks
+    const a=ap[wk]; if(!a) return;
+    const cap=getSlots(wk);
+    const remaining=Math.round((cap-a.fteWon)*10)/10;
+    if(remaining>=cutoff){ list.push({wk,remaining,label:wLabel(wkDate(wk))}); }
+  });
+  return {list,cutoff,cutoffLabel:cutoff.toFixed(1)};
+}
+window.lockedWeeksWithAvailability=lockedWeeksWithAvailability;
+
+// Everything the dashboard lock-summary box needs in one shot.
+function lockSummary(){
+  const perWeekLocked=[];
+  mondays.forEach(d=>{ const wk=dateKey(d); if(locksData?.weeks?.[wk]) perWeekLocked.push({wk,label:wLabel(wkDate(wk))}); });
+  return {
+    globalLock: !!locksData?.globalLock,
+    total: mondays.length,
+    lockedCount: perWeekLocked.length,
+    lockedWeeks: perWeekLocked,
+    lockedWithAvailability: lockedWeeksWithAvailability().list,   // problematic: locked but winnable
+    unlockedNoAvailability: weeksNeedingLock(true).list          // problematic: full but open
+  };
+}
+window.lockSummary=lockSummary;
 window.lockFullWeeks=function(){
   const info=weeksNeedingLock(false);
   const tolock=info.list; const T=info.T; const lowestFte=info.lowestFte;
@@ -3891,16 +4088,13 @@ window.renderDrawsReviews=function(){
     }
     if(e.type==='approved'){
       actions=`<button class="btn" style="padding:3px 9px;font-size:11px;background:var(--yellow);color:#000" onclick="confirmRevokeApproval('${e.user}','${e.wk}')">↶ Revoke</button>
-        <button class="btn" style="padding:3px 9px;font-size:11px;background:var(--blue);color:#fff" onclick="confirmAdminEdit('${e.user}','${e.wk}')">✏️ Edit</button>
         <button class="btn btn-danger" style="padding:3px 9px;font-size:11px" onclick="confirmAdminCancel('${e.user}','${e.wk}')">✕ Cancel</button>`;
     } else if(e.type==='denied'){
-      // Denied entries stay visible so admin can revoke or edit them
-      actions=`<button class="btn" style="padding:3px 9px;font-size:11px;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="adRevokeDeny('${e.user}','${e.wk}')">↶ Revoke Denial</button>
-        <button class="btn" style="padding:3px 9px;font-size:11px;background:var(--blue);color:#fff" onclick="confirmAdminEdit('${e.user}','${e.wk}')">✏️ Edit</button>`;
+      // Denied entries stay visible so admin can revoke them
+      actions=`<button class="btn" style="padding:3px 9px;font-size:11px;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="adRevokeDeny('${e.user}','${e.wk}')">↶ Revoke Denial</button>`;
     } else {
       actions=`<button class="btn btn-success" style="padding:3px 9px;font-size:11px" onclick="confirmApprove('${e.user}','${e.wk}','${e.type}')">✓ Approve as Win</button>
         <button class="btn btn-danger" style="padding:3px 9px;font-size:11px" onclick="adDeny('${e.user}','${e.wk}','${e.type}')">✕ Deny</button>
-        <button class="btn" style="padding:3px 9px;font-size:11px;background:var(--blue);color:#fff" onclick="confirmAdminEdit('${e.user}','${e.wk}')">✏️ Edit</button>
         <button class="btn btn-danger" style="padding:3px 9px;font-size:11px;opacity:.7" onclick="confirmAdminCancel('${e.user}','${e.wk}')">✕ Cancel</button>`;
     }
     const m=wkDate(e.wk);
@@ -4023,7 +4217,7 @@ window.confirmApprove=function(user,wk,type){
     title:'✓ Approve as Winner',
     body:`<div>Approve <strong>${user}</strong> (FTE ${ufte}) as winner for week of <strong>${wLabel(m)}</strong> (${wRange(m)})?</div>
           <div style="margin-top:8px;font-size:12px;color:var(--t2)">Current status: ${type==='draw'?'Draw':'Under Review'}</div>
-          ${overageHtml}`,
+          ${overageHtml}${readinessWarnHtml()}`,
     okText:'Approve',
     onConfirm:async()=>{
       // Atomic array union — appends user to array without ever wiping it
