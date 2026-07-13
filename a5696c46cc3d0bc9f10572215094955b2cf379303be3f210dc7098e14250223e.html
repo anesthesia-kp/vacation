@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 24;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 25;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -278,7 +278,8 @@ thead th{color:var(--t2)}
         <div class="card big-card" style="margin-bottom:0">
           <div class="card-title">Current Phase</div>
         <div id="phaseCurrentDisplay" style="font-size:2rem;font-weight:800;color:var(--blue);margin:8px 0"></div>
-        <div id="phaseStatusMsg" style="font-size:12px;color:var(--t2);margin-bottom:14px"></div>
+        <div id="phaseStatusMsg" style="font-size:12px;color:var(--t2);margin-bottom:10px"></div>
+        <div id="phaseProgress" style="margin-bottom:14px"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-danger" id="completePhaseBtn" onclick="completePhase()">✓ Complete Phase</button>
           <button class="btn btn-success" id="beginNextPhaseBtn" onclick="beginNextPhase()" style="display:none">▶ Begin Phase <span id="nextPhaseNum"></span></button>
@@ -342,10 +343,6 @@ thead th{color:var(--t2)}
         </div>
       </div>
 
-      <div class="card" style="margin-bottom:16px;padding:16px 22px">
-        <div class="card-title" style="margin-bottom:10px">Auction Health</div>
-        <div id="healthBody" style="font-size:12px;color:var(--t2)">—</div>
-      </div>
       <div style="display:flex;gap:10px;margin-bottom:14px">
         <button class="btn btn-ghost" onclick="const d=document.getElementById('dashUsersWrap');const on=d.style.display!=='none';d.style.display=on?'none':'block';this.textContent=on?'👥 User summary ▾':'👥 User summary ▴';">👥 User summary ▾</button>
         <button class="btn btn-ghost" onclick="const d=document.getElementById('dashWeeklyWrap');const on=d.style.display!=='none';d.style.display=on?'none':'block';this.textContent=on?'📆 Weekly summary ▾':'📆 Weekly summary ▴';">📆 Weekly summary ▾</button>
@@ -470,25 +467,11 @@ thead th{color:var(--t2)}
         <div class="page-sub" style="margin-top:6px">Enter the new user's initials and their FTE (defaults to 1.0 if left blank).</div>
       </div>
       <div class="card">
-        <div class="card-title">Current Users (<span id="userCount">0</span>)</div>
-        <div class="page-sub" style="margin-bottom:12px">Edit each user's FTE, or remove a user and all of their data. FTE default is 1.0 if not set.</div>
-        <div style="overflow-x:auto;max-height:480px;overflow-y:auto;border:1px solid var(--b1)">
-          <table><thead><tr><th>User</th><th>FTE</th><th></th><th></th></tr></thead><tbody id="fteBody"></tbody></table>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-title">E-mail Addresses</div>
-        <div class="page-sub" style="margin-bottom:12px">Used for outbid alerts, reminders, and phase results.</div>
-        <div style="overflow-x:auto;border:1px solid var(--b1)">
-          <table><thead><tr><th>User</th><th>Email</th><th></th></tr></thead><tbody id="emailsBody"></tbody></table>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-title">Passwords</div>
-        <div class="page-sub" style="margin-bottom:12px">Clear a password and the user sets a new one at next sign-in.</div>
-        <div style="margin-bottom:14px"><button class="btn btn-danger" onclick="clearAllPasswords()">Clear All Passwords</button></div>
-        <div style="overflow-x:auto;border:1px solid var(--b1)">
-          <table><thead><tr><th>User</th><th>Status</th><th></th></tr></thead><tbody id="passwordsBody"></tbody></table>
+        <div class="card-title">All Users (<span id="userCount">0</span>)</div>
+        <div class="page-sub" style="margin-bottom:12px">One row per user. Admin sets FTE; users enter their own e-mail and password (correct or clear them here if needed). Delete removes the user and all their data.</div>
+        <div style="display:flex;justify-content:flex-end;margin-bottom:10px"><button class="btn btn-danger" onclick="clearAllPasswords()">Clear All Passwords</button></div>
+        <div style="overflow-x:auto;max-height:560px;overflow-y:auto;border:1px solid var(--b1)">
+          <table><thead><tr><th>User</th><th>FTE</th><th>E-mail</th><th>Password</th><th></th></tr></thead><tbody id="usersBody"></tbody></table>
         </div>
       </div>
     </div>
@@ -558,7 +541,7 @@ thead th{color:var(--t2)}
         <div class="trow" style="align-items:flex-start;flex-direction:column;gap:8px">
           <div>
             <div class="trow-label">Bids allowed per user, per phase</div>
-            <div class="trow-desc">Whole numbers 1–10, or tick "No limit" — with no limit, users are bounded only by the bid numbers they have available (1,2,3 · 1,2 · 1–10 · NP). Applies when placing a NEW bid; editing an existing bid is always allowed.</div>
+            <div class="trow-desc"><strong>Applies to the current phase only</strong> — each user may place up to this many new bids in the phase now underway. Bids from completed phases don't count against the limit (they're locked and can't be changed anyway). Whole numbers 1–10, or tick "No limit" — with no limit, users are bounded only by the bid numbers they have available (1,2,3 · 1,2 · 1–10 · NP). Editing or removing an existing bid is always allowed.</div>
           </div>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
             <input type="number" id="maxBidsInput" class="inp" style="width:80px" min="1" max="10" step="1" value="3">
@@ -835,8 +818,8 @@ onSnapshot(worstBidsRef, snap=>{
   const panel=document.getElementById("panel-bestbids");
   if(panel&&panel.classList.contains("on")) renderBestBidsTable();
 });
-onSnapshot(emailsRef,   snap=>{ emailsData=snap.exists()?snap.data():{}; if(document.getElementById("emailsBody")) renderEmailsPanel(); });
-onSnapshot(passwordsRef,snap=>{ passwordsData=snap.exists()?snap.data():{}; if(document.getElementById("passwordsBody")) renderPasswordsPanel(); });
+onSnapshot(emailsRef,   snap=>{ emailsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
+onSnapshot(passwordsRef,snap=>{ passwordsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
   onSnapshot(fteRef, snap=>{ fteData=snap.exists()?snap.data():{}; refreshAll(); });
 onSnapshot(approvalsRef, snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()?snap.data():{}); refreshAll(); });
 onSnapshot(emailsRef,   snap=>{ emailsDataAdmin=snap.exists()?snap.data():{}; });
@@ -920,12 +903,7 @@ window.nav = function(id, el) {
   if(id==='bestbids') renderBestBids();
   if(id==='drawsreviews') renderDrawsReviews();
   if(id==='changelog') renderChangelog();
-  if(id==='users'){
-    if(typeof renderUserPanel==='function') renderUserPanel();
-    if(typeof renderFtePanel==='function') renderFtePanel();
-    if(typeof renderEmailsPanel==='function') renderEmailsPanel();
-    if(typeof renderPasswordsPanel==='function') renderPasswordsPanel();
-  }
+  if(id==='users'&&typeof renderUsersCombined==='function') renderUsersCombined();
 };
 
 // ── Helpers ──
@@ -1178,10 +1156,7 @@ function refreshAll(){
     if(isOn('drawsreviews')) renderDrawsReviews();
     if(isOn('bestbids')) renderBestBids();
     if(isOn('changelog')) renderChangelog();
-    if(isOn('users') && typeof renderUserPanel==='function') renderUserPanel();
-    if(isOn('users') && typeof renderFtePanel==='function') renderFtePanel();
-    if(isOn('users') && typeof renderEmailsPanel==='function') renderEmailsPanel();
-    if(isOn('users') && typeof renderPasswordsPanel==='function') renderPasswordsPanel();
+    if(isOn('users') && typeof renderUsersCombined==='function') renderUsersCombined();
     if(isOn('slots') && typeof renderSlotsPanel==='function') renderSlotsPanel();
     updateStats();
     syncControls();
@@ -1232,39 +1207,37 @@ function renderNoBidders(){
   const btn=document.getElementById('noBidsRemindBtn'); if(btn) btn.disabled=!noBidders.length;
 }
 
-// Auction health: over-subscribed weeks (total live demand + locked-in wins > FTE available)
-// and untouched weeks (no bids at all, no prior winners).
-function renderAuctionHealth(ap){
-  const el=document.getElementById('healthBody'); if(!el) return;
-  const over=[], untouched=[];
-  mondays.forEach(d=>{
-    const wk=dateKey(d); const cap=getSlots(wk); const a=ap[wk];
-    let demand=0, bidders=0;
+// Phase progress: how many current-phase bids are decided vs. total.
+function renderPhaseProgress(){
+  const el=document.getElementById('phaseProgress'); if(!el) return;
+  let total=0, decided=0;
+  for(const d of mondays){
+    const wk=dateKey(d);
+    const ap2=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
+    const dn=Array.isArray(deniedData?.[wk])?deniedData[wk]:[];
     for(const u in scheduleData){
       if(scheduleData[u]?.[wk]===undefined) continue;
-      if(Array.isArray(deniedData?.[wk])&&deniedData[wk].includes(u)) continue;
-      bidders++; demand+=getUserFTE(u);
+      if(!isCurrentPhaseBidAdmin(u,wk)) continue;
+      total++;
+      if(ap2.includes(u)||dn.includes(u)) decided++;
     }
-    demand=Math.round(demand*10)/10;
-    if(demand>cap) over.push({n:_wkNumByISO[wk]||'?',demand,cap});
-    if(bidders===0&&!(a&&a.priorWinners&&a.priorWinners.size)) untouched.push(_wkNumByISO[wk]||'?');
-  });
-  const chip=(txt,cls)=>`<span class="pill ${cls}" style="font-size:11px">${txt}</span>`;
-  const overHtml=over.length
-    ? over.slice(0,14).map(o=>chip(`Wk ${o.n} (${o.demand}/${o.cap})`,'p-red')).join(' ')+(over.length>14?` +${over.length-14} more`:'')
-    : '<span style="color:var(--green);font-weight:700">none</span>';
-  const untHtml=untouched.length
-    ? untouched.slice(0,18).map(n=>chip('Wk '+n,'p-yellow')).join(' ')+(untouched.length>18?` +${untouched.length-18} more`:'')
-    : '<span style="color:var(--green);font-weight:700">none</span>';
-  el.innerHTML=`<div style="display:flex;flex-direction:column;gap:8px">
-    <div><strong style="color:var(--red)">Over-subscribed weeks (${over.length})</strong> — demand exceeds FTE available: ${overHtml}</div>
-    <div><strong style="color:var(--yellow)">Weeks with no bids (${untouched.length})</strong>: ${untHtml}</div>
-  </div>`;
+  }
+  const pct=total?Math.round(decided/total*100):0;
+  const remaining=total-decided;
+  el.innerHTML=total===0
+    ? '<div style="font-size:12px;color:var(--t3)">No bids placed in this phase yet.</div>'
+    : `<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px">
+         <span style="font-weight:700;color:var(--t1)">${decided} of ${total} bids decided</span>
+         <span style="color:${remaining?'var(--t2)':'var(--green)'};font-weight:700">${remaining?remaining+' remaining before phase can complete':'✓ ready to complete'}</span>
+       </div>
+       <div style="height:10px;border-radius:999px;background:var(--s3);overflow:hidden">
+         <div style="height:100%;width:${pct}%;border-radius:999px;background:${remaining?'var(--blue)':'var(--green)'};transition:width .3s"></div>
+       </div>`;
 }
 
 function renderOverview(){
   const ap=computeApprovals();
-  try{ renderPhasePanel(); renderNoBidders(); renderAuctionHealth(ap); }catch(e){ console.warn('dash',e); }
+  try{ renderPhasePanel(); renderNoBidders(); renderPhaseProgress(); }catch(e){ console.warn('dash',e); }
   const g=document.getElementById("ovgrid"); if(!g)return;
   const legendEl=document.getElementById("dashLegend");
   const weekEl=document.getElementById("weekSummary");
@@ -3446,6 +3419,28 @@ onSnapshot(userListRef, snap=>{
   }
   renderUserPanel();
 });
+
+function renderUsersCombined(){
+  const tb=document.getElementById('usersBody'); if(!tb) return;
+  const count=document.getElementById('userCount'); if(count) count.textContent=names.length;
+  tb.innerHTML=names.map(n=>{
+    const fte=getUserFTE(n);
+    const em=emailsData[n]||''; const skip=em==='__skip__';
+    const hasPass=!!passwordsData[n];
+    return `<tr>
+      <td class="mono" style="white-space:nowrap"><strong>${n}</strong></td>
+      <td style="white-space:nowrap"><input type="number" id="fte_${n}" class="inp" style="width:70px" value="${fte}" step="0.1" min="0" max="1">
+        <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveFte('${n}')">Save</button></td>
+      <td style="white-space:nowrap"><input type="email" id="em_${n}" class="inp" style="width:190px" value="${skip?'':em}" placeholder="no email saved">${skip?' <span class="pill p-yellow">opted out</span>':''}
+        <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveEmail('${n}')">Save</button>
+        <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearEmail('${n}')">Clear</button></td>
+      <td style="white-space:nowrap"><span style="font-size:12px;color:${hasPass?'var(--green)':'var(--t3)'}">${hasPass?'✓ Set':'Not set'}</span>
+        <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearPassword('${n}')" ${hasPass?'':'disabled'}>Clear</button></td>
+      <td><button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="removeUser('${n}')">🗑 Delete</button></td>
+    </tr>`;
+  }).join('');
+}
+window.renderUsersCombined=renderUsersCombined;
 
 function renderUserPanel(){
   // The old chip grid was removed — the single Current Users table (fteBody,
