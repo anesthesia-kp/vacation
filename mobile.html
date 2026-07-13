@@ -3,13 +3,32 @@
 <head>
 <meta charset="UTF-8">
 <script>
+/* Device auto-redirect: phones use mobile.html, computers/tablets use index.html.
+   Runs before anything else loads. Identical detection on both pages so they agree
+   (no redirect loop). Add ?nr=1 to the URL to stay on the current page regardless. */
+(function(){
+  try{
+    if(/[?&]nr=1/.test(location.search)) return;
+    var ua=navigator.userAgent||"";
+    var phoneUA=/Android|iPhone|iPod|Windows Phone|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+    var narrow=Math.min(screen.width||9999,screen.height||9999)<=820;
+    var isPhone=phoneUA && narrow;   // tablets & desktops => full site
+    var path=(location.pathname||"").toLowerCase();
+    var onMobile=/mobile\.html$/.test(path);
+    var qs=location.search?location.search+"&auto=1":"?auto=1";
+    if(isPhone && !onMobile){ location.replace("mobile.html"+qs); return; }
+    if(!isPhone && onMobile){ location.replace("index.html"+qs); return; }
+  }catch(e){}
+})();
+</script>
+<script>
 /* Auto-refresh check: if a newer version of this page has been published,
    reload once so the latest version shows without a manual hard-refresh.
    Safe by design: plain page code (nothing persists in the browser),
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "mobile";  // this page's key in versions.json
-  var BUILD = 13;        // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 15;        // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -80,6 +99,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--t1);font-
 /* ── My Bids tab ── */
 .my-bid-card{background:var(--bg2);border:2px solid var(--border2);border-radius:14px;margin-bottom:10px;overflow:hidden;transition:border-color .2s}
 .my-bid-card.oc-win{border-color:var(--green);background:linear-gradient(135deg,rgba(52,211,153,.12),rgba(255,255,255,.94))}
+.oc-approved{border-color:var(--green);background:linear-gradient(135deg,rgba(52,211,153,.12),rgba(255,255,255,.94))}
 .my-bid-card.oc-draw{border-color:var(--yellow);background:linear-gradient(135deg,rgba(251,191,36,.1),rgba(255,255,255,.94))}
 .my-bid-card.oc-review{border-color:var(--purple);background:linear-gradient(135deg,rgba(168,85,247,.1),rgba(255,255,255,.94))}
 .my-bid-card.oc-lose{border-color:var(--red);background:linear-gradient(135deg,rgba(248,113,113,.1),rgba(255,255,255,.94))}
@@ -127,6 +147,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--t1);font-
 .bidder-chip{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:4px;font-size:.65rem;font-weight:600;margin:2px 2px 2px 0;background:rgba(15,23,42,.1);color:var(--t2)}
 .bidder-chip.bc-me{background:var(--blue-bg);color:var(--blue)}
 .bc-outcome-W{color:var(--green);font-weight:800}
+.bc-outcome-A{color:#00602f;font-weight:800}
 .bc-outcome-D{color:var(--yellow);font-weight:800}
 .bc-outcome-R{color:var(--purple);font-weight:800}
 .bc-outcome-L{color:var(--red);font-weight:800}
@@ -585,10 +606,10 @@ function onSnapshot(ref, next, error) {
 }
 
 // Outcome badges. Single letter, color coded — W win / D draw / R review / L lose.
-function outcomeIcon(o,cls){ const k=(o==='win'||o==='draw'||o==='review')?o:'lose';
+function outcomeIcon(o,cls){ const k=(o==='win'||o==='draw'||o==='review'||o==='approved')?o:'lose';
   const ch={win:'W',draw:'D',review:'R',lose:'L'}[k];
   return `<span class="obadge ob-${k}${cls?' '+cls:''}" aria-hidden="true">${ch}</span>`; }
-function outcomeText(o){ return o==='win'?'Winning':o==='draw'?'Draw':o==='review'?'Under Review':'Losing'; }
+function outcomeText(o){ return o==='approved'?'Approved':o==='win'?'Winning':o==='draw'?'Draw':o==='review'?'Under Review':'Losing'; }
 
 
 // ── State ──
@@ -757,7 +778,7 @@ function computeApprovals(src){
   });
   return a;
 }
-function getOutcome(wk,user,ap){ const a=ap?.[wk];if(!a)return'lose';if(a.reviews?.has(user))return'review';if(a.draws?.has(user))return'draw';if(a.winners?.has(user))return'win';return'lose'; }
+function getOutcome(wk,user,ap){ const a=ap?.[wk];if(!a)return'lose';if(Array.isArray(approvalsData?.[wk])&&approvalsData[wk].includes(user)&&isCurrentPhaseBid(user,wk))return'approved';if(a.reviews?.has(user))return'review';if(a.draws?.has(user))return'draw';if(a.winners?.has(user))return'win';return'lose'; }
 
 // ── Phase visibility helpers (mirrors desktop site) ──
 function getUserBidPhase(u,wk){ const p=bidPhaseData[u]?.[wk]; return p===undefined?Number(phasesData.currentPhase||1):Number(p); }
@@ -785,10 +806,10 @@ function getWeekUsers(wk){
   for(const u in data){ if(isVisibleBid(u,wk))out.push({user:u,priority:data[u][wk]}); }
   return out.sort((a,b)=>priorityScore(a.priority)-priorityScore(b.priority));
 }
-function outcomeClass(o){ return o==='win'?'oc-win':o==='draw'?'oc-draw':o==='review'?'oc-review':o==='denied'?'oc-lose':'oc-lose'; }
-function chipClass(o){ return o==='win'?'chip-win':o==='draw'?'chip-draw':o==='review'?'chip-review':o==='denied'?'chip-lose':'chip-lose'; }
+function outcomeClass(o){ return o==='approved'?'oc-approved':o==='win'?'oc-win':o==='draw'?'oc-draw':o==='review'?'oc-review':o==='denied'?'oc-lose':'oc-lose'; }
+function chipClass(o){ return o==='approved'?'chip-win':o==='win'?'chip-win':o==='draw'?'chip-draw':o==='review'?'chip-review':o==='denied'?'chip-lose':'chip-lose'; }
 function outcomeLabel(o){ return o==='denied'?'DENIED':outcomeText(o); }
-function outcomeShort(o){ return o==='win'?'W':o==='draw'?'D':o==='review'?'R':'L'; }
+function outcomeShort(o){ return o==='approved'?'A':o==='win'?'W':o==='draw'?'D':o==='review'?'R':'L'; }
 
 function isAuctionClosed(){ if(!timerData.enabled||!timerData.lastChange)return false; return ((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)<=0; }
 function getCurrentUser(){ return document.getElementById("userBadge").textContent||""; }
@@ -1090,6 +1111,7 @@ function renderMyBids(user,ap){
   list.innerHTML='';
 
   // Summary row
+  const approveds=entries.filter(([wk])=>outcomeFor(wk)==='approved').length;
   const wins=entries.filter(([wk])=>outcomeFor(wk)==='win').length;
   const draws=entries.filter(([wk])=>outcomeFor(wk)==='draw').length;
   const reviews=entries.filter(([wk])=>outcomeFor(wk)==='review').length;
@@ -1097,7 +1119,7 @@ function renderMyBids(user,ap){
   const denieds=entries.filter(([wk])=>outcomeFor(wk)==='denied').length;
   const summary=document.createElement("div");
   summary.style.cssText="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap";
-  summary.innerHTML=[wins&&`<span class="chip chip-win">✓ ${wins} WIN</span>`||'',draws&&`<span class="chip chip-draw">⚖ ${draws} DRAW</span>`||'',reviews&&`<span class="chip chip-review">🔍 ${reviews} REVIEW</span>`||'',loses&&`<span class="chip chip-lose">✗ ${loses} LOSE</span>`||'',denieds&&`<span class="chip chip-lose" style="background:rgba(239,68,68,.25);color:#b91c1c">✕ ${denieds} DENIED</span>`||''].filter(Boolean).join('');
+  summary.innerHTML=[approveds&&`<span class="chip chip-win" style="background:#00753a;color:#fff">✓ ${approveds} APPROVED</span>`||'',wins&&`<span class="chip chip-win">✓ ${wins} WIN</span>`||'',draws&&`<span class="chip chip-draw">⚖ ${draws} DRAW</span>`||'',reviews&&`<span class="chip chip-review">🔍 ${reviews} REVIEW</span>`||'',loses&&`<span class="chip chip-lose">✗ ${loses} LOSE</span>`||'',denieds&&`<span class="chip chip-lose" style="background:rgba(239,68,68,.25);color:#b91c1c">✕ ${denieds} DENIED</span>`||''].filter(Boolean).join('');
   list.appendChild(summary);
 
   entries.forEach(([wk,p])=>{

@@ -3,13 +3,32 @@
 <head>
 <meta charset="UTF-8">
 <script>
+/* Device auto-redirect: phones use mobile.html, computers/tablets use index.html.
+   Runs before anything else loads. Identical detection on both pages so they agree
+   (no redirect loop). Add ?nr=1 to the URL to stay on the current page regardless. */
+(function(){
+  try{
+    if(/[?&]nr=1/.test(location.search)) return;
+    var ua=navigator.userAgent||"";
+    var phoneUA=/Android|iPhone|iPod|Windows Phone|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+    var narrow=Math.min(screen.width||9999,screen.height||9999)<=820;
+    var isPhone=phoneUA && narrow;   // tablets & desktops => full site
+    var path=(location.pathname||"").toLowerCase();
+    var onMobile=/mobile\.html$/.test(path);
+    var qs=location.search?location.search+"&auto=1":"?auto=1";
+    if(isPhone && !onMobile){ location.replace("mobile.html"+qs); return; }
+    if(!isPhone && onMobile){ location.replace("index.html"+qs); return; }
+  }catch(e){}
+})();
+</script>
+<script>
 /* Auto-refresh check: if a newer version of this page has been published,
    reload once so the latest version shows without a manual hard-refresh.
    Safe by design: plain page code (nothing persists in the browser),
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 14;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 16;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -116,6 +135,7 @@ select:focus{outline:none;border-color:#006ba6}
 .selection-date{font-weight:600;color:#005e93;font-size:.78rem}
 .selection-outcome{font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:3px}
 .outcome-win{background:rgba(52,211,153,.2);color:#00753a}
+.outcome-approved{background:#00753a;color:#fff}
 .outcome-lose{background:rgba(248,113,113,.2);color:#dc2626}
 .outcome-draw{background:rgba(251,191,36,.2);color:#7a4e00}
 .outcome-review{background:rgba(168,85,247,.2);color:#4f42a3}
@@ -187,6 +207,8 @@ select:focus{outline:none;border-color:#006ba6}
 .week:hover{border-color:#48607a;transform:translateY(-2px)}
 .week.outcome-win{border-color:#00753a;background:linear-gradient(135deg,rgba(52,211,153,.18),rgba(16,185,129,.1));box-shadow:0 0 14px rgba(52,211,153,.18)}
 .week.outcome-win .week-day-label{color:#00753a}
+.week.outcome-approved{border-color:#00753a;background:linear-gradient(135deg,rgba(0,117,58,.22),rgba(0,117,58,.12));box-shadow:0 0 14px rgba(0,117,58,.22)}
+.week.outcome-approved .week-day-label{color:#00602f}
 .week.outcome-draw{border-color:#7a4e00;background:linear-gradient(135deg,rgba(251,191,36,.15),rgba(245,158,11,.08));box-shadow:0 0 14px rgba(251,191,36,.15)}
 .week.outcome-draw .week-day-label{color:#7a4e00}
 .week.outcome-lose{border-color:#dc2626;background:linear-gradient(135deg,rgba(248,113,113,.15),rgba(239,68,68,.08));box-shadow:0 0 14px rgba(248,113,113,.12)}
@@ -236,6 +258,7 @@ body{zoom:1.15}
 /* Outcome badges — single letter, color coded. W win / D draw / R review / L lose */
 .obadge{display:inline-flex;align-items:center;justify-content:center;width:1.35em;height:1.35em;border-radius:4px;font-weight:800;font-size:.82em;line-height:1;margin-right:.35em;flex:none;vertical-align:middle;position:relative;top:-.05em}
 .ob-win{background:rgba(52,211,153,.16);color:#00753a}
+.ob-approved{background:#00753a;color:#fff}
 .ob-draw{background:rgba(251,191,36,.16);color:#7a4e00}
 .ob-review{background:rgba(192,132,252,.16);color:#4f42a3}
 .ob-lose{background:rgba(248,113,113,.16);color:#dc2626}
@@ -554,10 +577,10 @@ function onSnapshot(ref, next, error) {
 }
 
 // Outcome badges. Single letter, color coded — W win / D draw / R review / L lose.
-function outcomeIcon(o,cls){ const k=(o==='win'||o==='draw'||o==='review')?o:'lose';
-  const ch={win:'W',draw:'D',review:'R',lose:'L'}[k];
+function outcomeIcon(o,cls){ const k=(o==='win'||o==='draw'||o==='review'||o==='approved')?o:'lose';
+  const ch={win:'W',draw:'D',review:'R',lose:'L',approved:'✓'}[k];
   return `<span class="obadge ob-${k}${cls?' '+cls:''}" aria-hidden="true">${ch}</span>`; }
-function outcomeText(o){ return o==='win'?'Winning':o==='draw'?'Draw':o==='review'?'Under Review':'Losing'; }
+function outcomeText(o){ return o==='approved'?'Approved':o==='win'?'Winning':o==='draw'?'Draw':o==='review'?'Under Review':'Losing'; }
 
 let timerData={enabled:false,lastChange:null};
 let pendingWeek=null, saveInProgress=false;
@@ -813,6 +836,8 @@ function computeApprovals(src){
 
 function getOutcome(wk,user,ap){
   const a=ap?.[wk];
+  // Admin explicitly approved this bid → show APPROVED (confirmed), not just projected WIN.
+  if(Array.isArray(approvalsData?.[wk])&&approvalsData[wk].includes(user)&&isCurrentPhaseBid(user,wk)) return 'approved';
   // If the algorithm hasn't produced a result for this week (e.g. ap is empty because
   // computeApprovals ran before data loaded), we can't distinguish outcomes. Treat as
   // 'lose' for now — but any UI element that renders "everyone lost" during initial
@@ -1610,7 +1635,7 @@ function renderCalendar(user,ap){
         allBids.sort((a,b)=>priorityScore(a.priority)-priorityScore(b.priority));
         if(allBids.length){
           function outcomeShort(o){ return outcomeIcon(o); }
-          function outcomeColor(o){ return o==='win'?'#00753a':o==='draw'?'#7a4e00':o==='review'?'#4f42a3':'#dc2626'; }
+          function outcomeColor(o){ return o==='approved'?'#00602f':o==='win'?'#00753a':o==='draw'?'#7a4e00':o==='review'?'#4f42a3':'#dc2626'; }
           const isProjWin=ap[wk]?.winners?.has(user);
           const list=document.createElement("div");
           list.style.cssText="margin-top:6px;display:flex;flex-direction:column;gap:3px";
@@ -1699,14 +1724,14 @@ function renderCalendar(user,ap){
         myRow.className="week-stat";
         myRow.style.cssText="margin-top:5px;font-size:.7rem;color:#2c4257";
         const o=getOutcome(wk,user,ap);
-        myRow.innerHTML=`<span style="font-size:.65rem;font-weight:600;color:#132f49">My Bid:</span> <span class="competitor" style="background:rgba(96,165,250,.2);color:#005e93">${bidLbl(data[user][wk])}</span> <span style="font-weight:600;color:${o==='win'?'#00753a':o==='draw'?'#7a4e00':o==='review'?'#4f42a3':'#dc2626'}">${o.toUpperCase()}</span>`;
+        myRow.innerHTML=`<span style="font-size:.65rem;font-weight:600;color:#132f49">My Bid:</span> <span class="competitor" style="background:rgba(96,165,250,.2);color:#005e93">${bidLbl(data[user][wk])}</span> <span style="font-weight:600;color:${o==='approved'?'#00602f':o==='win'?'#00753a':o==='draw'?'#7a4e00':o==='review'?'#4f42a3':'#dc2626'}">${o.toUpperCase()}</span>`;
         div.appendChild(myRow);
       }
       const othersLocked=allLockedBidders.filter(x=>x.user!==user);
       if(othersLocked.length){
         const od=document.createElement("div"); od.style.cssText="margin-top:4px";
         function outcomeShortL(o){ return outcomeIcon(o); }
-        function outcomeColorL(o){ return o==='win'?'#00753a':o==='draw'?'#7a4e00':o==='review'?'#4f42a3':'#dc2626'; }
+        function outcomeColorL(o){ return o==='approved'?'#00602f':o==='win'?'#00753a':o==='draw'?'#7a4e00':o==='review'?'#4f42a3':'#dc2626'; }
         od.innerHTML=`<span style="font-size:.62rem;font-weight:600;color:#48607a;display:block;margin-bottom:2px">Other Bids:</span>`+
           othersLocked.map(x=>{ const o=getOutcome(wk,x.user,ap); return `<span class="competitor" style="background:rgba(15,23,42,.08);color:#132f49">${x.user} <span style="color:#48607a">${bidLbl(x.priority)}</span> <span style="font-weight:700;color:${outcomeColorL(o)}">${outcomeShortL(o)}</span></span>`; }).join('');
         div.appendChild(od);
@@ -1782,7 +1807,7 @@ async function syncSheet(){
     const wks=mondays.map(d=>dateKey(d));
     const active=names.filter(n=>data[n]&&Object.keys(data[n]).length>0);
     const rows=[["Name",...wks.map(wk=>weekMeta[wk].range)]];
-    active.forEach(n=>{ const row=[n]; wks.forEach(wk=>{ const p=data[n]?.[wk]; if(p===undefined){row.push("");return;} const o=getOutcome(wk,n,ap); row.push(`${o==='win'?'WIN':o==='draw'?'DRAW':o==='review'?'Under Review':'LOSE'} ${bidLbl(p)}`); }); rows.push(row); });
+    active.forEach(n=>{ const row=[n]; wks.forEach(wk=>{ const p=data[n]?.[wk]; if(p===undefined){row.push("");return;} const o=getOutcome(wk,n,ap); row.push(`${o==='approved'?'APPROVED':o==='win'?'WIN':o==='draw'?'DRAW':o==='review'?'Under Review':'LOSE'} ${bidLbl(p)}`); }); rows.push(row); });
     rows.push([],["# Bids",...wks.map(wk=>Object.values(data).filter(u=>u?.[wk]!==undefined).length||"")]);
     const base=`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}`,ah={"Authorization":`Bearer ${token}`,"Content-Type":"application/json"};
     // Write FIRST, then clear leftovers — never wipe the sheet before a successful write,

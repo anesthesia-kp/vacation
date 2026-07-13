@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 26;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 29;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -287,6 +287,10 @@ thead th{color:var(--t2)}
         <div class="trow" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--b1)">
           <div><div class="trow-label">Global Lock</div><div class="trow-desc">Freeze all bidding — no user can add, edit, or remove any bid</div></div>
           <div class="tog" id="globalLockToggle" onclick="toggleGlobalLock()"></div>
+        </div>
+        <div style="margin-top:12px">
+          <button class="btn" style="width:100%;justify-content:center;background:rgba(179,157,248,.14);color:#5b4fb5;border:1px solid rgba(179,157,248,.4)" onclick="lockFullWeeks()">🔒 Lock Full Weeks (no availability left)</button>
+          <div class="trow-desc" style="margin-top:6px">Locks every week that admin approvals have filled past the FTE overage — do this between phases so no one can bid on weeks with no room.</div>
         </div>
       <details style="margin-top:14px"><summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--t2)">Phase history</summary>
         <div id="phaseHistoryBody" style="font-size:12px;color:var(--t2);margin-top:8px">No completed phases yet.</div>
@@ -2004,6 +2008,23 @@ window.beginNextPhase=function(){
     onConfirm:async()=>{
       await setDoc(phasesRef,{currentPhase:next},{merge:true});
       toast('▶ Phase '+next+' begun','ok');
+      // Warn if any full weeks are still unlocked — users could bid on weeks with no room.
+      setTimeout(()=>{
+        const need=weeksNeedingLock(true).list;
+        if(!need.length) return;
+        openConfirm({
+          title:'⚠️ Lock full weeks before bidding starts',
+          body:`<div><strong>${need.length} week${need.length!==1?'s':''}</strong> now ${need.length!==1?'have':'has'} no availability left (approvals filled them past the FTE overage), but ${need.length!==1?'are':'is'} still <strong>unlocked</strong>. Users could waste bids on ${need.length!==1?'them':'it'} in Phase ${next}.</div>
+                <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.7;max-height:150px;overflow-y:auto">${need.map(w=>`<li>${w.label} <span style="color:var(--red)">(Remaining: ${w.remaining})</span></li>`).join('')}</ul>
+                <div class="cmodal-info">Click "Lock Them Now" to lock all of these in one step. (You can also do this any time from the dashboard or the Lock Weeks page via "Lock Full Weeks".)</div>`,
+          okText:'🔒 Lock Them Now', danger:true,
+          onConfirm:async()=>{
+            const updates={}; need.forEach(w=>updates[w.wk]=true);
+            await setDoc(locksRef,{weeks:updates},{merge:true});
+            toast('🔒 Locked '+need.length+' full week'+(need.length!==1?'s':''),'warn');
+          }
+        });
+      },400);
     }
   });
 };
@@ -2072,7 +2093,7 @@ You have not yet placed any bids in Phase ${cur} of the vacation auction. Please
 
 Placing bids early benefits everyone — it moves the process along more quickly for the whole department.
 
-You can access the bidding board at any time to place your bids.
+Place your bids here: https://vacation-kp.github.io/
 
 Thank you!`);
         sent++;
@@ -2359,6 +2380,9 @@ window.exportDashboard=function(format){
   toast('📄 Preview opened — use browser "Print → Save as PDF"','ok');
 };
 
+// Ordering for the Approvals/Denials & Draws/Reviews lists: winners first, then
+// draws, then reviews, then losers (approved groups with win, denied with lose).
+function outcomeRank(o){ const m={approved:0,win:1,draw:2,review:3,lose:4,denied:5}; return (o in m)?m[o]:9; }
 window.renderAppDenials=function(){
   initAppDenialsFilters();
   const phaseSel=document.getElementById('adPhaseFilter');
@@ -2386,8 +2410,12 @@ window.renderAppDenials=function(){
     const deniedHere=Array.isArray(deniedData?.[wk])?deniedData[wk]:[];
     for(const u in scheduleData){
       const p=scheduleData[u]?.[wk]; if(p===undefined) continue;
-      if(!bidMatchesPhaseFilter(u,wk,phaseFilter)) continue;
       const bidPh=getUserBidPhaseAdmin(u,wk);
+      // Approvals/Denials must show EVERY bid for the shown phase, including denied
+      // ones (so admin can revoke a denial) — unlike the dashboard, which hides them.
+      const mm=phaseFilter&&phaseFilter.match(/^ph(\d+)$/);
+      const matchesPhase = phaseFilter==='all' ? true : (mm ? bidPh===Number(mm[1]) : bidPh===cur);
+      if(!matchesPhase) continue;
       let outcome;
       if(bidPh<cur){
         // Historical bid — resolve from that phase's snapshot
@@ -2456,6 +2484,7 @@ window.renderAppDenials=function(){
       const a=ap[wk]||{fteWon:0};
       const cap=getSlots(wk);
       const remaining=Math.round((cap-a.fteWon)*10)/10;
+      byWk[wk].sort((a,b)=>outcomeRank(a.outcome)-outcomeRank(b.outcome)||a.user.localeCompare(b.user));
       const drawUsers=byWk[wk].filter(e=>e.outcome==='draw').map(e=>e.user);
       const spinBtn=drawUsers.length>=2?`<button class="btn btn-primary" style="padding:3px 10px;font-size:11px;margin-top:6px" onclick='openWheel("${wk}",${JSON.stringify(drawUsers)})'>🎡 Spin Randomizer (${drawUsers.length} in draw)</button>`:'';
       html+=`<div class="dr-card">
@@ -2471,6 +2500,7 @@ window.renderAppDenials=function(){
     const byUser={};
     filtered.forEach(e=>{ (byUser[e.user]=byUser[e.user]||[]).push(e); });
     Object.keys(byUser).sort().forEach(u=>{
+      byUser[u].sort((a,b)=>outcomeRank(a.outcome)-outcomeRank(b.outcome)||a.wk.localeCompare(b.wk));
       html+=`<div class="dr-card">
         <div class="dr-card-head"><div class="dr-week">${u}</div><div style="font-size:11px;color:var(--t2)">FTE ${getUserFTE(u)}</div></div>
         ${byUser[u].map(e=>renderEntry(e,true)).join('')}
@@ -2632,24 +2662,33 @@ window.adDenyAllLosers=function(){
   });
 };
 
-window.lockFullWeeks=function(){
+// Weeks whose remaining FTE is so low that no user can win even with the max
+// allowed overage — i.e. weeks with no real availability. `unlockedOnly` filters
+// out weeks the admin has already locked. Shared by the button and the phase alert.
+function weeksNeedingLock(unlockedOnly){
   const ap=computeApprovals();
-  const tolock=[];
   const T=getReviewThreshold();
   const lowestFte=getLowestFTE();
-  // Cutoff: a week is "unavailable" if remaining < -(T - lowestFte).
-  // Reasoning: if there's more room than that, the lowest-FTE user could still
-  // squeeze in as a review (their total overage would be exactly T). Below the
-  // cutoff, even the lowest-FTE user would exceed T over cap → automatic loss.
   const cutoff=Math.round((-(T-lowestFte))*10)/10;
+  const list=[];
   mondays.forEach(d=>{
     const wk=dateKey(d);
     const a=ap[wk]; if(!a) return;
     const cap=getSlots(wk);
     const remaining=Math.round((cap-a.fteWon)*10)/10;
-    if(remaining<cutoff) tolock.push({wk,remaining,label:wLabel(wkDate(wk))});
+    if(remaining<cutoff){
+      if(unlockedOnly && locksData?.weeks?.[wk]) return; // already locked
+      list.push({wk,remaining,label:wLabel(wkDate(wk))});
+    }
   });
-  const cutoffLabel=cutoff.toFixed(1);
+  return {list,cutoff,cutoffLabel:cutoff.toFixed(1),T,lowestFte};
+}
+
+window.weeksNeedingLock=weeksNeedingLock; // exposed for testing
+window.lockFullWeeks=function(){
+  const info=weeksNeedingLock(false);
+  const tolock=info.list; const T=info.T; const lowestFte=info.lowestFte;
+  const cutoffLabel=info.cutoffLabel;
   if(!tolock.length){
     openConfirm({title:'🔒 Lock Full Weeks',body:`<div class="cmodal-info">No weeks currently have fewer than ${cutoffLabel} FTE available. Nothing to lock.<br><br><small style="color:var(--t2)">Threshold: FTE overage ${T.toFixed(1)}, lowest FTE user ${lowestFte}. Cutoff = -(${T.toFixed(1)} - ${lowestFte}) = ${cutoffLabel}.</small></div>`,okText:'OK',onConfirm:()=>{}});
     return;
@@ -3823,7 +3862,7 @@ window.renderDrawsReviews=function(){
         html+=`<div style="margin-bottom:8px"><button class="btn btn-primary" style="padding:4px 10px;font-size:11px" onclick='openWheel("${wk}",${JSON.stringify(drawUsers)})'>🎡 Spin Randomizer</button></div>`;
       }
       // Render the draw/review/approved entries (with action buttons)
-      list.forEach(e=>{ html+=renderRow(e,false); });
+      list.slice().sort((a,b)=>outcomeRank(a.type)-outcomeRank(b.type)||a.user.localeCompare(b.user)).forEach(e=>{ html+=renderRow(e,false); });
       // Also show projected wins/losses for context (read-only, no action buttons)
       const allWkBidders=[];
       for(const u in scheduleData){
@@ -3863,7 +3902,7 @@ window.renderDrawsReviews=function(){
           <div class="dr-week">${u} <span style="color:var(--t2);font-weight:400;font-size:11px">(FTE ${getUserFTE(u)})</span></div>
           <div style="font-size:11px;color:var(--t2)">${list.length} pending</div>
         </div>`;
-      list.sort((a,b)=>a.wk.localeCompare(b.wk)).forEach(e=>{ html+=renderRow(e,true); });
+      list.sort((a,b)=>outcomeRank(a.type)-outcomeRank(b.type)||a.wk.localeCompare(b.wk)).forEach(e=>{ html+=renderRow(e,true); });
       html+=`</div>`;
     });
   }
