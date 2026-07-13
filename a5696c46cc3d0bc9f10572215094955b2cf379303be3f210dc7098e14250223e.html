@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 25;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 26;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -284,6 +284,10 @@ thead th{color:var(--t2)}
           <button class="btn btn-danger" id="completePhaseBtn" onclick="completePhase()">✓ Complete Phase</button>
           <button class="btn btn-success" id="beginNextPhaseBtn" onclick="beginNextPhase()" style="display:none">▶ Begin Phase <span id="nextPhaseNum"></span></button>
         </div>
+        <div class="trow" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--b1)">
+          <div><div class="trow-label">Global Lock</div><div class="trow-desc">Freeze all bidding — no user can add, edit, or remove any bid</div></div>
+          <div class="tog" id="globalLockToggle" onclick="toggleGlobalLock()"></div>
+        </div>
       <details style="margin-top:14px"><summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--t2)">Phase history</summary>
         <div id="phaseHistoryBody" style="font-size:12px;color:var(--t2);margin-top:8px">No completed phases yet.</div>
       </details>
@@ -469,7 +473,10 @@ thead th{color:var(--t2)}
       <div class="card">
         <div class="card-title">All Users (<span id="userCount">0</span>)</div>
         <div class="page-sub" style="margin-bottom:12px">One row per user. Admin sets FTE; users enter their own e-mail and password (correct or clear them here if needed). Delete removes the user and all their data.</div>
-        <div style="display:flex;justify-content:flex-end;margin-bottom:10px"><button class="btn btn-danger" onclick="clearAllPasswords()">Clear All Passwords</button></div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px">
+          <button class="btn btn-danger" onclick="clearAllPasswords()">Clear All Passwords</button>
+          <button class="btn btn-danger" style="background:rgba(198,40,40,.22);border-color:rgba(198,40,40,.6)" onclick="deleteAllUsers()">🗑 Delete All Users</button>
+        </div>
         <div style="overflow-x:auto;max-height:560px;overflow-y:auto;border:1px solid var(--b1)">
           <table><thead><tr><th>User</th><th>FTE</th><th>E-mail</th><th>Password</th><th></th></tr></thead><tbody id="usersBody"></tbody></table>
         </div>
@@ -509,13 +516,6 @@ thead th{color:var(--t2)}
     <!-- CONTROLS -->
     <div class="panel" id="panel-controls">
       <div class="page-head"><div class="page-title">Controls</div><div class="page-sub">Global schedule settings.</div></div>
-      <div class="card">
-        <div class="card-title">Schedule Locks</div>
-        <div class="trow">
-          <div><div class="trow-label">Global Lock</div><div class="trow-desc">Prevent all users from making any changes</div></div>
-          <div class="tog" id="globalLockToggle" onclick="toggleGlobalLock()"></div>
-        </div>
-      </div>
       <div class="card">
         <div class="card-title">Authentication</div>
         <div class="trow">
@@ -3527,6 +3527,42 @@ window.removeUser=function(u){
       } catch(e) {
         toast("Error: "+e.message,"warn");
       }
+    }
+  });
+};
+
+window.deleteAllUsers=function(){
+  const n=names.length;
+  if(!n){ toast('No users to delete','ok'); return; }
+  openConfirm({
+    title:'🗑 Delete ALL Users',
+    body:`<div>Delete <strong>all ${n} users</strong> and every piece of their data?</div>
+          <ul style="margin:8px 0 10px 18px;color:var(--t2);font-size:13px;line-height:1.65">
+            <li>All bids on all weeks</li><li>All passwords and e-mails</li>
+            <li>All priority locks, approvals, denials, bid times, FTE settings</li>
+          </ul>
+          <div class="cmodal-danger" style="margin-top:8px"><strong>This empties the entire user list. It cannot be undone.</strong></div>`,
+    okText:'Continue…', danger:true,
+    onConfirm:()=>{
+      openConfirm({
+        title:'🚨 Final Confirmation',
+        body:`<div style="font-size:15px;font-weight:700;color:var(--red);text-align:center">Really delete every user?</div>
+              <div style="text-align:center;margin-top:10px;color:var(--t2);font-size:13px">All ${n} users and all of their data will be permanently removed. There is no recovery.</div>`,
+        okText:'YES — DELETE ALL USERS', danger:true,
+        onConfirm:async()=>{
+          try{
+            const doomed=[...names];
+            await setDoc(userListRef,{users:[]});
+            await Promise.all([
+              setDoc(scheduleRef,{}), setDoc(passwordsRef,{}), setDoc(emailsRef,{}),
+              setDoc(worstBidsRef,{}), setDoc(bidTimesRef,{}), setDoc(fteRef,{}),
+              setDoc(bidPhaseRef,{}), setDoc(approvalsRef,{}), setDoc(deniedRef,{}),
+            ]);
+            try { await adminLog('ALL','ALL','admin-delete-all-users'); } catch(_){}
+            toast('🗑 Deleted all '+doomed.length+' users and their data','warn');
+          }catch(e){ toast('Error: '+e.message,'warn'); }
+        }
+      });
     }
   });
 };
