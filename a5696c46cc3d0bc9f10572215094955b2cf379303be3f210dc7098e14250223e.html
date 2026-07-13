@@ -9,7 +9,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 21;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 22;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -34,11 +34,11 @@
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600;700&family=Geist:wght@400;500;600;700&display=swap');
 :root{
-  --bg:#f4f8fb;--s1:#ffffff;--s2:#ecf4fa;--s3:#ddebf5;
-  --b1:#d7e5ef;--b2:#c2d6e4;--b3:#a9c3d7;
-  --t1:#0e3a5c;--t2:#48657e;--t3:#8fa9bc;
-  --green:#0d7a43;--red:#dc2626;--yellow:#946008;--blue:#006ba6;--orange:#b4470f;
-  --green-d:rgba(5,150,105,.09);--red-d:rgba(220,38,38,.08);--yellow-d:rgba(180,83,9,.1);--blue-d:rgba(37,99,235,.09);
+  --bg:#eef2f6;--s1:#ffffff;--s2:#f2f5f8;--s3:#e3e9ef;
+  --b1:#c9d4de;--b2:#adbdcb;--b3:#8fa4b6;
+  --t1:#0a2540;--t2:#3d5568;--t3:#7e93a5;
+  --green:#00753a;--red:#c62828;--yellow:#7a4e00;--blue:#006ba6;--orange:#b3400b;
+  --green-d:rgba(0,117,58,.1);--red-d:rgba(198,40,40,.09);--yellow-d:rgba(122,78,0,.1);--blue-d:rgba(0,107,166,.09);
 }
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Geist',sans-serif;background:var(--bg);color:var(--t1);min-height:100vh;font-size:14px}
@@ -219,6 +219,19 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
 .dr-user{font-weight:700;color:var(--t1);min-width:48px}
 .dr-bid{font-family:var(--mono);color:var(--t2);font-size:11px}
 .dr-actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+
+/* High-contrast pass + dashboard big cards */
+.btn-primary{background:var(--blue);color:#fff;border:1px solid var(--blue)}
+.btn-primary:hover{background:#00578a}
+.btn-success{background:var(--green);color:#fff;border:1px solid var(--green)}
+.btn-success:hover{background:#005c2e}
+.btn-danger{background:var(--red-d);color:var(--red);border:1px solid rgba(198,40,40,.45)}
+.big-card{padding:22px 24px}
+.big-card .card-title{font-size:13px}
+#st-locked,#st-timer{font-size:13px!important;font-weight:800;display:inline;line-height:1.2}
+#phaseCurrentDisplay{font-size:2.2rem!important}
+.card{box-shadow:0 1px 3px rgba(10,37,64,.08)}
+thead th{color:var(--t2)}
 </style>
 </head>
 <body>
@@ -229,25 +242,20 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
   <nav class="bar">
     <div class="bar-logo"><span>Admin Panel</span></div>
     <div class="nav">
-      <div class="nav-section">Overview</div>
       <a onclick="nav('overview',this)" class="on">📊 Dashboard</a>
-      <div class="nav-section">Schedule</div>
-      <a onclick="nav('slots',this)">📆 FTE Availability</a>
-      <a onclick="nav('locks',this)">🔒 Lock Weeks</a>
       <a onclick="nav('appdenials',this)">✅ Approvals/Denials</a>
-      <a onclick="nav('edits',this)">✏️ Edit Selections</a>
       <a onclick="nav('drawsreviews',this)">⚖️ Draws &amp; Reviews</a>
-      <div class="nav-section">Users</div>
-      <a onclick="nav('emails',this)">✉️ Emails</a>
-        <a onclick="nav('passwords',this)">🔑 Passwords</a>
-        <a onclick="nav('users',this)">👤 Users</a>
+      <a onclick="nav('locks',this)">🔒 Lock Weeks</a>
+      <a onclick="nav('edits',this)">✏️ Edit Selections</a>
       <a onclick="nav('bestbids',this)">🔐 Priority Locks</a>
       <a onclick="nav('changelog',this)">📋 Change Log</a>
+      <div class="nav-section">People</div>
+      <a onclick="nav('users',this)">👤 Users</a>
       <div class="nav-section">Settings</div>
+      <a onclick="nav('slots',this)">📆 FTE Availability</a>
       <a onclick="nav('controls',this)">⚙️ Controls</a>
-      <a onclick="nav('timer',this)">⏱️ Timer</a>
+      <div class="nav-section">Testing</div>
       <a onclick="nav('simulator',this)">🎲 Simulator</a>
-      <a onclick="nav('phases',this)">📅 Phases</a>
     </div>
   </nav>
 
@@ -255,24 +263,96 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
 
     <!-- DASHBOARD -->
     <div class="panel on" id="panel-overview">
-      <div class="page-head"><div class="page-title">Dashboard</div><div class="page-sub">Live view of all vacation requests — 2027</div></div>
-      <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
-        <label style="font-size:12px;color:var(--t2);font-weight:600">View phase:</label>
-        <select id="dashPhaseFilter" class="sel" onchange="renderOverview()"></select>
-        <button class="btn" style="font-size:12px;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportDashboard('pdf')">📄 Export PDF</button>
-        <button class="btn" style="font-size:12px;background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportDashboard('xlsx')">📊 Export Excel</button>
-        <button class="btn" style="margin-left:auto;background:rgba(251,191,36,.15);color:var(--yellow);border:1px solid rgba(251,191,36,.35)" title="Queued outbid alerts waiting to be emailed — click to send now" onclick="flushMailQueue()">🔔 Alert Queue: <span id="mqCountTop" style="font-family:var(--mono);font-weight:700">0</span></button>
-        <button class="btn btn-primary" onclick="sendReminderEmails()">📧 Send Reminder E-mails</button>
-        <button class="btn btn-success" onclick="sendPhaseResultsEmails()">📮 Send Phase Results E-mails</button>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:20px">
+        <div><div class="page-title">Dashboard</div><div class="page-sub">Vacation auction — 2027</div></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <select id="dashPhaseFilter" class="sel" onchange="renderOverview()"></select>
+          <button class="btn btn-ghost" onclick="exportDashboard('pdf')">📄 PDF</button>
+          <button class="btn btn-ghost" onclick="exportDashboard('xlsx')">📊 Excel</button>
+          <button class="btn" style="background:rgba(180,83,9,.1);color:var(--yellow);border:1px solid rgba(180,83,9,.35)" title="Queued outbid alerts — click to send now" onclick="flushMailQueue()">🔔 <span id="mqCountTop" style="font-family:var(--mono);font-weight:800">0</span></button>
+          <button class="btn btn-success" onclick="sendPhaseResultsEmails()">📮 Send Phase Results</button>
+        </div>
       </div>
-      <div class="stats">
-        <div class="stat"><div class="stat-label">Total Bids</div><div class="stat-value c-blue" id="st-total">—</div></div>
-        <div class="stat"><div class="stat-label">Weeks Locked</div><div class="stat-value c-red" id="st-locked">—</div></div>
-        <div class="stat"><div class="stat-label">Timer</div><div class="stat-value c-orange" id="st-timer">—</div></div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px;margin-bottom:20px">
+        <div class="card big-card" style="margin-bottom:0">
+          <div class="card-title">Current Phase</div>
+        <div id="phaseCurrentDisplay" style="font-size:2rem;font-weight:800;color:var(--blue);margin:8px 0"></div>
+        <div id="phaseStatusMsg" style="font-size:12px;color:var(--t2);margin-bottom:14px"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-danger" id="completePhaseBtn" onclick="completePhase()">✓ Complete Phase</button>
+          <button class="btn btn-success" id="beginNextPhaseBtn" onclick="beginNextPhase()" style="display:none">▶ Begin Phase <span id="nextPhaseNum"></span></button>
+        </div>
+      <details style="margin-top:14px"><summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--t2)">Phase history</summary>
+        <div id="phaseHistoryBody" style="font-size:12px;color:var(--t2);margin-top:8px">No completed phases yet.</div>
+      </details>
+        </div>
+        <div class="card big-card" style="margin-bottom:0">
+          <div class="card-title">Bidding Timer</div>
+          <div class="trow">
+          <div><div class="trow-label">Enable Timer</div><div class="trow-desc">Shows a live countdown to all users, resets on each bid change</div></div>
+          <div class="tog" id="timerToggle" onclick="toggleTimerEnabled()"></div>
+        </div>
+        <div id="timerBlock" class="timer-block" style="margin-top:14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+            <div>
+              <div style="font-size:12px;font-weight:600;color:var(--t1);margin-bottom:3px" id="timerLabel">Timer disabled</div>
+              <div style="font-size:11px;color:var(--t2)" id="timerMeta">Enable above to start.</div>
+            </div>
+            <div id="timerDigs"></div>
+          </div>
+        </div>
+        <div style="margin-top:14px;margin-bottom:10px">
+          <div style="font-size:11px;color:var(--t2);margin-bottom:8px;">Auction window duration — <span id="durationDisplay" style="color:var(--t1);font-weight:600">48h</span></div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="btn btn-ghost dur-btn" data-hrs="1"  onclick="setDuration(1)">1h</button>
+            <button class="btn btn-ghost dur-btn" data-hrs="3"  onclick="setDuration(3)">3h</button>
+            <button class="btn btn-ghost dur-btn" data-hrs="6"  onclick="setDuration(6)">6h</button>
+            <button class="btn btn-ghost dur-btn" data-hrs="12" onclick="setDuration(12)">12h</button>
+            <button class="btn btn-ghost dur-btn" data-hrs="24" onclick="setDuration(24)">24h</button>
+            <button class="btn btn-ghost dur-btn" data-hrs="48" onclick="setDuration(48)">48h</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <button class="btn btn-orange" id="resetTimerBtn" onclick="adminResetTimer()" disabled>↺ Reset Timer</button>
+          <button class="btn btn-danger" id="clearTimerBtn" onclick="adminClearTimer()" disabled>✕ Clear Timer</button>
+        </div>
+        <div class="slider-row">
+          <div class="slider-label">Set time remaining <span id="sliderDisplay">48h 00m</span></div>
+          <input type="range" id="timerSlider" min="0" max="172800" step="900" value="172800" disabled
+            oninput="onSliderInput(this.value)" onchange="onSliderChange(this.value)">
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);margin-top:5px;font-family:'Geist Mono',monospace">
+            <span>0h</span><span>12h</span><span>24h</span><span>36h</span><span>48h</span>
+          </div>
+        </div>
+        </div>
+        <div class="card big-card" style="margin-bottom:0">
+          <div class="card-title">Bids Placed</div>
+          <div class="stat-value c-blue" id="st-total" style="font-size:46px;margin:6px 0 4px">—</div>
+          <div style="font-size:12px;color:var(--t2)">total bids in the system</div>
+          <div style="display:flex;gap:22px;margin-top:16px;padding-top:12px;border-top:1px solid var(--b1);font-size:12px;color:var(--t2)">
+            <span>🔒 Weeks locked: <strong class="mono" id="st-locked" style="color:var(--t1)">—</strong></span>
+            <span>⏱️ Timer: <strong class="mono" id="st-timer" style="color:var(--t1)">—</strong></span>
+          </div>
+        </div>
+        <div class="card big-card" style="margin-bottom:0">
+          <div class="card-title">Users Without Bids — Phase <span id="noBidsPhase">1</span> (<span id="noBidsCount">—</span>)</div>
+          <div id="noBidsList" style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 14px;max-height:130px;overflow-y:auto"></div>
+          <button class="btn btn-primary" id="noBidsRemindBtn" onclick="sendReminderEmails()">📧 Send Reminder E-mails</button>
+        </div>
       </div>
-      <div id="dashLegend"></div>
-      <div class="ovgrid" id="ovgrid"></div>
-      <div id="weekSummary"></div>
+
+      <div style="display:flex;gap:10px;margin-bottom:14px">
+        <button class="btn btn-ghost" onclick="const d=document.getElementById('dashUsersWrap');const on=d.style.display!=='none';d.style.display=on?'none':'block';this.textContent=on?'👥 User summary ▾':'👥 User summary ▴';">👥 User summary ▾</button>
+        <button class="btn btn-ghost" onclick="const d=document.getElementById('dashWeeklyWrap');const on=d.style.display!=='none';d.style.display=on?'none':'block';this.textContent=on?'📆 Weekly summary ▾':'📆 Weekly summary ▴';">📆 Weekly summary ▾</button>
+      </div>
+      <div id="dashUsersWrap" style="display:none">
+        <div id="dashLegend"></div>
+        <div class="ovgrid" id="ovgrid"></div>
+      </div>
+      <div id="dashWeeklyWrap" style="display:none">
+        <div id="weekSummary"></div>
+      </div>
     </div>
 
     <!-- LOCK WEEKS -->
@@ -354,14 +434,6 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
       <div id="drawsReviewsBody"></div>
     </div>
 
-    <!-- EMAILS -->
-    <div class="panel" id="panel-emails">
-      <div class="page-head"><div class="page-title">User Emails</div><div class="page-sub">Manage email addresses for notifications.</div></div>
-      <div style="overflow-x:auto;border:1px solid var(--b1)">
-        <table><thead><tr><th>User</th><th>Email</th><th></th></tr></thead><tbody id="emailsBody"></tbody></table>
-      </div>
-    </div>
-
     <!-- PRIORITY LOCKS -->
     <div class="panel" id="panel-bestbids">
       <div class="page-head"><div class="page-title">Priority Locks</div><div class="page-sub">Stored worst bids per user. Clear to let them rebid freely on a week.</div></div>
@@ -400,14 +472,20 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
           <table><thead><tr><th>User</th><th>FTE</th><th></th><th></th></tr></thead><tbody id="fteBody"></tbody></table>
         </div>
       </div>
-    </div>
-
-    <!-- PASSWORDS -->
-    <div class="panel" id="panel-passwords">
-      <div class="page-head"><div class="page-title">Passwords</div><div class="page-sub">Clear user passwords — users will set a new one on next login.</div></div>
-      <div style="margin-bottom:14px"><button class="btn btn-danger" onclick="clearAllPasswords()">Clear All Passwords</button></div>
-      <div style="overflow-x:auto;border:1px solid var(--b1)">
-        <table><thead><tr><th>User</th><th>Status</th><th></th></tr></thead><tbody id="passwordsBody"></tbody></table>
+      <div class="card">
+        <div class="card-title">E-mail Addresses</div>
+        <div class="page-sub" style="margin-bottom:12px">Used for outbid alerts, reminders, and phase results.</div>
+        <div style="overflow-x:auto;border:1px solid var(--b1)">
+          <table><thead><tr><th>User</th><th>Email</th><th></th></tr></thead><tbody id="emailsBody"></tbody></table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Passwords</div>
+        <div class="page-sub" style="margin-bottom:12px">Clear a password and the user sets a new one at next sign-in.</div>
+        <div style="margin-bottom:14px"><button class="btn btn-danger" onclick="clearAllPasswords()">Clear All Passwords</button></div>
+        <div style="overflow-x:auto;border:1px solid var(--b1)">
+          <table><thead><tr><th>User</th><th>Status</th><th></th></tr></thead><tbody id="passwordsBody"></tbody></table>
+        </div>
       </div>
     </div>
 
@@ -534,69 +612,6 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
           </div>
           <button class="btn btn-primary" style="flex:unset" onclick="flushMailQueue()">📮 Send Pending</button>
         </div>
-      </div>
-    </div>
-
-    <!-- TIMER -->
-    <div class="panel" id="panel-timer">
-      <div class="page-head"><div class="page-title">Countdown Timer</div><div class="page-sub">48-hour auction window shown to all users.</div></div>
-      <div class="card">
-        <div class="card-title">Timer</div>
-        <div class="trow">
-          <div><div class="trow-label">Enable Timer</div><div class="trow-desc">Shows a live countdown to all users, resets on each bid change</div></div>
-          <div class="tog" id="timerToggle" onclick="toggleTimerEnabled()"></div>
-        </div>
-        <div id="timerBlock" class="timer-block" style="margin-top:14px">
-          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-            <div>
-              <div style="font-size:12px;font-weight:600;color:var(--t1);margin-bottom:3px" id="timerLabel">Timer disabled</div>
-              <div style="font-size:11px;color:var(--t2)" id="timerMeta">Enable above to start.</div>
-            </div>
-            <div id="timerDigs"></div>
-          </div>
-        </div>
-        <div style="margin-top:14px;margin-bottom:10px">
-          <div style="font-size:11px;color:var(--t2);margin-bottom:8px;">Auction window duration — <span id="durationDisplay" style="color:var(--t1);font-weight:600">48h</span></div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <button class="btn btn-ghost dur-btn" data-hrs="1"  onclick="setDuration(1)">1h</button>
-            <button class="btn btn-ghost dur-btn" data-hrs="3"  onclick="setDuration(3)">3h</button>
-            <button class="btn btn-ghost dur-btn" data-hrs="6"  onclick="setDuration(6)">6h</button>
-            <button class="btn btn-ghost dur-btn" data-hrs="12" onclick="setDuration(12)">12h</button>
-            <button class="btn btn-ghost dur-btn" data-hrs="24" onclick="setDuration(24)">24h</button>
-            <button class="btn btn-ghost dur-btn" data-hrs="48" onclick="setDuration(48)">48h</button>
-          </div>
-        </div>
-        <div style="display:flex;gap:8px;margin-top:4px">
-          <button class="btn btn-orange" id="resetTimerBtn" onclick="adminResetTimer()" disabled>↺ Reset Timer</button>
-          <button class="btn btn-danger" id="clearTimerBtn" onclick="adminClearTimer()" disabled>✕ Clear Timer</button>
-        </div>
-        <div class="slider-row">
-          <div class="slider-label">Set time remaining <span id="sliderDisplay">48h 00m</span></div>
-          <input type="range" id="timerSlider" min="0" max="172800" step="900" value="172800" disabled
-            oninput="onSliderInput(this.value)" onchange="onSliderChange(this.value)">
-          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);margin-top:5px;font-family:'Geist Mono',monospace">
-            <span>0h</span><span>12h</span><span>24h</span><span>36h</span><span>48h</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-
-    <!-- PHASES -->
-    <div class="panel" id="panel-phases">
-      <div class="page-head"><div class="page-title">📅 Phase Management</div><div class="page-sub">Control auction phases. All bids must be approved or denied before completing a phase.</div></div>
-      <div class="card" style="margin-bottom:14px">
-        <div class="card-title">Current Phase</div>
-        <div id="phaseCurrentDisplay" style="font-size:2rem;font-weight:800;color:var(--blue);margin:8px 0"></div>
-        <div id="phaseStatusMsg" style="font-size:12px;color:var(--t2);margin-bottom:14px"></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-danger" id="completePhaseBtn" onclick="completePhase()">✓ Complete Phase</button>
-          <button class="btn btn-success" id="beginNextPhaseBtn" onclick="beginNextPhase()" style="display:none">▶ Begin Phase <span id="nextPhaseNum"></span></button>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-title">Phase History</div>
-        <div id="phaseHistoryBody" style="font-size:12px;color:var(--t2)">No completed phases yet.</div>
       </div>
     </div>
 
@@ -892,16 +907,15 @@ window.nav = function(id, el) {
   if(id==='locks') renderLockPanel();
   if(id==='edits') renderEditTable();
   if(id==='simulator') renderSimPanel();
-  if(id==='phases') renderPhasePanel();
   if(id==='appdenials') renderAppDenials();
   if(id==='bestbids') renderBestBids();
   if(id==='drawsreviews') renderDrawsReviews();
   if(id==='changelog') renderChangelog();
-  if(id==='emails' && typeof renderEmailsPanel==='function') renderEmailsPanel();
-  if(id==='passwords' && typeof renderPasswordsPanel==='function') renderPasswordsPanel();
   if(id==='users'){
     if(typeof renderUserPanel==='function') renderUserPanel();
     if(typeof renderFtePanel==='function') renderFtePanel();
+    if(typeof renderEmailsPanel==='function') renderEmailsPanel();
+    if(typeof renderPasswordsPanel==='function') renderPasswordsPanel();
   }
 };
 
@@ -1151,15 +1165,14 @@ function refreshAll(){
     if(isOn('locks')) renderLockPanel();
     if(isOn('edits')) renderEditTable();
     if(isOn('simulator')) renderSimPanel();
-    if(isOn('phases')) renderPhasePanel();
     if(isOn('appdenials')) renderAppDenials();
     if(isOn('drawsreviews')) renderDrawsReviews();
     if(isOn('bestbids')) renderBestBids();
     if(isOn('changelog')) renderChangelog();
-    if(isOn('emails')) renderEmailsPanel();
-    if(isOn('passwords') && typeof renderPasswordsPanel==='function') renderPasswordsPanel();
     if(isOn('users') && typeof renderUserPanel==='function') renderUserPanel();
     if(isOn('users') && typeof renderFtePanel==='function') renderFtePanel();
+    if(isOn('users') && typeof renderEmailsPanel==='function') renderEmailsPanel();
+    if(isOn('users') && typeof renderPasswordsPanel==='function') renderPasswordsPanel();
     if(isOn('slots') && typeof renderSlotsPanel==='function') renderSlotsPanel();
     updateStats();
     syncControls();
@@ -1188,8 +1201,31 @@ function updateStats(){
 // onchange="renderOverview()" throws ReferenceError and the dashboard silently
 // never re-renders — which is exactly "changing the phase does nothing".
 window.renderOverview=renderOverview;
+// Users with zero current-phase bids — dashboard card + reminder button state.
+function renderNoBidders(){
+  const el=document.getElementById('noBidsList'); if(!el) return;
+  const cur=Number(phasesData.currentPhase||1);
+  const noBidders=[];
+  for(const u of names){
+    let has=false; const uw=scheduleData[u]||{};
+    for(const wk in uw){
+      if(uw[wk]===undefined) continue;
+      if(Array.isArray(deniedData?.[wk])&&deniedData[wk].includes(u)) continue;
+      if(getUserBidPhaseAdmin(u,wk)===cur){ has=true; break; }
+    }
+    if(!has) noBidders.push(u);
+  }
+  const ph=document.getElementById('noBidsPhase'); if(ph) ph.textContent=cur;
+  const cnt=document.getElementById('noBidsCount'); if(cnt) cnt.textContent=noBidders.length;
+  el.innerHTML=noBidders.length
+    ? noBidders.map(u=>`<span class="pill p-yellow" style="font-size:12px">${u}</span>`).join('')
+    : '<span style="color:var(--green);font-weight:700;font-size:13px">✓ Everyone has placed at least one bid</span>';
+  const btn=document.getElementById('noBidsRemindBtn'); if(btn) btn.disabled=!noBidders.length;
+}
+
 function renderOverview(){
   const ap=computeApprovals();
+  try{ renderPhasePanel(); renderNoBidders(); }catch(e){ console.warn('dash',e); }
   const g=document.getElementById("ovgrid"); if(!g)return;
   const legendEl=document.getElementById("dashLegend");
   const weekEl=document.getElementById("weekSummary");
