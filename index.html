@@ -2,25 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<script>
-/* Device auto-redirect: phones use mobile.html, computers/tablets use index.html.
-   Runs before anything else loads. Identical detection on both pages so they agree
-   (no redirect loop). Add ?nr=1 to the URL to stay on the current page regardless. */
-(function(){
-  try{
-    if(/[?&]nr=1/.test(location.search)) return;
-    var ua=navigator.userAgent||"";
-    var phoneUA=/Android|iPhone|iPod|Windows Phone|BlackBerry|IEMobile|Opera Mini/i.test(ua);
-    var narrow=Math.min(screen.width||9999,screen.height||9999)<=820;
-    var isPhone=phoneUA && narrow;   // tablets & desktops => full site
-    var path=(location.pathname||"").toLowerCase();
-    var onMobile=/mobile\.html$/.test(path);
-    var qs=location.search?location.search+"&auto=1":"?auto=1";
-    if(isPhone && !onMobile){ location.replace("mobile.html"+qs); return; }
-    if(!isPhone && onMobile){ location.replace("index.html"+qs); return; }
-  }catch(e){}
-})();
-</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script>
 /* Auto-refresh check: if a newer version of this page has been published,
    reload once so the latest version shows without a manual hard-refresh.
@@ -28,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 16;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 17;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -249,7 +231,7 @@ button{flex:1;padding:10px 16px;border:none;border-radius:10px;font-size:.9rem;f
 .party-btn:hover{border-color:rgba(255,255,255,.2);color:rgba(255,255,255,.3);transform:rotate(20deg)}
 #confettiCanvas{position:fixed;inset:0;pointer-events:none;z-index:9999;display:none}
 
-@media(max-width:768px){.header-top{font-size:1.5rem}.toolbar{flex-direction:column;align-items:stretch}.person-selector{flex-direction:column}select{min-width:unset}.weeks-grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}}
+@media(max-width:768px){.toolbar{flex-direction:column;align-items:stretch}.person-selector{flex-direction:column}select{min-width:unset}}
 
 /* Global scale — renders as if the browser were at 115% zoom. Change the one
    number below to retune (1 = 100%, 1.15 = 115%). */
@@ -263,6 +245,32 @@ body{zoom:1.15}
 .ob-review{background:rgba(192,132,252,.16);color:#4f42a3}
 .ob-lose{background:rgba(248,113,113,.16);color:#dc2626}
 .obadge-lg{width:1.5em;height:1.5em;font-size:.9em}
+
+/* ===== Responsive user site (authoritative — placed last so it wins) ===== */
+@media(max-width:820px){
+  body{zoom:1!important;padding:14px 12px}
+  .container{max-width:100%}
+  .header-top{font-size:1.45rem;text-align:center}
+  .header-sub,.header-phase{text-align:center}
+  .toolbar{flex-direction:column;align-items:stretch;gap:10px}
+  .person-selector{flex-direction:column;align-items:stretch}
+  select{min-width:unset;width:100%}
+  .months-grid{gap:16px}
+  .month-title{font-size:1rem}
+  .weeks-grid{grid-template-columns:1fr 1fr;gap:8px}
+  .week{padding:10px;font-size:.72rem}
+  .week-day-label{font-size:.82rem;line-height:1.15}
+  .week-range{font-size:.64rem}
+  .selections-bar{padding:14px 14px}
+  .selections-bar-title{font-size:.9rem}
+  .modal{padding:14px 0;align-items:flex-start}
+  .modal-content{padding:18px 16px;width:94%;max-width:460px;margin:10px auto}
+  #countdownBanner{flex-direction:column;align-items:stretch;gap:8px}
+  #priorityModal .modal-content .prio-grid,#priorityModal .modal-content [style*="grid-template-columns"]{grid-template-columns:repeat(3,1fr)!important}
+}
+@media(max-width:380px){
+  .weeks-grid{grid-template-columns:1fr}
+}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
 <script>try{emailjs.init("M5DaguiYyyyR3VG6t");}catch(e){}</script>
@@ -274,11 +282,23 @@ body{zoom:1.15}
 <!-- Sign-in modal -->
 <div id="accountSelectModal" class="modal show">
   <div class="modal-content">
-    <h2 class="modal-title">Select Your Account</h2>
-    <label class="modal-label">Choose your name:</label>
-    <div id="nameList" style="max-height:240px;overflow-y:auto;border:2px solid #9fb4c6;border-radius:10px;margin-bottom:14px;background:#eef2f6"></div>
-    <div id="selectedNameDisplay" style="display:none;margin-bottom:14px;padding:9px 13px;border-radius:8px;background:rgba(96,165,250,.15);border:1px solid #006ba6;color:#005e93;font-weight:600;font-size:.9rem"></div>
-    <div class="modal-buttons"><button class="btn-primary" id="confirmAccountBtn" data-label="Continue" onclick="confirmAccountSelection()" disabled style="opacity:.5;cursor:wait">Loading…</button></div>
+    <div id="signinPhaseLine" style="text-align:center;font-size:.74rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#48607a;margin-bottom:14px;min-height:1em"></div>
+    <!-- Returning user: one-tap continue -->
+    <div id="signinWelcome" style="display:none;text-align:center">
+      <h2 class="modal-title" style="margin-bottom:2px">Welcome back</h2>
+      <div id="signinWelcomeName" style="font-size:2rem;font-weight:800;color:#006ba6;margin:10px 0 20px"></div>
+      <button class="btn-primary" id="quickContinueBtn" style="width:100%;padding:13px;font-size:1rem" onclick="quickContinue()">Continue</button>
+      <div style="margin-top:14px"><a onclick="signinShowPicker()" style="cursor:pointer;color:#006ba6;text-decoration:underline;font-size:.85rem">Sign in as someone else</a></div>
+    </div>
+    <!-- Picker: search + browsable list -->
+    <div id="signinPicker">
+      <h2 class="modal-title" style="margin-bottom:12px">Sign in</h2>
+      <input id="signinSearch" type="text" placeholder="Type your initials…" autocomplete="off" oninput="filterNameList()" onkeydown="if(event.key==='Enter')pickFirstMatch()" style="width:100%;padding:12px 14px;font-size:1.05rem;font-weight:600;border:2px solid #9fb4c6;border-radius:10px;background:#fff;color:#111827;margin-bottom:10px;box-sizing:border-box">
+      <div id="nameList" style="max-height:260px;overflow-y:auto;border:2px solid #9fb4c6;border-radius:10px;background:#eef2f6"></div>
+      <div id="signinNoMatch" style="display:none;text-align:center;color:#48607a;font-size:.85rem;padding:12px">No initials match that — check your spelling or scroll the list.</div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:.85rem;color:#3b566d;cursor:pointer;margin-top:12px"><input type="checkbox" id="rememberMe"> Remember me on this device</label>
+      <div id="signinLoading" style="display:none;text-align:center;color:#48607a;font-size:.8rem;margin-top:8px">Loading accounts…</div>
+    </div>
   </div>
 </div>
 
@@ -915,7 +935,7 @@ onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; });
 onSnapshot(passcodesRef,snap=>{ passcodesData=snap.exists()?snap.data():{}; _passcodesReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
 onSnapshot(fteRef,      snap=>{ if(snap.exists()){ fteData=snap.data(); } else { setDoc(fteRef,FTE_MAP).catch(()=>{}); return; } scheduleRender(); });
 onSnapshot(approvalsRef,snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()?snap.data():{}); scheduleRender(); });
-onSnapshot(phasesRef,  snap=>{ phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{}}; renderPhaseLabel(); scheduleRender(); });
+onSnapshot(phasesRef,  snap=>{ phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{}}; renderPhaseLabel(); scheduleRender(); if(typeof updateSigninPhase==='function') updateSigninPhase(); });
 onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); scheduleRender(); });
 onSnapshot(deniedRef,  snap=>{ deniedData=normalizeWkArrayMap(snap.exists()?snap.data():{}); scheduleRender(); });
 onSnapshot(slotsRef,   snap=>{ slotsData=snap.exists()?snap.data():{}; applySlotOverrides(); scheduleRender(); });
@@ -984,6 +1004,21 @@ onSnapshot(timerRef,  snap=>{
   scheduleRender();
 });
 
+// ── Auction-closed pop-up ──
+// Shows once per closure so a scrolled-down user can't miss it. Re-arms only if
+// the admin restarts the timer (handled in renderCountdown when remaining>0).
+let _auctionClosedShown=false;
+function showAuctionClosedModal(){
+  if(_auctionClosedShown) return;
+  _auctionClosedShown=true;
+  const m=document.getElementById("auctionClosedModal");
+  if(m) m.classList.add("show");
+}
+window.closeAuctionClosedModal=function(){
+  const m=document.getElementById("auctionClosedModal");
+  if(m) m.classList.remove("show");
+};
+
 // ── Countdown ──
 function startCountdownTick(){
   if(countdownInterval) clearInterval(countdownInterval);
@@ -1010,8 +1045,12 @@ function renderCountdown(){
     descEl.textContent="The auction window has closed — no more changes can be made";
     banner.classList.add("urgent");
     if(countdownInterval){clearInterval(countdownInterval);countdownInterval=null;}
+    // Pop up a modal so the user sees the closure even if scrolled down the page.
+    showAuctionClosedModal();
     return;
   }
+  // Timer is running again (e.g. admin reset it) — re-arm the closed pop-up.
+  _auctionClosedShown=false;
   const ts=Math.floor(remaining/1000);
   const h=Math.floor(ts/3600), m=Math.floor((ts%3600)/60), s=ts%60;
   const pad=n=>String(n).padStart(2,"0");
@@ -1866,33 +1905,80 @@ async function sendEmailNotifications(prevSnap,newSnap,actor){
 
 // ── Sign-in ──
 let selectedSignInName="";
+let _pendingSignIn=null, _rememberedName=null;
+const REMEMBER_KEY="vk_lastUser";
+function signinReady(){ return _adminSettingsReady&&_passcodesReady&&_emailsReady; }
+
 function buildNameList(){
+  if(!nameList) return;
   nameList.innerHTML="";
   names.forEach(n=>{
-    const item=document.createElement("div"); item.textContent=n;
-    item.style.cssText="padding:10px 16px;cursor:pointer;color:#132f49;font-size:1rem;border-bottom:1px solid #ffffff;transition:background .15s";
-    item.addEventListener("mouseenter",()=>{ if(selectedSignInName!==n)item.style.background="rgba(96,165,250,.08)"; });
-    item.addEventListener("mouseleave",()=>{ if(selectedSignInName!==n)item.style.background=""; });
-    item.addEventListener("click",()=>{
-      selectedSignInName=n;
-      nameList.querySelectorAll("div").forEach(d=>{d.style.background="";d.style.color="#2c4257";d.style.fontWeight="";});
-      item.style.background="rgba(96,165,250,.2)"; item.style.color="#005e93"; item.style.fontWeight="600";
-      const disp=document.getElementById("selectedNameDisplay"); disp.textContent="Selected: "+n; disp.style.display="block";
-    });
+    const item=document.createElement("div"); item.className="name-row"; item.dataset.name=n; item.textContent=n;
+    item.style.cssText="padding:12px 16px;cursor:pointer;color:#132f49;font-size:1.05rem;font-weight:600;border-bottom:1px solid #ffffff;transition:background .12s";
+    item.addEventListener("mouseenter",()=>item.style.background="rgba(0,107,166,.08)");
+    item.addEventListener("mouseleave",()=>item.style.background="");
+    item.addEventListener("click",()=>selectName(n));
     nameList.appendChild(item);
   });
+  filterNameList();
+  initSigninScreen();
+}
+window.filterNameList=function(){
+  const q=(document.getElementById("signinSearch")?.value||"").trim().toUpperCase();
+  let shown=0;
+  nameList.querySelectorAll(".name-row").forEach(r=>{
+    const match=r.dataset.name.toUpperCase().includes(q);
+    r.style.display=match?"":"none"; if(match) shown++;
+  });
+  const nm=document.getElementById("signinNoMatch"); if(nm) nm.style.display=(shown===0&&q)?"block":"none";
+};
+window.pickFirstMatch=function(){
+  const first=[...nameList.querySelectorAll(".name-row")].find(r=>r.style.display!=="none");
+  if(first) selectName(first.dataset.name);
+};
+function selectName(n){
+  selectedSignInName=n;
+  if(!signinReady()){ _pendingSignIn=n; const l=document.getElementById("signinLoading"); if(l)l.style.display="block"; return; }
+  confirmAccountSelection();
+}
+function initSigninScreen(){
+  let remembered=null; try{ remembered=localStorage.getItem(REMEMBER_KEY); }catch(_){}
+  const w=document.getElementById("signinWelcome"), p=document.getElementById("signinPicker");
+  if(!w||!p) return;
+  if(remembered && names.includes(remembered)){
+    _rememberedName=remembered;
+    w.style.display="block"; p.style.display="none";
+    const nm=document.getElementById("signinWelcomeName"); if(nm) nm.textContent=remembered;
+    const b=document.getElementById("quickContinueBtn"); if(b) b.textContent="Continue as "+remembered;
+  } else if(w.style.display!=="block"){
+    p.style.display="block";
+  }
+}
+window.signinShowPicker=function(){
+  const w=document.getElementById("signinWelcome"), p=document.getElementById("signinPicker");
+  if(w) w.style.display="none"; if(p) p.style.display="block";
+  const s=document.getElementById("signinSearch"); if(s) setTimeout(()=>s.focus(),60);
+};
+window.quickContinue=function(){
+  if(!_rememberedName) return;
+  const cb=document.getElementById("rememberMe"); if(cb) cb.checked=true;
+  selectName(_rememberedName);
+};
+function updateSigninPhase(){
+  const el=document.getElementById("signinPhaseLine"); if(!el) return;
+  const ph=Number(phasesData?.currentPhase||0);
+  el.textContent=ph?("Vacation Auction · Phase "+ph):"Vacation Auction";
 }
 buildNameList();
 document.getElementById("accountSelectModal").classList.add("show");
 
+// Called when Firestore readiness flags change: hide loading and, if a name was
+// tapped before data finished loading, proceed automatically.
 function _updateSignInBtnState(){
-  const btn=document.getElementById("confirmAccountBtn");
-  if(!btn) return;
-  const ready=_adminSettingsReady&&_passcodesReady&&_emailsReady;
-  btn.disabled=!ready;
-  btn.textContent=ready?(btn.dataset.label||"Continue"):"Loading…";
-  btn.style.opacity=ready?"1":"0.5";
-  btn.style.cursor=ready?"pointer":"wait";
+  if(signinReady()){
+    const l=document.getElementById("signinLoading"); if(l)l.style.display="none";
+    if(_pendingSignIn){ const n=_pendingSignIn; _pendingSignIn=null; selectedSignInName=n; confirmAccountSelection(); }
+  }
 }
 
 window.confirmAccountSelection=function(){
@@ -1961,6 +2047,7 @@ async function verifyPasscode(){
 }
 
 function completeSignIn(){
+  try{ if(document.getElementById("rememberMe")?.checked) localStorage.setItem(REMEMBER_KEY,selectedSignInName); else localStorage.removeItem(REMEMBER_KEY); }catch(_){}
   personSelect.value=selectedSignInName; personSelect.disabled=true;
   personSelect.style.display="none";
   const _pl=document.getElementById("personLabel"); _pl.textContent=selectedSignInName; _pl.style.display="inline";
@@ -2035,6 +2122,14 @@ window.launchParty=function(){
 </script>
 
 <!-- Confirm Modal -->
+<div id="auctionClosedModal" class="modal">
+  <div class="modal-content" style="max-width:360px;text-align:center;padding:28px 24px">
+    <div style="font-size:2.4rem;margin-bottom:6px">⛔</div>
+    <div class="modal-title" style="color:#b91c1c;margin-bottom:10px">Auction Closed</div>
+    <p style="color:#132f49;font-size:.95rem;margin-bottom:20px;line-height:1.5">The bidding window has closed and the timer has run out. No more bids can be placed, edited, or removed.</p>
+    <button id="auctionClosedOk" onclick="closeAuctionClosedModal()" style="padding:9px 26px;background:#0f2744;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:.95rem">Got it</button>
+  </div>
+</div>
 <div id="confirmModal" class="modal">
   <div class="modal-content" style="max-width:340px;text-align:center;padding:24px">
     <p id="confirmMsg" style="color:#132f49;font-size:.95rem;margin-bottom:18px"></p>

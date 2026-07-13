@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script>
 /* Auto-refresh check: if a newer version of this page has been published,
    reload once so the latest version shows without a manual hard-refresh.
@@ -9,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 29;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 32;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -189,7 +190,7 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
 @keyframes spin{to{transform:rotate(360deg)}}
 #load.hidden{display:none}
 
-@media(max-width:700px){.shell{grid-template-columns:1fr}.bar{display:none}.stats{flex-direction:column}}
+@media(max-width:700px){.stats{flex-direction:column}}
 
 /* Confirmation modal */
 .cmodal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);align-items:center;justify-content:center;z-index:2000;padding:24px}
@@ -232,12 +233,47 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
 #phaseCurrentDisplay{font-size:2.2rem!important}
 .card{box-shadow:0 1px 3px rgba(10,37,64,.08)}
 thead th{color:var(--t2)}
+
+/* ── Mobile / responsive admin ── */
+#navToggle{display:none;position:fixed;top:12px;left:12px;z-index:60;width:44px;height:44px;border:1px solid var(--b2);border-radius:11px;background:var(--s1);color:var(--t1);font-size:20px;cursor:pointer;box-shadow:0 2px 8px rgba(10,37,64,.15)}
+#navOverlay{display:none;position:fixed;inset:0;background:rgba(10,37,64,.45);z-index:50}
+@media (max-width:900px){
+  .shell{grid-template-columns:1fr}
+  #navToggle{display:flex;align-items:center;justify-content:center}
+  .bar{display:flex!important;position:fixed;top:0;left:0;height:100vh;width:260px;z-index:55;transform:translateX(-100%);transition:transform .25s ease;box-shadow:0 0 40px rgba(10,37,64,.3);overflow-y:auto}
+  .bar.open{transform:translateX(0)}
+  #navOverlay.open{display:block}
+  .content{padding:64px 16px 40px}
+  .page-title{font-size:22px}
+  /* stack the dashboard big cards */
+  #dash2Top,[id^="panel-"] .card{}
+  .stats{flex-direction:column}
+  .card{padding:18px 16px;border-radius:16px}
+  /* dashboard three-panel row → single column */
+  #panel-overview > div[style*="grid-template-columns:repeat(auto-fit"]{grid-template-columns:1fr!important}
+  /* any wide inline grids collapse */
+  [style*="grid-template-columns:1.6fr"]{grid-template-columns:1fr!important}
+  [style*="grid-template-columns:repeat(auto-fit,minmax(360px"]{grid-template-columns:1fr!important}
+  /* tables scroll horizontally instead of overflowing */
+  table{min-width:520px}
+  .dr-row{flex-wrap:wrap}
+  /* header action rows wrap tightly */
+  .btn{padding:8px 12px}
+}
+@media (max-width:560px){
+  .content{padding:60px 10px 40px}
+  .page-title{font-size:20px}
+  .stat-value{font-size:22px}
+  #phaseCurrentDisplay{font-size:1.8rem!important}
+}
 </style>
 </head>
 <body>
 <div id="load"><div class="spin"></div></div>
 
 <div class="shell">
+  <button id="navToggle" onclick="toggleNav()" aria-label="Menu">☰</button>
+  <div id="navOverlay" onclick="toggleNav()"></div>
   <!-- Sidebar -->
   <nav class="bar">
     <div class="bar-logo"><span>Admin Panel</span></div>
@@ -288,13 +324,23 @@ thead th{color:var(--t2)}
           <div><div class="trow-label">Global Lock</div><div class="trow-desc">Freeze all bidding — no user can add, edit, or remove any bid</div></div>
           <div class="tog" id="globalLockToggle" onclick="toggleGlobalLock()"></div>
         </div>
-        <div style="margin-top:12px">
-          <button class="btn" style="width:100%;justify-content:center;background:rgba(179,157,248,.14);color:#5b4fb5;border:1px solid rgba(179,157,248,.4)" onclick="lockFullWeeks()">🔒 Lock Full Weeks (no availability left)</button>
-          <div class="trow-desc" style="margin-top:6px">Locks every week that admin approvals have filled past the FTE overage — do this between phases so no one can bid on weeks with no room.</div>
-        </div>
       <details style="margin-top:14px"><summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--t2)">Phase history</summary>
         <div id="phaseHistoryBody" style="font-size:12px;color:var(--t2);margin-top:8px">No completed phases yet.</div>
       </details>
+        </div>
+        <div class="card big-card" style="margin-bottom:0">
+          <div class="card-title">Bids Placed</div>
+          <div class="stat-value c-blue" id="st-total" style="font-size:46px;margin:6px 0 4px">—</div>
+          <div style="font-size:12px;color:var(--t2)">total bids in the system</div>
+          <div style="display:flex;gap:22px;margin-top:14px;padding-top:12px;border-top:1px solid var(--b1);font-size:12px;color:var(--t2)">
+            <span>🔒 Weeks locked: <strong class="mono" id="st-locked" style="color:var(--t1)">—</strong></span>
+            <span>⏱️ Timer: <strong class="mono" id="st-timer" style="color:var(--t1)">—</strong></span>
+          </div>
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--b1)">
+            <div style="font-size:12px;font-weight:800;color:var(--t1);margin-bottom:8px">Users without bids — Phase <span id="noBidsPhase">1</span> (<span id="noBidsCount">—</span>)</div>
+            <div id="noBidsList" style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px;max-height:110px;overflow-y:auto"></div>
+            <button class="btn btn-primary" id="noBidsRemindBtn" onclick="sendReminderEmails()">📧 Send Reminder E-mails</button>
+          </div>
         </div>
         <div class="card big-card" style="margin-bottom:0">
           <div class="card-title">Bidding Timer</div>
@@ -326,28 +372,6 @@ thead th{color:var(--t2)}
           <button class="btn btn-orange" id="resetTimerBtn" onclick="adminResetTimer()" disabled>↺ Reset Timer</button>
           <button class="btn btn-danger" id="clearTimerBtn" onclick="adminClearTimer()" disabled>✕ Clear Timer</button>
         </div>
-        <div class="slider-row">
-          <div class="slider-label">Set time remaining <span id="sliderDisplay">48h 00m</span></div>
-          <input type="range" id="timerSlider" min="0" max="172800" step="900" value="172800" disabled
-            oninput="onSliderInput(this.value)" onchange="onSliderChange(this.value)">
-          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);margin-top:5px;font-family:'Geist Mono',monospace">
-            <span>0h</span><span>12h</span><span>24h</span><span>36h</span><span>48h</span>
-          </div>
-        </div>
-        </div>
-        <div class="card big-card" style="margin-bottom:0">
-          <div class="card-title">Bids Placed</div>
-          <div class="stat-value c-blue" id="st-total" style="font-size:46px;margin:6px 0 4px">—</div>
-          <div style="font-size:12px;color:var(--t2)">total bids in the system</div>
-          <div style="display:flex;gap:22px;margin-top:14px;padding-top:12px;border-top:1px solid var(--b1);font-size:12px;color:var(--t2)">
-            <span>🔒 Weeks locked: <strong class="mono" id="st-locked" style="color:var(--t1)">—</strong></span>
-            <span>⏱️ Timer: <strong class="mono" id="st-timer" style="color:var(--t1)">—</strong></span>
-          </div>
-          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--b1)">
-            <div style="font-size:12px;font-weight:800;color:var(--t1);margin-bottom:8px">Users without bids — Phase <span id="noBidsPhase">1</span> (<span id="noBidsCount">—</span>)</div>
-            <div id="noBidsList" style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px;max-height:110px;overflow-y:auto"></div>
-            <button class="btn btn-primary" id="noBidsRemindBtn" onclick="sendReminderEmails()">📧 Send Reminder E-mails</button>
-          </div>
         </div>
       </div>
 
@@ -369,9 +393,9 @@ thead th{color:var(--t2)}
       <div class="page-head"><div class="page-title">Lock Weeks</div><div class="page-sub">Locked weeks cannot be edited by users.</div></div>
       <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-danger" onclick="lockAllWeeks()">🔒 Lock All</button>
+        <button class="btn btn-success" onclick="unlockAllWeeks()">🔓 Unlock All</button>
         <button class="btn btn-danger btn-orange" style="background:rgba(249,115,22,.12);color:#fb923c;border-color:rgba(249,115,22,.35)" onclick="lockAllExceptHighDemand()">🔒 Lock All Except High Demand</button>
         <button class="btn" style="background:rgba(168,85,247,.12);color:#5b4fb5;border:1px solid rgba(168,85,247,.3)" onclick="lockFullWeeks()">🔒 Lock Weeks with No Availability</button>
-        <button class="btn btn-success" onclick="unlockAllWeeks()">🔓 Unlock All</button>
       </div>
       <div class="tabs" id="lockTabs"></div>
       <div class="wgrid" id="lockGrid"></div>
@@ -521,7 +545,17 @@ thead th{color:var(--t2)}
     <div class="panel" id="panel-controls">
       <div class="page-head"><div class="page-title">Controls</div><div class="page-sub">Global schedule settings.</div></div>
       <div class="card">
-        <div class="card-title">Authentication</div>
+        <div class="card-title">Email Prompt on Login</div>
+        <div class="trow">
+          <div>
+            <div class="trow-label">Email Prompt on Login</div>
+            <div class="trow-desc">When ON, users are asked to enter their email when they sign in. When OFF, the prompt is skipped.</div>
+          </div>
+          <div class="tog" id="emailPromptToggle" onclick="toggleEmailPrompt()"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Require Passwords</div>
         <div class="trow">
           <div>
             <div class="trow-label">Require Passwords</div>
@@ -531,7 +565,7 @@ thead th{color:var(--t2)}
         </div>
       </div>
       <div class="card">
-        <div class="card-title">Bid Rules</div>
+        <div class="card-title">Priority Lock</div>
         <div class="trow">
           <div>
             <div class="trow-label">Priority Lock (bids only increase)</div>
@@ -541,10 +575,30 @@ thead th{color:var(--t2)}
         </div>
       </div>
       <div class="card">
-        <div class="card-title">Maximum Bids Per Phase</div>
+        <div class="card-title">Email Notifications on Change</div>
+        <div class="trow">
+          <div>
+            <div class="trow-label">Email Notifications on Change</div>
+            <div class="trow-desc">When ON, users receive emails when their bid outcome changes. When OFF, no emails are sent.</div>
+          </div>
+          <div class="tog" id="emailNotifsToggle" onclick="toggleEmailNotifs()"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Outbid Alert Queue</div>
+        <div class="trow">
+          <div>
+            <div class="trow-label">Outbid Alert Queue: <span id="mqCount" style="font-family:var(--mono)">0</span> pending</div>
+            <div class="trow-desc">Alerts are saved to a queue the moment a bid changes, then emailed. If the sender's browser closes first, ANY open page (user or admin) delivers them within about a minute using a claim system that prevents duplicates. The button flushes immediately from here.</div>
+          </div>
+          <button class="btn btn-primary" style="flex:unset" onclick="flushMailQueue()">📮 Send Pending</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Max Bids for Current Phase</div>
         <div class="trow" style="align-items:flex-start;flex-direction:column;gap:8px">
           <div>
-            <div class="trow-label">Bids allowed per user, per phase</div>
+            <div class="trow-label">Bids allowed per user, for the current phase</div>
             <div class="trow-desc"><strong>Applies to the current phase only</strong> — each user may place up to this many new bids in the phase now underway. Bids from completed phases don't count against the limit (they're locked and can't be changed anyway). Whole numbers 1–10, or tick "No limit" — with no limit, users are bounded only by the bid numbers they have available (1,2,3 · 1,2 · 1–10 · NP). Editing or removing an existing bid is always allowed.</div>
           </div>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
@@ -557,7 +611,7 @@ thead th{color:var(--t2)}
         </div>
       </div>
       <div class="card">
-        <div class="card-title">FTE Overage Amount Allowed</div>
+        <div class="card-title">FTE Overage Amount</div>
         <div class="trow" style="align-items:flex-start;flex-direction:column;gap:8px">
           <div>
             <div class="trow-label">Maximum FTE Overage</div>
@@ -577,33 +631,6 @@ thead th{color:var(--t2)}
             <button class="btn btn-primary" id="reviewThresholdSaveBtn" onclick="saveReviewThreshold()">Save</button>
           </div>
           <div id="reviewThresholdStatus" style="font-size:11px;color:var(--t2);margin-top:4px"></div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-title">User Experience</div>
-        <div class="trow">
-          <div>
-            <div class="trow-label">Email Prompt on Login</div>
-            <div class="trow-desc">When ON, users are asked to enter their email when they sign in. When OFF, the prompt is skipped.</div>
-          </div>
-          <div class="tog" id="emailPromptToggle" onclick="toggleEmailPrompt()"></div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-title">Notifications</div>
-        <div class="trow">
-          <div>
-            <div class="trow-label">Email Notifications on Change</div>
-            <div class="trow-desc">When ON, users receive emails when their bid outcome changes. When OFF, no emails are sent.</div>
-          </div>
-          <div class="tog" id="emailNotifsToggle" onclick="toggleEmailNotifs()"></div>
-        </div>
-        <div class="trow">
-          <div>
-            <div class="trow-label">Outbid Alert Queue: <span id="mqCount" style="font-family:var(--mono)">0</span> pending</div>
-            <div class="trow-desc">Alerts are saved to a queue the moment a bid changes, then emailed. If the sender's browser closes first, ANY open page (user or admin) delivers them within about a minute using a claim system that prevents duplicates. The button flushes immediately from here.</div>
-          </div>
-          <button class="btn btn-primary" style="flex:unset" onclick="flushMailQueue()">📮 Send Pending</button>
         </div>
       </div>
     </div>
@@ -893,7 +920,13 @@ window.flushMailQueue=async function(){
 };
 
 // ── Nav ──
+window.toggleNav=function(){
+  const bar=document.querySelector('.bar'); const ov=document.getElementById('navOverlay');
+  const open=bar.classList.toggle('open'); if(ov) ov.classList.toggle('open',open);
+};
 window.nav = function(id, el) {
+  // On mobile, close the drawer after choosing a destination.
+  const bar=document.querySelector('.bar'); if(bar&&bar.classList.contains('open')) toggleNav();
   document.querySelectorAll(".panel").forEach(p=>p.classList.remove("on"));
   document.querySelectorAll(".nav a").forEach(a=>a.classList.remove("on"));
   document.getElementById("panel-"+id).classList.add("on");
@@ -1058,7 +1091,10 @@ function bidMatchesPhaseFilter(user,wk,filterVal){
   return true;
 }
 
-function computeApprovals(){
+function computeApprovals(ignoreAdmin){
+  // ignoreAdmin=true → compute the NATURAL projection: what each user's outcome
+  // would be from the bidding rules alone, before any admin approve/deny. Used to
+  // label "projected WIN/DRAW/REVIEW/LOSE" so admin can see the pre-decision state.
   const out={};
   mondays.forEach(d=>{
     const wk=dateKey(d);
@@ -1070,7 +1106,7 @@ function computeApprovals(){
       if(priorWinners.has(u)) continue;
       const p=scheduleData[u]?.[wk]; if(p===undefined) continue;
       const deniedHereChk=Array.isArray(deniedData?.[wk])&&deniedData[wk].includes(u);
-      if(deniedHereChk) continue;
+      if(!ignoreAdmin&&deniedHereChk) continue;
       // NOTE: we intentionally do NOT filter by phase here. All live bids in
       // scheduleData compete for the current phase's FTE, regardless of when they
       // were placed. Prior-phase locked-in wins are already handled via priorWinners.
@@ -1106,15 +1142,17 @@ function computeApprovals(){
       }
     }
     for(const u of draws) reviews.delete(u);
-    const approvedHere=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
-    approvedHere.forEach(u=>{
-      if(!reqs.some(r=>r.user===u)) return;
-      if(!winners.has(u)){
-        draws.delete(u); reviews.delete(u);
-        winners.add(u);
-        fteWon+=getUserFTE(u);
-      }
-    });
+    if(!ignoreAdmin){
+      const approvedHere=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
+      approvedHere.forEach(u=>{
+        if(!reqs.some(r=>r.user===u)) return;
+        if(!winners.has(u)){
+          draws.delete(u); reviews.delete(u);
+          winners.add(u);
+          fteWon+=getUserFTE(u);
+        }
+      });
+    }
     // NOTE: We intentionally do NOT auto-collapse a lone remaining draw into a
     // review or a loss. When the admin approves one member of a draw, every
     // other member of that draw must stay a DRAW so the admin still has to
@@ -1141,6 +1179,26 @@ function getOutcome(wk,u,ap){
   if(a.draws?.has(u)) return 'draw';
   if(a.winners?.has(u)) return 'win';
   return 'lose';
+}
+// Natural (pre-decision) projection: win/draw/review/lose from the bidding rules
+// alone, ignoring any admin approve/deny. `nat` is the result of computeApprovals(true).
+function natOutcome(nat,wk,u){
+  const a=nat?.[wk]; if(!a) return 'lose';
+  if(a.reviews?.has(u)) return 'review';
+  if(a.draws?.has(u)) return 'draw';
+  if(a.winners?.has(u)) return 'win';
+  return 'lose';
+}
+// Small "projected" pill showing what the user was BEFORE admin approval/denial.
+function projPill(o){
+  const m={
+    win:['WIN','#0d7a43','rgba(16,185,129,.12)'],
+    draw:['DRAW','#946200','rgba(251,191,36,.15)'],
+    review:['REVIEW','#5b4fb5','rgba(168,85,247,.15)'],
+    lose:['LOSE','#b91c1c','rgba(239,68,68,.1)']
+  };
+  const [t,c,bg]=m[o]||m.lose;
+  return `<span title="Projected outcome before admin decision" style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;color:${c};background:${bg};border:1px dashed ${c}">proj: ${t}</span>`;
 }
 
 let _refreshT=null;
@@ -2016,7 +2074,7 @@ window.beginNextPhase=function(){
           title:'⚠️ Lock full weeks before bidding starts',
           body:`<div><strong>${need.length} week${need.length!==1?'s':''}</strong> now ${need.length!==1?'have':'has'} no availability left (approvals filled them past the FTE overage), but ${need.length!==1?'are':'is'} still <strong>unlocked</strong>. Users could waste bids on ${need.length!==1?'them':'it'} in Phase ${next}.</div>
                 <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.7;max-height:150px;overflow-y:auto">${need.map(w=>`<li>${w.label} <span style="color:var(--red)">(Remaining: ${w.remaining})</span></li>`).join('')}</ul>
-                <div class="cmodal-info">Click "Lock Them Now" to lock all of these in one step. (You can also do this any time from the dashboard or the Lock Weeks page via "Lock Full Weeks".)</div>`,
+                <div class="cmodal-info">Click "Lock Them Now" to lock all of these in one step. (You can also do this any time from the Lock Weeks page via "Lock Weeks with No Availability".)</div>`,
           okText:'🔒 Lock Them Now', danger:true,
           onConfirm:async()=>{
             const updates={}; need.forEach(w=>updates[w.wk]=true);
@@ -2399,6 +2457,7 @@ window.renderAppDenials=function(){
   if(userDiv) userDiv.style.display=viewBy==='user'?'flex':'none';
   const body=document.getElementById('adBody'); if(!body) return;
   const ap=computeApprovals();
+  const nat=computeApprovals(true); // natural projection, ignores admin decisions
   const cur=Number(phasesData.currentPhase||1);
   // Build full entries list — every bid placed, with outcome. In "all phases" or
   // a specific past-phase view, use that phase's historical approvals/denials for outcome.
@@ -2433,7 +2492,8 @@ window.renderAppDenials=function(){
         else if(a.reviews.has(u)) outcome='review';
         else outcome='lose';
       }
-      entries.push({wk,user:u,priority:p,outcome,phase:bidPh,approved:approvedHere.includes(u),denied:deniedHere.includes(u)});
+      const proj=bidPh<cur?null:natOutcome(nat,wk,u);
+      entries.push({wk,user:u,priority:p,outcome,phase:bidPh,approved:approvedHere.includes(u),denied:deniedHere.includes(u),proj});
     }
   });
   // Filter
@@ -2470,7 +2530,7 @@ window.renderAppDenials=function(){
       ${wkHtml}
       <div class="dr-user">${phaseBadge}${e.user}</div>
       <div class="dr-bid">${lbl} · FTE ${getUserFTE(e.user)}</div>
-      ${outcomeChip(e.outcome)}
+      <div style="display:flex;align-items:center;gap:6px">${outcomeChip(e.outcome)}${e.proj?projPill(e.proj):''}</div>
       <div class="dr-actions">${actions}</div>
     </div>`;
   };
@@ -3322,9 +3382,14 @@ function getDurationMs(){ return ((timerData.durationHours||48)*3600000); }
 function getDurationHrs(){ return timerData.durationHours||48; }
 function fmtDuration(hrs){ return hrs+"h"; }
 
-window.setDuration=async function(hrs){
-  await setDoc(timerRef,{durationHours:hrs},{merge:true});
-  toast(`⏱️ Duration set to ${hrs}h`,"ok");
+window.setDuration=function(hrs){
+  if((timerData.durationHours||48)===hrs){ toast(`Duration already ${hrs}h`,"ok"); return; }
+  openConfirm({
+    title:'⏱️ Change Auction Window',
+    body:`<div>Set the auction window duration to <strong>${hrs}h</strong>?</div>${timerData.enabled?'<div class="cmodal-info" style="margin-top:8px">The timer is running — this changes how much total time the window represents. Use Reset Timer afterward to restart the countdown from the new duration.</div>':''}`,
+    okText:`Set ${hrs}h`,
+    onConfirm:async()=>{ await setDoc(timerRef,{durationHours:hrs},{merge:true}); toast(`⏱️ Duration set to ${hrs}h`,"ok"); }
+  });
 };
 
 function syncDurationUI(){
@@ -3338,10 +3403,19 @@ function syncDurationUI(){
   if(sl){ sl.max=hrs*3600; if(parseFloat(sl.value)>hrs*3600) sl.value=hrs*3600; }
 }
 
-window.toggleTimerEnabled=async function(){
+window.toggleTimerEnabled=function(){
   const nv=!(timerData.enabled===true);
-  await setDoc(timerRef,{enabled:nv,lastChange:nv?timerData.lastChange:null},{merge:true});
-  toast(nv?"⏱️ Timer enabled":"🔕 Timer disabled",nv?"ok":"warn");
+  openConfirm({
+    title:nv?'⏱️ Enable Timer':'🔕 Disable Timer',
+    body:nv
+      ? `<div>Turn the countdown timer <strong>on</strong>? A live countdown will show to all users and reset on each bid change.</div>`
+      : `<div>Turn the countdown timer <strong>off</strong>? Users will no longer see a countdown.</div>`,
+    okText:nv?'Enable Timer':'Disable Timer', danger:!nv,
+    onConfirm:async()=>{
+      await setDoc(timerRef,{enabled:nv,lastChange:nv?timerData.lastChange:null},{merge:true});
+      toast(nv?"⏱️ Timer enabled":"🔕 Timer disabled",nv?"ok":"warn");
+    }
+  });
 };
 window.adminResetTimer=function(){
   if(!timerData.enabled)return;
@@ -3769,6 +3843,7 @@ window.renderDrawsReviews=function(){
   const drBanner=document.getElementById("drPhaseBanner");
   if(drBanner) drBanner.textContent='Showing draws & reviews for the current phase — Phase '+Number(phasesData.currentPhase||1);
   const ap=computeApprovals();
+  const nat=computeApprovals(true); // natural projection, ignores admin decisions
   const sortBy=document.getElementById("drSortBy")?.value||'week';
   const filter=document.getElementById("drFilter")?.value||'all';
   // Collect entries
@@ -3830,11 +3905,15 @@ window.renderDrawsReviews=function(){
     }
     const m=wkDate(e.wk);
     const weekCol=showWeekLabel?`<div style="font-family:var(--mono);min-width:90px">${wLabel(m)}</div>`:'';
+    // Show the natural projection (pre-decision) for approved/denied rows so admin
+    // can see what the user was before the approve/deny. Draw/review tags already
+    // show the pre-decision state, so no extra pill there.
+    const projHtml=(e.type==='approved'||e.type==='denied')?projPill(natOutcome(nat,e.wk,e.user)):'';
     return `<div class="dr-row">
       ${weekCol}
       <div class="dr-user">${e.user}</div>
       <div class="dr-bid">${lbl} · FTE ${getUserFTE(e.user)}</div>
-      ${tag}
+      <div style="display:flex;align-items:center;gap:6px">${tag}${projHtml}</div>
       <div class="dr-actions">${actions}</div>
     </div>`;
   };
