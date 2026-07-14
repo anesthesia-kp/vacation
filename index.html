@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 28;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 29;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -2247,40 +2247,72 @@ function completeSignIn(){
 }
 
 // ── Welcome / enrollment-confirmation email (sent ONCE, on first email entry) ──
+// Unicode bold (sans-serif bold letters/digits) — renders as real bold in
+// Gmail/Outlook/Apple Mail without requiring any HTML support in the template.
+function _emBold(s){
+  return [...s].map(ch=>{
+    const c=ch.codePointAt(0);
+    if(c>=65&&c<=90)  return String.fromCodePoint(0x1D5D4+c-65);  // A-Z
+    if(c>=97&&c<=122) return String.fromCodePoint(0x1D5EE+c-97);  // a-z
+    if(c>=48&&c<=57)  return String.fromCodePoint(0x1D7EC+c-48);  // 0-9
+    return ch;
+  }).join('');
+}
+// Hard-wrap a bullet at ~66 chars; continuation lines keep a hanging indent so
+// wrapped text lines up under the text after the bullet, not under the "•".
+function _emBullet(text){
+  const indent='   ';
+  const words=String(text).split(' ');
+  const lines=[]; let cur='• ';
+  for(const w of words){
+    if((cur+' '+w).length>66 && cur.trim()!=='•'){ lines.push(cur); cur=indent+w; }
+    else cur+=(cur==='• '?'':' ')+w;
+  }
+  if(cur.trim()) lines.push(cur);
+  return lines.join('\n');
+}
 function buildWelcomeEmailBody(user){
   const lim=getMaxBidsPerPhase();
   const limLine=lim===null
-    ? '- There is no per-phase bid limit — you are limited only by the bid numbers you have available; only bid for the number of weeks your accrued vacation and ATO will allow for'
-    : '- Only '+lim+' bid'+(lim!==1?'s':'')+' (including NP bids) may be used per phase — only bid for the number of weeks your accrued vacation and ATO will allow for';
+    ? `There is ${_emBold('no per-phase bid limit')} — you are limited only by the bid numbers you have available; only bid for the number of weeks your accrued vacation and ATO will allow for`
+    : `Only ${_emBold(String(lim)+' bid'+(lim!==1?'s':''))} (including NP bids) may be used per phase — only bid for the number of weeks your accrued vacation and ATO will allow for`;
   const T=getReviewThreshold().toFixed(1);
+  const B=_emBold;
+  // Bullets sit on consecutive lines; true blank lines ONLY between paragraphs.
+  const bullets=arr=>arr.map(_emBullet).join('\n');
   return `Hi ${user},
 
-Welcome to the 2027 Anesthesia Vacation Auction!
+Welcome to the ${B('2027 Anesthesia Vacation Auction')}!
 
-This confirms you are enrolled in e-mail alerts. You will receive an e-mail:
-- When someone places a bid that changes your projected outcome for a week (outbid alerts)
-- When a bidding phase concludes and your results (approved/denied) are sent
-- As an occasional reminder if you have not yet placed any bids in an open phase
+This confirms you are ${B('enrolled in e-mail alerts')}. You will receive an e-mail:
+${bullets([
+  `When someone places a bid that changes your projected outcome for a week (${B('outbid alerts')})`,
+  `When a bidding phase concludes and your ${B('results')} (approved/denied) are sent`,
+  `As an occasional ${B('reminder')} if you have not yet placed any bids in an open phase`
+])}
 
-RULES AND REGULATIONS OF THE AUCTION
-- Vacation selections are called "bids" — the process works like an auction, where bids compete for limited slots based on priority
-- Enter your bids early, it benefits everyone
-- Sniping is not possible, do not try it
-${limLine}
-- Bid priorities can only increase, not decrease — once you bid 5 on a week, you can only re-bid 4 or better
-- On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used
-- To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week
+${B('RULES AND REGULATIONS OF THE AUCTION')}
+${bullets([
+  `Vacation selections are called "bids" — the process works like an auction, where bids compete for limited slots based on priority`,
+  `Enter your bids early, it benefits everyone`,
+  `Sniping is not possible, do not try it`,
+  limLine,
+  `Bid priorities can ${B('only increase, not decrease')} — once you bid 5 on a week, you can only re-bid 4 or better`,
+  `On the ${B('highest demand weeks')} (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used`,
+  `To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`
+])}
 
-UNDERSTANDING OUTCOMES
-- Winning: your bid is projected to be approved for this week
-- Draw: you are tied with one or more people, combined FTE exceeds availability, but at least one person could individually fit within ${T} FTE over cap; a spin-off or admin approval will resolve the tie
-- Under Review: your bid is slightly over the cap (up to ${T} FTE); admin may still approve under certain circumstances
-- Losing: your bid is projected not to be approved for this week
-- If you are in a Draw or Under Review for a week and do not win after it is resolved, you get the bid back for the next phase
-- These are projections, not final results — outcomes can shift as others place bids or as unexpected staffing needs change
+${B('UNDERSTANDING OUTCOMES')}
+${bullets([
+  `${B('Winning')}: your bid is projected to be approved for this week`,
+  `${B('Draw')}: you are tied with one or more people, combined FTE exceeds availability, but at least one person could individually fit within ${T} FTE over cap; a spin-off or admin approval will resolve the tie`,
+  `${B('Under Review')}: your bid is slightly over the cap (up to ${T} FTE); admin may still approve under certain circumstances`,
+  `${B('Losing')}: your bid is projected not to be approved for this week`,
+  `If you are in a ${B('Draw')} or ${B('Under Review')} for a week and do not win after it is resolved, you get the bid back for the next phase`,
+  `These are ${B('projections, not final results')} — outcomes can shift as others place bids or as unexpected staffing needs change`
+])}
 
-Happy bidding!
-2027 Anesthesia Vacation Auction`;
+Happy bidding!`;
 }
 async function sendWelcomeEmail(user,email){
   // Outbox pattern (same as outbid alerts): persist to the queue first, then try
