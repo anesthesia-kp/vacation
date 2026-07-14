@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 36;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 37;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1367,11 +1367,12 @@ function renderLockSummary(){
     `<span style="color:${wa.length?'#946200':'var(--t2)'}">${wa.length?'⚠️ ':'✓ '}<strong>${wa.length}</strong> locked week${wa.length!==1?'s':''} still ${wa.length!==1?'have':'has'} availability</span>`,
     wa.length, wa, '#d97706',
     wa.length?`<button class="btn" style="font-size:11px;background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="unlockAvailabilityWeeks()">🔓 Unlock these</button>`:'');
-  // 3) Unlocked weeks with no availability
+  // 3) Unlocked weeks with no availability (+ Lock button)
   const na=s.unlockedNoAvailability;
   html+=row('unlockedFull',
     `<span style="color:${na.length?'#b91c1c':'var(--t2)'}">${na.length?'⚠️ ':'✓ '}<strong>${na.length}</strong> unlocked week${na.length!==1?'s':''} ${na.length!==1?'have':'has'} no availability</span>`,
-    na.length, na, '#dc2626');
+    na.length, na, '#dc2626',
+    na.length?`<button class="btn btn-danger" style="font-size:11px" onclick="lockNoAvailabilityWeeks()">🔒 Lock these</button>`:'');
   // Smart action + all-clear note
   html+=`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:4px">
     <button class="btn btn-primary" style="font-size:12px" onclick="smartLockUnlock()">✨ Smart Lock and Unlock</button>
@@ -1394,6 +1395,23 @@ window.unlockAvailabilityWeeks=function(){
       const updates={}; toUnlock.forEach(w=>updates[w.wk]=false);
       await setDoc(locksRef,{weeks:updates},{merge:true});
       toast('🔓 Unlocked '+toUnlock.length+' week'+(toUnlock.length!==1?'s':''),'ok');
+    }
+  });
+};
+// Lock every unlocked week that has no availability (full even with the overage).
+window.lockNoAvailabilityWeeks=function(){
+  const toLock=weeksNeedingLock(true).list;
+  if(!toLock.length){ toast('No unlocked full weeks to lock.','ok'); return; }
+  openConfirm({
+    title:'🔒 Lock full weeks',
+    body:`<div>Lock <strong>${toLock.length}</strong> unlocked week${toLock.length!==1?'s':''} that ${toLock.length!==1?'have':'has'} no availability?</div>
+      <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.7;max-height:150px;overflow-y:auto">${toLock.map(w=>`<li>${w.label} <span style="color:var(--red)">(Remaining: ${w.remaining})</span></li>`).join('')}</ul>
+      <div class="cmodal-info">Users won't be able to waste bids on these full weeks.</div>`,
+    okText:'🔒 Lock These', danger:true,
+    onConfirm:async()=>{
+      const updates={}; toLock.forEach(w=>updates[w.wk]=true);
+      await setDoc(locksRef,{weeks:updates},{merge:true});
+      toast('🔒 Locked '+toLock.length+' week'+(toLock.length!==1?'s':''),'warn');
     }
   });
 };
