@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 21;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 23;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -319,15 +319,14 @@ body{zoom:1.15}
         <button class="btn-primary" id="quickContinueBtn" style="width:100%;padding:13px;font-size:1rem" onclick="quickContinue()">Continue</button>
         <div style="margin-top:14px"><a onclick="signinShowPicker()" style="cursor:pointer;color:#006ba6;text-decoration:underline;font-size:.85rem">Sign in as someone else</a></div>
       </div>
-      <!-- Username + password form -->
+      <!-- Single-screen sign-in: username + password together -->
       <div id="signinPicker">
         <h2 class="modal-title" style="margin-bottom:4px">Sign in</h2>
         <div style="font-size:.8rem;color:#48607a;margin-bottom:16px">Enter your initials (or your saved username) and password.</div>
         <label class="modal-label" for="loginUsername">Username</label>
-        <input id="loginUsername" list="userDatalist" type="text" autocomplete="off" placeholder="Your initials"
-               oninput="onLoginUserInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();document.getElementById('loginPassword').focus();}"
+        <input id="loginUsername" type="text" autocomplete="off" placeholder="Your initials"
+               oninput="onLoginUserInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();if(document.getElementById('loginPassword').disabled){doLogin();}else{document.getElementById('loginPassword').focus();}}"
                style="width:100%;padding:12px 14px;font-size:1.05rem;font-weight:600;border:2px solid #9fb4c6;border-radius:10px;background:#fff;color:#111827;box-sizing:border-box;margin-bottom:14px">
-        <datalist id="userDatalist"></datalist>
         <label class="modal-label" for="loginPassword">Password</label>
         <input id="loginPassword" type="password" autocomplete="off" placeholder="Password"
                onkeydown="if(event.key==='Enter'){event.preventDefault();doLogin();}"
@@ -502,6 +501,7 @@ body{zoom:1.15}
   </div>
 
   <div id="globalLockBanner">🔒 The schedule has been locked by the admin.</div>
+  <div id="notStartedBanner" style="display:none;background:rgba(251,191,36,.14);border:1px solid rgba(251,191,36,.45);color:#7a4e00;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-weight:600;font-size:.9rem;text-align:center">⏳ Bidding has not started yet — the auction opens when admin begins Phase 1.</div>
   <div id="errorMessage" class="flash err"></div>
   <div class="notif-bar" id="notifBar"></div>
   <div class="selections-bar" style="margin-bottom:14px">
@@ -921,6 +921,12 @@ function getOutcome(wk,user,ap){
 }
 
 // ── Auction closed check ──
+// Bidding is closed until admin explicitly begins Phase 1. Phases 2-4 are
+// started the moment admin advances currentPhase, so only phase 1 needs the flag.
+function biddingOpen(){
+  const cp=Number(phasesData?.currentPhase||1);
+  return cp>1 || phasesData?.phase1Started===true;
+}
 function isAuctionClosed(){
   if(!timerData.enabled||!timerData.lastChange) return false;
   return ((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)<=0;
@@ -1228,6 +1234,7 @@ let sheetDebounce=null;
 // SAFE concurrent-write helper: only touches one user's specific week, never overwrites the whole doc.
 async function persistScheduleChange(user, wk, bid, prevSnapshot){
   // bid===null or undefined → remove. Otherwise → set.
+  if(!biddingOpen()){ showError("Bidding hasn't started yet — the auction opens when admin begins Phase 1."); return; }
   if(isAuctionClosed()){ showError("The auction has closed — no more changes allowed."); return; }
   // Enforce the admin-set per-phase bid limit — NEW bids only (edits/removals always allowed).
   if(bid!==null&&bid!==undefined&&prevSnapshot&&(prevSnapshot[user]===undefined||prevSnapshot[user][wk]===undefined)){
@@ -1292,6 +1299,7 @@ function flash(el,msg,dur){ el.textContent=msg; el.classList.add("show"); setTim
 
 // ── Priority modal ──
 function openPriorityModal(wk){
+  if(!biddingOpen()){ showError("Bidding hasn't started yet — the auction opens when admin begins Phase 1."); return; }
   if(isAuctionClosed()){ showError("The auction has closed — no more changes allowed."); return; }
   const user=getCurrentUser();
   // Block bidding on weeks user has already won via admin approval in a previous phase
@@ -1557,6 +1565,7 @@ window.openPhaseHistory=function(){
 function render(){
   const user=getCurrentUser(); if(!user) return;
   document.getElementById("globalLockBanner").style.display=locksData.globalLock?"block":"none";
+  const nsb=document.getElementById("notStartedBanner"); if(nsb) nsb.style.display=biddingOpen()?"none":"block";
   const ap=computeApprovals();
   renderNotifications(user,ap);
   renderBidPool(user);
@@ -2022,14 +2031,9 @@ function signinReady(){ return _adminSettingsReady&&_passcodesReady&&_emailsRead
 // Display name = custom username if the user set one, else their initials.
 function displayName(initials){ return usernamesData[initials]||initials; }
 
-// Populate the username datalist and refresh the returning-user view.
+// Refresh login state when users/usernames load. (No browse list — users type
+// their initials or saved username; login resolves either. See resolveUser.)
 function refreshLoginUsers(){
-  const dl=document.getElementById("userDatalist");
-  if(dl){
-    // Browsing list shows INITIALS only (usernames are private-ish and not listed).
-    // Login still resolves either initials or a saved username (see resolveUser).
-    dl.innerHTML=names.map(n=>`<option value="${n}"></option>`).join("");
-  }
   updateLoginPwState();
   initSigninScreen();
 }
@@ -2045,8 +2049,9 @@ function resolveUser(raw){
 }
 function showSigninError(msg){ const e=document.getElementById("signinError"); if(e){ e.textContent=msg; e.style.display="block"; } }
 function clearSigninError(){ const e=document.getElementById("signinError"); if(e) e.style.display="none"; }
+window.clearSigninError=clearSigninError;
 
-// Grey out / enable the password box and set the "password is private" hint.
+// Grey out / enable the always-visible password box + privacy hint.
 function updateLoginPwState(){
   const pw=document.getElementById("loginPassword"); if(!pw) return;
   const on=adminSettings.passcodesEnabled===true;
@@ -2057,7 +2062,7 @@ function updateLoginPwState(){
   pw.placeholder=on?"Password":"Passwords are turned off";
   const hint=document.getElementById("loginPwHint");
   if(hint){
-    if(!on){ hint.textContent="Passwords are turned off — just enter your username to sign in."; }
+    if(!on){ hint.textContent="Passwords are turned off — just enter your username and press Sign In."; }
     else {
       const initials=resolveUser(document.getElementById("loginUsername")?.value||"");
       const firstTime=initials && !passcodesData[initials];
@@ -2070,6 +2075,8 @@ function updateLoginPwState(){
 window.updateLoginPwState=updateLoginPwState;
 window.onLoginUserInput=function(){ clearSigninError(); updateLoginPwState(); };
 
+// One-step sign-in: resolve the username, check the password (set on first
+// login, verify after), then in.
 window.doLogin=async function(){
   clearSigninError();
   const raw=(document.getElementById("loginUsername")?.value||"").trim();
@@ -2138,18 +2145,19 @@ function initSigninScreen(){
 window.signinShowPicker=function(){
   const w=document.getElementById("signinWelcome"), p=document.getElementById("signinPicker");
   if(w) w.style.display="none"; if(p) p.style.display="block";
-  const s=document.getElementById("loginUsername"); if(s) setTimeout(()=>s.focus(),60);
+  clearSigninError();
+  const u=document.getElementById("loginUsername"); if(u){ u.value=""; setTimeout(()=>u.focus(),60); }
+  updateLoginPwState();
 };
 window.quickContinue=function(){
   if(!_rememberedName) return;
   const cb=document.getElementById("rememberMe"); if(cb) cb.checked=true;
-  signinShowPicker();
-  const u=document.getElementById("loginUsername"); if(u) u.value=displayName(_rememberedName);
+  const w=document.getElementById("signinWelcome"), p=document.getElementById("signinPicker");
+  if(w) w.style.display="none"; if(p) p.style.display="block";
+  const u=document.getElementById("loginUsername"); if(u) u.value=_rememberedName;
   updateLoginPwState();
-  // Passwords on + a stored password -> still require it. Otherwise sign straight in.
   if(adminSettings.passcodesEnabled===true && passcodesData[_rememberedName]){
     const pw=document.getElementById("loginPassword"); if(pw) setTimeout(()=>pw.focus(),80);
-    showSigninError("Welcome back — please enter your password.");
   } else {
     doLogin();
   }
@@ -2157,7 +2165,8 @@ window.quickContinue=function(){
 function updateSigninPhase(){
   const el=document.getElementById("signinPhaseLine"); if(!el) return;
   const ph=Number(phasesData?.currentPhase||0);
-  el.textContent=ph?("Phase "+ph+" · Bidding open"):"Sign in to bid";
+  if(!ph){ el.textContent="Sign in to bid"; return; }
+  el.textContent=biddingOpen()?("Phase "+ph+" · Bidding open"):"Bidding opens soon";
 }
 window.updateSigninPhase=updateSigninPhase;
 refreshLoginUsers();

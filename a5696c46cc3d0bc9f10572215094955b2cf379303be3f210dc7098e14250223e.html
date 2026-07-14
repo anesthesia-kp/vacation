@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 37;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 38;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -304,20 +304,17 @@ thead th{color:var(--t2)}
         <div><div class="page-title">Dashboard</div><div class="page-sub">Vacation auction — 2027</div></div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <select id="dashPhaseFilter" class="sel" onchange="renderOverview()"></select>
-          <button class="btn btn-ghost" onclick="exportDashboard('pdf')">📄 PDF</button>
-          <button class="btn btn-ghost" onclick="exportDashboard('xlsx')">📊 Excel</button>
-          <button class="btn" style="background:rgba(180,83,9,.1);color:var(--yellow);border:1px solid rgba(180,83,9,.35)" title="Queued outbid alerts — click to send now" onclick="flushMailQueue()">🔔 <span id="mqCountTop" style="font-family:var(--mono);font-weight:800">0</span></button>
-          <button class="btn btn-success" onclick="sendPhaseResultsEmails()">📮 Send Phase Results</button>
         </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px;margin-bottom:20px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px;margin-bottom:20px">
         <div class="card big-card" style="margin-bottom:0">
           <div class="card-title">Current Phase</div>
         <div id="phaseCurrentDisplay" style="font-size:2rem;font-weight:800;color:var(--blue);margin:8px 0"></div>
         <div id="phaseStatusMsg" style="font-size:12px;color:var(--t2);margin-bottom:10px"></div>
         <div id="phaseProgress" style="margin-bottom:14px"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-success" id="beginPhase1Btn" onclick="beginPhase1()" style="display:none">▶ Begin Phase 1 — Open Bidding</button>
           <button class="btn btn-danger" id="completePhaseBtn" onclick="completePhase()">✓ Complete Phase</button>
           <button class="btn btn-success" id="beginNextPhaseBtn" onclick="beginNextPhase()" style="display:none">▶ Begin Phase <span id="nextPhaseNum"></span></button>
         </div>
@@ -330,58 +327,76 @@ thead th{color:var(--t2)}
       </details>
         </div>
         <div class="card big-card" style="margin-bottom:0">
-          <div class="card-title">Bids Placed</div>
-          <div class="stat-value c-blue" id="st-total" style="font-size:46px;margin:6px 0 4px">—</div>
-          <div style="font-size:12px;color:var(--t2)">total bids in the system</div>
-          <div style="display:flex;gap:22px;margin-top:14px;padding-top:12px;border-top:1px solid var(--b1);font-size:12px;color:var(--t2)">
-            <span>🔒 Weeks locked: <strong class="mono" id="st-locked" style="color:var(--t1)">—</strong></span>
-            <span>⏱️ Timer: <strong class="mono" id="st-timer" style="color:var(--t1)">—</strong></span>
+          <div class="card-title">Bids &amp; Timer</div>
+          <div style="display:flex;align-items:baseline;gap:10px">
+            <div class="stat-value c-blue" id="st-total" style="font-size:46px;margin:6px 0 4px">—</div>
+            <div style="font-size:12px;color:var(--t2)">total bids in the system</div>
           </div>
-          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--b1)">
-            <div style="font-size:12px;font-weight:800;color:var(--t1);margin-bottom:8px">Users without bids — Phase <span id="noBidsPhase">1</span> (<span id="noBidsCount">—</span>)</div>
-            <div id="noBidsList" style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px;max-height:110px;overflow-y:auto"></div>
-            <button class="btn btn-primary" id="noBidsRemindBtn" onclick="sendReminderEmails()">📧 Send Reminder E-mails</button>
+          <div style="margin-top:8px;padding-top:10px;border-top:1px solid var(--b1)">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <div style="font-size:12px;font-weight:800;color:var(--t1)"><span id="noBidsCount">—</span> user<span id="noBidsPlural">s</span> without bids in Phase <span id="noBidsPhase">1</span></div>
+              <button class="btn btn-ghost" style="font-size:11px;padding:3px 9px" id="noBidsViewBtn" onclick="var e=document.getElementById('noBidsList');var open=e.style.display!=='none';e.style.display=open?'none':'flex';this.textContent=open?'View users':'Hide users';">View users</button>
+            </div>
+            <div id="noBidsList" style="display:none;flex-wrap:wrap;gap:6px;margin:10px 0 0;max-height:110px;overflow-y:auto"></div>
+          </div>
+          <div class="trow" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
+            <div><div class="trow-label">Bidding Timer</div><div class="trow-desc">Live countdown shown to all users; resets on each bid change</div></div>
+            <div class="tog" id="timerToggle" onclick="toggleTimerEnabled()"></div>
+          </div>
+          <div id="timerBlock" class="timer-block" style="margin-top:12px">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+              <div>
+                <div style="font-size:12px;font-weight:600;color:var(--t1);margin-bottom:3px" id="timerLabel">Timer disabled</div>
+                <div style="font-size:11px;color:var(--t2)" id="timerMeta">Enable above to start.</div>
+              </div>
+              <div id="timerDigs"></div>
+            </div>
+          </div>
+          <div style="margin-top:12px">
+            <div style="font-size:11px;color:var(--t2);margin-bottom:6px">Auction window — <span id="durationDisplay" style="color:var(--t1);font-weight:700">48h</span> <span style="color:var(--t3)">(0 = timer off)</span></div>
+            <input type="range" id="durSlider" min="0" max="6" step="1" value="6" style="width:100%;accent-color:#3b82f6"
+                   oninput="onDurSliderInput(this.value)" onchange="onDurSliderChange(this.value)">
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);font-family:var(--mono);margin-top:2px"><span>0</span><span>1h</span><span>3h</span><span>6h</span><span>12h</span><span>24h</span><span>48h</span></div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <button class="btn btn-orange" id="resetTimerBtn" onclick="adminResetTimer()" disabled>↺ Reset Timer</button>
           </div>
         </div>
         <div class="card big-card" style="margin-bottom:0">
-          <div class="card-title">Bidding Timer</div>
-          <div class="trow">
-          <div><div class="trow-label">Enable Timer</div><div class="trow-desc">Shows a live countdown to all users, resets on each bid change</div></div>
-          <div class="tog" id="timerToggle" onclick="toggleTimerEnabled()"></div>
-        </div>
-        <div id="timerBlock" class="timer-block" style="margin-top:14px">
-          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-            <div>
-              <div style="font-size:12px;font-weight:600;color:var(--t1);margin-bottom:3px" id="timerLabel">Timer disabled</div>
-              <div style="font-size:11px;color:var(--t2)" id="timerMeta">Enable above to start.</div>
-            </div>
-            <div id="timerDigs"></div>
+          <div class="card-title">Messaging Users</div>
+          <div class="trow" style="align-items:center">
+            <div><div class="trow-label">Phase results</div><div class="trow-desc">E-mail every user their approved / denied results for the phase</div></div>
+            <button class="btn btn-success" style="flex:unset;white-space:nowrap" onclick="sendPhaseResultsEmails()">📮 Send Phase Results</button>
+          </div>
+          <div class="trow" style="align-items:center;margin-top:10px;padding-top:12px;border-top:1px solid var(--b1)">
+            <div><div class="trow-label">Outbid alerts — <span id="mqCountTop" style="font-family:var(--mono)">0</span> queued</div><div class="trow-desc">Alerts queued when a user is outbid; sent automatically, or flush them now</div></div>
+            <button class="btn" style="flex:unset;white-space:nowrap;background:rgba(180,83,9,.1);color:var(--yellow);border:1px solid rgba(180,83,9,.35)" onclick="flushMailQueue()">🔔 Send Pending</button>
+          </div>
+          <div class="trow" style="align-items:center;margin-top:10px;padding-top:12px;border-top:1px solid var(--b1)">
+            <div><div class="trow-label">Bid reminders</div><div class="trow-desc">Nudge users who haven't placed any bids in the current phase</div></div>
+            <button class="btn btn-primary" style="flex:unset;white-space:nowrap" id="noBidsRemindBtn" onclick="sendReminderEmails()">📧 Send Reminders</button>
           </div>
         </div>
-        <div style="margin-top:14px;margin-bottom:10px">
-          <div style="font-size:11px;color:var(--t2);margin-bottom:8px;">Auction window duration — <span id="durationDisplay" style="color:var(--t1);font-weight:600">48h</span></div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <button class="btn btn-ghost dur-btn" data-hrs="1"  onclick="setDuration(1)">1h</button>
-            <button class="btn btn-ghost dur-btn" data-hrs="3"  onclick="setDuration(3)">3h</button>
-            <button class="btn btn-ghost dur-btn" data-hrs="6"  onclick="setDuration(6)">6h</button>
-            <button class="btn btn-ghost dur-btn" data-hrs="12" onclick="setDuration(12)">12h</button>
-            <button class="btn btn-ghost dur-btn" data-hrs="24" onclick="setDuration(24)">24h</button>
-            <button class="btn btn-ghost dur-btn" data-hrs="48" onclick="setDuration(48)">48h</button>
+        <div class="card big-card" style="margin-bottom:0">
+          <div class="card-title">Results Reports</div>
+          <div style="font-size:12px;color:var(--t2);margin:4px 0 12px;line-height:1.5">Approvals &amp; denials summary — every bid grouped by week with its result. View it live in a pop-up, or export it, by phase or all phases together.</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+            <label style="font-size:11px;color:var(--t2)">Phase:</label>
+            <select id="repPhaseFilter" class="sel"></select>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-primary" onclick="exportPhaseResults('view',document.getElementById('repPhaseFilter').value)">👁 View Live</button>
+            <button class="btn" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportPhaseResults('pdf',document.getElementById('repPhaseFilter').value)">📄 Export PDF</button>
+            <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportPhaseResults('xlsx',document.getElementById('repPhaseFilter').value)">📊 Export Excel</button>
           </div>
         </div>
-        <div style="display:flex;gap:8px;margin-top:4px">
-          <button class="btn btn-orange" id="resetTimerBtn" onclick="adminResetTimer()" disabled>↺ Reset Timer</button>
-          <button class="btn btn-danger" id="clearTimerBtn" onclick="adminClearTimer()" disabled>✕ Clear Timer</button>
+        <div class="card big-card" id="lockSummaryCard" style="margin-bottom:0">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+            <div class="card-title" style="margin:0">🔒 Lock Weeks Summary</div>
+            <button class="btn btn-ghost" style="font-size:12px" onclick="nav('locks',document.querySelector('.nav a[onclick*=\'locks\']'))">Open Lock Weeks settings →</button>
+          </div>
+          <div id="lockSummaryBody" style="font-size:13px;color:var(--t2)"></div>
         </div>
-        </div>
-      </div>
-
-      <div class="card" id="lockSummaryCard" style="margin-bottom:20px">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px">
-          <div class="card-title" style="margin:0">🔒 Lock Weeks Summary</div>
-          <button class="btn btn-ghost" style="font-size:12px" onclick="nav('locks',document.querySelector('.nav a[onclick*=\'locks\']'))">Open Lock Weeks settings →</button>
-        </div>
-        <div id="lockSummaryBody" style="font-size:13px;color:var(--t2)"></div>
       </div>
 
       <div style="display:flex;gap:10px;margin-bottom:14px">
@@ -692,8 +707,7 @@ thead th{color:var(--t2)}
       <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
         <button class="btn btn-success" style="font-size:12px" onclick="adApproveAllWinners()">✓ Approve All Current Winners</button>
         <button class="btn btn-danger" style="font-size:12px" onclick="adDenyAllLosers()">✕ Deny All Current Losers</button>
-        <button class="btn" style="font-size:12px;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3);margin-left:auto" onclick="exportPhaseResults('pdf')">📄 Export PDF</button>
-        <button class="btn" style="font-size:12px;background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportPhaseResults('xlsx')">📊 Export Excel</button>
+        <span style="margin-left:auto;font-size:11px;color:var(--t3);align-self:center">Reports moved to the dashboard → Results Reports</span>
       </div>
       <div id="adBody"></div>
     </div>
@@ -1265,17 +1279,9 @@ function refreshAll(){
 // ── Stats ──
 function updateStats(){
   let total=0; names.forEach(n=>{ total+=Object.keys(scheduleData[n]||{}).length; });
-  const locked=Object.values(locksData.weeks||{}).filter(Boolean).length;
-  document.getElementById("st-total").textContent=total;
-  document.getElementById("st-locked").textContent=locksData.globalLock?"ALL":locked;
-  const tel=document.getElementById("st-timer");
-  if(!timerData.enabled){tel.textContent="OFF";tel.className="stat-value c-orange";}
-  else if(!timerData.lastChange){tel.textContent="ON";tel.className="stat-value c-green";}
-  else{
-    const rem=getDurationMs()-(Date.now()-timerData.lastChange);
-    if(rem<=0){tel.textContent="EXPIRED";tel.className="stat-value c-red";}
-    else{ const h=Math.floor(rem/3600000); tel.textContent=h+"h left"; tel.className=h<2?"stat-value c-red":h<6?"stat-value c-yellow":"stat-value c-green"; }
-  }
+  const st=document.getElementById("st-total"); if(st) st.textContent=total;
+  // Weeks-locked and second timer readouts were removed from the dashboard —
+  // locks live in the Lock Weeks Summary card, the timer in the Bids & Timer card.
 }
 
 // ── Overview ──
@@ -1300,6 +1306,8 @@ function renderNoBidders(){
   }
   const ph=document.getElementById('noBidsPhase'); if(ph) ph.textContent=cur;
   const cnt=document.getElementById('noBidsCount'); if(cnt) cnt.textContent=noBidders.length;
+  const pl=document.getElementById('noBidsPlural'); if(pl) pl.textContent=noBidders.length===1?'':'s';
+  const vb=document.getElementById('noBidsViewBtn'); if(vb) vb.style.display=noBidders.length?'':'none';
   el.innerHTML=noBidders.length
     ? noBidders.map(u=>`<span class="pill p-yellow" style="font-size:12px">${u}</span>`).join('')
     : '<span style="color:var(--green);font-weight:700;font-size:13px">✓ Everyone has placed at least one bid</span>';
@@ -1444,7 +1452,7 @@ window.smartLockUnlock=function(){
 
 function renderOverview(){
   const ap=computeApprovals();
-  try{ renderPhasePanel(); renderNoBidders(); renderPhaseProgress(); renderLockSummary(); }catch(e){ console.warn('dash',e); }
+  try{ renderPhasePanel(); renderNoBidders(); renderPhaseProgress(); renderLockSummary(); populatePhaseFilter(document.getElementById('repPhaseFilter')); }catch(e){ console.warn('dash',e); }
   const g=document.getElementById("ovgrid"); if(!g)return;
   const legendEl=document.getElementById("dashLegend");
   const weekEl=document.getElementById("weekSummary");
@@ -2098,6 +2106,11 @@ window.clearEverything=function(){
 };
 
 // ── Phase Management ──
+// Phase 1 must be explicitly begun by admin before any bidding happens.
+// Phases 2-4 are implicitly "started" the moment beginNextPhase sets currentPhase.
+function phase1Started(){
+  return Number(phasesData.currentPhase||1)>1 || phasesData.phase1Started===true;
+}
 function renderPhasePanel(){
   const cur=Number(phasesData.currentPhase||1);
   const completed=phasesData.completedPhases||{};
@@ -2106,8 +2119,21 @@ function renderPhasePanel(){
   const msgEl=document.getElementById('phaseStatusMsg');
   const completeBtn=document.getElementById('completePhaseBtn');
   const beginBtn=document.getElementById('beginNextPhaseBtn');
+  const begin1Btn=document.getElementById('beginPhase1Btn');
   const nextNumEl=document.getElementById('nextPhaseNum');
   if(!el) return;
+  if(!phase1Started()){
+    el.textContent='Not started';
+    el.style.color='var(--yellow)';
+    msgEl.textContent='Bidding has not begun — users cannot place bids until you begin Phase 1.';
+    if(begin1Btn) begin1Btn.style.display='';
+    completeBtn.style.display='none';
+    beginBtn.style.display='none';
+    const histEl0=document.getElementById('phaseHistoryBody');
+    if(histEl0) histEl0.innerHTML='<div style="color:var(--t3)">No completed phases yet.</div>';
+    return;
+  }
+  if(begin1Btn) begin1Btn.style.display='none';
   if(isComplete){
     el.textContent='Phase '+cur+' ✓ Complete';
     el.style.color='var(--green)';
@@ -2202,9 +2228,24 @@ window.completePhase=function(){
 };
 
 async function _commitBeginPhase(next){
-  await setDoc(phasesRef,{currentPhase:next},{merge:true});
-  toast('▶ Phase '+next+' begun','ok');
+  if(next===1){
+    await setDoc(phasesRef,{currentPhase:1,phase1Started:true},{merge:true});
+  } else {
+    await setDoc(phasesRef,{currentPhase:next},{merge:true});
+  }
+  toast('▶ Phase '+next+' begun — bidding is open','ok');
 }
+// Begin Phase 1: opens bidding for the first time. Runs the same lock decision
+// (Smart Lock & Unlock) as every other phase start.
+window.beginPhase1=function(){
+  openConfirm({
+    title:'▶ Begin Phase 1',
+    body:`<div>Open bidding and begin <strong>Phase 1</strong>?</div>
+          <div class="cmodal-info" style="margin-top:10px">Users cannot place any bids until Phase 1 is begun. You'll confirm week locks first — the same fix as Smart Lock and Unlock.</div>`,
+    okText:'Continue',
+    onConfirm:()=>_beginPhaseLockDecision(1)
+  });
+};
 // Override path: begin the phase WITHOUT applying lock fixes (admin's explicit choice).
 window._beginPhaseOverride=async function(next){
   closeConfirm();
@@ -2224,9 +2265,9 @@ function _beginPhaseLockDecision(next){
     title:'⚠️ Lock decision required before Phase '+next,
     body:`<div style="margin-bottom:6px"><strong>Phase ${next} has not started yet.</strong> Decide how to handle these weeks first:</div>
           ${secNeed}${secWrong}
-          <div class="cmodal-info">Choose <strong>Fix All & Begin</strong> to lock the full weeks and unlock the still-winnable weeks, then start Phase ${next}.</div>
+          <div class="cmodal-info"><strong>Smart Lock &amp; Unlock</strong> locks every full week and unlocks every week that still has availability — exactly like the Smart Lock and Unlock button — then begins Phase ${next}.</div>
           <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="_beginPhaseOverride(${next})">▶ Begin Phase ${next} without changes (override)</button>`,
-    okText:'🔧 Fix All & Begin Phase '+next, danger:true,
+    okText:'✨ Smart Lock & Unlock, then Begin Phase '+next, danger:true,
     onConfirm:async()=>{
       const updates={};
       need.forEach(w=>updates[w.wk]=true);
@@ -2498,7 +2539,9 @@ window.exportPhaseResults=function(format,scopeOverride){
     toast('📊 Excel library unavailable — exported CSV instead','warn');
     return;
   }
-  // PDF via print window — grouped by week, color-coded results, no FTE.
+  // PDF via print window, or 'view' — the same report in a pop-up without the
+  // auto-print, so admin can read it live in the browser.
+  const isView=format==='view';
   const sections=groups.map(g=>{
     const rows=g.bids.map(b=>{
       const c=bwOutcomeColor(b.outcome);
@@ -2525,10 +2568,10 @@ window.exportPhaseResults=function(format,scopeOverride){
     <h1>Vacation Auction — Bids by Week</h1>
     <div class="stamp">${exportLabel} · Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} across ${groups.length} week${groups.length!==1?'s':''}</div>
     ${sections||'<p>No bids for this selection.</p>'}
-    <script>setTimeout(()=>window.print(),300);<\/script>
+    ${isView?'':'<script>setTimeout(()=>window.print(),300);<\/script>'}
     </body></html>`);
   w.document.close();
-  toast('📄 Preview opened — use browser "Print → Save as PDF"','ok');
+  toast(isView?'👁 Report opened in a new tab':'📄 Preview opened — use browser "Print → Save as PDF"','ok');
 };
 
 // ── Bids by Week — live on-site grid ──
@@ -3055,7 +3098,18 @@ window.lockFullWeeks=function(){
 };
 
 
-window.runSimulationApprovals=async function(){
+// Confirmation wrapper — auto-approve is a bulk decision, so admin must confirm it.
+window.runSimulationApprovals=function(){
+  const cur=Number(phasesData.currentPhase||1);
+  openConfirm({
+    title:'✅ Auto-Approve/Deny Results',
+    body:`<div>Run auto-approve/deny for <strong>Phase ${cur}</strong>?</div>
+          <div class="cmodal-info" style="margin-top:8px">Winners are approved, losers denied, reviews approved, and draws are decided at random within the FTE cap plus the allowed overage. This writes real approvals and denials.</div>`,
+    okText:'✅ Run Auto-Approve/Deny', danger:true,
+    onConfirm:()=>_execSimulationApprovals()
+  });
+};
+async function _execSimulationApprovals(){
   const ap=computeApprovals();
   const log=document.getElementById('simLog');
   if(log) log.style.display='block';
@@ -3629,10 +3683,8 @@ function syncTimer(){
   syncDurationUI();
   const en=timerData.enabled===true;
   const tog=document.getElementById("timerToggle"); if(tog)tog.className="tog"+(en?" on-orange":"");
-  const rb=document.getElementById("resetTimerBtn"); const cb=document.getElementById("clearTimerBtn");
-  if(rb)rb.disabled=!en; if(cb)cb.disabled=!en;
-  const sl2=document.getElementById("timerSlider"); if(sl2)sl2.disabled=!en;
-  if(!en){const sd=document.getElementById("sliderDisplay");if(sd)sd.textContent="48h 00m";if(sl2)sl2.value=172800;}
+  const rb=document.getElementById("resetTimerBtn");
+  if(rb)rb.disabled=!en;
   const bl=document.getElementById("timerBlock"); const lb=document.getElementById("timerLabel"); const mt=document.getElementById("timerMeta");
   if(!bl||!lb||!mt)return;
   if(!en){bl.className="timer-block";lb.textContent="Timer disabled";mt.textContent="Enable above to start.";document.getElementById("timerDigs").innerHTML="";return;}
@@ -3642,12 +3694,6 @@ function syncTimer(){
   lb.textContent=rem<=0?"Timer expired":"Timer running";
   mt.textContent=`Last reset: ${new Date(timerData.lastChange).toLocaleString()}`;
   renderTimerDigs();
-  // Sync slider to current remaining time
-  const sl=document.getElementById("timerSlider");
-  if(sl&&!sl._dragging){
-    const secLeft=Math.max(0,Math.floor((getDurationMs()-(Date.now()-timerData.lastChange))/1000));
-    sl.value=secLeft; updateSliderDisplay(secLeft);
-  }
 }
 function getResetLabel(){ return `↺ Reset to ${fmtDuration(getDurationHrs())}`; }
 function renderTimerDigs(){
@@ -3669,25 +3715,54 @@ function getDurationMs(){ return ((timerData.durationHours||48)*3600000); }
 function getDurationHrs(){ return timerData.durationHours||48; }
 function fmtDuration(hrs){ return hrs+"h"; }
 
-window.setDuration=function(hrs){
-  if((timerData.durationHours||48)===hrs){ toast(`Duration already ${hrs}h`,"ok"); return; }
-  openConfirm({
-    title:'⏱️ Change Auction Window',
-    body:`<div>Set the auction window duration to <strong>${hrs}h</strong>?</div>${timerData.enabled?'<div class="cmodal-info" style="margin-top:8px">The timer is running — this changes how much total time the window represents. Use Reset Timer afterward to restart the countdown from the new duration.</div>':''}`,
-    okText:`Set ${hrs}h`,
-    onConfirm:async()=>{ await setDoc(timerRef,{durationHours:hrs},{merge:true}); toast(`⏱️ Duration set to ${hrs}h`,"ok"); }
-  });
+// Duration slider: discrete stops only. Position 0 turns the timer OFF.
+const DUR_STOPS=[0,1,3,6,12,24,48];
+function durIdxFor(hrs){ const i=DUR_STOPS.indexOf(hrs); return i>=0?i:6; }
+window.onDurSliderInput=function(idx){
+  // Live label while dragging — nothing is saved until the change confirm.
+  const h=DUR_STOPS[Number(idx)]??48;
+  const dd=document.getElementById("durationDisplay");
+  if(dd) dd.textContent=h===0?'Timer off':h+'h';
 };
+window.onDurSliderChange=function(idx){
+  const h=DUR_STOPS[Number(idx)]??48;
+  const en=timerData.enabled===true;
+  const curHrs=timerData.durationHours||48;
+  const snapBack=()=>syncDurationUI(); // restore slider to the saved state on cancel
+  if(h===0){
+    if(!en){ syncDurationUI(); return; } // already off
+    openConfirm({
+      title:'🔕 Turn Timer Off',
+      body:'<div>Slide to <strong>0</strong> turns the countdown timer <strong>off</strong>. Users will no longer see a countdown.</div>',
+      okText:'Turn Timer Off', danger:true,
+      onConfirm:async()=>{ await setDoc(timerRef,{enabled:false,lastChange:null},{merge:true}); toast('🔕 Timer turned off','warn'); }
+    });
+    // If they cancel, the next syncTimer snapshot re-syncs; also snap back now.
+    setTimeout(snapBack,50);
+    return;
+  }
+  if(en&&h===curHrs){ syncDurationUI(); return; } // no change
+  openConfirm({
+    title:'⏱️ Set Auction Window',
+    body:`<div>Set the auction window to <strong>${h}h</strong>${en?'' :' and turn the timer <strong>on</strong>'}?</div>${en?'<div class="cmodal-info" style="margin-top:8px">The timer is running — this changes the total window. Use Reset Timer afterward to restart the countdown from the new duration.</div>':''}`,
+    okText:`Set ${h}h`,
+    onConfirm:async()=>{
+      await setDoc(timerRef,{durationHours:h,enabled:true},{merge:true});
+      toast(`⏱️ Auction window set to ${h}h`,"ok");
+    }
+  });
+  setTimeout(snapBack,50);
+};
+// Legacy entry point kept for tests/back-compat — routes through the same confirm.
+window.setDuration=function(hrs){ onDurSliderChange(durIdxFor(hrs)); };
 
 function syncDurationUI(){
-  const hrs=timerData.durationHours||48;
+  const en=timerData.enabled===true;
+  const hrs=en?(timerData.durationHours||48):0;
   const dd=document.getElementById("durationDisplay");
-  if(dd) dd.textContent=hrs+"h";
-  document.querySelectorAll(".dur-btn").forEach(b=>{
-    b.className=parseInt(b.dataset.hrs)===hrs?"btn btn-warn dur-btn":"btn btn-ghost dur-btn";
-  });
-  const sl=document.getElementById("timerSlider");
-  if(sl){ sl.max=hrs*3600; if(parseFloat(sl.value)>hrs*3600) sl.value=hrs*3600; }
+  if(dd) dd.textContent=en?(timerData.durationHours||48)+"h":"Timer off";
+  const sl=document.getElementById("durSlider");
+  if(sl) sl.value=durIdxFor(hrs); // durIdxFor(0)=0 → slider parked at "off"
 }
 
 window.toggleTimerEnabled=function(){
@@ -3713,43 +3788,7 @@ window.adminResetTimer=function(){
     onConfirm:async()=>{ await setDoc(timerRef,{lastChange:Date.now()},{merge:true}); toast("↺ Timer reset","ok"); }
   });
 };
-window.adminClearTimer=function(){
-  if(!timerData.enabled)return;
-  openConfirm({
-    title:'✕ Clear Timer',
-    body:`<div>Clear the countdown timer?</div><div class="cmodal-warn">The auction window will be marked as not yet started until reset.</div>`,
-    okText:'Clear', danger:true,
-    onConfirm:async()=>{ await setDoc(timerRef,{lastChange:null},{merge:true}); toast("✕ Timer cleared","warn"); }
-  });
-};
-
-// ── Slider ──
-function updateSliderDisplay(secs){
-  const h=Math.floor(secs/3600), m=Math.floor((secs%3600)/60);
-  const el=document.getElementById("sliderDisplay");
-  if(el) el.textContent=`${h}h ${String(m).padStart(2,"0")}m`;
-}
-window.onSliderInput=function(val){
-  const secs=parseInt(val);
-  updateSliderDisplay(secs);
-  // Mark as dragging so syncTimer doesn't snap it back
-  const sl=document.getElementById("timerSlider"); if(sl) sl._dragging=true;
-};
-window.onSliderChange=async function(val){
-  const sl=document.getElementById("timerSlider"); if(sl) sl._dragging=false;
-  if(!timerData.enabled) return;
-  const secs=parseInt(val);
-  if(secs===0){
-    await setDoc(timerRef,{lastChange:Date.now()-getDurationMs()},{merge:true});
-    toast("⏱️ Timer set to expired","warn");
-  } else {
-    // Calculate what lastChange should be to give exactly secs remaining
-    const newLastChange=Date.now()-getDurationMs()+(secs*1000);
-    await setDoc(timerRef,{lastChange:newLastChange},{merge:true});
-    const h=Math.floor(secs/3600), m=Math.floor((secs%3600)/60);
-    toast(`⏱️ Timer set to ${h}h ${String(m).padStart(2,"0")}m`,"ok");
-  }
-};
+// (Clear Timer removed — the slider's 0 position and the enable toggle cover it.)
 
 // ── SHA-256 ──
 async function sha256(str){
