@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 29;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 30;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -575,7 +575,6 @@ const bidPhaseRef   = doc(db,"vacations","bidPhase");
 const deniedRef      = doc(db,"vacations","denials");
 const slotsRef       = doc(db,"vacations","slots"); // admin per-week FTE availability overrides
 const mailQueueRef   = doc(db,"vacations","mailQueue"); // outbox for projection-change alerts
-const welcomesRef    = doc(db,"vacations","welcomes");  // {user: ts} — welcome email sent once, ever
 
 // ── State ──
 let data={}, locksData={globalLock:false,weeks:{}};
@@ -1054,8 +1053,6 @@ function renderBidPool(user){
 onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; });
 onSnapshot(passcodesRef,snap=>{ passcodesData=snap.exists()?snap.data():{}; _passcodesReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; _usernamesReady=true; if(typeof refreshLoginUsers==='function') refreshLoginUsers(); });
-let welcomesData={};
-onSnapshot(welcomesRef,snap=>{ welcomesData=snap.exists()?snap.data():{}; });
 onSnapshot(fteRef,      snap=>{ if(snap.exists()){ fteData=snap.data(); } else { setDoc(fteRef,FTE_MAP).catch(()=>{}); return; } scheduleRender(); });
 onSnapshot(approvalsRef,snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()?snap.data():{}); scheduleRender(); });
 onSnapshot(phasesRef,  snap=>{ phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{}}; renderPhaseLabel(); scheduleRender(); if(typeof updateSigninPhase==='function') updateSigninPhase(); });
@@ -2331,13 +2328,11 @@ window.saveEmail=async function(){
   const val=document.getElementById("emailInput").value.trim();
   if(!val||!val.includes("@")){showError("Please enter a valid email.");return;}
   const user=getCurrentUser();
-  const firstTime=!welcomesData[user]; // once EVER, even if the email is later changed
   await setDoc(emailsRef,{[user]:val},{merge:true});
   document.getElementById("emailModal").classList.remove("show");
-  if(firstTime){
-    setDoc(welcomesRef,{[user]:Date.now()},{merge:true}).catch(()=>{});
-    sendWelcomeEmail(user,val).catch(()=>{});
-  }
+  // Welcome/enrollment confirmation goes out EVERY time a user enters an e-mail
+  // address here — including re-entry after admin cleared their saved address.
+  sendWelcomeEmail(user,val).catch(()=>{});
 };
 window.remindLater=function(){ document.getElementById("emailModal").classList.remove("show"); };
 
