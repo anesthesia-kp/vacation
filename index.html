@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 25;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 26;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -613,15 +613,16 @@ function applySlotOverrides(){
 // Track whether security-critical collections have loaded from Firestore.
 // Defaults assume passcodes ON / email prompt ON — but until snapshots fire we
 // don't actually know the admin's settings. Confirm button waits for both.
-let _adminSettingsReady=false, _passcodesReady=false, _emailsReady=false;
+let _adminSettingsReady=false, _passcodesReady=false, _emailsReady=false, _usernamesReady=false;
 // Fallback: unlock Continue button after 1.5s if Firestore hasn't fired by then.
 // Firestore typically responds in <500ms; this just guards against rules issues,
 // auth failures, or network blocks so users are never stuck on "Loading…".
 setTimeout(()=>{
-  if(!_adminSettingsReady||!_passcodesReady||!_emailsReady){
+  if(!_adminSettingsReady||!_passcodesReady||!_emailsReady||!_usernamesReady){
     console.warn('[Sign-in] Firestore did not respond in time — unlocking. Check Firestore rules and anonymous auth.');
-    _adminSettingsReady=true; _passcodesReady=true; _emailsReady=true;
+    _adminSettingsReady=true; _passcodesReady=true; _emailsReady=true; _usernamesReady=true;
     if(typeof _updateSignInBtnState==='function') _updateSignInBtnState();
+    if(typeof refreshLoginUsers==='function') refreshLoginUsers();
   }
 }, 1500);
 // Auth failure handler — log it visibly so issues are diagnosable
@@ -1051,7 +1052,7 @@ function renderBidPool(user){
 }
 onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; });
 onSnapshot(passcodesRef,snap=>{ passcodesData=snap.exists()?snap.data():{}; _passcodesReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
-onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; if(typeof refreshLoginUsers==='function') refreshLoginUsers(); });
+onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; _usernamesReady=true; if(typeof refreshLoginUsers==='function') refreshLoginUsers(); });
 onSnapshot(fteRef,      snap=>{ if(snap.exists()){ fteData=snap.data(); } else { setDoc(fteRef,FTE_MAP).catch(()=>{}); return; } scheduleRender(); });
 onSnapshot(approvalsRef,snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()?snap.data():{}); scheduleRender(); });
 onSnapshot(phasesRef,  snap=>{ phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{}}; renderPhaseLabel(); scheduleRender(); if(typeof updateSigninPhase==='function') updateSigninPhase(); });
@@ -2163,14 +2164,23 @@ function initSigninScreen(){
   let remembered=null; try{ remembered=localStorage.getItem(REMEMBER_KEY); }catch(_){}
   const w=document.getElementById("signinWelcome"), p=document.getElementById("signinPicker");
   if(!w||!p) return;
-  if(remembered && names.includes(remembered)){
-    _rememberedName=remembered;
-    w.style.display="block"; p.style.display="none";
-    const nm=document.getElementById("signinWelcomeName"); if(nm) nm.textContent=displayName(remembered);
-    const b=document.getElementById("quickContinueBtn"); if(b) b.textContent="Continue as "+displayName(remembered);
-  } else if(w.style.display!=="block"){
-    p.style.display="block";
+  if(remembered){
+    // Hold BOTH panels until usernames + the user list have loaded (or the 1.5s
+    // fallback fires). Rendering earlier flashes raw initials before the saved
+    // username swaps in — a brief blank beats an unprofessional flash.
+    if(!_usernamesReady || !names.length){
+      w.style.display="none"; p.style.display="none";
+      return;
+    }
+    if(names.includes(remembered)){
+      _rememberedName=remembered;
+      w.style.display="block"; p.style.display="none";
+      const nm=document.getElementById("signinWelcomeName"); if(nm) nm.textContent=displayName(remembered);
+      const b=document.getElementById("quickContinueBtn"); if(b) b.textContent="Continue as "+displayName(remembered);
+      return;
+    }
   }
+  if(w.style.display!=="block") p.style.display="block";
 }
 window.signinShowPicker=function(){
   const w=document.getElementById("signinWelcome"), p=document.getElementById("signinPicker");
@@ -2214,17 +2224,19 @@ function completeSignIn(){
   personSelect.value=selectedSignInName; personSelect.disabled=true;
   personSelect.style.display="none";
   const _pl=document.getElementById("personLabel"); _pl.textContent=displayName(selectedSignInName); _pl.style.display="inline";
+  // Email prompt: decide BEFORE revealing the board so it appears as part of the
+  // sign-in flow, not a laggy pop-in 800ms after the page loads. All the data it
+  // needs (adminSettings + emails) is guaranteed loaded — sign-in is gated on it.
+  const needsEmail = adminSettings.emailPromptEnabled===true
+    && (()=>{ const s=emailsData[selectedSignInName]; return !s||s===""||s==="__skip__"; })();
   document.getElementById("accountSelectModal").classList.remove("show");
   mainContainer.style.display="block";
   startListening();
   startCountdownTick();
-  setTimeout(()=>{
-    // Explicit truthy check — only show prompt if admin has actively enabled it
-    if(adminSettings.emailPromptEnabled!==true) return;
-    if(!_emailsReady) return;
-    const stored=emailsData[selectedSignInName];
-    if(!stored||stored===""||stored==="__skip__") document.getElementById("emailModal").classList.add("show");
-  },800);
+  if(needsEmail){
+    document.getElementById("emailModal").classList.add("show");
+    setTimeout(()=>{ document.getElementById("emailInput")?.focus(); },100);
+  }
 }
 
 window.saveEmail=async function(){
