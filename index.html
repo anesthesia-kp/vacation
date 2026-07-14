@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 26;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 28;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -477,7 +477,7 @@ body{zoom:1.15}
     </div>
     <div class="rules-body" id="rulesBody">
       <ul class="rules-list">
-        <li>Vacation selections are now called "bids" — the process now works like an auction, where bids compete for limited slots based on priority</li>
+        <li>Vacation selections are now called "bids" — the process works like an auction, where bids compete for limited slots based on priority</li>
         <li>Enter your bids early, it benefits everyone</li>
         <li>Sniping is not possible, do not try it</li>
         <li id="ruleMaxBids">Only 3 bids (including NP bids) may be used per phase — only bid for the number of weeks your accrued vacation and ATO will allow for</li>
@@ -507,9 +507,8 @@ body{zoom:1.15}
   <div id="globalLockBanner">🔒 The schedule has been locked by the admin.</div>
   <div id="notStartedBanner" style="display:none;background:rgba(251,191,36,.14);border:1px solid rgba(251,191,36,.45);color:#7a4e00;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-weight:600;font-size:.9rem;text-align:center">⏳ Bidding has not started yet — the auction opens when admin begins Phase 1.</div>
   <div id="errorMessage" class="flash err"></div>
-  <div class="notif-bar" id="notifBar"></div>
   <div class="selections-bar" style="margin-bottom:14px">
-    <div class="selections-bar-title">My Bid Count</div>
+    <div class="selections-bar-title" style="flex-wrap:wrap">My Bid Count<span id="notifMine" style="margin-left:auto;font-weight:400"></span></div>
     <div id="bidPoolBox"></div>
   </div>
   <div class="selections-bar">
@@ -536,6 +535,7 @@ body{zoom:1.15}
         <option value="month:December">December</option>
       </optgroup>
     </select>
+    <span id="notifAll"></span>
   </div>
   <div class="months-grid" id="calendar"></div>
 </div>
@@ -575,6 +575,7 @@ const bidPhaseRef   = doc(db,"vacations","bidPhase");
 const deniedRef      = doc(db,"vacations","denials");
 const slotsRef       = doc(db,"vacations","slots"); // admin per-week FTE availability overrides
 const mailQueueRef   = doc(db,"vacations","mailQueue"); // outbox for projection-change alerts
+const welcomesRef    = doc(db,"vacations","welcomes");  // {user: ts} — welcome email sent once, ever
 
 // ── State ──
 let data={}, locksData={globalLock:false,weeks:{}};
@@ -1053,6 +1054,8 @@ function renderBidPool(user){
 onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; });
 onSnapshot(passcodesRef,snap=>{ passcodesData=snap.exists()?snap.data():{}; _passcodesReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; _usernamesReady=true; if(typeof refreshLoginUsers==='function') refreshLoginUsers(); });
+let welcomesData={};
+onSnapshot(welcomesRef,snap=>{ welcomesData=snap.exists()?snap.data():{}; });
 onSnapshot(fteRef,      snap=>{ if(snap.exists()){ fteData=snap.data(); } else { setDoc(fteRef,FTE_MAP).catch(()=>{}); return; } scheduleRender(); });
 onSnapshot(approvalsRef,snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()?snap.data():{}); scheduleRender(); });
 onSnapshot(phasesRef,  snap=>{ phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{}}; renderPhaseLabel(); scheduleRender(); if(typeof updateSigninPhase==='function') updateSigninPhase(); });
@@ -1615,27 +1618,31 @@ function renderNotifications(user,ap){
   // Chip 2: all changes by everyone (including you) in last 24h
   const total=[...log24].reverse();
 
-  const bar=document.getElementById("notifBar");
+  // Chip 1 lives in the "My Bid Count" box; chip 2 sits beside the board-view
+  // dropdown in the bidding-board header.
+  const mineSlot=document.getElementById("notifMine");
+  const allSlot=document.getElementById("notifAll");
   const mineHtml=mine.length
     ?mine.map(e=>{const t=new Date(e.ts);const ts=t.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});return `<div class="notif-row mine-row"><span style="color:#48607a;font-size:.68rem">${ts}</span> ${e.user} ${icon(e)} ${formatShort(e.weekKey)} → your bid: <b>${e.outcome.toUpperCase()}</b></div>`;}).join('')
     :'<div class="notif-empty-sm">No recent changes on your weeks</div>';
   const totalHtml=total.length
     ?total.map(e=>{const t=new Date(e.ts);const ts=t.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});return `<div class="notif-row"><span style="color:#48607a;font-size:.68rem">${ts}</span> ${e.user===user?'<b>You</b>':e.user||'?'} ${icon(e)} ${formatShort(e.weekKey)}</div>`;}).join('')
     :'<div class="notif-empty-sm">No changes in last 24h</div>';
-  bar.innerHTML=`
+  if(mineSlot) mineSlot.innerHTML=`
     <div class="notif-popover" id="notifPop1">
       <div class="notif-chip ${mine.length?'has-mine':''}" onclick="toggleNotifPop('notifPop1');event.stopPropagation()">${mine.length?'<div class="notif-dot"></div>':''}⚠️ ${mine.length} change${mine.length!==1?'s':''} affecting your weeks <span style="margin-left:4px;color:#5a7186">▾</span></div>
-      <div class="notif-popover-content" onclick="event.stopPropagation()">
+      <div class="notif-popover-content" onclick="event.stopPropagation()" style="left:auto;right:0">
         <div class="notif-popover-header">
           <span class="notif-popover-title">Changes since you last edited</span>
           <button class="notif-popover-close" onclick="toggleNotifPop('notifPop1')">✕</button>
         </div>
         <div class="notif-popover-scroll">${mineHtml}</div>
       </div>
-    </div>
+    </div>`;
+  if(allSlot) allSlot.innerHTML=`
     <div class="notif-popover" id="notifPop2">
       <div class="notif-chip" onclick="toggleNotifPop('notifPop2');event.stopPropagation()">📋 ${total.length} change${total.length!==1?'s':''} in last 24h <span style="margin-left:4px;color:#5a7186">▾</span></div>
-      <div class="notif-popover-content" onclick="event.stopPropagation()">
+      <div class="notif-popover-content" onclick="event.stopPropagation()" style="left:auto;right:0">
         <div class="notif-popover-header">
           <span class="notif-popover-title">All changes (last 24h)</span>
           <button class="notif-popover-close" onclick="toggleNotifPop('notifPop2')">✕</button>
@@ -2239,11 +2246,66 @@ function completeSignIn(){
   }
 }
 
+// ── Welcome / enrollment-confirmation email (sent ONCE, on first email entry) ──
+function buildWelcomeEmailBody(user){
+  const lim=getMaxBidsPerPhase();
+  const limLine=lim===null
+    ? '- There is no per-phase bid limit — you are limited only by the bid numbers you have available; only bid for the number of weeks your accrued vacation and ATO will allow for'
+    : '- Only '+lim+' bid'+(lim!==1?'s':'')+' (including NP bids) may be used per phase — only bid for the number of weeks your accrued vacation and ATO will allow for';
+  const T=getReviewThreshold().toFixed(1);
+  return `Hi ${user},
+
+Welcome to the 2027 Anesthesia Vacation Auction!
+
+This confirms you are enrolled in e-mail alerts. You will receive an e-mail:
+- When someone places a bid that changes your projected outcome for a week (outbid alerts)
+- When a bidding phase concludes and your results (approved/denied) are sent
+- As an occasional reminder if you have not yet placed any bids in an open phase
+
+RULES AND REGULATIONS OF THE AUCTION
+- Vacation selections are called "bids" — the process works like an auction, where bids compete for limited slots based on priority
+- Enter your bids early, it benefits everyone
+- Sniping is not possible, do not try it
+${limLine}
+- Bid priorities can only increase, not decrease — once you bid 5 on a week, you can only re-bid 4 or better
+- On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used
+- To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week
+
+UNDERSTANDING OUTCOMES
+- Winning: your bid is projected to be approved for this week
+- Draw: you are tied with one or more people, combined FTE exceeds availability, but at least one person could individually fit within ${T} FTE over cap; a spin-off or admin approval will resolve the tie
+- Under Review: your bid is slightly over the cap (up to ${T} FTE); admin may still approve under certain circumstances
+- Losing: your bid is projected not to be approved for this week
+- If you are in a Draw or Under Review for a week and do not win after it is resolved, you get the bid back for the next phase
+- These are projections, not final results — outcomes can shift as others place bids or as unexpected staffing needs change
+
+Happy bidding!
+2027 Anesthesia Vacation Auction`;
+}
+async function sendWelcomeEmail(user,email){
+  // Outbox pattern (same as outbid alerts): persist to the queue first, then try
+  // to send; the entry is removed on success and relayed by any open page if not.
+  const body=buildWelcomeEmailBody(user);
+  const qid=`${Date.now()}_welcome_${user}_${Math.floor(Math.random()*1e6)}`;
+  try{ await setDoc(mailQueueRef,{[qid]:{user,email,body,ts:Date.now()}},{merge:true}); }catch(_){}
+  try{
+    if(typeof emailjs!=="undefined"){
+      await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body});
+      updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
+    }
+  }catch(_){/* stays queued — delivered by the relay */}
+}
 window.saveEmail=async function(){
   const val=document.getElementById("emailInput").value.trim();
   if(!val||!val.includes("@")){showError("Please enter a valid email.");return;}
-  await setDoc(emailsRef,{[getCurrentUser()]:val},{merge:true});
+  const user=getCurrentUser();
+  const firstTime=!welcomesData[user]; // once EVER, even if the email is later changed
+  await setDoc(emailsRef,{[user]:val},{merge:true});
   document.getElementById("emailModal").classList.remove("show");
+  if(firstTime){
+    setDoc(welcomesRef,{[user]:Date.now()},{merge:true}).catch(()=>{});
+    sendWelcomeEmail(user,val).catch(()=>{});
+  }
 };
 window.remindLater=function(){ document.getElementById("emailModal").classList.remove("show"); };
 
