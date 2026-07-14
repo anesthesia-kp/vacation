@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 33;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 34;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1669,14 +1669,34 @@ function renderSelections(user,ap){
     const meta=weekMeta[wk];
     // Format: "Week 12 · Mar 22" — week number + short date of that Monday
     const wkLabel=`Week ${meta?.weekNum||''} · ${formatShort(wk)}`;
-    return `<div class="selection-item">
+    return `<div class="selection-item" onclick="scrollToWeek('${wk}')" title="Show this week on the bidding board" style="cursor:pointer">
       <span class="selection-date">${wkLabel}</span>
       <span style="color:#48607a;font-size:.72rem">${bidLbl(p)}</span>
       <span class="selection-outcome outcome-${o==='denied'?'lose':o}"${denied?' style="background:rgba(239,68,68,.25);color:#b91c1c"':''}>${label}</span>
-      
+
     </div>`;
   }).join('');
 }
+
+// Clicking a bid in "My Bids & Projections" jumps to that week on the bidding
+// board and flashes it. If the current board view filters the week out (e.g. a
+// month view), switch back to the full year first so the week exists to scroll to.
+window.scrollToWeek=function(wk){
+  let cell=document.querySelector(`.week[data-wk="${wk}"]`);
+  if(!cell){
+    _boardView='all';
+    const sel=document.getElementById('boardViewSelect'); if(sel) sel.value='all';
+    const user=getCurrentUser(); if(user) renderCalendar(user,computeApprovals());
+    cell=document.querySelector(`.week[data-wk="${wk}"]`);
+  }
+  if(!cell) return;
+  cell.scrollIntoView({behavior:'smooth',block:'center'});
+  // Brief highlight so the eye lands on the right card.
+  const prev=cell.style.boxShadow, prevT=cell.style.transition;
+  cell.style.transition='box-shadow .25s';
+  cell.style.boxShadow='0 0 0 3px #006ba6, 0 8px 24px rgba(0,107,166,.35)';
+  setTimeout(()=>{ cell.style.boxShadow=prev; setTimeout(()=>{ cell.style.transition=prevT; },300); },1600);
+};
 
 function renderCalendar(user,ap){
   calendarEl.innerHTML="";
@@ -1724,6 +1744,7 @@ function renderCalendar(user,ap){
       const priorWon=getPriorPhaseWinners(wk).has(user);
       const isGL=locksData.globalLock, isWL=!!locksData.weeks?.[wk], isLocked=isGL||isWL;
       const div=document.createElement("div"); div.className="week";
+      div.dataset.wk=wk; // anchor for scroll-to-week from My Bids & Projections
       if(isLocked){
         div.style.cssText="opacity:.5;cursor:not-allowed;border-color:#fecaca;background:linear-gradient(135deg,rgba(220,38,38,.07),rgba(220,38,38,.05))";
       } else if(priorWon){
@@ -1872,6 +1893,7 @@ function renderCalendar(user,ap){
       const meta=weekMeta[wk];
       const isSel=isVisibleBid(user,wk);
       const div=document.createElement("div"); div.className="week";
+      div.dataset.wk=wk; // anchor for scroll-to-week
       div.style.cssText="opacity:.6;cursor:not-allowed;border-color:#fecaca;background:linear-gradient(135deg,rgba(220,38,38,.07),rgba(220,38,38,.05))";
       // Week number
       const wn=document.createElement("div");
