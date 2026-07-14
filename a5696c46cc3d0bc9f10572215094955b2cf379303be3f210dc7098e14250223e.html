@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 33;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 34;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -404,7 +404,7 @@ thead th{color:var(--t2)}
         <button class="btn btn-danger" onclick="lockAllWeeks()">🔒 Lock All</button>
         <button class="btn btn-success" onclick="unlockAllWeeks()">🔓 Unlock All</button>
         <button class="btn btn-danger btn-orange" style="background:rgba(249,115,22,.12);color:#fb923c;border-color:rgba(249,115,22,.35)" onclick="lockAllExceptHighDemand()">🔒 Lock All Except High Demand</button>
-        <button class="btn" style="background:rgba(168,85,247,.12);color:#5b4fb5;border:1px solid rgba(168,85,247,.3)" onclick="lockFullWeeks()">🔒 Lock Weeks with No Availability</button>
+        <button class="btn" style="background:rgba(59,130,246,.12);color:var(--blue);border:1px solid rgba(59,130,246,.3)" onclick="smartLockUnlock()">✨ Smart Lock and Unlock</button>
       </div>
       <div class="tabs" id="lockTabs"></div>
       <div class="wgrid" id="lockGrid"></div>
@@ -509,13 +509,13 @@ thead th{color:var(--t2)}
       </div>
       <div class="card">
         <div class="card-title">All Users (<span id="userCount">0</span>)</div>
-        <div class="page-sub" style="margin-bottom:12px">One row per user. Admin sets FTE; users enter their own e-mail and password (correct or clear them here if needed). Delete removes the user and all their data.</div>
+        <div class="page-sub" style="margin-bottom:12px">One row per user. "Initials" is the account ID admin sets; "Username" is the display name a user may choose at login (defaults to their initials). Passwords are chosen by users and are <strong>never shown here</strong> — only whether one is set. Delete removes the user and all their data.</div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px">
           <button class="btn btn-danger" onclick="clearAllPasswords()">Clear All Passwords</button>
           <button class="btn btn-danger" style="background:rgba(198,40,40,.22);border-color:rgba(198,40,40,.6)" onclick="deleteAllUsers()">🗑 Delete All Users</button>
         </div>
         <div style="overflow-x:auto;max-height:560px;overflow-y:auto;border:1px solid var(--b1)">
-          <table><thead><tr><th>User</th><th>FTE</th><th>E-mail</th><th>Password</th><th></th></tr></thead><tbody id="usersBody"></tbody></table>
+          <table><thead><tr><th>Initials</th><th>Username</th><th>FTE</th><th>E-mail</th><th>Password</th><th></th></tr></thead><tbody id="usersBody"></tbody></table>
         </div>
       </div>
     </div>
@@ -553,6 +553,16 @@ thead th{color:var(--t2)}
     <!-- CONTROLS -->
     <div class="panel" id="panel-controls">
       <div class="page-head"><div class="page-title">Controls</div><div class="page-sub">Global schedule settings.</div></div>
+      <div class="card">
+        <div class="card-title">Update Username Prompt</div>
+        <div class="trow">
+          <div>
+            <div class="trow-label">Prompt users to update their username</div>
+            <div class="trow-desc">When ON, users are offered a chance to set a custom display name (username) when they sign in. When OFF, users just sign in with their initials and are not prompted. Any username a user picks is visible to admin in the Users list.</div>
+          </div>
+          <div class="tog" id="usernamePromptToggle" onclick="toggleUsernamePrompt()"></div>
+        </div>
+      </div>
       <div class="card">
         <div class="card-title">Email Prompt on Login</div>
         <div class="trow">
@@ -800,6 +810,7 @@ const worstBidsRef = doc(db,"vacations","bestBids");
 const emailsRef   = doc(db,"vacations","emails");
 const passwordsRef = doc(db,"vacations","passcodes");
 const userListRef  = doc(db,"vacations","userList");
+const usernamesRef = doc(db,"vacations","usernames"); // {initials: customDisplayName}
 const fteRef       = doc(db,"vacations","fteMap");
 const approvalsRef = doc(db,"vacations","approvals");
 const bidTimesRef  = doc(db,"vacations","bidTimes");
@@ -824,7 +835,7 @@ let changesLog=[], adminSettings={emailNotifsEnabled:true}, timerData={enabled:f
 function getReviewThreshold(){ const raw=adminSettings?.reviewThreshold; if(raw===undefined||raw===null)return 0.5; const n=Number(raw); if(isNaN(n))return 0.5; const clamped=Math.max(0,Math.min(2,n)); return Math.round(clamped*10)/10; }
 // Returns the FTE of the lowest-FTE user in the roster. Used by the auto-lock rule.
 function getLowestFTE(){ let m=Infinity; for(const u of names){ const f=getUserFTE(u); if(f<m) m=f; } return m===Infinity?1:m; }
-let worstBidsData={}, emailsData={}, passwordsData={}, fteData={}, approvalsData={}, bidTimesData={};
+let worstBidsData={}, emailsData={}, passwordsData={}, fteData={}, approvalsData={}, bidTimesData={}, usernamesData={};
 let selLockMonth=null, tickInterval=null;
 
 // ── Auth gate ───────────────────────────────────────────────────────────────
@@ -873,6 +884,7 @@ onSnapshot(worstBidsRef, snap=>{
 });
 onSnapshot(emailsRef,   snap=>{ emailsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
 onSnapshot(passwordsRef,snap=>{ passwordsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
+onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
   onSnapshot(fteRef, snap=>{ fteData=snap.exists()?snap.data():{}; refreshAll(); });
 onSnapshot(approvalsRef, snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()?snap.data():{}); refreshAll(); });
 onSnapshot(emailsRef,   snap=>{ emailsDataAdmin=snap.exists()?snap.data():{}; });
@@ -1325,34 +1337,91 @@ function renderLockSummary(){
   const el=document.getElementById('lockSummaryBody'); if(!el) return;
   const s=lockSummary();
   const chipList=(arr,color)=>arr.map(w=>`<span style="display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;margin:2px;background:${color}22;color:${color};border:1px solid ${color}55">${w.label}${w.remaining!==undefined?` (${w.remaining})`:''}</span>`).join('');
+  // Each row: count line + a "Show weeks" toggle button; the week list stays hidden
+  // until clicked so the summary reads clean. `extraBtn` adds an action (e.g. Unlock).
+  const row=(id,line,count,weeks,color,extraBtn)=>{
+    const listId='lsl_'+id;
+    return `<div style="padding:9px 11px;border:1px solid var(--b1);border-radius:8px;background:var(--s2);margin-bottom:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <div style="font-size:13px">${line}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${count?`<button class="btn btn-ghost" style="font-size:11px" onclick="var e=document.getElementById('${listId}');var open=e.style.display!=='none';e.style.display=open?'none':'block';this.textContent=open?'Show weeks':'Hide weeks';">Show weeks</button>`:''}
+          ${extraBtn||''}
+        </div>
+      </div>
+      ${count?`<div id="${listId}" style="display:none;margin-top:8px">${chipList(weeks,color)}</div>`:''}
+    </div>`;
+  };
   let html='';
   if(s.globalLock){
     html+=`<div style="padding:8px 10px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;color:#b91c1c;font-weight:700;margin-bottom:10px">🌐 Global Lock is ON — all bidding is frozen for every week.</div>`;
   }
-  html+=`<div style="margin-bottom:8px"><strong style="color:var(--t1);font-size:15px">${s.lockedCount}</strong> of ${s.total} week${s.total!==1?'s':''} individually locked.</div>`;
-  if(s.lockedCount){
-    html+=`<div style="margin-bottom:6px"><span style="font-size:11px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.04em">Locked weeks</span><br>${chipList(s.lockedWeeks,'#334155')}</div>`;
-  }
-  // Problem 1: locked but still winnable → should probably be unlocked
-  if(s.lockedWithAvailability.length){
-    html+=`<div style="margin-top:10px;padding:8px 10px;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.4);border-radius:8px">
-      <div style="font-weight:700;color:#946200;margin-bottom:4px">⚠️ ${s.lockedWithAvailability.length} locked week${s.lockedWithAvailability.length!==1?'s':''} still ${s.lockedWithAvailability.length!==1?'have':'has'} availability</div>
-      <div style="font-size:11px;color:var(--t2);margin-bottom:4px">These are locked but a user could still win them (remaining FTE, accounting for the allowed overage) — bidding is wrongly blocked.</div>
-      ${chipList(s.lockedWithAvailability,'#d97706')}</div>`;
-  }
-  // Problem 2: unlocked but no availability → should probably be locked
-  if(s.unlockedNoAvailability.length){
-    html+=`<div style="margin-top:10px;padding:8px 10px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px">
-      <div style="font-weight:700;color:#b91c1c;margin-bottom:4px">⚠️ ${s.unlockedNoAvailability.length} unlocked week${s.unlockedNoAvailability.length!==1?'s':''} ${s.unlockedNoAvailability.length!==1?'have':'has'} no availability</div>
-      <div style="font-size:11px;color:var(--t2);margin-bottom:4px">These are open for bidding but full (no room even with the allowed overage) — users could waste bids. Consider locking them.</div>
-      ${chipList(s.unlockedNoAvailability,'#dc2626')}</div>`;
-  }
-  if(!s.lockedWithAvailability.length&&!s.unlockedNoAvailability.length&&!s.globalLock){
-    html+=`<div style="margin-top:6px;color:var(--green);font-weight:600">✓ No lock problems detected — every full week is locked and every winnable week is open.</div>`;
-  }
+  // 1) Weeks locked
+  html+=row('locked',
+    `🔒 <strong style="color:var(--t1)">${s.lockedCount}</strong> of ${s.total} week${s.total!==1?'s':''} locked`,
+    s.lockedCount, s.lockedWeeks, '#334155');
+  // 2) Locked weeks that still have availability (+ Unlock button)
+  const wa=s.lockedWithAvailability;
+  html+=row('wrongLocked',
+    `<span style="color:${wa.length?'#946200':'var(--t2)'}">${wa.length?'⚠️ ':'✓ '}<strong>${wa.length}</strong> locked week${wa.length!==1?'s':''} still ${wa.length!==1?'have':'has'} availability</span>`,
+    wa.length, wa, '#d97706',
+    wa.length?`<button class="btn" style="font-size:11px;background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="unlockAvailabilityWeeks()">🔓 Unlock these</button>`:'');
+  // 3) Unlocked weeks with no availability
+  const na=s.unlockedNoAvailability;
+  html+=row('unlockedFull',
+    `<span style="color:${na.length?'#b91c1c':'var(--t2)'}">${na.length?'⚠️ ':'✓ '}<strong>${na.length}</strong> unlocked week${na.length!==1?'s':''} ${na.length!==1?'have':'has'} no availability</span>`,
+    na.length, na, '#dc2626');
+  // Smart action + all-clear note
+  html+=`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:4px">
+    <button class="btn btn-primary" style="font-size:12px" onclick="smartLockUnlock()">✨ Smart Lock and Unlock</button>
+    ${(!wa.length&&!na.length&&!s.globalLock)?'<span style="color:var(--green);font-weight:600;font-size:12px">✓ Locks look correct — every full week is locked and every winnable week is open.</span>':'<span style="color:var(--t2);font-size:11px">Fixes both problems above in one step.</span>'}
+  </div>`;
   el.innerHTML=html;
 }
 window.renderLockSummary=renderLockSummary;
+// Unlock every week that is locked but still has availability.
+window.unlockAvailabilityWeeks=function(){
+  const toUnlock=lockedWeeksWithAvailability().list;
+  if(!toUnlock.length){ toast('No locked weeks with availability.','ok'); return; }
+  openConfirm({
+    title:'🔓 Unlock winnable weeks',
+    body:`<div>Unlock <strong>${toUnlock.length}</strong> week${toUnlock.length!==1?'s':''} that ${toUnlock.length!==1?'are':'is'} locked but still ${toUnlock.length!==1?'have':'has'} availability?</div>
+      <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.7;max-height:150px;overflow-y:auto">${toUnlock.map(w=>`<li>${w.label} <span style="color:var(--green)">(Remaining: ${w.remaining})</span></li>`).join('')}</ul>
+      <div class="cmodal-info">Users will be able to bid on these weeks again.</div>`,
+    okText:'🔓 Unlock These',
+    onConfirm:async()=>{
+      const updates={}; toUnlock.forEach(w=>updates[w.wk]=false);
+      await setDoc(locksRef,{weeks:updates},{merge:true});
+      toast('🔓 Unlocked '+toUnlock.length+' week'+(toUnlock.length!==1?'s':''),'ok');
+    }
+  });
+};
+// Smart Lock and Unlock: lock all no-availability weeks AND unlock all with-availability weeks.
+window.smartLockUnlock=function(){
+  const toLock=weeksNeedingLock(true).list;            // unlocked + no availability → lock
+  const toUnlock=lockedWeeksWithAvailability().list;   // locked + has availability → unlock
+  if(!toLock.length&&!toUnlock.length){
+    openConfirm({title:'✨ Smart Lock and Unlock',body:'<div class="cmodal-info">Everything is already correct — no weeks need locking or unlocking.</div>',okText:'OK',onConfirm:()=>{}});
+    return;
+  }
+  openConfirm({
+    title:'✨ Smart Lock and Unlock',
+    body:`<div>This will automatically fix your week locks in one step:</div>
+      <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:13px;line-height:1.8">
+        <li>🔒 <strong>Lock ${toLock.length}</strong> week${toLock.length!==1?'s':''} with <strong>no availability</strong> (full even with the allowed overage).</li>
+        <li>🔓 <strong>Unlock ${toUnlock.length}</strong> week${toUnlock.length!==1?'s':''} that <strong>still have availability</strong> (a user could still win them).</li>
+      </ul>
+      <div class="cmodal-info">Locking full weeks stops wasted bids; unlocking winnable weeks lets bidding continue where there's still room.</div>`,
+    okText:'✨ Apply',
+    onConfirm:async()=>{
+      const updates={};
+      toLock.forEach(w=>updates[w.wk]=true);
+      toUnlock.forEach(w=>updates[w.wk]=false);
+      await setDoc(locksRef,{weeks:updates},{merge:true});
+      toast('✨ Locked '+toLock.length+', unlocked '+toUnlock.length,'ok');
+    }
+  });
+};
 
 function renderOverview(){
   const ap=computeApprovals();
@@ -1539,6 +1608,8 @@ function syncControls(){
   if(pt) pt.className="tog"+(adminSettings.passcodesEnabled!==false?" on":"");
   const ep=document.getElementById("emailPromptToggle");
   if(ep) ep.className="tog"+(adminSettings.emailPromptEnabled!==false?" on":"");
+  const ut=document.getElementById("usernamePromptToggle");
+  if(ut) ut.className="tog"+(adminSettings.usernamePromptEnabled===true?" on":"");
   const pl=document.getElementById("prioLockToggle");
   if(pl) pl.className="tog"+(adminSettings.priorityLockEnabled!==false?" on":"");
   // Review threshold slider/textbox
@@ -3717,6 +3788,12 @@ window.togglePasswords=async function(){
   toast(!cur?"🔑 Passwords enabled":"🔓 Passwords disabled",!cur?"ok":"warn");
 };
 
+window.toggleUsernamePrompt=async function(){
+  const cur=adminSettings.usernamePromptEnabled===true;
+  await setDoc(adminRef,{usernamePromptEnabled:!cur},{merge:true});
+  toast(!cur?"👤 Username prompt enabled":"🔕 Username prompt disabled",!cur?"ok":"warn");
+};
+
 // ── User Management ──
 let userListData=null;
 onSnapshot(userListRef, snap=>{
@@ -3737,8 +3814,14 @@ function renderUsersCombined(){
     const fte=getUserFTE(n);
     const em=emailsData[n]||''; const skip=em==='__skip__';
     const hasPass=!!passwordsData[n];
+    const uname=usernamesData[n];
+    const unameCell=uname&&uname!==n
+      ? `<span style="font-weight:700;color:var(--t1)">${uname}</span> <span style="color:var(--t3);font-size:11px">(${n})</span>
+         <button class="btn btn-ghost" style="padding:2px 7px;font-size:11px" onclick="adminClearUsername('${n}')" title="Reset to initials">Reset</button>`
+      : `<span style="color:var(--t3);font-size:12px;font-style:italic">default (${n})</span>`;
     return `<tr>
       <td class="mono" style="white-space:nowrap"><strong>${n}</strong></td>
+      <td style="white-space:nowrap">${unameCell}</td>
       <td style="white-space:nowrap"><input type="number" id="fte_${n}" class="inp" style="width:70px" value="${fte}" step="0.1" min="0" max="1">
         <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveFte('${n}')">Save</button></td>
       <td style="white-space:nowrap"><input type="email" id="em_${n}" class="inp" style="width:190px" value="${skip?'':em}" placeholder="no email saved">${skip?' <span class="pill p-yellow">opted out</span>':''}
@@ -3751,6 +3834,18 @@ function renderUsersCombined(){
   }).join('');
 }
 window.renderUsersCombined=renderUsersCombined;
+window.adminClearUsername=function(u){
+  openConfirm({
+    title:'↺ Reset username',
+    body:`<div>Reset <strong>${u}</strong>'s username back to their initials (<strong>${u}</strong>)?</div>
+          <div class="cmodal-info">They can choose a new one again at their next login.</div>`,
+    okText:'Reset',
+    onConfirm:async()=>{
+      await updateDoc(usernamesRef,{[u]:deleteField()}).catch(async()=>{ const d={...usernamesData}; delete d[u]; await setDoc(usernamesRef,d); });
+      toast('↺ Username reset for '+u,'ok');
+    }
+  });
+};
 
 function renderUserPanel(){
   // The old chip grid was removed — the single Current Users table (fteBody,
