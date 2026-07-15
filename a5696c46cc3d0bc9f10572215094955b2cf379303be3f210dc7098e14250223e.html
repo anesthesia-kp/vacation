@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 44;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 45;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -870,10 +870,11 @@ document.getElementById("load").classList.add("hidden");
 onSnapshot(scheduleRef, snap=>{ scheduleData=normalizeUserWkMap(snap.exists()?snap.data():{}); refreshAll(); });
 onSnapshot(locksRef,    snap=>{ locksData=snap.exists()?snap.data():{globalLock:false,weeks:{}}; if(!locksData.weeks)locksData.weeks={}; refreshAll(); });
 onSnapshot(metaRef,     snap=>{ const d=snap.exists()?snap.data():{};  metaData=d; refreshAll(); });
-onSnapshot(changesRef,  snap=>{ 
-  changesLog=snap.exists()?(snap.data().log||[]):[];  
-  const p=document.getElementById("panel-changelog"); 
+onSnapshot(changesRef,  snap=>{
+  changesLog=snap.exists()?(snap.data().log||[]):[];
+  const p=document.getElementById("panel-changelog");
   if(p&&p.classList.contains("on")) renderChangelog();
+  if(typeof renderInsights==='function') renderInsights(); // keep Popcornometer in sync
 });
 onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{}; syncControls(); refreshAll(); });
 onSnapshot(timerRef,    snap=>{ timerData=snap.exists()?snap.data():{enabled:false,lastChange:null}; syncTimer(); startTick(); refreshAll(); });
@@ -1376,12 +1377,17 @@ function renderLockSummary(){
 window.renderLockSummary=renderLockSummary;
 
 // ── Auction Insights — participation, bids, and the Popcornometer ──
-// Bid activity in the last 24h: bids added/edited (bidTimes stamps, which the
-// simulator also writes) plus bids removed (change-log entries).
+// Bid activity in the last 24h — matches the user-facing "changes in last 24h"
+// chip (change-log events) plus simulator bids, so the two numbers agree.
 function popcornCount24h(){
-  const cutoff=Date.now()-86400000; let n=0;
-  for(const u in bidTimesData){ const m=bidTimesData[u]||{}; for(const wk in m){ const t=m[wk]; if(typeof t==='number'&&t>=cutoff) n++; } }
-  (changesLog||[]).forEach(e=>{ if(e&&typeof e.ts==='number'&&e.ts>=cutoff&&e.action==='removed') n++; });
+  const cutoff=Date.now()-86400000;
+  // Same source as the "changes in last 24h" chip: every logged event (adds,
+  // edits, removals, admin actions) in the window...
+  const log=(changesLog||[]).filter(e=>e&&typeof e.ts==='number'&&e.ts>=cutoff);
+  let n=log.length;
+  // ...plus simulator bids, which stamp bidTimes but never write the change log.
+  const logged=new Set(log.map(e=>(e.user||'')+'|'+(e.weekKey||'')));
+  for(const u in bidTimesData){ const m=bidTimesData[u]||{}; for(const wk in m){ const t=m[wk]; if(typeof t==='number'&&t>=cutoff&&!logged.has(u+'|'+wk)) n++; } }
   return n;
 }
 // Thresholds: 0 quiet · 1-9 a few kernels · 10-29 steady · 30-59 lively · 60+ frenzy.

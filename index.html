@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 38;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 39;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1579,13 +1579,18 @@ window.openPhaseHistory=function(){
 };
 
 // ── Popcornometer — same meter as the admin dashboard ──
-// Bid activity in the last 24h: bids added/edited (bidTimes stamps, incl.
-// simulator bids) plus bids removed (change-log entries). More activity =
-// more popcorn popping in the little saucepan.
+// Bid activity in the last 24h — matches the "changes in last 24h" chip
+// (change-log events) plus simulator bids, so the two numbers agree. More
+// activity = more popcorn popping in the little saucepan.
 function popcornCount24h(){
-  const cutoff=Date.now()-86400000; let n=0;
-  for(const u in bidTimesData){ const m=bidTimesData[u]||{}; for(const wk in m){ const t=m[wk]; if(typeof t==='number'&&t>=cutoff) n++; } }
-  (changesData.log||[]).forEach(e=>{ if(e&&typeof e.ts==='number'&&e.ts>=cutoff&&e.action==='removed') n++; });
+  const cutoff=Date.now()-86400000;
+  // Same source as the "changes in last 24h" chip: every logged event (adds,
+  // edits, removals, admin actions) in the window...
+  const log=(changesData.log||[]).filter(e=>e&&typeof e.ts==='number'&&e.ts>=cutoff);
+  let n=log.length;
+  // ...plus simulator bids, which stamp bidTimes but never write the change log.
+  const logged=new Set(log.map(e=>(e.user||'')+'|'+(e.weekKey||'')));
+  for(const u in bidTimesData){ const m=bidTimesData[u]||{}; for(const wk in m){ const t=m[wk]; if(typeof t==='number'&&t>=cutoff&&!logged.has(u+'|'+wk)) n++; } }
   return n;
 }
 function popcornRate(n){ return n<=0?0:Math.min(7,Math.max(0.5,n/10)); } // pops/sec — same thresholds as admin
