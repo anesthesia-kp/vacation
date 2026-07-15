@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 54;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 56;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -216,11 +216,14 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
 .dr-card{background:var(--card);border:1px solid var(--b1);border-radius:10px;padding:14px;margin-bottom:12px}
 .dr-card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px}
 .dr-week{font-size:14px;font-weight:700;color:var(--t1)}
-.dr-row{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px dashed var(--b1);flex-wrap:wrap}
+/* Row data (user · bid/FTE · projection · actions) grouped within ~2/3 of the
+   card width so the eye doesn't have to jump across blank space; the card's
+   scroll bar stays at the far right edge. */
+.dr-row{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px dashed var(--b1);flex-wrap:wrap;max-width:68%}
 .dr-row:first-of-type{border-top:none}
 .dr-user{font-weight:700;color:var(--t1);min-width:48px}
 .dr-bid{font-family:var(--mono);color:var(--t2);font-size:11px}
-.dr-actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+.dr-actions{margin-left:14px;display:flex;gap:6px;flex-wrap:wrap}
 
 /* High-contrast pass + dashboard big cards */
 .btn-primary{background:var(--blue);color:#fff;border:1px solid var(--blue)}
@@ -257,7 +260,7 @@ thead th{color:var(--t2)}
   [style*="grid-template-columns:repeat(auto-fit,minmax(360px"]{grid-template-columns:1fr!important}
   /* tables scroll horizontally instead of overflowing */
   table{min-width:520px}
-  .dr-row{flex-wrap:wrap}
+  .dr-row{flex-wrap:wrap;max-width:100%}
   /* header action rows wrap tightly */
   .btn{padding:8px 12px}
 }
@@ -2457,10 +2460,17 @@ window.beginNextPhase=function(){
   const cur=Number(phasesData.currentPhase||1);
   const next=cur+1;
   if(next>4){toast('Phase 4 is the final phase.','warn');return;}
+  // Users only learn their Phase N results from the results e-mails — and once
+  // Phase N+1 begins, the results also become visible on their site. Remind the
+  // admin if the e-mails were never sent for the phase being left behind.
+  const resultsNotSent=!!phasesData.completedPhases?.[cur]&&!phasesData.resultsSent?.[cur];
+  const resultsWarn=resultsNotSent
+    ? `<div class="cmodal-warn" style="margin-top:10px"><strong>📮 Phase ${cur} results e-mails have NOT been sent.</strong> Users have not been notified of their approved/denied results, but the results will become visible on the user site the moment Phase ${next} begins. Consider sending them first: Dashboard → Messaging Users → <strong>Send Phase Results</strong>.</div>`
+    : '';
   openConfirm({
     title:'▶ Begin Phase '+next,
     body:`<div>Begin Phase <strong>${next}</strong>?</div>
-          <div class="cmodal-info" style="margin-top:10px">Users will see "Phase ${next}" on the bidding board and can place new bids. Previous approvals remain locked in.</div>`,
+          <div class="cmodal-info" style="margin-top:10px">Users will see "Phase ${next}" on the bidding board and can place new bids. Previous approvals remain locked in.</div>${resultsWarn}`,
     okText:'Continue',
     onConfirm:()=>_beginPhaseLockDecision(next)
   });
@@ -2597,6 +2607,9 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
         adminSendEmail(u,`Vacation Auction — Phase ${cur} Results`,bodyText);
         sent++;
       }
+      // Record that results were sent for this phase — Begin Phase checks this
+      // and reminds the admin if the e-mails were never sent.
+      await setDoc(phasesRef,{resultsSent:{...(phasesData.resultsSent||{}),[cur]:Date.now()}},{merge:true}).catch(()=>{});
       toast(`📮 Phase ${cur} results sent: ${sent}${skipped?` (${skipped} skipped)`:''}`,'ok');
     }
   });
@@ -2793,8 +2806,10 @@ const REPORT_CSS=`
   .wk{margin-bottom:16px;break-inside:avoid}
   .wk-head{font-weight:700;font-size:13px;background:#0f2744;color:#fff;padding:5px 10px;border-radius:6px 6px 0 0;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
   .wk-head .fte{margin-left:12px;font-weight:600;font-size:11px;background:rgba(255,255,255,.14);padding:2px 9px;border-radius:10px}
-  table{border-collapse:collapse;width:100%;font-size:12px}
-  th,td{border:1px solid #e2e8f0;padding:5px 9px;text-align:left}
+  /* Data clusters to the LEFT — columns only as wide as their content (plus a
+     little breathing room) instead of being stretched across the full page. */
+  table{border-collapse:collapse;width:auto;min-width:50%;font-size:12px}
+  th,td{border:1px solid #e2e8f0;padding:6px 26px 6px 10px;text-align:left;white-space:nowrap}
   th{background:#f8fafc;font-weight:600}
   tbody tr:nth-child(even){background:#fafafa}
   .chip{color:#fff;font-weight:700;font-size:10px;padding:2px 8px;border-radius:10px;white-space:nowrap}
@@ -3139,7 +3154,13 @@ window.renderAppDenials=function(){
       ${wkHtml}
       <div class="dr-user">${phaseBadge}${e.user}</div>
       <div class="dr-bid">${lbl} · FTE ${getUserFTE(e.user)}</div>
-      <div style="display:flex;align-items:center;gap:6px">${outcomeChip(e.outcome)}${e.proj?projPill(e.proj):''}</div>
+      <div style="display:flex;align-items:center;gap:6px">${
+        // Undecided bids: the dashed projection pill alone (the solid chip would
+        // just repeat it). The solid ✓ APPROVED / ✕ DENIED chip is ADDED once
+        // admin decides. Historical/no-proj rows fall back to the outcome chip.
+        (e.approved||e.denied)?`${e.proj?projPill(e.proj):''}${outcomeChip(e.outcome)}`
+        :(e.proj?projPill(e.proj):outcomeChip(e.outcome))
+      }</div>
       <div class="dr-actions">${actions}</div>
     </div>`;
   };
@@ -4634,15 +4655,18 @@ window.renderDrawsReviews=function(){
   const renderRow=(e,showWeekLabel)=>{
     const p=scheduleData[e.user]?.[e.wk]; const pl=Array.isArray(p)?p.join(','):p;
     const lbl=p==='NP'?'NP':pl;
+    // Same convention as the Approvals/Denials section: projections always wear
+    // the dashed pill; the solid ✓ APPROVED / ✕ DENIED chip is ADDED only once
+    // admin decides. DRAW / UNDER REVIEW are projections, so they're dashed.
     let tag, actions;
     if(e.type==='draw'){
-      tag='<span class="pill p-yellow">DRAW</span>';
+      tag=projPill('draw');
     } else if(e.type==='review'){
-      tag='<span class="pill" style="background:rgba(168,85,247,.15);color:#5b4fb5">UNDER REVIEW</span>';
+      tag=projPill('review');
     } else if(e.type==='denied'){
-      tag='<span class="pill p-red">✕ DENIED</span>';
+      tag=`${projPill(natOutcome(nat,e.wk,e.user))}<span class="pill p-red">✕ DENIED</span>`;
     } else {
-      tag='<span class="pill p-green">✓ APPROVED</span>';
+      tag=`${projPill(natOutcome(nat,e.wk,e.user))}<span class="pill p-green">✓ APPROVED</span>`;
     }
     if(e.type==='approved'){
       actions=`<button class="btn" style="padding:3px 9px;font-size:11px;background:var(--yellow);color:#000" onclick="confirmRevokeApproval('${e.user}','${e.wk}')">↶ Revoke</button>
@@ -4657,15 +4681,11 @@ window.renderDrawsReviews=function(){
     }
     const m=wkDate(e.wk);
     const weekCol=showWeekLabel?`<div style="font-family:var(--mono);min-width:90px">${wLabel(m)}</div>`:'';
-    // Show the natural projection (pre-decision) for approved/denied rows so admin
-    // can see what the user was before the approve/deny. Draw/review tags already
-    // show the pre-decision state, so no extra pill there.
-    const projHtml=(e.type==='approved'||e.type==='denied')?projPill(natOutcome(nat,e.wk,e.user)):'';
     return `<div class="dr-row">
       ${weekCol}
       <div class="dr-user">${e.user}</div>
       <div class="dr-bid">${lbl} · FTE ${getUserFTE(e.user)}</div>
-      <div style="display:flex;align-items:center;gap:6px">${tag}${projHtml}</div>
+      <div style="display:flex;align-items:center;gap:6px">${tag}</div>
       <div class="dr-actions">${actions}</div>
     </div>`;
   };

@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 48;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 49;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -841,13 +841,15 @@ function computeApprovals(src){
     const priorWinners=getPriorPhaseWinners(wk);
     const priorFte=getPriorPhaseFteWon(wk);
 
-    // Current-phase bidders: only visible (current phase, not denied) bids, and
-    // never any user who already has a locked-in prior-phase win for this week.
+    // Current-phase bidders. PRIVACY RULE: the user site must NOT reflect any
+    // live admin decision (approval OR denial) for the current phase — users
+    // see pure projections until the phase closes and the next one begins.
+    // Denied bids therefore still compete here, and admin approvals are never
+    // merged in below. Prior-phase results (completed snapshots) stay visible.
     const reqs=[];
     for(const u in src){
       if(priorWinners.has(u)) continue;
       const p=src[u]?.[wk]; if(p===undefined) continue;
-      if(isDeniedBid(u,wk)) continue;
       // Do not filter by phase here — all live bids compete. Prior-phase wins are
       // already locked in via priorWinners. Phase-based display filtering is done
       // separately by the view layer (calendar cells, My Bids list).
@@ -894,21 +896,10 @@ function computeApprovals(src){
 
     for(const u of draws) reviews.delete(u);
 
-    const approvedHere=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
-    approvedHere.forEach(u=>{
-      if(!reqs.some(r=>r.user===u)) return;
-      if(!winners.has(u)){
-        draws.delete(u); reviews.delete(u);
-        winners.add(u);
-        fteWon+=getUserFTE(u);
-      }
-    });
-
-    // NOTE: We intentionally do NOT auto-collapse a lone remaining draw into a
-    // review or a loss. When one member of a draw is approved by the admin, the
-    // remaining participant(s) stay a DRAW (pending) until the admin explicitly
-    // approves or denies them — a draw participant is never auto-resolved. This
-    // must match the admin site's computeApprovals exactly.
+    // NOTE: live admin approvals are intentionally NOT merged in here (they were
+    // before 15 Jul 2026). Users must not see any admin decision until the phase
+    // closes and the next phase begins — results arrive via the "Send Phase
+    // Results" e-mails and then appear from the completed-phase snapshot.
 
     const fteDraws=[...draws].reduce((s,u)=>s+getUserFTE(u),0);
     const fteReviews=[...reviews].reduce((s,u)=>s+getUserFTE(u),0);
@@ -923,8 +914,8 @@ function computeApprovals(src){
 
 function getOutcome(wk,user,ap){
   const a=ap?.[wk];
-  // Admin explicitly approved this bid → show APPROVED (confirmed), not just projected WIN.
-  if(Array.isArray(approvalsData?.[wk])&&approvalsData[wk].includes(user)&&isCurrentPhaseBid(user,wk)) return 'approved';
+  // PRIVACY RULE: never surface a live admin approval as APPROVED here — the
+  // current phase shows projections only, until results are sent.
   // If the algorithm hasn't produced a result for this week (e.g. ap is empty because
   // computeApprovals ran before data loaded), we can't distinguish outcomes. Treat as
   // 'lose' for now — but any UI element that renders "everyone lost" during initial
@@ -1069,10 +1060,12 @@ onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; _use
 // Read-only: same rule as the user list — the user site never seeds/overwrites
 // admin-owned docs on an empty read (that pattern resurrected deleted data).
 onSnapshot(fteRef,      snap=>{ if(snap.exists()){ fteData=snap.data(); scheduleRender(); } });
-onSnapshot(approvalsRef,snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()?snap.data():{}); scheduleRender(); });
+// (approvals listener removed 15 Jul 2026 — same privacy rule as denials: the
+// user site must not react to live admin decisions during the current phase.)
 onSnapshot(phasesRef,  snap=>{ phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{}}; renderPhaseLabel(); scheduleRender(); if(typeof updateSigninPhase==='function') updateSigninPhase(); });
 onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); scheduleRender(); });
-onSnapshot(deniedRef,  snap=>{ deniedData=normalizeWkArrayMap(snap.exists()?snap.data():{}); scheduleRender(); });
+// (denials listener removed 15 Jul 2026 — the user site must not react to live
+// admin decisions; denial outcomes reach users via completed-phase snapshots.)
 onSnapshot(slotsRef,   snap=>{ slotsData=snap.exists()?snap.data():{}; applySlotOverrides(); scheduleRender(); });
 onSnapshot(mailQueueRef,snap=>{ mailQueueData=snap.exists()?snap.data():{}; scheduleMailQueueRelay(); });
 
@@ -1504,8 +1497,9 @@ window.removeSelection=removeSelection;
 // the completedPhases snapshot's `schedule`, not via the live bidPhaseData.
 function getUserBidPhase(u,wk){ const p=bidPhaseData[u]?.[wk]; return p===undefined?Number(phasesData.currentPhase||1):Number(p); }
 function isCurrentPhaseBid(u,wk){ return getUserBidPhase(u,wk)===Number(phasesData.currentPhase||1); }
-function isDeniedBid(u,wk){ const arr=deniedData[wk]; return Array.isArray(arr)&&arr.includes(u); }
-function isVisibleBid(u,wk){ return data[u]?.[wk]!==undefined && isCurrentPhaseBid(u,wk) && !isDeniedBid(u,wk); }
+// PRIVACY RULE: denial does NOT hide a bid — users must not learn of admin
+// decisions until the next phase begins, so denied bids look like live bids.
+function isVisibleBid(u,wk){ return data[u]?.[wk]!==undefined && isCurrentPhaseBid(u,wk); }
 function myActiveWeeks(user){ return Object.keys(data[user]||{}).filter(wk=>isVisibleBid(user,wk)); }
 // Current-phase bids INCLUDING admin-denied ones. A denied bid was still PLACED —
 // it counts against the per-phase limit and its number stays consumed until the
@@ -1552,7 +1546,10 @@ function renderPhaseLabel(){
 window.openPhaseHistory=function(){
   const user=getCurrentUser(); if(!user) return;
   const completed=phasesData.completedPhases||{};
-  const keys=Object.keys(completed).sort((a,b)=>Number(a)-Number(b));
+  // PRIVACY RULE: a phase that is completed but whose successor has NOT begun
+  // is still hidden — results only become visible once the next phase starts.
+  const curPh=Number(phasesData.currentPhase||1);
+  const keys=Object.keys(completed).filter(k=>Number(k)<curPh).sort((a,b)=>Number(a)-Number(b));
   const modal=document.getElementById('phaseHistoryModal');
   const content=document.getElementById('phaseHistoryContent');
   if(!keys.length){
@@ -1773,16 +1770,16 @@ function renderSelections(user,ap){
   if(!Object.keys(uw).length){selectionsEl.innerHTML='<div class="empty-msg">No selections yet — click a week below.</div>';return;}
   const locked=wk=>locksData.globalLock||locksData.weeks?.[wk];
   selectionsEl.innerHTML=Object.entries(uw).sort((a,b)=>new Date(a[0])-new Date(b[0])).map(([wk,p])=>{
-    const denied=isDeniedBid(user,wk);
-    const o=denied?'denied':getOutcome(wk,user,ap);
-    const label=denied?'DENIED':outcomeText(o);
+    // PRIVACY RULE: no DENIED (or APPROVED) shown mid-phase — projections only.
+    const o=getOutcome(wk,user,ap);
+    const label=outcomeText(o);
     const meta=weekMeta[wk];
     // Format: "Week 12 · Mar 22" — week number + short date of that Monday
     const wkLabel=`Week ${meta?.weekNum||''} · ${formatShort(wk)}`;
     return `<div class="selection-item" onclick="scrollToWeek('${wk}')" title="Show this week on the bidding board" style="cursor:pointer">
       <span class="selection-date">${wkLabel}</span>
       <span style="color:#48607a;font-size:.72rem">${bidLbl(p)}</span>
-      <span class="selection-outcome outcome-${o==='denied'?'lose':o}"${denied?' style="background:rgba(239,68,68,.25);color:#b91c1c"':''}>${label}</span>
+      <span class="selection-outcome outcome-${o}">${label}</span>
 
     </div>`;
   }).join('');
