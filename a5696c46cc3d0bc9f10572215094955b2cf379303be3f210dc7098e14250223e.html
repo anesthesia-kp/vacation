@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 49;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 50;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -2614,12 +2614,64 @@ function bwOutcomeLabel(o){ return o==='losing'?'LOSING':o==='lose'?'LOSING':o.t
 // Human label for a week's demand type — used in Summaries & Reports.
 const REPORT_SPECIAL={"2027-02-14":"Ski Week","2027-03-28":"Spring Break","2027-04-04":"Spring Break","2027-11-21":"Thanksgiving","2027-12-19":"Christmas","2027-12-26":"New Year's"};
 function weekTypeLabel(wk,d){
+  // Holiday name only — no generic "High demand" prefix in reports/summaries.
   if(typeof HIGH_DEMAND_WEEKS!=='undefined'&&HIGH_DEMAND_WEEKS.has(wk)){
-    return 'High demand'+(REPORT_SPECIAL[wk]?' — '+REPORT_SPECIAL[wk]:'');
+    return REPORT_SPECIAL[wk]||'';
   }
   const isSummer=d>=new Date('2027-05-30T00:00:00')&&d<=new Date('2027-08-22T00:00:00');
   if(isSummer) return 'Summer';
   return '';
+}
+// Recompute the NATURAL projection for a completed phase from its snapshot —
+// fallback for phases completed before projections were stored with the
+// snapshot. Mirrors computeApprovals(true): every bid in the snapshot schedule
+// competes, prior-phase (< phN) approved winners consume FTE first, and the
+// same draw/review threshold rules apply.
+function snapshotProjection(phN){
+  const cp=phasesData.completedPhases||{};
+  const sched=cp[phN]?.schedule||{};
+  const T=getReviewThreshold();
+  const out={};
+  mondays.forEach(d=>{
+    const wk=dateKey(d);
+    const cap=getSlots(wk);
+    const priorWinners=new Set();
+    for(const n of Object.keys(cp)){
+      if(Number(n)>=Number(phN)) continue;
+      const arr=cp[n]?.approvals?.[wk];
+      if(Array.isArray(arr)) arr.forEach(u=>priorWinners.add(u));
+    }
+    let fteWon=0; priorWinners.forEach(u=>{fteWon+=getUserFTE(u);});
+    const reqs=[];
+    for(const u in sched){
+      if(priorWinners.has(u)) continue;
+      const p=sched[u]?.[wk]; if(p===undefined) continue;
+      reqs.push({user:u,score:pScore(p),fte:getUserFTE(u)});
+    }
+    if(!reqs.length) return;
+    reqs.sort((a,b)=>a.score-b.score);
+    const winners=new Set(),draws=new Set(),reviews=new Set();
+    const groups=[]; let i=0;
+    while(i<reqs.length){ const s=reqs[i].score; const g=[]; while(i<reqs.length&&reqs[i].score===s){g.push(reqs[i]);i++;} groups.push(g); }
+    let settled=false;
+    for(const group of groups){
+      if(settled) continue;
+      const gf=group.reduce((s,r)=>s+r.fte,0);
+      if(fteWon+gf<=cap){ group.forEach(r=>winners.add(r.user)); fteWon+=gf; }
+      else {
+        settled=true;
+        if(group.length>1){
+          const anyFits=group.some(r=>Math.round(((fteWon+r.fte)-cap)*10)/10<=T);
+          if(anyFits) group.forEach(r=>draws.add(r.user));
+        } else {
+          const overage=Math.round(((fteWon+group[0].fte)-cap)*10)/10;
+          if(overage>0&&overage<=T) reviews.add(group[0].user);
+        }
+      }
+    }
+    out[wk]={win:winners,draw:draws,review:reviews};
+  });
+  return out;
 }
 // FINAL FTE status for a week: counts ONLY actual admin decisions — approvals
 // stored in EVERY completed-phase snapshot plus live approvals of the current
@@ -2655,6 +2707,7 @@ function bidsByWeekModel(scope){
   const cur=Number(phasesData.currentPhase||1);
   const ap=computeApprovals();
   const natAp=computeApprovals(true); // pre-admin projection for current-phase bids
+  const snapProjCache={};             // recomputed projections for legacy snapshots
   const mm=(typeof scope==='string')&&scope.match(/^ph(\d+)$/);
   const lockedPhase=mm?Number(mm[1]):null;
   const groups=[];
@@ -2675,9 +2728,16 @@ function bidsByWeekModel(scope){
         const phAp=Array.isArray(phSnap.approvals?.[wk])?phSnap.approvals[wk]:[];
         const phDen=Array.isArray(phSnap.denials?.[wk])?phSnap.denials[wk]:[];
         outcome=phAp.includes(u)?'approved':(phDen.includes(u)?'denied':'losing');
-        // Projection as stored when that phase completed (null for old snapshots).
+        // Projection as stored when that phase completed; for older snapshots
+        // without stored projections, recompute it from the snapshot itself.
         const pr=phSnap.projections?.[wk];
-        projected=pr?(pr.win?.includes(u)?'winning':pr.draw?.includes(u)?'draw':pr.review?.includes(u)?'review':'losing'):null;
+        if(pr){
+          projected=pr.win?.includes(u)?'winning':pr.draw?.includes(u)?'draw':pr.review?.includes(u)?'review':'losing';
+        } else {
+          if(!snapProjCache[bp]) snapProjCache[bp]=snapshotProjection(bp);
+          const sp=snapProjCache[bp][wk];
+          projected=sp?(sp.win.has(u)?'winning':sp.draw.has(u)?'draw':sp.review.has(u)?'review':'losing'):'losing';
+        }
       } else {
         if(approvedHere.includes(u)) outcome='approved';
         else if(deniedHere.includes(u)) outcome='denied';
@@ -2714,7 +2774,7 @@ const REPORT_CSS=`
   .stamp{color:#587690;font-size:12px;margin-bottom:16px}
   .wk{margin-bottom:16px;break-inside:avoid}
   .wk-head{font-weight:700;font-size:13px;background:#0f2744;color:#fff;padding:5px 10px;border-radius:6px 6px 0 0;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-  .wk-head .fte{margin-left:auto;font-weight:600;font-size:11px;background:rgba(255,255,255,.14);padding:2px 9px;border-radius:10px}
+  .wk-head .fte{margin-left:12px;font-weight:600;font-size:11px;background:rgba(255,255,255,.14);padding:2px 9px;border-radius:10px}
   table{border-collapse:collapse;width:100%;font-size:12px}
   th,td{border:1px solid #e2e8f0;padding:5px 9px;text-align:left}
   th{background:#f8fafc;font-weight:600}
@@ -2731,7 +2791,7 @@ function projChipHtml(projected){
   return `<span class="proj" style="color:${c};border-color:${c}">${PROJ_LABEL[projected]||projected.toUpperCase()}</span>`;
 }
 function wkHeadHtml(g){
-  const typeTag=g.type?` <span class="typetag" style="background:${/High demand/.test(g.type)?'#f59e0b':'#38bdf8'}">${g.type}</span>`:'';
+  const typeTag=g.type?` <span class="typetag" style="background:${g.type==='Summer'?'#38bdf8':'#f59e0b'}">${g.type}</span>`:'';
   return `<div class="wk-head">Week ${g.wn} · ${g.date}${typeTag}<span class="fte">FTE approved ${g.fte.approved} · available ${g.fte.available} of ${g.fte.cap}</span></div>`;
 }
 function openReportTab(title,subtitle,bodyHtml,autoPrint){
@@ -2769,7 +2829,6 @@ window.exportPhaseResults=function(format,scopeOverride){
       const S_TITLE={font:{bold:true,sz:15,color:{rgb:'0F172A'}}};
       const S_STAMP={font:{sz:10,color:{rgb:'587690'}}};
       const S_WKHEAD={fill:{fgColor:{rgb:'0F2744'}},font:{bold:true,sz:11,color:{rgb:'FFFFFF'}},alignment:{vertical:'center'}};
-      const S_WKFTE={fill:{fgColor:{rgb:'1B3A5C'}},font:{bold:true,sz:10,color:{rgb:'FFFFFF'}},alignment:{horizontal:'right',vertical:'center'}};
       const S_COLHEAD={fill:{fgColor:{rgb:'F1F5F9'}},font:{bold:true,sz:10,color:{rgb:'334155'}},border:BORDER};
       const S_CELL={font:{sz:10,color:{rgb:'0F172A'}},border:BORDER};
       const S_USER={font:{bold:true,sz:10,color:{rgb:'0F172A'}},border:BORDER};
@@ -2788,11 +2847,11 @@ window.exportPhaseResults=function(format,scopeOverride){
         const r=aoa.length;
         const headTxt=`Week ${g.wn} · ${g.date}${g.type?' — '+g.type:''}`;
         const fteTxt=`FTE approved ${g.fte.approved} · available ${g.fte.available} of ${g.fte.cap}`;
-        // Week header: title spans all but the last column; FTE sits in the last.
-        const headCells=Array(nCols).fill(''); headCells[0]=headTxt; headCells[nCols-1]=fteTxt;
-        const headStyles=Array(nCols).fill(S_WKHEAD); headStyles[nCols-1]=S_WKFTE;
+        // Week header: one merged cell — FTE status sits right next to the week/date.
+        const headCells=Array(nCols).fill(''); headCells[0]=`${headTxt}   ·   ${fteTxt}`;
+        const headStyles=Array(nCols).fill(S_WKHEAD);
         push(headCells,headStyles,18);
-        if(nCols>2) merges.push({s:{r,c:0},e:{r,c:nCols-2}});
+        merges.push({s:{r,c:0},e:{r,c:nCols-1}});
         push(cols,cols.map(()=>S_COLHEAD));
         g.bids.forEach(b=>{
           const row=showPhaseCol?[b.user,String(b.bid),'P'+b.phase,projTxt(b.projected),bwOutcomeLabel(b.outcome)]
