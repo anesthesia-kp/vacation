@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 50;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 51;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1500,32 +1500,38 @@ window.openSummaryTab=function(kind){
       const rows=(byUser[u]||[]).sort((a,b)=>a.g.wk.localeCompare(b.g.wk));
       const inner=rows.length
         ? `<table><thead><tr><th>Week</th><th>Date</th><th>Type</th><th>Bid</th><th>Phase</th><th>Projected</th><th>Result</th></tr></thead><tbody>${
-            rows.map(({g,b})=>`<tr><td><strong>W${g.wn}</strong></td><td>${g.date}</td><td>${g.type||''}</td><td>${b.bid}</td><td>P${b.phase}</td><td>${projChipHtml(b.projected)}</td><td>${resultChipHtml(b.outcome)}</td></tr>`).join('')
+            rows.map(({g,b})=>`<tr><td><strong>W${g.wn}</strong></td><td>${g.date}</td><td>${g.type||''}</td><td>${b.bid}</td><td>P${b.phase}</td><td>${projChipHtml(b.projected)}</td><td>${resultCellHtml(b)}</td></tr>`).join('')
           }</tbody></table>`
         : `<div style="border:1px solid #e2e8f0;border-top:none;padding:8px 10px;font-size:12px;color:#94a3b8">No bids for this selection.</div>`;
       const won=rows.filter(({b})=>b.outcome==='approved').length;
       return `<div class="wk"><div class="wk-head">${u}<span class="fte">FTE ${getUserFTE(u)} · ${rows.length} bid${rows.length!==1?'s':''} · ${won} approved</span></div>${inner}</div>`;
     }).join('');
   } else {
-    // One section per week with color-coded outcome groups + final FTE status.
-    const catChip=(label,color,users)=>users.length?`<tr><td style="width:130px"><span class="chip" style="background:${color}">${label}</span></td><td>${users.map(u=>`<strong>${u}</strong> <span style="color:#587690;font-size:11px">(${getUserFTE(u)})</span>`).join(', ')}</td></tr>`:'';
+    // One section per week + final FTE status. Solid chips = real admin
+    // decisions; outlined chips = projected status (no decision yet).
+    const userList=users=>users.map(u=>`<strong>${u}</strong> <span style="color:#587690;font-size:11px">(${getUserFTE(u)})</span>`).join(', ');
+    const catRow=(chip,users)=>users.length?`<tr><td style="width:150px">${chip}</td><td>${userList(users)}</td></tr>`:'';
     body=groups.map(g=>{
       const cats={approved:[],winning:[],draw:[],review:[],losing:[],denied:[]};
-      g.bids.forEach(b=>{ (cats[b.outcome]=cats[b.outcome]||[]).push(b.user); });
+      g.bids.forEach(b=>{
+        // Undecided bids are grouped by their PROJECTED status; decided by result.
+        const key=b.decided?b.outcome:(b.projected||'losing');
+        (cats[key]=cats[key]||[]).push(b.user);
+      });
       const rows=[
-        catChip('APPROVED',bwOutcomeColor('approved'),cats.approved),
-        catChip('WINNING',bwOutcomeColor('winning'),cats.winning),
-        catChip('DRAW',bwOutcomeColor('draw'),cats.draw),
-        catChip('REVIEW',bwOutcomeColor('review'),cats.review),
-        catChip('LOSING',bwOutcomeColor('losing'),cats.losing),
-        catChip('DENIED',bwOutcomeColor('denied'),cats.denied)
+        catRow(resultChipHtml('approved'),cats.approved),
+        catRow(resultChipHtml('denied'),cats.denied),
+        catRow(projChipHtml('winning'),cats.winning),
+        catRow(projChipHtml('draw'),cats.draw),
+        catRow(projChipHtml('review'),cats.review),
+        catRow(projChipHtml('losing'),cats.losing)
       ].join('');
       return `<div class="wk">${wkHeadHtml(g)}<table><tbody>${rows||'<tr><td style="color:#94a3b8;font-size:12px">No bids.</td></tr>'}</tbody></table></div>`;
     }).join('')||'<p>No bids for this selection.</p>';
   }
   const title=isUsers?'User Summary':'Weekly Summary';
   const ok=openReportTab(`Vacation Auction — ${title}`,
-    `${scopeLabel} · Snapshot ${stamp}${isUsers?' · Projected = outcome before admin approval/denial':' · FTE figures count admin-approved bids only (all completed phases)'}`,
+    `${scopeLabel} · Snapshot ${stamp}${isUsers?' · Projected = outcome before admin approval/denial · Result — = awaiting admin decision':' · FTE figures count admin-approved bids only (all completed phases) · Solid chip = admin decision, outlined = projected'}`,
     body,false);
   if(ok) toast('👁 '+title+' opened in a new tab','ok');
 };
@@ -2747,7 +2753,12 @@ function bidsByWeekModel(scope){
         else outcome='losing';
         projected=natAp[wk]?.winners?.has(u)?'winning':natAp[wk]?.draws?.has(u)?'draw':natAp[wk]?.reviews?.has(u)?'review':'losing';
       }
-      bids.push({user:u,bid:bidLblAdmin(p),phase:bp,outcome,projected,score:pScore(p)});
+      // A bid only has a REAL result once admin has decided (approved/denied) —
+      // or once its phase completed (every bid is decided before completion).
+      // Undecided current-phase bids show a dash in the Result column; their
+      // status lives in the Projected column instead.
+      const decided=bp<cur||outcome==='approved'||outcome==='denied';
+      bids.push({user:u,bid:bidLblAdmin(p),phase:bp,outcome,projected,decided,score:pScore(p)});
     }
     if(!bids.length) return;
     bids.sort((a,b)=>bwOutcomeRank(a.outcome)-bwOutcomeRank(b.outcome)||a.score-b.score||a.user.localeCompare(b.user));
@@ -2785,6 +2796,8 @@ const REPORT_CSS=`
   @media print { body { margin: 12mm } }`;
 // Result chip (solid) and projected chip (outlined) — same colors everywhere.
 function resultChipHtml(outcome){ return `<span class="chip" style="background:${bwOutcomeColor(outcome)}">${bwOutcomeLabel(outcome)}</span>`; }
+// Result cell: real results only. Undecided bids get a dash placeholder.
+function resultCellHtml(b){ return b.decided?resultChipHtml(b.outcome):'<span style="color:#94a3b8;font-size:10px" title="Awaiting admin decision">—</span>'; }
 function projChipHtml(projected){
   if(!projected) return '<span style="color:#94a3b8;font-size:10px">—</span>';
   const c=bwOutcomeColor(projected);
@@ -2833,6 +2846,7 @@ window.exportPhaseResults=function(format,scopeOverride){
       const S_CELL={font:{sz:10,color:{rgb:'0F172A'}},border:BORDER};
       const S_USER={font:{bold:true,sz:10,color:{rgb:'0F172A'}},border:BORDER};
       const resultStyle=o=>({fill:{fgColor:{rgb:bwOutcomeColor(o).replace('#','').toUpperCase()}},font:{bold:true,sz:10,color:{rgb:'FFFFFF'}},alignment:{horizontal:'center'},border:BORDER});
+      const S_DASH={font:{sz:10,color:{rgb:'94A3B8'}},alignment:{horizontal:'center'},border:BORDER};
       const projStyle=p=>p?{font:{bold:true,sz:10,color:{rgb:bwOutcomeColor(p).replace('#','').toUpperCase()}},alignment:{horizontal:'center'},border:BORDER}:{font:{sz:10,color:{rgb:'94A3B8'}},alignment:{horizontal:'center'},border:BORDER};
       const cols=showPhaseCol?['User','Bid','Phase','Projected','Result']:['User','Bid','Projected','Result'];
       const nCols=cols.length;
@@ -2854,10 +2868,12 @@ window.exportPhaseResults=function(format,scopeOverride){
         merges.push({s:{r,c:0},e:{r,c:nCols-1}});
         push(cols,cols.map(()=>S_COLHEAD));
         g.bids.forEach(b=>{
-          const row=showPhaseCol?[b.user,String(b.bid),'P'+b.phase,projTxt(b.projected),bwOutcomeLabel(b.outcome)]
-                                :[b.user,String(b.bid),projTxt(b.projected),bwOutcomeLabel(b.outcome)];
-          const st=showPhaseCol?[S_USER,S_CELL,S_CELL,projStyle(b.projected),resultStyle(b.outcome)]
-                               :[S_USER,S_CELL,projStyle(b.projected),resultStyle(b.outcome)];
+          const resTxt=b.decided?bwOutcomeLabel(b.outcome):'—';
+          const resSty=b.decided?resultStyle(b.outcome):S_DASH;
+          const row=showPhaseCol?[b.user,String(b.bid),'P'+b.phase,projTxt(b.projected),resTxt]
+                                :[b.user,String(b.bid),projTxt(b.projected),resTxt];
+          const st=showPhaseCol?[S_USER,S_CELL,S_CELL,projStyle(b.projected),resSty]
+                               :[S_USER,S_CELL,projStyle(b.projected),resSty];
           push(row,st);
         });
         push([]); // blank spacer row between weeks
@@ -2884,8 +2900,9 @@ window.exportPhaseResults=function(format,scopeOverride){
     const dataRows=[];
     groups.forEach(g=>{
       g.bids.forEach(b=>{
-        const row=showPhaseCol?[g.wn,g.date,g.type||'',g.fte.approved,g.fte.available,b.user,String(b.bid),'P'+b.phase,projTxt(b.projected),bwOutcomeLabel(b.outcome)]
-                              :[g.wn,g.date,g.type||'',g.fte.approved,g.fte.available,b.user,String(b.bid),projTxt(b.projected),bwOutcomeLabel(b.outcome)];
+        const resTxt=b.decided?bwOutcomeLabel(b.outcome):'—';
+        const row=showPhaseCol?[g.wn,g.date,g.type||'',g.fte.approved,g.fte.available,b.user,String(b.bid),'P'+b.phase,projTxt(b.projected),resTxt]
+                              :[g.wn,g.date,g.type||'',g.fte.approved,g.fte.available,b.user,String(b.bid),projTxt(b.projected),resTxt];
         dataRows.push(row);
       });
     });
@@ -2904,12 +2921,12 @@ window.exportPhaseResults=function(format,scopeOverride){
   // auto-print, so admin can read it live in the browser.
   const isView=format==='view';
   const sections=groups.map(g=>{
-    const rows=g.bids.map(b=>`<tr><td><strong>${b.user}</strong></td><td>${b.bid}</td>${showPhaseCol?`<td>P${b.phase}</td>`:''}<td>${projChipHtml(b.projected)}</td><td>${resultChipHtml(b.outcome)}</td></tr>`).join('');
+    const rows=g.bids.map(b=>`<tr><td><strong>${b.user}</strong></td><td>${b.bid}</td>${showPhaseCol?`<td>P${b.phase}</td>`:''}<td>${projChipHtml(b.projected)}</td><td>${resultCellHtml(b)}</td></tr>`).join('');
     return `<div class="wk">${wkHeadHtml(g)}
       <table><thead><tr><th>User</th><th>Bid</th>${showPhaseCol?'<th>Phase</th>':''}<th>Projected</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }).join('');
   const ok=openReportTab(`Vacation Auction — Bids by Week — ${exportLabel}`,
-    `${exportLabel} · Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} across ${groups.length} week${groups.length!==1?'s':''} · Projected = outcome before admin approval/denial`,
+    `${exportLabel} · Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} across ${groups.length} week${groups.length!==1?'s':''} · Projected = outcome before admin approval/denial · Result — = awaiting admin decision`,
     sections||'<p>No bids for this selection.</p>', !isView);
   if(ok) toast(isView?'👁 Report opened in a new tab':'📄 Preview opened — use browser "Print → Save as PDF"','ok');
 };
