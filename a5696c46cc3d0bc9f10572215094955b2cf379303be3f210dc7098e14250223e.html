@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 52;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 54;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -833,7 +833,7 @@ let deniedData={}; // {wk: [user,...]} — admin denials per week
 let bidPhaseData={}; // {user:{wk:phaseNum}} — which phase each live bid was placed in
 let slotsData={};    // {wk: number} — admin-entered per-week FTE availability overrides
 let emailsDataAdmin={}; // user → email
-let changesLog=[], adminSettings={emailNotifsEnabled:true}, timerData={enabled:false,lastChange:null};
+let changesLog=[], changesResetAt=0, adminSettings={emailNotifsEnabled:true}, timerData={enabled:false,lastChange:null};
 function getReviewThreshold(){ const raw=adminSettings?.reviewThreshold; if(raw===undefined||raw===null)return 0.5; const n=Number(raw); if(isNaN(n))return 0.5; const clamped=Math.max(0,Math.min(2,n)); return Math.round(clamped*10)/10; }
 // Returns the FTE of the lowest-FTE user in the roster. Used by the auto-lock rule.
 function getLowestFTE(){ let m=Infinity; for(const u of names){ const f=getUserFTE(u); if(f<m) m=f; } return m===Infinity?1:m; }
@@ -873,6 +873,7 @@ onSnapshot(locksRef,    snap=>{ locksData=snap.exists()?snap.data():{globalLock:
 onSnapshot(metaRef,     snap=>{ const d=snap.exists()?snap.data():{};  metaData=d; refreshAll(); });
 onSnapshot(changesRef,  snap=>{
   changesLog=snap.exists()?(snap.data().log||[]):[];
+  changesResetAt=snap.exists()?(snap.data().resetAt||0):0;
   const p=document.getElementById("panel-changelog");
   if(p&&p.classList.contains("on")) renderChangelog();
   if(typeof renderInsights==='function') renderInsights(); // keep Popcornometer in sync
@@ -1386,7 +1387,9 @@ window.renderLockSummary=renderLockSummary;
 // Events = every change-log entry in the window, plus any bidTimes stamp
 // (e.g. legacy simulator bids) that has no matching log entry.
 function changeEvents24h(){
-  const cutoff=Date.now()-86400000;
+  // resetAt fences off everything from before the last phase close — the
+  // counters read 0 the moment a phase completes.
+  const cutoff=Math.max(Date.now()-86400000, changesResetAt||0);
   const log=(changesLog||[]).filter(e=>e&&typeof e.ts==='number'&&e.ts>=cutoff);
   const logged=new Set(log.map(e=>(e.user||'')+'|'+(e.weekKey||'')));
   const extras=[];
@@ -2376,11 +2379,14 @@ window.completePhase=function(){
       // between phases. The next Begin Phase runs Smart Lock & Unlock to reopen
       // exactly the weeks that still have availability.
       await _lockEveryWeek();
-      // Archive this phase's change log and start the next phase with a clean log.
+      // Archive this phase's change log and reset ALL 24h activity counters —
+      // the Popcornometer and "changes in last 24h" must read 0 on both sites
+      // after a phase closes. resetAt also fences off bidTimes stamps from the
+      // closed phase, which would otherwise keep feeding the counters.
       if(changesLog.length){
         await setDoc(changesArchiveRef,{[cur]:changesLog},{merge:true}).catch(()=>{});
-        await setDoc(changesRef,{log:[]}).catch(()=>{});
       }
+      await setDoc(changesRef,{log:[],resetAt:Date.now()}).catch(()=>{});
       toast('✓ Phase '+cur+' completed — all weeks locked','ok');
     }
   });
@@ -3233,14 +3239,18 @@ window._fixLockAllWeeksInline=async function(){
 window.adApprove=function(user,wk,currentOutcome){
   const m=wkDate(wk);
   const cap=getSlots(wk); const ufte=getUserFTE(user);
-  // Over-cap warning counts APPROVED FTE only: prior-phase locked-in winners +
-  // users the admin has explicitly approved this phase + this user. Projected
-  // (natural) winners are NOT counted — a projection is not an approval, so it
-  // must not trigger the exceed-cap warning.
-  const approvedHere=(Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[]).filter(u=>u!==user);
-  const approvedFte=getPriorPhaseFteWon(wk)+approvedHere.reduce((s,u)=>s+getUserFTE(u),0);
-  const overage=Math.round((approvedFte+ufte-cap)*10)/10;
-  const overageHtml=overage>0?`<div class="cmodal-warn">⚠️ Approved FTE will exceed cap by ${overage} (admin override allowed).</div>`:'';
+  // Over-cap warning uses the site's ONE deduplicated winner set (computeApprovals):
+  // prior-phase locked-in winners + projected current-phase wins + admin-approved
+  // users — each counted exactly ONCE. Draws and reviews consume nothing.
+  // This avoids the phase-2+ double count (a prior winner appears in both the
+  // snapshot AND the never-cleared live approvals list) and treats projected
+  // wins as using FTE. If the user being approved is already in the winner set
+  // (approving a projected winner), their FTE is not added a second time.
+  const a=computeApprovals()[wk]||{winners:new Set(),fteWon:0};
+  const usedFte=a.fteWon||0;
+  const total=a.winners?.has(user)?usedFte:usedFte+ufte;
+  const overage=Math.round((total-cap)*10)/10;
+  const overageHtml=overage>0?`<div class="cmodal-warn">⚠️ FTE will exceed cap by ${overage} — counting locked-in winners, approved bids, and projected wins (admin override allowed).</div>`:'';
   const isDrawUser=currentOutcome==='draw';
   openConfirm({
     title:'✓ Approve '+user,
