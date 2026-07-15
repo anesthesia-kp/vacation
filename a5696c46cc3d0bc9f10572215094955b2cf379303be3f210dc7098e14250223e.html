@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 51;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 52;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1530,8 +1530,8 @@ window.openSummaryTab=function(kind){
     }).join('')||'<p>No bids for this selection.</p>';
   }
   const title=isUsers?'User Summary':'Weekly Summary';
-  const ok=openReportTab(`Vacation Auction — ${title}`,
-    `${scopeLabel} · Snapshot ${stamp}${isUsers?' · Projected = outcome before admin approval/denial · Result — = awaiting admin decision':' · FTE figures count admin-approved bids only (all completed phases) · Solid chip = admin decision, outlined = projected'}`,
+  const ok=openReportTab(`Vacation Auction — ${title}`, scopeLabel,
+    `Snapshot ${stamp}${isUsers?' · Projected = outcome before admin approval/denial · Result — = awaiting admin decision':' · FTE figures count admin-approved bids only (all completed phases) · Solid chip = admin decision, outlined = projected'}`,
     body,false);
   if(ok) toast('👁 '+title+' opened in a new tab','ok');
 };
@@ -2783,6 +2783,7 @@ const REPORT_CSS=`
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:24px;color:#0f172a}
   h1{margin:0 0 4px 0;font-size:20px}
   .stamp{color:#587690;font-size:12px;margin-bottom:16px}
+  .phase-badge{display:inline-block;background:#1d4ed8;color:#fff;font-size:15px;font-weight:800;letter-spacing:.02em;padding:4px 16px;border-radius:10px;margin-left:10px;vertical-align:middle}
   .wk{margin-bottom:16px;break-inside:avoid}
   .wk-head{font-weight:700;font-size:13px;background:#0f2744;color:#fff;padding:5px 10px;border-radius:6px 6px 0 0;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
   .wk-head .fte{margin-left:12px;font-weight:600;font-size:11px;background:rgba(255,255,255,.14);padding:2px 9px;border-radius:10px}
@@ -2807,11 +2808,13 @@ function wkHeadHtml(g){
   const typeTag=g.type?` <span class="typetag" style="background:${g.type==='Summer'?'#38bdf8':'#f59e0b'}">${g.type}</span>`:'';
   return `<div class="wk-head">Week ${g.wn} · ${g.date}${typeTag}<span class="fte">FTE approved ${g.fte.approved} · available ${g.fte.available} of ${g.fte.cap}</span></div>`;
 }
-function openReportTab(title,subtitle,bodyHtml,autoPrint){
+function openReportTab(title,phaseLabel,subtitle,bodyHtml,autoPrint){
   const w=window.open('','_blank');
   if(!w){ toast('Pop-up blocked — allow pop-ups for this site','warn'); return false; }
-  w.document.write(`<!doctype html><html><head><title>${title}</title><style>${REPORT_CSS}</style></head><body>
-    <h1>${title}</h1>
+  // The phase is rendered as a large badge right in the heading — it is the
+  // single most important piece of context on every report.
+  w.document.write(`<!doctype html><html><head><title>${title} — ${phaseLabel}</title><style>${REPORT_CSS}</style></head><body>
+    <h1>${title}<span class="phase-badge">${phaseLabel}</span></h1>
     <div class="stamp">${subtitle}</div>
     ${bodyHtml}
     ${autoPrint?'<script>setTimeout(()=>window.print(),300);<\/script>':''}
@@ -2852,10 +2855,14 @@ window.exportPhaseResults=function(format,scopeOverride){
       const nCols=cols.length;
       const aoa=[]; const styles=[]; const merges=[]; const rowHts=[];
       const push=(cells,cellStyles,ht)=>{aoa.push(cells);styles.push(cellStyles||[]);rowHts.push(ht||null);};
-      push([`Vacation Auction — Bids by Week — ${exportLabel}`],[S_TITLE],22);
+      const S_PHASE={fill:{fgColor:{rgb:'1D4ED8'}},font:{bold:true,sz:13,color:{rgb:'FFFFFF'}},alignment:{horizontal:'center',vertical:'center'}};
+      push([`Vacation Auction — Bids by Week`],[S_TITLE],22);
       merges.push({s:{r:0,c:0},e:{r:0,c:nCols-1}});
-      push([`Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} across ${groups.length} week${groups.length!==1?'s':''}`],[S_STAMP]);
+      // Dedicated, highly visible phase row — the report's most important context.
+      push([exportLabel.toUpperCase()],[S_PHASE],20);
       merges.push({s:{r:1,c:0},e:{r:1,c:nCols-1}});
+      push([`Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} across ${groups.length} week${groups.length!==1?'s':''}`],[S_STAMP]);
+      merges.push({s:{r:2,c:0},e:{r:2,c:nCols-1}});
       push([]); // spacer
       groups.forEach(g=>{
         const r=aoa.length;
@@ -2925,8 +2932,8 @@ window.exportPhaseResults=function(format,scopeOverride){
     return `<div class="wk">${wkHeadHtml(g)}
       <table><thead><tr><th>User</th><th>Bid</th>${showPhaseCol?'<th>Phase</th>':''}<th>Projected</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }).join('');
-  const ok=openReportTab(`Vacation Auction — Bids by Week — ${exportLabel}`,
-    `${exportLabel} · Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} across ${groups.length} week${groups.length!==1?'s':''} · Projected = outcome before admin approval/denial · Result — = awaiting admin decision`,
+  const ok=openReportTab('Vacation Auction — Bids by Week', exportLabel,
+    `Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} across ${groups.length} week${groups.length!==1?'s':''} · Projected = outcome before admin approval/denial · Result — = awaiting admin decision`,
     sections||'<p>No bids for this selection.</p>', !isView);
   if(ok) toast(isView?'👁 Report opened in a new tab':'📄 Preview opened — use browser "Print → Save as PDF"','ok');
 };
