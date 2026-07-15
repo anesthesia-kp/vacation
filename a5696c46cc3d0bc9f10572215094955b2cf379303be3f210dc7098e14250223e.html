@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 46;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 47;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1379,17 +1379,20 @@ window.renderLockSummary=renderLockSummary;
 // ── Auction Insights — participation, bids, and the Popcornometer ──
 // Bid activity in the last 24h — matches the user-facing "changes in last 24h"
 // chip (change-log events) plus simulator bids, so the two numbers agree.
-function popcornCount24h(){
+// SINGLE source of truth for 24-hour bid activity — IDENTICAL logic to the
+// user site's changeEvents24h(), so the Popcornometer and the "changes in
+// last 24h" counters on BOTH sites always show the same number.
+// Events = every change-log entry in the window, plus any bidTimes stamp
+// (e.g. legacy simulator bids) that has no matching log entry.
+function changeEvents24h(){
   const cutoff=Date.now()-86400000;
-  // Same source as the "changes in last 24h" chip: every logged event (adds,
-  // edits, removals, admin actions) in the window...
   const log=(changesLog||[]).filter(e=>e&&typeof e.ts==='number'&&e.ts>=cutoff);
-  let n=log.length;
-  // ...plus simulator bids, which stamp bidTimes but never write the change log.
   const logged=new Set(log.map(e=>(e.user||'')+'|'+(e.weekKey||'')));
-  for(const u in bidTimesData){ const m=bidTimesData[u]||{}; for(const wk in m){ const t=m[wk]; if(typeof t==='number'&&t>=cutoff&&!logged.has(u+'|'+wk)) n++; } }
-  return n;
+  const extras=[];
+  for(const u in bidTimesData){ const m=bidTimesData[u]||{}; for(const wk in m){ const t=m[wk]; if(typeof t==='number'&&t>=cutoff&&!logged.has(u+'|'+wk)) extras.push({id:'bt_'+u+'_'+wk,user:u,weekKey:wk,action:'added',actor:'sim',ts:t}); } }
+  return log.concat(extras).sort((a,b)=>(a.ts||0)-(b.ts||0));
 }
+function popcornCount24h(){ return changeEvents24h().length; }
 // Thresholds: 0 quiet · 1-9 a few kernels · 10-29 steady · 30-59 lively · 60+ frenzy.
 function popcornStatus(n){ return n<=0?'Quiet — no changes yet':n<10?'A few kernels popping':n<30?'Steady popping':n<60?'Lively popping!':'Full popcorn frenzy!'; }
 function popcornRate(n){ return n<=0?0:Math.min(7,Math.max(0.5,n/10)); } // pops per second
@@ -2351,7 +2354,10 @@ async function _commitBeginPhase(next){
   } else {
     await setDoc(phasesRef,{currentPhase:next},{merge:true});
   }
-  toast('▶ Phase '+next+' begun — bidding is open','ok');
+  // Beginning any phase resets the countdown to a fresh 48-hour window so
+  // every phase opens with the full default bidding time.
+  await setDoc(timerRef,{enabled:true,durationHours:48,lastChange:Date.now()},{merge:true}).catch(()=>{});
+  toast('▶ Phase '+next+' begun — bidding is open (timer reset to 48h)','ok');
 }
 // Begin Phase 1: opens bidding for the first time. Runs the same lock decision
 // (Smart Lock & Unlock) as every other phase start.
