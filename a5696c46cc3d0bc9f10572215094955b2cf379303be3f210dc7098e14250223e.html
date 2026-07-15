@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 42;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 43;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -884,6 +884,7 @@ onSnapshot(worstBidsRef, snap=>{
   if(panel&&panel.classList.contains("on")) renderBestBidsTable();
 });
 onSnapshot(emailsRef,   snap=>{ emailsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
+onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; if(typeof renderInsights==='function') renderInsights(); });
 onSnapshot(passwordsRef,snap=>{ passwordsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
   onSnapshot(fteRef, snap=>{ fteData=snap.exists()?snap.data():{}; refreshAll(); });
@@ -1374,12 +1375,63 @@ function renderLockSummary(){
 }
 window.renderLockSummary=renderLockSummary;
 
-// ── Auction Insights — four clean stat lines on auction progress ──
+// ── Auction Insights — participation, bids, and the Popcornometer ──
+// Bid activity in the last 24h: bids added/edited (bidTimes stamps, which the
+// simulator also writes) plus bids removed (change-log entries).
+function popcornCount24h(){
+  const cutoff=Date.now()-86400000; let n=0;
+  for(const u in bidTimesData){ const m=bidTimesData[u]||{}; for(const wk in m){ const t=m[wk]; if(typeof t==='number'&&t>=cutoff) n++; } }
+  (changesLog||[]).forEach(e=>{ if(e&&typeof e.ts==='number'&&e.ts>=cutoff&&e.action==='removed') n++; });
+  return n;
+}
+// Thresholds: 0 quiet · 1-9 a few kernels · 10-29 steady · 30-59 lively · 60+ frenzy.
+function popcornStatus(n){ return n<=0?'Quiet — no changes yet':n<10?'A few kernels popping':n<30?'Steady popping':n<60?'Lively popping!':'Full popcorn frenzy!'; }
+function popcornRate(n){ return n<=0?0:Math.min(7,Math.max(0.5,n/10)); } // pops per second
+
+// Popcorn animation engine — a saucepan with kernels popping out and falling back.
+const _pc={rate:0,count:0,kernels:[],last:0,started:false};
+window.__pcInfo=()=>({count:_pc.count,rate:_pc.rate}); // exposed for testing
+function popcornSet(n){ _pc.count=n; _pc.rate=popcornRate(n); }
+function _pcStart(canvasId){
+  if(_pc.started) return; _pc.started=true;
+  function loop(ts){
+    requestAnimationFrame(loop);
+    const cvEl=document.getElementById(canvasId); if(!cvEl||cvEl.offsetParent===null||document.hidden) return; // hidden — skip work
+    const ctx=cvEl.getContext('2d');
+    const W=cvEl.width=cvEl.clientWidth, H=cvEl.height=cvEl.clientHeight;
+    if(!_pc.last) _pc.last=ts; const dt=Math.min(0.05,(ts-_pc.last)/1000); _pc.last=ts;
+    const panW=110, panH=26, px=W/2-panW/2-10, py=H-panH-4;
+    if(_pc.rate>0 && Math.random()<_pc.rate*dt){
+      _pc.kernels.push({x:px+10+Math.random()*(panW-20),y:py-4,vx:(Math.random()-0.5)*60,vy:-(120+Math.random()*110),r:3.5+Math.random()*2.5,rot:Math.random()*6.3,vr:(Math.random()-0.5)*8});
+    }
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle='#334155';
+    ctx.beginPath(); ctx.moveTo(px,py); ctx.lineTo(px+panW,py); ctx.lineTo(px+panW-8,py+panH); ctx.lineTo(px+8,py+panH); ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#1e293b'; ctx.fillRect(px-3,py-3,panW+6,5);                 // rim
+    ctx.fillStyle='#475569'; ctx.fillRect(px+panW+2,py-2,34,5);                // handle
+    const rest=Math.min(6,Math.ceil(_pc.rate*1.2));
+    ctx.fillStyle='#fef9c3';
+    for(let i=0;i<rest;i++){ const rx=px+14+i*((panW-28)/Math.max(1,rest-1||1)); ctx.beginPath(); ctx.arc(rx,py-5,4,0,6.3); ctx.fill(); }
+    for(let i=_pc.kernels.length-1;i>=0;i--){
+      const k=_pc.kernels[i];
+      k.vy+=260*dt; k.x+=k.vx*dt; k.y+=k.vy*dt; k.rot+=k.vr*dt;
+      if(k.y>H+8){ _pc.kernels.splice(i,1); continue; }
+      ctx.save(); ctx.translate(k.x,k.y); ctx.rotate(k.rot);
+      ctx.fillStyle='#fffbeb';
+      ctx.beginPath(); ctx.arc(0,0,k.r,0,6.3); ctx.fill();
+      ctx.beginPath(); ctx.arc(k.r*0.7,-k.r*0.4,k.r*0.7,0,6.3); ctx.fill();
+      ctx.beginPath(); ctx.arc(-k.r*0.7,-k.r*0.3,k.r*0.65,0,6.3); ctx.fill();
+      ctx.fillStyle='#fde68a'; ctx.beginPath(); ctx.arc(0,k.r*0.35,k.r*0.4,0,6.3); ctx.fill();
+      ctx.restore();
+    }
+    if(_pc.rate===0){ ctx.fillStyle='#94a3b8'; ctx.font='11px sans-serif'; ctx.textAlign='center'; ctx.fillText('…all quiet…',W/2-10,py-16); }
+  }
+  requestAnimationFrame(loop);
+}
+
 function renderInsights(){
   const el=document.getElementById('insightsBody'); if(!el) return;
   const cur=Number(phasesData.currentPhase||1);
-  const ap=computeApprovals();
-  // Participation: users with ≥1 current-phase, non-denied bid
   let bidders=0, totalBids=0;
   for(const u of names){
     let has=false; const uw=scheduleData[u]||{};
@@ -1392,32 +1444,27 @@ function renderInsights(){
     if(has) bidders++;
   }
   const pct=names.length?Math.round(bidders/names.length*100):0;
-  // Most contested week + wide-open weeks (availability, zero bidders)
-  let hot=null, openWeeks=0;
-  mondays.forEach(d=>{
-    const wk=dateKey(d);
-    const a=ap[wk]; if(!a) return;
-    const cap=getSlots(wk);
-    let bc=0, fteAsk=0;
-    for(const u in scheduleData){
-      if(scheduleData[u]?.[wk]===undefined) continue;
-      if(Array.isArray(deniedData?.[wk])&&deniedData[wk].includes(u)) continue;
-      bc++; fteAsk+=getUserFTE(u);
-    }
-    fteAsk=Math.round(fteAsk*10)/10;
-    const remaining=Math.round((cap-a.fteWon)*10)/10;
-    if(bc===0&&remaining>0&&!locksData?.weeks?.[wk]) openWeeks++;
-    if(fteAsk>cap&&(!hot||fteAsk-cap>hot.over)) hot={wk,label:wLabel(d),bidders:bc,cap,over:Math.round((fteAsk-cap)*10)/10};
-  });
-  // Exactly four clean stat lines — no clutter.
-  const lines=[
-    ['👥',`<div style="font-size:13px;color:var(--t1)"><strong>${bidders}</strong> of ${names.length} users bidding in Phase ${cur} <span style="color:var(--t2)">(${pct}%)</span></div>
-      <div style="height:6px;border-radius:999px;background:var(--s3);overflow:hidden;margin-top:5px"><div style="height:100%;width:${pct}%;background:var(--blue);border-radius:999px"></div></div>`],
-    ['🗳️',`<span style="color:var(--t1)"><strong>${totalBids}</strong> bid${totalBids!==1?'s':''} placed</span>${bidders?` <span style="color:var(--t2)">· avg ${(Math.round(totalBids/bidders*10)/10)} per bidder</span>`:''}`],
-    ['🔥',hot?`<span style="color:var(--t1)">Most contested: <strong>${hot.label}</strong></span> <span style="color:var(--t2)">· ${hot.bidders} bidders for ${hot.cap} FTE</span>`:'<span style="color:var(--t2)">No over-subscribed weeks yet</span>'],
-    ['🌿',`<span style="color:var(--t1)"><strong>${openWeeks}</strong> week${openWeeks!==1?'s':''} wide open</span> <span style="color:var(--t2)">· availability but no bids yet</span>`]
-  ];
-  el.innerHTML=lines.map(([icon,html],i)=>`<div style="display:flex;align-items:center;gap:10px;padding:10px 0;${i<lines.length-1?'border-bottom:1px solid var(--b1)':''}"><span style="font-size:15px">${icon}</span><div style="flex:1">${html}</div></div>`).join('');
+  const changes24=popcornCount24h();
+  popcornSet(changes24);
+  // Build the skeleton ONCE so the canvas animation survives re-renders.
+  if(!document.getElementById('pcCanvasAdm')){
+    el.innerHTML=`
+      <div id="insLine1" style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--b1)"></div>
+      <div id="insLine2" style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--b1)"></div>
+      <div style="padding:10px 0 0">
+        <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">🍿 <strong style="color:var(--t1)">Popcornometer</strong>
+          <span style="color:var(--t2)">— <span id="pcCountAdm">0</span> bid change<span id="pcPlAdm">s</span> in last 24h</span></div>
+        <div id="pcStatusAdm" style="font-size:11px;color:var(--t2);margin-bottom:6px"></div>
+        <canvas id="pcCanvasAdm" style="width:100%;height:104px;display:block;background:linear-gradient(180deg,rgba(59,130,246,.05),rgba(15,39,68,.06));border:1px solid var(--b1);border-radius:8px"></canvas>
+      </div>`;
+    _pcStart('pcCanvasAdm');
+  }
+  document.getElementById('insLine1').innerHTML=`<span style="font-size:15px">👥</span><div style="flex:1"><div style="font-size:13px;color:var(--t1)"><strong>${bidders}</strong> of ${names.length} users bidding in Phase ${cur} <span style="color:var(--t2)">(${pct}%)</span></div>
+      <div style="height:6px;border-radius:999px;background:var(--s3);overflow:hidden;margin-top:5px"><div style="height:100%;width:${pct}%;background:var(--blue);border-radius:999px"></div></div></div>`;
+  document.getElementById('insLine2').innerHTML=`<span style="font-size:15px">🗳️</span><div style="flex:1"><span style="color:var(--t1)"><strong>${totalBids}</strong> bid${totalBids!==1?'s':''} placed</span>${bidders?` <span style="color:var(--t2)">· avg ${(Math.round(totalBids/bidders*10)/10)} per bidder</span>`:''}</div>`;
+  document.getElementById('pcCountAdm').textContent=changes24;
+  document.getElementById('pcPlAdm').textContent=changes24===1?'':'s';
+  document.getElementById('pcStatusAdm').textContent=popcornStatus(changes24);
 }
 window.renderInsights=renderInsights;
 
@@ -2070,6 +2117,13 @@ window.runSimulation=async function(){
       toast('bidPhase write failed — see log','warn');
       return;
     }
+    // Stamp bid times — simulated bids count as real bid activity (Popcornometer etc.)
+    try{
+      const nowTs=Date.now(); const timeTag={};
+      for(const user of Object.keys(newSchedule)){ timeTag[user]={}; for(const wk of Object.keys(newSchedule[user])) timeTag[user][wk]=nowTs; }
+      if(cur>1){ for(const user of Object.keys(timeTag)) await setDoc(bidTimesRef,{[user]:timeTag[user]},{merge:true}); }
+      else { await setDoc(bidTimesRef, timeTag); }
+    }catch(_){/* non-critical */}
     // Set priority locks (worstBidsRef): the simulated bid becomes each user's floor for that week
     const priorityLocks={};
     for(const user of Object.keys(newSchedule)){
