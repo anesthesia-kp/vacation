@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 34;       // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 35;       // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1053,7 +1053,9 @@ function renderBidPool(user){
 onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; });
 onSnapshot(passcodesRef,snap=>{ passcodesData=snap.exists()?snap.data():{}; _passcodesReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; _usernamesReady=true; if(typeof refreshLoginUsers==='function') refreshLoginUsers(); });
-onSnapshot(fteRef,      snap=>{ if(snap.exists()){ fteData=snap.data(); } else { setDoc(fteRef,FTE_MAP).catch(()=>{}); return; } scheduleRender(); });
+// Read-only: same rule as the user list — the user site never seeds/overwrites
+// admin-owned docs on an empty read (that pattern resurrected deleted data).
+onSnapshot(fteRef,      snap=>{ if(snap.exists()){ fteData=snap.data(); scheduleRender(); } });
 onSnapshot(approvalsRef,snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()?snap.data():{}); scheduleRender(); });
 onSnapshot(phasesRef,  snap=>{ phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{}}; renderPhaseLabel(); scheduleRender(); if(typeof updateSigninPhase==='function') updateSigninPhase(); });
 onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); scheduleRender(); });
@@ -1105,8 +1107,11 @@ onSnapshot(userListRef, snap=>{
     names.length=0;
     newNames.forEach(n=>names.push(n));
   } else {
-    // No doc in Firestore — save the hardcoded default
-    setDoc(userListRef,{users:[...names]}).catch(()=>{});
+    // Doc missing (fresh install or a transient offline/cache read). The user
+    // site must NEVER write the user list — the old auto-seed here silently
+    // resurrected deleted users (e.g. CC) by re-writing the hardcoded default
+    // roster whenever any user's browser hit a momentary empty read. Admin owns
+    // the user list; here we just keep whatever we last had and wait.
     return;
   }
   // Rebuild sign-in list and dropdown
