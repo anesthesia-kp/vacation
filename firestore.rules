@@ -3,13 +3,27 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function accessDocExists() {
+      return exists(/databases/$(database)/documents/vacations/adminAccess);
+    }
+
+    function isListedAdmin() {
+      return request.auth.token.email.lower() in
+             get(/databases/$(database)/documents/vacations/adminAccess).data.get('emails', []);
+    }
+
+    function isDefaultAdmin() {
+      return request.auth.token.email.lower() in [
+        'dr.vacation.goddess@gmail.com',
+        'aaronjfrankel@gmail.com'
+      ];
+    }
+
     function isAdmin() {
       return request.auth != null
         && request.auth.token.email_verified == true
-        && request.auth.token.email.lower() in [
-             'dr.vacation.goddess@gmail.com',
-             'aaronjfrankel@gmail.com'
-           ];
+        && ((accessDocExists() && isListedAdmin())
+            || (!accessDocExists() && isDefaultAdmin()));
     }
 
     function isSignedIn() {
@@ -26,6 +40,7 @@ service cloud.firestore {
         'fteMap',
         'userList',
         'adminSettings',
+        'adminAccess',
         'changesArchive',
         'meta'
       ];

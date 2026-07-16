@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 59;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 61;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -538,6 +538,15 @@ thead th{color:var(--t2)}
         <div class="page-sub" style="margin-top:6px">Enter the new user's initials and their FTE (defaults to 1.0 if left blank).</div>
       </div>
       <div class="card">
+        <div class="card-title">🔐 Admin Access (Google sign-in)</div>
+        <div class="page-sub" style="margin-bottom:10px">Google accounts allowed to open this admin page and make admin decisions. Every admin is equal — any admin may grant or revoke any other (or themselves). The list can never be emptied. Grants and revocations take effect immediately.</div>
+        <div id="adminAccessList" style="margin-bottom:12px"></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="email" id="newAdminEmail" class="inp" style="width:250px" placeholder="their-account@gmail.com">
+          <button class="btn btn-primary" onclick="addAdminEmail()">Grant Admin Access</button>
+        </div>
+      </div>
+      <div class="card">
         <div class="card-title">All Users (<span id="userCount">0</span>)</div>
         <div class="page-sub" style="margin-bottom:12px">One row per user. "Initials" is the account ID admin sets; "Username" is the display name a user may choose at login (defaults to their initials). Passwords are chosen by users and are <strong>never shown here</strong> — only whether one is set. Delete removes the user and all their data.</div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px;flex-wrap:wrap">
@@ -877,23 +886,44 @@ let selLockMonth=null, tickInterval=null;
 // attach) until an authorized account signs in. The same e-mail list is
 // enforced server-side by the Firestore security rules — this page gate is
 // the friendly UI layer, the rules are the actual security.
-const ADMIN_EMAILS=['dr.vacation.goddess@gmail.com','aaronjfrankel@gmail.com'];
-function isAdminUser(u){
-  return !!u && !u.isAnonymous && typeof u.email==='string'
-    && ADMIN_EMAILS.includes(u.email.toLowerCase())
-    && u.emailVerified!==false;
+// The admin list lives in the vacations/adminAccess document — EVERY admin on
+// it is equal and any admin may remove any other (or themselves). Safety rails:
+// the list can never be emptied, and if the document doesn't exist at all
+// (first run, or catastrophic deletion) these DEFAULT accounts get in and the
+// document is re-seeded with them. The security rules mirror this exactly.
+const DEFAULT_ADMIN_EMAILS=['dr.vacation.goddess@gmail.com','aaronjfrankel@gmail.com'];
+const adminAccessRef = doc(db,"vacations","adminAccess");
+let _currentAdminEmail=null;
+async function checkAdminAccess(u){
+  if(!u || u.isAnonymous || typeof u.email!=='string' || u.emailVerified===false) return false;
+  const em=u.email.toLowerCase();
+  try{
+    const snap=await getDoc(adminAccessRef);
+    if(!snap.exists()||!Array.isArray(snap.data().emails)||!snap.data().emails.length){
+      // Bootstrap: no admin list yet → defaults apply, and we create the list.
+      if(DEFAULT_ADMIN_EMAILS.includes(em)){
+        setDoc(adminAccessRef,{emails:DEFAULT_ADMIN_EMAILS},{merge:true}).catch(()=>{});
+        return true;
+      }
+      return false;
+    }
+    return snap.data().emails.map(x=>String(x).toLowerCase()).includes(em);
+  }catch(_){ return false; }
 }
 let _authResolve;
 const authReady = new Promise(resolve => { _authResolve = resolve; });
-onAuthStateChanged(auth, u => {
+onAuthStateChanged(auth, async u => {
+  const ok=await checkAdminAccess(u);
   const gate=document.getElementById('authGate');
   const who=document.getElementById('authGateWho');
-  if(isAdminUser(u)){
+  if(ok){
+    _currentAdminEmail=u.email.toLowerCase();
     if(gate) gate.style.display='none';
     const badge=document.getElementById('adminWhoami');
     if(badge) badge.textContent=u.email;
     _authResolve(u); // listeners attach; the panel comes alive
   } else {
+    _currentAdminEmail=null;
     if(gate) gate.style.display='flex';
     if(who) who.textContent=(u&&u.email)?('Signed in as '+u.email+' — this account is not authorized.'):'';
   }
@@ -911,6 +941,60 @@ window.adminGoogleSignIn=async function(){
   }
 };
 window.adminSignOut=function(){ signOut(auth).catch(()=>{}); };
+
+// ── Admin Access management (Manage Users → Admin Access card) ──
+let adminAccessEmails=[];
+onSnapshot(adminAccessRef, snap=>{
+  adminAccessEmails=snap.exists()?(snap.data().emails||[]).map(x=>String(x).toLowerCase()):[];
+  renderAdminAccess();
+});
+function renderAdminAccess(){
+  const el=document.getElementById('adminAccessList'); if(!el) return;
+  const list=adminAccessEmails.length?adminAccessEmails:DEFAULT_ADMIN_EMAILS;
+  const last=list.length<=1;
+  el.innerHTML=list.map(email=>`
+    <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px dashed var(--b1)">
+      <span class="mono" style="font-size:12px;color:var(--t1)">${email}</span>
+      ${email===_currentAdminEmail?'<span style="font-size:10px;font-weight:700;color:var(--green);background:rgba(52,211,153,.12);padding:1px 8px;border-radius:8px">YOU</span>':''}
+      ${last
+        ? '<span style="font-size:10px;color:var(--t3)">last admin — cannot be removed</span>'
+        : `<button class="btn btn-danger" style="padding:2px 8px;font-size:11px" onclick="removeAdminEmail('${email}')">✕ Remove</button>`}
+    </div>`).join('');
+}
+window.addAdminEmail=function(){
+  const inp=document.getElementById('newAdminEmail');
+  const email=(inp?.value||'').trim().toLowerCase();
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ toast('Enter a valid e-mail address','warn'); return; }
+  if(adminAccessEmails.includes(email)){ toast('That account already has admin access','ok'); return; }
+  openConfirm({
+    title:'🔐 Grant Admin Access',
+    body:`<div>Give <strong>${email}</strong> FULL admin access?</div>
+          <div class="cmodal-warn" style="margin-top:8px">They will be able to approve/deny bids, lock weeks, begin and complete phases, manage users, and reset the auction — everything you can do here (except manage founder accounts). Make sure this is their Google account e-mail, spelled exactly.</div>`,
+    okText:'Grant Access', danger:true,
+    onConfirm:async()=>{
+      await setDoc(adminAccessRef,{emails:arrayUnion(email)},{merge:true});
+      if(inp) inp.value='';
+      toast('🔐 '+email+' now has admin access','ok');
+    }
+  });
+};
+window.removeAdminEmail=function(email){
+  // Safety rail: the admin list can never be emptied.
+  if(adminAccessEmails.length<=1){ toast('Cannot remove the last admin — grant someone else access first','warn'); return; }
+  const self=email===_currentAdminEmail;
+  openConfirm({
+    title:'✕ Revoke Admin Access',
+    body:`<div>Remove admin access for <strong>${email}</strong>?</div>
+          ${self?'<div class="cmodal-danger" style="margin-top:8px"><strong>⚠️ This is YOUR account.</strong> You will be locked out of this admin page immediately after confirming.</div>':''}
+          <div class="cmodal-info" style="margin-top:8px">Their admin writes are rejected immediately; the page locks them out on their next visit.</div>`,
+    okText:self?'Yes — remove MYSELF':'Revoke', danger:true,
+    onConfirm:async()=>{
+      await updateDoc(adminAccessRef,{emails:arrayRemove(email)}).catch(()=>{});
+      toast('✕ Admin access revoked for '+email,'warn');
+      if(self) window.adminSignOut();
+    }
+  });
+};
 
 // Drop-in replacement for the imported onSnapshot. Defers attachment until
 // auth is ready, and surfaces listener errors instead of swallowing them.
