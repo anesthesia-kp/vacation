@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 68;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 69;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1638,13 +1638,13 @@ function renderInsights(){
   // Build the skeleton ONCE so the canvas animation survives re-renders.
   if(!document.getElementById('pcCanvasAdm')){
     el.innerHTML=`
-      <div style="padding:2px 0 10px;border-bottom:1px solid var(--b1)">
+      <div id="strugglingBox" style="padding:2px 0 10px;border-bottom:1px solid var(--b1)"></div>
+      <div style="padding:10px 0;border-bottom:1px solid var(--b1)">
         <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">📈 <strong style="color:var(--t1)">Bid activity — Phase <span id="bcPhase">1</span></strong>
           <span style="color:var(--t2)" id="bcMeta"></span></div>
         <canvas id="bidChart" style="width:100%;height:120px;display:block;background:var(--s2);border:1px solid var(--b1);border-radius:8px"></canvas>
         <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);margin-top:3px"><span>phase opened</span><span id="bcXlabel">hours since phase opened →</span><span>now</span></div>
       </div>
-      <div id="strugglingBox" style="padding:10px 0;border-bottom:1px solid var(--b1)"></div>
       <div style="padding:10px 0 0">
         <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">🍿 <strong style="color:var(--t1)">Popcornometer</strong>
           <span style="color:var(--t2)">— <span id="pcCountAdm">0</span> bid change<span id="pcPlAdm">s</span> in last 24h</span></div>
@@ -1686,63 +1686,86 @@ function availableNumbersFor(u){
   return [1,2,3,4,5,6,7,8,9,10].filter(x=>!used.has(x));
 }
 function computeStrugglingUsers(){
+  // Scope: users with NO wins in the CURRENT phase (projected or approved).
+  // type 'allLosing' — every current-phase bid is projected losing.
+  // type 'mixed'     — no wins, but at least one bid is a pending draw/review.
+  // canImprove       — their remaining bid numbers could still raise their odds
+  //                    on at least one losing week (beat/tie the weakest live
+  //                    winner) or draw week (outbid the tie outright). Reviews
+  //                    are an FTE problem, not a bid-strength problem, so they
+  //                    never count toward improvability.
   const ap=computeApprovals();
-  const cp=phasesData.completedPhases||{};
   const out=[];
   for(const u of names){
-    let priorWins=0;
-    for(const n of Object.keys(cp)){ const apn=cp[n]?.approvals||{}; for(const wk in apn){ if(Array.isArray(apn[wk])&&apn[wk].includes(u)) priorWins++; } }
     const bids=[];
     for(const wk in (scheduleData[u]||{})){ if(scheduleData[u][wk]===undefined) continue; if(isCurrentPhaseBidAdmin(u,wk)) bids.push(wk); }
     if(!bids.length) continue; // dashboard's "users without bids" covers these
-    let curWins=0, pending=0; const losing=[];
+    let curWins=0; const losing=[],draws=[],reviews=[];
     for(const wk of bids){
       const a=ap[wk]; if(!a) continue;
       if(a.winners.has(u)) curWins++;
-      else if(a.draws.has(u)||a.reviews.has(u)) pending++;
+      else if(a.draws.has(u)) draws.push(wk);
+      else if(a.reviews.has(u)) reviews.push(wk);
       else losing.push(wk);
     }
-    if(priorWins+curWins>0||!losing.length) continue;
-    // Can any losing week still be fought for with their remaining numbers?
+    if(curWins>0) continue;
+    if(!losing.length&&!draws.length&&!reviews.length) continue;
     const pool=availableNumbersFor(u);
-    let improvableWeeks=0;
+    const cand=(wk)=>{const hd=(typeof HIGH_DEMAND_WEEKS!=='undefined')&&HIGH_DEMAND_WEEKS.has(wk);return pool.filter(n=>!hd||n<=4);};
+    let canImprove=false;
     for(const wk of losing){
       const a=ap[wk];
-      // Weakest LIVE current-phase winner sets the bar (prior winners are unbeatable).
-      let weakest=null;
+      // The bar to clear: the weakest LIVE winner — or, if the cap is being
+      // contested by a draw instead, the draw group's score (matching it
+      // joins the draw; beating it wins outright). Prior winners are unbeatable.
+      let bar=null;
       for(const w of a.winners){
         if(a.priorWinners?.has(w)) continue;
         const p=scheduleData[w]?.[wk]; if(p===undefined) continue;
-        const sc=pScore(p); if(weakest===null||sc>weakest) weakest=sc;
+        const sc=pScore(p); if(bar===null||sc>bar) bar=sc;
       }
-      if(weakest===null) continue; // full from locked-in prior wins — nothing can help here
-      const hd=(typeof HIGH_DEMAND_WEEKS!=='undefined')&&HIGH_DEMAND_WEEKS.has(wk);
-      const candidates=pool.filter(n=>!hd||n<=4);
-      // equal score ties into a DRAW — that's a chance, so <= counts as improvable
-      if(candidates.some(n=>pScore(n)<=weakest)) improvableWeeks++;
+      if(bar===null){
+        for(const w of a.draws){
+          const p=scheduleData[w]?.[wk]; if(p===undefined) continue;
+          bar=pScore(p); break; // all draw members share one score
+        }
+      }
+      if(bar===null) continue; // full from locked-in prior wins — unwinnable
+      if(cand(wk).some(n=>pScore(n)<=bar)){ canImprove=true; break; }
     }
-    out.push({user:u,bids:bids.length,losing:losing.length,pending,stuck:improvableWeeks===0,pool});
+    if(!canImprove){
+      for(const wk of draws){
+        const own=scheduleData[u]?.[wk]; if(own===undefined) continue;
+        const ownSc=pScore(own);
+        if(cand(wk).some(n=>pScore(n)<ownSc)){ canImprove=true; break; } // outbid the tie
+      }
+    }
+    out.push({user:u,bids:bids.length,losing:losing.length,pending:draws.length+reviews.length,
+      type:(draws.length||reviews.length)?'mixed':'allLosing',canImprove,pool});
   }
-  out.sort((a,b)=>(b.stuck?1:0)-(a.stuck?1:0)||b.losing-a.losing||a.user.localeCompare(b.user));
   return out;
 }
 function renderStruggling(){
   const el=document.getElementById('strugglingBox'); if(!el) return;
-  if(!phase1Started()){ el.innerHTML='<div style="font-size:12px;color:var(--t3)">⚠️ Struggling-user flags appear once bidding begins.</div>'; return; }
+  if(!phase1Started()){ el.innerHTML='<div style="font-size:12px;color:var(--t3)">⚠️ Struggling Users appears once bidding begins.</div>'; return; }
   const list=computeStrugglingUsers();
-  const head=`<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">⚠️ <strong style="color:var(--t1)">Users struggling in the auction</strong><span style="color:var(--t2)">— no wins yet and currently losing</span></div>`;
-  if(!list.length){ el.innerHTML=head+'<div style="font-size:12px;color:var(--green)">✅ Nobody flagged — every active bidder has a win or a live chance (draw/review).</div>'; return; }
-  el.innerHTML=head+list.map(r=>{
-    const tone=r.stuck?'var(--red)':'var(--yellow)';
-    const tag=r.stuck
-      ? '🔴 <strong>cannot improve</strong> — no remaining bid number is strong enough for any week they want'
-      : `🟠 could still improve (numbers left: ${r.pool.slice(0,5).join(', ')}${r.pool.length>5?'…':''})`;
-    return `<div style="display:flex;align-items:center;gap:10px;padding:4px 0;font-size:12px">
-      <strong class="mono" style="color:var(--t1);min-width:44px">${esc(r.user)}</strong>
-      <span style="color:var(--t2)">0 wins · losing ${r.losing} of ${r.bids} bid${r.bids!==1?'s':''}${r.pending?` · ${r.pending} pending draw/review`:''}</span>
-      <span style="color:${tone}">${tag}</span>
+  const head=`<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">⚠️ <strong style="color:var(--t1)">Struggling Users</strong><span style="color:var(--t2)">— no wins this phase</span></div>`;
+  if(!list.length){ el.innerHTML=head+'<div style="font-size:12px;color:var(--green)">✅ None.</div>'; return; }
+  const chip=(r)=>`<span class="mono" title="losing ${r.losing} of ${r.bids} bid${r.bids!==1?'s':''}${r.pending?`, ${r.pending} pending draw/review`:''} — numbers left: ${r.pool.length?r.pool.join(','):'none'}" style="display:inline-block;font-weight:700;font-size:11px;color:var(--t1);background:var(--s3);border:1px solid var(--b2);border-radius:7px;padding:1px 7px;margin:1px 3px 1px 0;cursor:default">${esc(r.user)}</span>`;
+  const bucket=(label,color,rows)=>rows.length?`<div style="display:flex;align-items:baseline;gap:8px;padding:2px 0">
+      <span style="font-size:11px;font-weight:700;color:${color};min-width:110px">${label}</span>
+      <span>${rows.map(chip).join('')}</span></div>`:'';
+  const section=(title,rows)=>{
+    if(!rows.length) return '';
+    return `<div style="margin-top:6px">
+      <div style="font-size:11px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">${title} (${rows.length})</div>
+      ${bucket('🔴 Cannot improve','var(--red)',rows.filter(r=>!r.canImprove))}
+      ${bucket('🟠 Can improve','var(--yellow)',rows.filter(r=>r.canImprove))}
     </div>`;
-  }).join('');
+  };
+  el.innerHTML=head
+    +section('Losing every bid',list.filter(r=>r.type==='allLosing'))
+    +section('Draw/review pending, no wins',list.filter(r=>r.type==='mixed'));
 }
 // ── Bid-activity line chart ──
 // X: time since the current phase opened; Y: number of bid changes per bucket.
@@ -2905,9 +2928,18 @@ function initAppDenialsFilters(){
 // Every e-mail counts against the EmailJS monthly quota — track it (both sites
 // increment the same per-month counter; the dashboard meter reads it).
 const mailStatsRef = doc(db,"vacations","mailStats");
+// EmailJS's monthly quota resets on the 6th (the account's billing day), NOT
+// on the 1st — count within the same window so the meter matches their site.
+function emailCycleKey(){
+  const RESET_DAY=6;
+  const d=new Date();
+  let y=d.getFullYear(),m=d.getMonth();
+  if(d.getDate()<RESET_DAY){ m-=1; if(m<0){m=11;y-=1;} }
+  return 'cy'+y+'-'+String(m+1).padStart(2,'0');
+}
 function trackEmailSent(){
-  const ym=new Date().toISOString().slice(0,7); // e.g. "2026-07"
-  updateDoc(mailStatsRef,{[ym]:increment(1)}).catch(()=>setDoc(mailStatsRef,{[ym]:1},{merge:true}).catch(()=>{}));
+  const k=emailCycleKey();
+  updateDoc(mailStatsRef,{[k]:increment(1)}).catch(()=>setDoc(mailStatsRef,{[k]:1},{merge:true}).catch(()=>{}));
 }
 function adminSendEmail(user,subject,body){
   const email=emailsDataAdmin[user]; if(!email||email==='__skip__') return;
@@ -2920,13 +2952,30 @@ let mailStatsData={};
 onSnapshot(mailStatsRef, snap=>{ mailStatsData=snap.exists()?snap.data():{}; renderMailMeter(); });
 function renderMailMeter(){
   const el=document.getElementById('mailMeter'); if(!el) return;
-  const ym=new Date().toISOString().slice(0,7);
-  const n=Number(mailStatsData[ym]||0);
+  const n=Number(mailStatsData[emailCycleKey()]||0);
   const QUOTA=200; // EmailJS free tier
   const color=n>=190?'var(--red)':n>=150?'var(--yellow)':'var(--t2)';
   const warn=n>=190?' — quota nearly exhausted!':n>=150?' — getting close to the free limit':'';
-  el.innerHTML=`<span style="color:${color}">📊 E-mails sent this month: <strong>${n}</strong> of ${QUOTA} free (EmailJS)${warn}</span>`;
+  el.innerHTML=`<span style="color:${color}">📊 E-mails this quota cycle (resets the 6th): <strong>${n}</strong> of ${QUOTA} free (EmailJS)${warn}</span>
+    <button class="btn btn-ghost" style="margin-left:8px;padding:2px 8px;font-size:11px" onclick="syncMailMeter()" title="Enter the exact count shown on your EmailJS dashboard to reconcile">✏️ Sync</button>`;
 }
+// Reconcile with the number EmailJS itself reports (e.g. e-mails sent before
+// this meter existed, or from anywhere outside the site).
+window.syncMailMeter=function(){
+  openConfirm({
+    title:'✏️ Sync E-mail Meter',
+    body:`<div>Enter the usage shown on your EmailJS dashboard (the "X / 200" number):</div>
+          <div style="margin-top:10px;text-align:center"><input type="number" id="mailSyncInput" class="inp" style="width:110px;text-align:center" min="0" max="5000" step="1"></div>
+          <div class="cmodal-info" style="margin-top:10px">The meter will continue counting up from this number for the current cycle.</div>`,
+    okText:'Set Count',
+    onConfirm:async()=>{
+      const v=parseInt(document.getElementById('mailSyncInput')?.value,10);
+      if(isNaN(v)||v<0){ toast('Enter a valid number','warn'); return; }
+      await setDoc(mailStatsRef,{[emailCycleKey()]:v},{merge:true});
+      toast('📊 E-mail meter set to '+v,'ok');
+    }
+  });
+};
 
 // Send reminder emails to users who haven't placed any bids in the CURRENT phase.
 // (Prior-phase bids or historical wins don't count — this is about who still owes bids.)

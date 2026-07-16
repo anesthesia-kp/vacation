@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 53;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 54;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1082,9 +1082,18 @@ onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?sn
 // Every e-mail this page sends counts against the shared EmailJS monthly quota —
 // increment the same per-month counter the admin dashboard's meter reads.
 const mailStatsRef = doc(db,"vacations","mailStats");
+// EmailJS's monthly quota resets on the 6th (the account's billing day), NOT
+// on the 1st — count within the same window so the meter matches their site.
+function emailCycleKey(){
+  const RESET_DAY=6;
+  const d=new Date();
+  let y=d.getFullYear(),m=d.getMonth();
+  if(d.getDate()<RESET_DAY){ m-=1; if(m<0){m=11;y-=1;} }
+  return 'cy'+y+'-'+String(m+1).padStart(2,'0');
+}
 function trackEmailSent(){
-  const ym=new Date().toISOString().slice(0,7);
-  updateDoc(mailStatsRef,{[ym]:increment(1)}).catch(()=>setDoc(mailStatsRef,{[ym]:1},{merge:true}).catch(()=>{}));
+  const k=emailCycleKey();
+  updateDoc(mailStatsRef,{[k]:increment(1)}).catch(()=>setDoc(mailStatsRef,{[k]:1},{merge:true}).catch(()=>{}));
 }
 onSnapshot(slotsRef,   snap=>{ slotsData=snap.exists()?snap.data():{}; applySlotOverrides(); scheduleRender(); });
 onSnapshot(mailQueueRef,snap=>{ mailQueueData=snap.exists()?snap.data():{}; scheduleMailQueueRelay(); });
