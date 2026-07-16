@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 66;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 68;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -821,7 +821,8 @@ thead th{color:var(--t2)}
 <!-- Full-screen sign-in gate — the admin panel is inert until an allow-listed
      Google account signs in. Hidden by the auth listener on success. -->
 <div id="authGate" style="position:fixed;inset:0;z-index:99998;background:#0b1826;display:flex;align-items:center;justify-content:center;padding:20px">
-  <div style="background:#122438;border:1px solid #24405c;border-radius:14px;max-width:400px;width:100%;padding:30px 28px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.5)">
+  <div id="authGateChecking" style="color:#8fa9bf;font-size:13px;letter-spacing:.03em">Checking sign-in…</div>
+  <div id="authGateCard" style="display:none;background:#122438;border:1px solid #24405c;border-radius:14px;max-width:400px;width:100%;padding:30px 28px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.5)">
     <div style="font-size:34px;margin-bottom:8px">🔐</div>
     <div style="font-size:18px;font-weight:800;color:#e8f1f8;margin-bottom:6px">Scheduler Admin</div>
     <div style="font-size:13px;color:#8fa9bf;margin-bottom:18px">Sign in with an authorized Google account to continue.</div>
@@ -935,6 +936,11 @@ onAuthStateChanged(auth, async u => {
   } else {
     _currentAdminEmail=null;
     if(gate) gate.style.display='flex';
+    // Only NOW reveal the sign-in card — while Firebase restores an existing
+    // session the gate shows a quiet "Checking sign-in…" instead of flashing
+    // the login form at an already-signed-in admin.
+    const chk=document.getElementById('authGateChecking'); if(chk) chk.style.display='none';
+    const card=document.getElementById('authGateCard'); if(card) card.style.display='block';
     if(who) who.textContent=(u&&u.email)?('Signed in as '+u.email+' — this account is not authorized.'):'';
   }
 });
@@ -1195,14 +1201,23 @@ function getDefaultSlots(wk){
   return 3;
 }
 function getSlots(wk){
-  // Admin-entered per-week FTE availability wins when present; otherwise fall
-  // back to the built-in default. A blank/missing entry means "use default".
+  // ONLY admin-entered values count — the built-in default was removed
+  // 16 Jul 2026 so capacity can never silently revert. A week without a saved
+  // value has capacity 0 (unbiddable) until admin saves one. getDefaultSlots
+  // survives only as the SUGGESTED prefill in the FTE Availability panel.
   const ov=slotsData?slotsData[wk]:undefined;
   if(ov!==undefined&&ov!==null&&ov!==''){
     const n=Number(ov);
     if(!isNaN(n)&&n>=0) return Math.round(n*10)/10;
   }
-  return getDefaultSlots(wk);
+  return 0;
+}
+// Weeks with no saved capacity — surfaced on the dashboard and FTE panel.
+function weeksMissingCapacity(){
+  const out=[];
+  mondays.forEach(d=>{ const wk=dateKey(d); const ov=slotsData?slotsData[wk]:undefined;
+    if(ov===undefined||ov===null||ov===''||isNaN(Number(ov))||Number(ov)<0) out.push(wk); });
+  return out;
 }
 
 // Prior-phase locked-in winners: users approved in phases < currentPhase.
@@ -1629,6 +1644,7 @@ function renderInsights(){
         <canvas id="bidChart" style="width:100%;height:120px;display:block;background:var(--s2);border:1px solid var(--b1);border-radius:8px"></canvas>
         <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);margin-top:3px"><span>phase opened</span><span id="bcXlabel">hours since phase opened →</span><span>now</span></div>
       </div>
+      <div id="strugglingBox" style="padding:10px 0;border-bottom:1px solid var(--b1)"></div>
       <div style="padding:10px 0 0">
         <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">🍿 <strong style="color:var(--t1)">Popcornometer</strong>
           <span style="color:var(--t2)">— <span id="pcCountAdm">0</span> bid change<span id="pcPlAdm">s</span> in last 24h</span></div>
@@ -1641,6 +1657,92 @@ function renderInsights(){
   document.getElementById('pcPlAdm').textContent=changes24===1?'':'s';
   document.getElementById('pcStatusAdm').textContent=popcornStatus(changes24);
   renderBidChart();
+  renderStruggling();
+}
+// ── Struggling-user flag ──
+// Flags users with ZERO wins anywhere in the auction who are currently losing.
+// 🔴 stuck  — none of their remaining bid numbers is strong enough to beat (or
+//             tie into a draw with) the weakest live winner on ANY week they
+//             are losing: they cannot improve their own odds.
+// 🟠 could improve — same situation but they still hold numbers strong enough
+//             to fight for at least one of their losing weeks.
+// Draws/reviews count as live chances, so those users are not flagged.
+function availableNumbersFor(u){
+  const used=new Set();
+  const cp=phasesData.completedPhases||{};
+  for(const n of Object.keys(cp)){
+    const sn=cp[n]||{}; const apn=sn.approvals||{}; const sch=(sn.schedule||{})[u]||{};
+    for(const wk in sch){
+      if(Array.isArray(apn[wk])&&apn[wk].includes(u)){ // prior WINS consume forever
+        const p=sch[wk]; if(p!=='NP'&&p!==undefined) (Array.isArray(p)?p:[p]).forEach(x=>used.add(Number(x)));
+      }
+    }
+  }
+  for(const wk in (scheduleData[u]||{})){
+    if(!isCurrentPhaseBidAdmin(u,wk)) continue;
+    const p=scheduleData[u][wk]; if(p===undefined||p==='NP') continue;
+    (Array.isArray(p)?p:[p]).forEach(x=>used.add(Number(x)));
+  }
+  return [1,2,3,4,5,6,7,8,9,10].filter(x=>!used.has(x));
+}
+function computeStrugglingUsers(){
+  const ap=computeApprovals();
+  const cp=phasesData.completedPhases||{};
+  const out=[];
+  for(const u of names){
+    let priorWins=0;
+    for(const n of Object.keys(cp)){ const apn=cp[n]?.approvals||{}; for(const wk in apn){ if(Array.isArray(apn[wk])&&apn[wk].includes(u)) priorWins++; } }
+    const bids=[];
+    for(const wk in (scheduleData[u]||{})){ if(scheduleData[u][wk]===undefined) continue; if(isCurrentPhaseBidAdmin(u,wk)) bids.push(wk); }
+    if(!bids.length) continue; // dashboard's "users without bids" covers these
+    let curWins=0, pending=0; const losing=[];
+    for(const wk of bids){
+      const a=ap[wk]; if(!a) continue;
+      if(a.winners.has(u)) curWins++;
+      else if(a.draws.has(u)||a.reviews.has(u)) pending++;
+      else losing.push(wk);
+    }
+    if(priorWins+curWins>0||!losing.length) continue;
+    // Can any losing week still be fought for with their remaining numbers?
+    const pool=availableNumbersFor(u);
+    let improvableWeeks=0;
+    for(const wk of losing){
+      const a=ap[wk];
+      // Weakest LIVE current-phase winner sets the bar (prior winners are unbeatable).
+      let weakest=null;
+      for(const w of a.winners){
+        if(a.priorWinners?.has(w)) continue;
+        const p=scheduleData[w]?.[wk]; if(p===undefined) continue;
+        const sc=pScore(p); if(weakest===null||sc>weakest) weakest=sc;
+      }
+      if(weakest===null) continue; // full from locked-in prior wins — nothing can help here
+      const hd=(typeof HIGH_DEMAND_WEEKS!=='undefined')&&HIGH_DEMAND_WEEKS.has(wk);
+      const candidates=pool.filter(n=>!hd||n<=4);
+      // equal score ties into a DRAW — that's a chance, so <= counts as improvable
+      if(candidates.some(n=>pScore(n)<=weakest)) improvableWeeks++;
+    }
+    out.push({user:u,bids:bids.length,losing:losing.length,pending,stuck:improvableWeeks===0,pool});
+  }
+  out.sort((a,b)=>(b.stuck?1:0)-(a.stuck?1:0)||b.losing-a.losing||a.user.localeCompare(b.user));
+  return out;
+}
+function renderStruggling(){
+  const el=document.getElementById('strugglingBox'); if(!el) return;
+  if(!phase1Started()){ el.innerHTML='<div style="font-size:12px;color:var(--t3)">⚠️ Struggling-user flags appear once bidding begins.</div>'; return; }
+  const list=computeStrugglingUsers();
+  const head=`<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">⚠️ <strong style="color:var(--t1)">Users struggling in the auction</strong><span style="color:var(--t2)">— no wins yet and currently losing</span></div>`;
+  if(!list.length){ el.innerHTML=head+'<div style="font-size:12px;color:var(--green)">✅ Nobody flagged — every active bidder has a win or a live chance (draw/review).</div>'; return; }
+  el.innerHTML=head+list.map(r=>{
+    const tone=r.stuck?'var(--red)':'var(--yellow)';
+    const tag=r.stuck
+      ? '🔴 <strong>cannot improve</strong> — no remaining bid number is strong enough for any week they want'
+      : `🟠 could still improve (numbers left: ${r.pool.slice(0,5).join(', ')}${r.pool.length>5?'…':''})`;
+    return `<div style="display:flex;align-items:center;gap:10px;padding:4px 0;font-size:12px">
+      <strong class="mono" style="color:var(--t1);min-width:44px">${esc(r.user)}</strong>
+      <span style="color:var(--t2)">0 wins · losing ${r.losing} of ${r.bids} bid${r.bids!==1?'s':''}${r.pending?` · ${r.pending} pending draw/review`:''}</span>
+      <span style="color:${tone}">${tag}</span>
+    </div>`;
+  }).join('');
 }
 // ── Bid-activity line chart ──
 // X: time since the current phase opened; Y: number of bid changes per bucket.
@@ -1989,8 +2091,9 @@ function syncControls(){
     if(!inp||!cb) return;
     if(document.activeElement===inp) return; // don't clobber mid-typing
     const raw=adminSettings?.maxBidsPerPhase;
-    if(raw==='none'){ cb.checked=true; inp.disabled=true; }
-    else { cb.checked=false; inp.disabled=false; inp.value=(raw===undefined||raw===null)?3:raw; }
+    // ONLY what admin entered (no default). Unset = no limit.
+    if(raw==='none'||raw===undefined||raw===null||raw===''){ cb.checked=true; inp.disabled=true; inp.value=''; }
+    else { cb.checked=false; inp.disabled=false; inp.value=raw; }
   })();
   const gl=document.getElementById("globalLockToggle");
   if(gl) gl.className="tog"+(locksData.globalLock?" on":"");
@@ -2514,6 +2617,22 @@ function countPendingDecisions(){
   return n;
 }
 window.gotoAppDenials=function(){ nav('appdenials',document.querySelector('[onclick*="appdenials"]')); };
+// Every state-changing step in the workflow guide confirms first. Closing
+// bidding expires the timer AND locks all 52 weeks — never silently.
+window.closePhaseBidding=function(cur){
+  openConfirm({
+    title:'⏱ Close Phase '+cur+' bidding',
+    body:`<div>End bidding for Phase <strong>${cur}</strong> now?</div>
+          <ul style="margin:10px 0 8px 18px;color:var(--t2);font-size:13px;line-height:1.65">
+            <li>The countdown timer expires immediately — users see the auction-closed notice</li>
+            <li>All 52 weeks are locked — no bids can be added, edited, or removed</li>
+            <li>Next you'll decide approvals/denials, then complete the phase</li>
+          </ul>`,
+    okText:'⏱ Close Bidding', danger:true,
+    onConfirm:async()=>{ await _fixClosePhaseBidding(cur); }
+  });
+};
+window.gotoSlotsPanel=function(){ nav('slots',document.querySelector('[onclick*="\'slots\'"]')); };
 function renderNextStep(){
   const el=document.getElementById('phaseNextStep'); if(!el) return;
   const cur=Number(phasesData.currentPhase||1);
@@ -2522,7 +2641,10 @@ function renderNextStep(){
     <div style="font-size:12.5px;color:var(--t1);line-height:1.5">${txt}</div>${btnHtml||''}</div>`;
   const btn=(label,onclick,cls)=>`<button class="btn ${cls||'btn-primary'}" style="margin-top:8px;padding:4px 12px;font-size:12px" onclick="${onclick}">${label}</button>`;
   let html;
-  if(!phase1Started()){
+  const missingCaps=weeksMissingCapacity().length;
+  if(missingCaps>0){
+    html=box(`<strong>${missingCaps}</strong> week${missingCaps!==1?'s have':' has'} no saved FTE capacity — those weeks are unbiddable (capacity 0) until you save a value. There are no built-in defaults.`,btn('📆 Open FTE Availability','gotoSlotsPanel()'));
+  } else if(!phase1Started()){
     html=box('Bidding has not begun. Begin Phase 1 to open the auction to users.',btn('▶ Begin Phase 1','beginPhase1()','btn-success'));
   } else if(phasesData.completedPhases?.[cur]){
     if(!phasesData.resultsSent?.[cur]){
@@ -2535,7 +2657,7 @@ function renderNextStep(){
   } else {
     const r=approvalReadiness();
     if(!r.ready){
-      html=box(`Phase ${cur} bidding is OPEN — users can place and change bids. When bidding should end, close it (expires the timer and locks all weeks).`,btn('⏱ Close Phase '+cur+' bidding','_fixClosePhaseBidding('+cur+')'));
+      html=box(`Phase ${cur} bidding is OPEN — users can place and change bids. When bidding should end, close it (expires the timer and locks all weeks).`,btn('⏱ Close Phase '+cur+' bidding','closePhaseBidding('+cur+')'));
     } else {
       const pending=countPendingDecisions();
       if(pending>0){
@@ -4842,17 +4964,23 @@ window.saveFte=async function(u){
 // there is no blank/default concept in the UI.
 function renderSlotsPanel(){
   const tb=document.getElementById("slotsBody"); if(!tb) return;
+  const missing=new Set(weeksMissingCapacity());
   tb.innerHTML=mondays.map(d=>{
     const wk=dateKey(d);
-    const val=getSlots(wk); // current effective value
-    return `<tr>
+    const unsaved=missing.has(wk);
+    // Unsaved weeks show the SUGGESTED value (old defaults) in the input, but
+    // their live capacity is 0 until Save is pressed.
+    const val=unsaved?getDefaultSlots(wk):getSlots(wk);
+    return `<tr${unsaved?' style="background:rgba(251,191,36,.07)"':''}>
       <td class="mono" style="white-space:nowrap;padding:3px 8px;font-size:12px">${wLabel(d)} <span style="color:var(--t2);font-size:10px;font-weight:400">${wRange(d)}</span></td>
-      <td style="padding:3px 8px"><input type="number" id="slot_${wk}" class="inp" style="width:72px;padding:3px 6px" value="${val}" step="0.1" min="0"></td>
+      <td style="padding:3px 8px"><input type="number" id="slot_${wk}" class="inp" style="width:72px;padding:3px 6px" value="${val}" step="0.1" min="0">${unsaved?' <span class="pill p-yellow" title="Live capacity is 0 until saved">NOT SAVED — capacity 0</span>':''}</td>
       <td style="padding:3px 6px"><button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveOneSlot('${wk}')">Save</button></td>
     </tr>`;
   }).join('');
   const st=document.getElementById("slotsStatus");
-  if(st) st.textContent='';
+  if(st) st.innerHTML=missing.size
+    ? `<span style="color:var(--yellow);font-weight:700">⚠️ ${missing.size} week${missing.size!==1?'s have':' has'} no saved capacity (live capacity 0). The inputs show suggested values — press "Save All Weeks" to apply them.</span>`
+    : `<span style="color:var(--green)">✓ Every week has an admin-saved capacity.</span>`;
 }
 
 // Read + validate one week input. Returns {ok, value}.

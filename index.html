@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 52;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 53;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -614,15 +614,17 @@ function getReviewThreshold(){
 let phasesData={currentPhase:1,completedPhases:{}};
 let bidPhaseData={}, deniedData={};
 let slotsData={}; // admin-entered per-week FTE availability overrides {wk:number}
-// Apply per-week FTE availability overrides onto weekMeta.slots. A present
-// override wins; a blank/missing one falls back to the built-in default.
+// Apply per-week FTE availability onto weekMeta.slots. ONLY admin-entered
+// values count — there is NO built-in default (removed 16 Jul 2026). A week
+// without a saved value has capacity 0 (unbiddable) until admin saves one, so
+// capacity can never silently revert to a default.
 function applySlotOverrides(){
   for(const wk in weekMeta){
     const ov=slotsData?slotsData[wk]:undefined;
     if(ov!==undefined&&ov!==null&&ov!==''&&!isNaN(Number(ov))&&Number(ov)>=0){
       weekMeta[wk].slots=Math.round(Number(ov)*10)/10;
     } else {
-      weekMeta[wk].slots=weekMeta[wk].defaultSlots;
+      weekMeta[wk].slots=0;
     }
   }
 }
@@ -738,8 +740,7 @@ mondays.forEach((d,idx)=>{
     label:d.toLocaleDateString('en-US',fmtWkd),
     range:d.toLocaleDateString('en-US',fmtWkd)+' – '+sat.toLocaleDateString('en-US',fmtWkd),
     shortDate:d.toLocaleDateString('en-US',fmt),
-    slots:special?special.slots:3,
-    defaultSlots:special?special.slots:3, // built-in default; admin FTE Availability may override .slots
+    slots:0, // capacity comes ONLY from admin-saved FTE Availability (no built-in default)
     highPriorityOnly:special?.highPriorityOnly||false,
     summerOnly:special?.summerOnly||false,
     special
@@ -991,10 +992,12 @@ onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{emailNo
 
 // ── Maximum bids per phase (admin-set; 'none' = no limit) ──
 function getMaxBidsPerPhase(){
+  // ONLY what admin entered counts — no built-in default (removed 16 Jul 2026).
+  // Nothing saved (or 'none') means no per-phase limit.
   const raw=adminSettings?.maxBidsPerPhase;
-  if(raw==='none') return null;               // no limit
+  if(raw===undefined||raw===null||raw===''||raw==='none') return null;
   const n=parseInt(raw,10);
-  if(isNaN(n)||n<1||n>10) return 3;           // starting value
+  if(isNaN(n)||n<1||n>10) return null;
   return n;
 }
 function updateBidLimitRule(){
@@ -1631,10 +1634,13 @@ window.openPhaseHistory=function(){
       const approvedHere=Array.isArray(phApprovals[wk])?phApprovals[wk]:[];
       const phDenials=d.denials||{};
       const deniedHere=Array.isArray(phDenials[wk])?phDenials[wk]:[];
+      // Completed phases contain only decided bids, so the honest labels are
+      // APPROVED / DENIED. (NOT APPROVED covers legacy/simulated snapshots
+      // where a bid was never explicitly decided.)
       let outcome, oc;
-      if(approvedHere.includes(user)){ outcome='WON'; oc='#00753a'; }
+      if(approvedHere.includes(user)){ outcome='APPROVED'; oc='#00753a'; }
       else if(deniedHere.includes(user)){ outcome='DENIED'; oc='#dc2626'; }
-      else { outcome='LOST'; oc='#dc2626'; }
+      else { outcome='NOT APPROVED'; oc='#dc2626'; }
       const lbl=bidLbl(prio);
       html+=`<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid rgba(0,0,0,.04)">
         <span style="font-size:.72rem;font-weight:700;color:#006ba6;min-width:48px">W${meta?.weekNum||''}</span>
