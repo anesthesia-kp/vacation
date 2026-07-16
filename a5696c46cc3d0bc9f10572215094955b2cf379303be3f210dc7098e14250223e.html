@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 58;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 59;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -314,8 +314,10 @@ thead th{color:var(--t2)}
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:12px">
         <div class="page-title" style="margin:0">Dashboard</div>
         <div class="page-sub" style="margin:0">Vacation auction — 2027</div>
-        <!-- Same double-confirm nuclear wipe as the Simulator's reset button -->
-        <button class="btn btn-danger" style="margin-left:auto;padding:5px 12px;font-size:12px" onclick="clearEverything()">💣 Reset Auction</button>
+        <!-- Signed-in admin + sign-out, then the nuclear reset (same double-confirm as the Simulator) -->
+        <span id="adminWhoami" style="margin-left:auto;font-size:11px;color:var(--t3)"></span>
+        <button class="btn btn-ghost" style="padding:5px 10px;font-size:12px" onclick="adminSignOut()">Sign out</button>
+        <button class="btn btn-danger" style="padding:5px 12px;font-size:12px" onclick="clearEverything()">💣 Reset Auction</button>
       </div>
 
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;margin-bottom:16px">
@@ -797,11 +799,27 @@ thead th{color:var(--t2)}
   </div>
 </div>
 
+<!-- Full-screen sign-in gate — the admin panel is inert until an allow-listed
+     Google account signs in. Hidden by the auth listener on success. -->
+<div id="authGate" style="position:fixed;inset:0;z-index:99998;background:#0b1826;display:flex;align-items:center;justify-content:center;padding:20px">
+  <div style="background:#122438;border:1px solid #24405c;border-radius:14px;max-width:400px;width:100%;padding:30px 28px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.5)">
+    <div style="font-size:34px;margin-bottom:8px">🔐</div>
+    <div style="font-size:18px;font-weight:800;color:#e8f1f8;margin-bottom:6px">Scheduler Admin</div>
+    <div style="font-size:13px;color:#8fa9bf;margin-bottom:18px">Sign in with an authorized Google account to continue.</div>
+    <button id="authGateBtn" onclick="adminGoogleSignIn()" style="display:inline-flex;align-items:center;gap:10px;background:#ffffff;color:#1f2937;border:none;border-radius:8px;padding:10px 22px;font-size:14px;font-weight:700;cursor:pointer">
+      <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+      Sign in with Google
+    </button>
+    <div id="authGateWho" style="margin-top:14px;font-size:12px;color:#fbbf24"></div>
+    <div id="authGateErr" style="margin-top:8px;font-size:12px;color:#f87171"></div>
+  </div>
+</div>
+
 <script type="module">
 import { initializeApp }    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, doc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, getDoc, onSnapshot as _onSnapshot }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-import { getAuth, signInAnonymously, onAuthStateChanged }
+import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const app = initializeApp({
@@ -853,17 +871,46 @@ function getLowestFTE(){ let m=Infinity; for(const u of names){ const f=getUserF
 let worstBidsData={}, emailsData={}, passwordsData={}, fteData={}, approvalsData={}, bidTimesData={}, usernamesData={};
 let selLockMonth=null, tickInterval=null;
 
-// ── Auth gate ───────────────────────────────────────────────────────────────
-// Firestore listeners MUST NOT attach before anonymous sign-in resolves.
-// Without a token every listener is rejected with permission-denied — and a
-// rejected snapshot listener never retries, so the page stays dead. A normal
-// browser hides this race behind a cached session; incognito has none, so it
-// loses the race every time.
-const authReady = new Promise((resolve, reject) => {
-  onAuthStateChanged(auth, u => { if (u) resolve(u); }, reject);
-  signInAnonymously(auth).catch(reject);
+// ── Admin auth gate ─────────────────────────────────────────────────────────
+// The admin panel requires a REAL Google sign-in from an allow-listed account.
+// The page stays behind the full-screen gate (and no Firestore listeners
+// attach) until an authorized account signs in. The same e-mail list is
+// enforced server-side by the Firestore security rules — this page gate is
+// the friendly UI layer, the rules are the actual security.
+const ADMIN_EMAILS=['dr.vacation.goddess@gmail.com','aaronjfrankel@gmail.com'];
+function isAdminUser(u){
+  return !!u && !u.isAnonymous && typeof u.email==='string'
+    && ADMIN_EMAILS.includes(u.email.toLowerCase())
+    && u.emailVerified!==false;
+}
+let _authResolve;
+const authReady = new Promise(resolve => { _authResolve = resolve; });
+onAuthStateChanged(auth, u => {
+  const gate=document.getElementById('authGate');
+  const who=document.getElementById('authGateWho');
+  if(isAdminUser(u)){
+    if(gate) gate.style.display='none';
+    const badge=document.getElementById('adminWhoami');
+    if(badge) badge.textContent=u.email;
+    _authResolve(u); // listeners attach; the panel comes alive
+  } else {
+    if(gate) gate.style.display='flex';
+    if(who) who.textContent=(u&&u.email)?('Signed in as '+u.email+' — this account is not authorized.'):'';
+  }
 });
-authReady.catch(e => console.error('[Auth] anonymous sign-in failed:', e && e.code, e && e.message));
+window.adminGoogleSignIn=async function(){
+  const err=document.getElementById('authGateErr');
+  if(err) err.textContent='';
+  try{
+    await signOut(auth).catch(()=>{}); // lets a wrong account switch cleanly
+    const provider=new GoogleAuthProvider();
+    if(provider.setCustomParameters) provider.setCustomParameters({prompt:'select_account'});
+    await signInWithPopup(auth, provider);
+  }catch(e){
+    if(err) err.textContent='Sign-in failed: '+((e&&e.message)||e)+' — if a pop-up was blocked, allow pop-ups for this site and try again.';
+  }
+};
+window.adminSignOut=function(){ signOut(auth).catch(()=>{}); };
 
 // Drop-in replacement for the imported onSnapshot. Defers attachment until
 // auth is ready, and surfaces listener errors instead of swallowing them.
