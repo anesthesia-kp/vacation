@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 62;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 66;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -85,6 +85,12 @@ code,kbd,.mono{font-family:'Geist Mono',monospace}
 .tog.on::after{transform:translateX(18px)}
 .tog.on-orange{background:var(--orange)}
 .tog.on-orange::after{transform:translateX(18px)}
+.tog.on-blue{background:var(--blue)}
+.tog.on-blue::after{transform:translateX(18px)}
+.tog.on-red{background:var(--red)}
+.tog.on-red::after{transform:translateX(18px)}
+.btn-blue{background:rgba(59,130,246,.1);color:var(--blue);border:1px solid rgba(59,130,246,.3)}.btn-blue:hover{background:rgba(59,130,246,.18)}
+.btn-redlock{background:rgba(239,68,68,.1);color:var(--red);border:1px solid rgba(239,68,68,.3)}.btn-redlock:hover{background:rgba(239,68,68,.18)}
 
 /* Buttons */
 .btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;font-size:12px;font-weight:600;border:none;cursor:pointer;transition:all .15s;font-family:'Geist',sans-serif}
@@ -153,7 +159,8 @@ tbody tr:hover td{background:rgba(255,255,255,.02)}
 
 /* Timer block */
 .timer-block{background:var(--s2);border:1px solid var(--b1);padding:14px 16px;margin-top:12px}
-.timer-block.running{border-color:rgba(249,115,22,.3)}
+.timer-block.running{border-color:rgba(59,130,246,.35)}
+.timer-block.glocked{border-color:rgba(239,68,68,.45)}
 .timer-block.expired{border-color:rgba(239,68,68,.3)}
 .timer-digs{display:flex;gap:4px;align-items:center}
 .tdig{background:var(--s3);border:1px solid var(--b2);padding:5px 8px;text-align:center;min-width:46px}
@@ -326,6 +333,7 @@ thead th{color:var(--t2)}
         <div id="phaseCurrentDisplay" style="font-size:1.8rem;font-weight:800;color:var(--blue);margin:6px 0 4px"></div>
         <div id="phaseStatusMsg" style="font-size:12px;color:var(--t2);margin-bottom:10px"></div>
         <div id="phaseProgress" style="margin-bottom:12px"></div>
+        <div id="phaseNextStep" style="margin-bottom:12px"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-success" id="beginPhase1Btn" onclick="beginPhase1()" style="display:none">▶ Begin Phase 1 — Open Bidding</button>
           <button class="btn btn-danger" id="completePhaseBtn" onclick="completePhase()">✓ Complete Phase</button>
@@ -364,7 +372,7 @@ thead th{color:var(--t2)}
             <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);font-family:var(--mono);margin-top:2px"><span>0</span><span>1h</span><span>3h</span><span>6h</span><span>12h</span><span>24h</span><span>48h</span></div>
           </div>
           <div style="display:flex;gap:8px;margin-top:12px">
-            <button class="btn btn-orange" id="resetTimerBtn" onclick="adminResetTimer()" disabled>↺ Reset Timer</button>
+            <button class="btn btn-blue" id="resetTimerBtn" onclick="adminResetTimer()" disabled>↺ Reset Timer</button>
           </div>
           <div class="trow" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
             <div><div class="trow-label">Bidding Timer</div><div class="trow-desc">Live countdown shown to all users; resets on each bid change</div></div>
@@ -412,6 +420,7 @@ thead th{color:var(--t2)}
             <div><div class="trow-label">Outbid alerts — <span id="mqCountTop" style="font-family:var(--mono)">0</span> queued</div><div class="trow-desc">Alerts queued when a user is outbid; sent automatically, or flush them now</div></div>
             <button class="btn" style="flex:unset;white-space:nowrap;background:rgba(180,83,9,.1);color:var(--yellow);border:1px solid rgba(180,83,9,.35)" onclick="flushMailQueue()">🔔 Send Pending</button>
           </div>
+          <div id="mailMeter" style="margin-top:10px;padding-top:12px;border-top:1px solid var(--b1);font-size:12px"></div>
         </div>
         <div class="card big-card" style="margin-bottom:0">
           <div class="card-title">📈 Auction Insights</div>
@@ -579,6 +588,7 @@ thead th{color:var(--t2)}
           <option value="edited">Edited</option>
           <option value="removed">Removed</option>
           <option value="approved">Approved</option>
+          <option value="denied">Denied</option>
           <option value="revoked">Revoked</option>
         </select>
         <label style="font-size:11px;color:var(--t2);margin-left:10px">User:</label>
@@ -826,7 +836,7 @@ thead th{color:var(--t2)}
 
 <script type="module">
 import { initializeApp }    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, getDoc, onSnapshot as _onSnapshot }
+import { getFirestore, doc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, getDoc, increment, onSnapshot as _onSnapshot }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
@@ -1013,7 +1023,7 @@ function onSnapshot(ref, next, error) {
 document.getElementById("load").classList.add("hidden");
 
 onSnapshot(scheduleRef, snap=>{ scheduleData=normalizeUserWkMap(snap.exists()?snap.data():{}); refreshAll(); });
-onSnapshot(locksRef,    snap=>{ locksData=snap.exists()?snap.data():{globalLock:false,weeks:{}}; if(!locksData.weeks)locksData.weeks={}; refreshAll(); });
+onSnapshot(locksRef,    snap=>{ locksData=snap.exists()?snap.data():{globalLock:false,weeks:{}}; if(!locksData.weeks)locksData.weeks={}; syncTimer(); refreshAll(); });
 onSnapshot(metaRef,     snap=>{ const d=snap.exists()?snap.data():{};  metaData=d; refreshAll(); });
 onSnapshot(changesRef,  snap=>{
   changesLog=snap.exists()?(snap.data().log||[]):[];
@@ -1290,10 +1300,11 @@ function computeApprovals(ignoreAdmin){
       const p=scheduleData[u]?.[wk]; if(p===undefined) continue;
       const deniedHereChk=Array.isArray(deniedData?.[wk])&&deniedData[wk].includes(u);
       if(!ignoreAdmin&&deniedHereChk) continue;
-      // NOTE: we intentionally do NOT filter by phase here. All live bids in
-      // scheduleData compete for the current phase's FTE, regardless of when they
-      // were placed. Prior-phase locked-in wins are already handled via priorWinners.
-      // Display layers (dashboard cards, approvals/denials panel) filter by phase separately.
+      // Prior-phase bids never compete in the current phase: winners are locked
+      // in via priorWinners above, and non-winning prior bids are DEAD (their
+      // numbers returned to the user). Without this filter a phase-1 denied bid
+      // would silently compete in phase-2 projections.
+      if(getUserBidPhaseAdmin(u,wk)<Number(phasesData.currentPhase||1)) continue;
       reqs.push({user:u,score:pScore(p),fte:getUserFTE(u)});
     }
     reqs.sort((a,b)=>a.score-b.score);
@@ -1306,7 +1317,7 @@ function computeApprovals(ignoreAdmin){
     for(const group of groups){
       if(settled) continue;
       const gf=group.reduce((s,r)=>s+r.fte,0);
-      if(fteWon+gf<=cap){
+      if(Math.round((fteWon+gf-cap)*10)/10<=0){ // FP-safe fit test (0.8*3+0.6 === 3.0000000000000004)
         group.forEach(r=>winners.add(r.user));
         fteWon+=gf;
       } else {
@@ -1530,11 +1541,18 @@ window.renderLockSummary=renderLockSummary;
 // last 24h" counters on BOTH sites always show the same number.
 // Events = every change-log entry in the window, plus any bidTimes stamp
 // (e.g. legacy simulator bids) that has no matching log entry.
+// Admin approve/deny/revoke decisions are logged for the ADMIN change-log, but
+// must never surface in the shared 24h activity feed or counters — users would
+// see decisions mid-phase (privacy rule), and both sites must count the same.
+function isDecisionEntry(e){
+  const a=String((e&&(e.action||e.type))||'');
+  return /approve|deny|denied|revoke/i.test(a);
+}
 function changeEvents24h(){
   // resetAt fences off everything from before the last phase close — the
   // counters read 0 the moment a phase completes.
   const cutoff=Math.max(Date.now()-86400000, changesResetAt||0);
-  const log=(changesLog||[]).filter(e=>e&&typeof e.ts==='number'&&e.ts>=cutoff);
+  const log=(changesLog||[]).filter(e=>e&&typeof e.ts==='number'&&e.ts>=cutoff&&!isDecisionEntry(e));
   const logged=new Set(log.map(e=>(e.user||'')+'|'+(e.weekKey||'')));
   const extras=[];
   for(const u in bidTimesData){ const m=bidTimesData[u]||{}; for(const wk in m){ const t=m[wk]; if(typeof t==='number'&&t>=cutoff&&!logged.has(u+'|'+wk)) extras.push({id:'bt_'+u+'_'+wk,user:u,weekKey:wk,action:'added',actor:'sim',ts:t}); } }
@@ -1600,14 +1618,17 @@ function renderInsights(){
     }
     if(has) bidders++;
   }
-  const pct=names.length?Math.round(bidders/names.length*100):0;
   const changes24=popcornCount24h();
   popcornSet(changes24);
   // Build the skeleton ONCE so the canvas animation survives re-renders.
   if(!document.getElementById('pcCanvasAdm')){
     el.innerHTML=`
-      <div id="insLine1" style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--b1)"></div>
-      <div id="insLine2" style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--b1)"></div>
+      <div style="padding:2px 0 10px;border-bottom:1px solid var(--b1)">
+        <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">📈 <strong style="color:var(--t1)">Bid activity — Phase <span id="bcPhase">1</span></strong>
+          <span style="color:var(--t2)" id="bcMeta"></span></div>
+        <canvas id="bidChart" style="width:100%;height:120px;display:block;background:var(--s2);border:1px solid var(--b1);border-radius:8px"></canvas>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);margin-top:3px"><span>phase opened</span><span id="bcXlabel">hours since phase opened →</span><span>now</span></div>
+      </div>
       <div style="padding:10px 0 0">
         <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">🍿 <strong style="color:var(--t1)">Popcornometer</strong>
           <span style="color:var(--t2)">— <span id="pcCountAdm">0</span> bid change<span id="pcPlAdm">s</span> in last 24h</span></div>
@@ -1616,13 +1637,58 @@ function renderInsights(){
       </div>`;
     _pcStart('pcCanvasAdm');
   }
-  document.getElementById('insLine1').innerHTML=`<span style="font-size:15px">👥</span><div style="flex:1"><div style="font-size:13px;color:var(--t1)"><strong>${bidders}</strong> of ${names.length} users bidding in Phase ${cur} <span style="color:var(--t2)">(${pct}%)</span></div>
-      <div style="height:6px;border-radius:999px;background:var(--s3);overflow:hidden;margin-top:5px"><div style="height:100%;width:${pct}%;background:var(--blue);border-radius:999px"></div></div></div>`;
-  document.getElementById('insLine2').innerHTML=`<span style="font-size:15px">🗳️</span><div style="flex:1"><span style="color:var(--t1)"><strong>${totalBids}</strong> bid${totalBids!==1?'s':''} placed</span>${bidders?` <span style="color:var(--t2)">· avg ${(Math.round(totalBids/bidders*10)/10)} per bidder</span>`:''}</div>`;
   document.getElementById('pcCountAdm').textContent=changes24;
   document.getElementById('pcPlAdm').textContent=changes24===1?'':'s';
   document.getElementById('pcStatusAdm').textContent=popcornStatus(changes24);
+  renderBidChart();
 }
+// ── Bid-activity line chart ──
+// X: time since the current phase opened; Y: number of bid changes per bucket.
+// Data = current-phase change-log entries (adds/edits/removals incl. simulator;
+// admin approve/deny decisions excluded — those aren't bid changes).
+function renderBidChart(){
+  const cv=document.getElementById('bidChart'); if(!cv) return;
+  const cur=Number(phasesData.currentPhase||1);
+  const ph=document.getElementById('bcPhase'); if(ph) ph.textContent=cur;
+  const events=(changesLog||[]).filter(e=>e&&typeof e.ts==='number'&&!isDecisionEntry(e)&&e.ts>=(changesResetAt||0));
+  const began=phasesData.phaseBeganAt?.[cur]
+    || (events.length?Math.min(...events.map(e=>e.ts)):Date.now()-3600000);
+  const now=Date.now();
+  const spanMs=Math.max(now-began,3600000); // at least a 1h window
+  const N=40;                                // fixed bucket count → clean line
+  const bucketMs=spanMs/N;
+  const buckets=new Array(N).fill(0);
+  events.forEach(e=>{ const i=Math.min(N-1,Math.max(0,Math.floor((e.ts-began)/bucketMs))); buckets[i]++; });
+  const meta=document.getElementById('bcMeta');
+  if(meta){ const hrs=Math.round(spanMs/360000)/10; meta.textContent=`— ${events.length} change${events.length!==1?'s':''} over ${hrs}h`; }
+  // Draw
+  const dpr=window.devicePixelRatio||1;
+  const W=cv.clientWidth||600, H=cv.clientHeight||120;
+  cv.width=W*dpr; cv.height=H*dpr;
+  const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  const padL=26,padR=8,padT=8,padB=14;
+  const maxY=Math.max(1,...buckets);
+  // gridlines + y labels
+  ctx.strokeStyle='rgba(148,163,184,.15)'; ctx.fillStyle='#64748b'; ctx.font='9px sans-serif'; ctx.textAlign='right';
+  for(const frac of [0,0.5,1]){
+    const y=padT+(H-padT-padB)*(1-frac);
+    ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke();
+    ctx.fillText(String(Math.round(maxY*frac)),padL-4,y+3);
+  }
+  const px=i=>padL+(W-padL-padR)*(i/(N-1));
+  const py=v=>padT+(H-padT-padB)*(1-v/maxY);
+  // area fill
+  ctx.beginPath(); ctx.moveTo(px(0),py(buckets[0]));
+  for(let i=1;i<N;i++) ctx.lineTo(px(i),py(buckets[i]));
+  ctx.lineTo(px(N-1),H-padB); ctx.lineTo(px(0),H-padB); ctx.closePath();
+  ctx.fillStyle='rgba(59,130,246,.15)'; ctx.fill();
+  // line
+  ctx.beginPath(); ctx.moveTo(px(0),py(buckets[0]));
+  for(let i=1;i<N;i++) ctx.lineTo(px(i),py(buckets[i]));
+  ctx.strokeStyle='#3b82f6'; ctx.lineWidth=2; ctx.stroke();
+}
+window.renderBidChart=renderBidChart;
 window.renderInsights=renderInsights;
 
 // ── Open the User / Weekly summary in a NEW TAB ──
@@ -1835,11 +1901,17 @@ function renderOverview(){
           phAp=approvalsData||{};
           phDen=deniedData||{};
         }
-        const winners=new Set(Array.isArray(phAp[wk])?phAp[wk]:[]);
+        // Snapshot approvals/schedule are CUMULATIVE — subtract earlier phases
+        // so phase-1 winners/bidders don't masquerade as phase-N results.
+        const cpAll=phasesData.completedPhases||{};
+        const prevWin=new Set();
+        for(const n of Object.keys(cpAll)){ if(Number(n)>=wantPh) continue; const arr=cpAll[n]?.approvals?.[wk]; if(Array.isArray(arr)) arr.forEach(x=>prevWin.add(x)); }
+        const winners=new Set((Array.isArray(phAp[wk])?phAp[wk]:[]).filter(x=>!prevWin.has(x)));
         const losersFromSnap=new Set();
-        // Losers = anyone who bid in that phase minus winners
         for(const u in phSched){
-          if(phSched[u]?.[wk]===undefined) continue;
+          const v=phSched[u]?.[wk]; if(v===undefined) continue;
+          if(prevWin.has(u)) continue;
+          if(phSnap.schedule&&inEarlierSnapshot(cpAll,wantPh,u,wk,v)) continue;
           if(!winners.has(u)) losersFromSnap.add(u);
         }
         let fteWonHist=0; for(const u of winners) fteWonHist+=getUserFTE(u);
@@ -2378,9 +2450,15 @@ window.clearEverything=function(){
       openConfirm({
         title:'🚨 Final Confirmation',
         body:`<div style="font-size:15px;font-weight:700;color:var(--red);text-align:center">Are you absolutely sure?</div>
-              <div style="text-align:center;margin-top:10px;color:var(--t2);font-size:13px">This will remove all bids, all admin approvals, all denials, all phase history, and all locks for every user. There is no recovery.</div>`,
+              <div style="text-align:center;margin-top:10px;color:var(--t2);font-size:13px">This will remove all bids, all admin approvals, all denials, all phase history, and all locks for every user. There is no recovery.</div>
+              <div style="text-align:center;margin-top:12px">
+                <div style="font-size:12px;color:var(--t2);margin-bottom:6px">Type <strong style="color:var(--red)">RESET</strong> to confirm:</div>
+                <input type="text" id="resetTypeInput" class="inp" style="width:140px;text-align:center;text-transform:uppercase" autocomplete="off">
+              </div>`,
         okText:'YES — DELETE EVERYTHING', danger:true,
         onConfirm:async()=>{
+          const typed=(document.getElementById('resetTypeInput')?.value||'').trim().toUpperCase();
+          if(typed!=='RESET'){ toast('Not reset — you must type RESET in the box to confirm','warn'); return; }
           try {
             await Promise.all([
               setDoc(scheduleRef,{}),
@@ -2415,7 +2493,62 @@ window.clearEverything=function(){
 function phase1Started(){
   return Number(phasesData.currentPhase||1)>1 || phasesData.phase1Started===true;
 }
+// ── "Next step" guide ──
+// The phase lifecycle always follows the same rhythm: open bidding → close
+// bidding → decide every bid → complete phase → send results → begin next.
+// This box always shows exactly where the auction is and one button for the
+// next action, so the admin never has to remember the sequence.
+function countPendingDecisions(){
+  const cur=Number(phasesData.currentPhase||1);
+  let n=0;
+  mondays.forEach(d=>{
+    const wk=dateKey(d);
+    const approvedHere=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
+    const deniedHere=Array.isArray(deniedData?.[wk])?deniedData[wk]:[];
+    for(const u in scheduleData){
+      const p=scheduleData[u]?.[wk]; if(p===undefined) continue;
+      if(!isCurrentPhaseBidAdmin(u,wk)) continue;
+      if(!approvedHere.includes(u)&&!deniedHere.includes(u)) n++;
+    }
+  });
+  return n;
+}
+window.gotoAppDenials=function(){ nav('appdenials',document.querySelector('[onclick*="appdenials"]')); };
+function renderNextStep(){
+  const el=document.getElementById('phaseNextStep'); if(!el) return;
+  const cur=Number(phasesData.currentPhase||1);
+  const box=(txt,btnHtml)=>`<div style="background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.3);border-radius:10px;padding:10px 12px">
+    <div style="font-size:11px;font-weight:700;color:var(--blue);letter-spacing:.05em;margin-bottom:4px">👉 NEXT STEP</div>
+    <div style="font-size:12.5px;color:var(--t1);line-height:1.5">${txt}</div>${btnHtml||''}</div>`;
+  const btn=(label,onclick,cls)=>`<button class="btn ${cls||'btn-primary'}" style="margin-top:8px;padding:4px 12px;font-size:12px" onclick="${onclick}">${label}</button>`;
+  let html;
+  if(!phase1Started()){
+    html=box('Bidding has not begun. Begin Phase 1 to open the auction to users.',btn('▶ Begin Phase 1','beginPhase1()','btn-success'));
+  } else if(phasesData.completedPhases?.[cur]){
+    if(!phasesData.resultsSent?.[cur]){
+      html=box(`Phase ${cur} is complete, but users have NOT been e-mailed their results yet.`,btn('📮 Send Phase '+cur+' Results','sendPhaseResultsEmails()','btn-success'));
+    } else if(cur>=4){
+      html=box('Phase 4 is complete and results are sent — the auction is finished. 🎉','');
+    } else {
+      html=box(`Phase ${cur} results are sent. Begin Phase ${cur+1} whenever you're ready.`,btn('▶ Begin Phase '+(cur+1),'beginNextPhase()','btn-success'));
+    }
+  } else {
+    const r=approvalReadiness();
+    if(!r.ready){
+      html=box(`Phase ${cur} bidding is OPEN — users can place and change bids. When bidding should end, close it (expires the timer and locks all weeks).`,btn('⏱ Close Phase '+cur+' bidding','_fixClosePhaseBidding('+cur+')'));
+    } else {
+      const pending=countPendingDecisions();
+      if(pending>0){
+        html=box(`Bidding is closed. <strong>${pending}</strong> bid${pending!==1?'s':''} still need${pending===1?'s':''} an approve or deny decision before the phase can be completed.`,btn('✅ Go to Approvals/Denials','gotoAppDenials()'));
+      } else {
+        html=box(`Bidding is closed and every bid is decided. Complete Phase ${cur} to lock in the results.`,btn('✓ Complete Phase '+cur,'completePhase()','btn-success'));
+      }
+    }
+  }
+  el.innerHTML=html;
+}
 function renderPhasePanel(){
+  renderNextStep();
   const cur=Number(phasesData.currentPhase||1);
   const completed=phasesData.completedPhases||{};
   const isComplete=!!completed[cur];
@@ -2536,15 +2669,21 @@ window.completePhase=function(){
       }
       await setDoc(changesRef,{log:[],resetAt:Date.now()}).catch(()=>{});
       toast('✓ Phase '+cur+' completed — all weeks locked','ok');
+      // Guide the admin straight to the natural next action: sending results.
+      setTimeout(()=>sendPhaseResultsEmails(),500);
     }
   });
 };
 
 async function _commitBeginPhase(next){
   if(next===1){
-    await setDoc(phasesRef,{currentPhase:1,phase1Started:true},{merge:true});
+    await setDoc(phasesRef,{currentPhase:1,phase1Started:true,phaseBeganAt:{...(phasesData.phaseBeganAt||{}),1:Date.now()}},{merge:true});
   } else {
-    await setDoc(phasesRef,{currentPhase:next},{merge:true});
+    await setDoc(phasesRef,{currentPhase:next,phaseBeganAt:{...(phasesData.phaseBeganAt||{}),[next]:Date.now()}},{merge:true});
+    // The finished phase's approvals/denials are preserved in its snapshot.
+    // Clearing the LIVE docs prevents a phase-1 denial from silently
+    // auto-denying a fresh re-bid on the same week in phase 2+.
+    await Promise.all([setDoc(approvalsRef,{}),setDoc(deniedRef,{})]).catch(()=>{});
   }
   // Beginning any phase resets the countdown to a fresh 48-hour window so
   // every phase opens with the full default bidding time.
@@ -2641,11 +2780,30 @@ function initAppDenialsFilters(){
   }
 }
 
+// Every e-mail counts against the EmailJS monthly quota — track it (both sites
+// increment the same per-month counter; the dashboard meter reads it).
+const mailStatsRef = doc(db,"vacations","mailStats");
+function trackEmailSent(){
+  const ym=new Date().toISOString().slice(0,7); // e.g. "2026-07"
+  updateDoc(mailStatsRef,{[ym]:increment(1)}).catch(()=>setDoc(mailStatsRef,{[ym]:1},{merge:true}).catch(()=>{}));
+}
 function adminSendEmail(user,subject,body){
   const email=emailsDataAdmin[user]; if(!email||email==='__skip__') return;
   try{
     emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body});
+    trackEmailSent();
   }catch(e){console.warn('Email failed:',e);}
+}
+let mailStatsData={};
+onSnapshot(mailStatsRef, snap=>{ mailStatsData=snap.exists()?snap.data():{}; renderMailMeter(); });
+function renderMailMeter(){
+  const el=document.getElementById('mailMeter'); if(!el) return;
+  const ym=new Date().toISOString().slice(0,7);
+  const n=Number(mailStatsData[ym]||0);
+  const QUOTA=200; // EmailJS free tier
+  const color=n>=190?'var(--red)':n>=150?'var(--yellow)':'var(--t2)';
+  const warn=n>=190?' — quota nearly exhausted!':n>=150?' — getting close to the free limit':'';
+  el.innerHTML=`<span style="color:${color}">📊 E-mails sent this month: <strong>${n}</strong> of ${QUOTA} free (EmailJS)${warn}</span>`;
 }
 
 // Send reminder emails to users who haven't placed any bids in the CURRENT phase.
@@ -2762,6 +2920,9 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
   });
 };
 
+// Escape user-controlled strings before ANY innerHTML interpolation — a
+// username or e-mail chosen on the user site must never execute as HTML here.
+function esc(v){ return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function bidLblAdmin(p){ if(p===undefined||p===null) return '—'; if(p==='NP') return 'NP'; if(Array.isArray(p)) return p.join(','); return String(p); }
 
 // ── Canonical phase-aware "Bids by Week" model (FTE-free) ──
@@ -2799,6 +2960,17 @@ function weekTypeLabel(wk,d){
 // snapshot. Mirrors computeApprovals(true): every bid in the snapshot schedule
 // competes, prior-phase (< phN) approved winners consume FTE first, and the
 // same draw/review threshold rules apply.
+// True when an identical bid entry (same user/week/value) already existed in a
+// snapshot of a phase EARLIER than phN — i.e. the entry is inherited history,
+// not a bid placed in phase phN. (Snapshots store the full merged schedule.)
+function inEarlierSnapshot(cp,phN,u,wk,val){
+  for(const n of Object.keys(cp)){
+    if(Number(n)>=Number(phN)) continue;
+    const q=cp[n]?.schedule?.[u]?.[wk];
+    if(q!==undefined&&JSON.stringify(q)===JSON.stringify(val)) return true;
+  }
+  return false;
+}
 function snapshotProjection(phN){
   const cp=phasesData.completedPhases||{};
   const sched=cp[phN]?.schedule||{};
@@ -2818,6 +2990,7 @@ function snapshotProjection(phN){
     for(const u in sched){
       if(priorWinners.has(u)) continue;
       const p=sched[u]?.[wk]; if(p===undefined) continue;
+      if(inEarlierSnapshot(cp,phN,u,wk,p)) continue; // inherited dead bid, not phase-phN
       reqs.push({user:u,score:pScore(p),fte:getUserFTE(u)});
     }
     if(!reqs.length) return;
@@ -2829,7 +3002,7 @@ function snapshotProjection(phN){
     for(const group of groups){
       if(settled) continue;
       const gf=group.reduce((s,r)=>s+r.fte,0);
-      if(fteWon+gf<=cap){ group.forEach(r=>winners.add(r.user)); fteWon+=gf; }
+      if(Math.round((fteWon+gf-cap)*10)/10<=0){ group.forEach(r=>winners.add(r.user)); fteWon+=gf; } // FP-safe fit test
       else {
         settled=true;
         if(group.length>1){
@@ -2889,11 +3062,24 @@ function bidsByWeekModel(scope){
     const approvedHere=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
     const deniedHere=Array.isArray(deniedData?.[wk])?deniedData[wk]:[];
     const bids=[];
-    for(const u in scheduleData){
-      const p=scheduleData[u]?.[wk]; if(p===undefined) continue;
-      const bp=getUserBidPhaseAdmin(u,wk);
-      if(lockedPhase!==null){ if(bp!==lockedPhase) continue; }
-      else if(scope==='current'){ if(bp!==cur) continue; }   // 'all' keeps everything
+    // Locked-phase views iterate that phase's SNAPSHOT schedule (original bid
+    // values, immune to later re-bids overwriting the live tag); inherited
+    // entries from earlier snapshots are skipped. Live views iterate the live
+    // schedule with phase tags as before.
+    const snapMode=lockedPhase!==null;
+    const cpAll=phasesData.completedPhases||{};
+    const srcSched=snapMode?((cpAll[lockedPhase]||{}).schedule||scheduleData):scheduleData;
+    for(const u in srcSched){
+      const p=srcSched[u]?.[wk]; if(p===undefined) continue;
+      let bp;
+      if(snapMode){
+        if((cpAll[lockedPhase]||{}).schedule&&inEarlierSnapshot(cpAll,lockedPhase,u,wk,p)) continue;
+        bp=(cpAll[lockedPhase]||{}).schedule?lockedPhase:getUserBidPhaseAdmin(u,wk);
+        if(bp!==lockedPhase) continue;
+      } else {
+        bp=getUserBidPhaseAdmin(u,wk);
+        if(scope==='current'){ if(bp!==cur) continue; }   // 'all' keeps everything
+      }
       let outcome, projected;
       if(bp<cur){
         const phSnap=phasesData.completedPhases?.[bp]||{};
@@ -3126,9 +3312,12 @@ function buildDashboardRows(phaseFilter){
         for(const u in scheduleData){ if(scheduleData[u]?.[wk]===undefined) continue; if(getUserBidPhaseAdmin(u,wk)!==wantPh) continue; phSched[u]=scheduleData[u]; }
         phAp=approvalsData||{};
       }
-      const winners=new Set(Array.isArray(phAp[wk])?phAp[wk]:[]);
+      const cpAll2=phasesData.completedPhases||{};
+      const prevWin2=new Set();
+      for(const n of Object.keys(cpAll2)){ if(Number(n)>=wantPh) continue; const arr=cpAll2[n]?.approvals?.[wk]; if(Array.isArray(arr)) arr.forEach(x=>prevWin2.add(x)); }
+      const winners=new Set((Array.isArray(phAp[wk])?phAp[wk]:[]).filter(x=>!prevWin2.has(x)));
       const losers=new Set();
-      for(const u in phSched){ if(phSched[u]?.[wk]===undefined) continue; if(!winners.has(u)) losers.add(u); }
+      for(const u in phSched){ const v=phSched[u]?.[wk]; if(v===undefined) continue; if(prevWin2.has(u)) continue; if(phSnap.schedule&&inEarlierSnapshot(cpAll2,wantPh,u,wk,v)) continue; if(!winners.has(u)) losers.add(u); }
       let fteWonHist=0; for(const u of winners) fteWonHist+=getUserFTE(u);
       a={winners,draws:new Set(),reviews:new Set(),fteWon:Math.round(fteWonHist*10)/10};
       loserSet=losers;
@@ -3480,6 +3669,7 @@ window.adRevokeDeny=function(user,wk){
     okText:'Revoke',
     onConfirm:async()=>{
       await updateDoc(deniedRef,{[wk]:arrayRemove(user)}).catch(()=>{});
+      await adminLog(user,wk,'admin-revoke',scheduleData[user]?.[wk]).catch?.(()=>{});
       toast('↶ Denial revoked for '+user,'ok');
       renderAppDenials();
     }
@@ -3669,10 +3859,16 @@ async function _execSimulationApprovals(){
   for(const wk of mondays.map(d=>dateKey(d))){
     const a=ap[wk]; if(!a) continue;
     const approvedHere=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
-    // Approve all winners not yet approved
+    // Approve all winners not yet approved — current-phase bidders only
+    // (prior-phase winners are already settled; same guards as the manual
+    // Approve All Winners button).
+    const priorWinnersSim=getPriorPhaseWinners(wk);
     for(const u of a.winners){
+      if(priorWinnersSim.has(u)) continue;
+      if(scheduleData[u]?.[wk]===undefined||!isCurrentPhaseBidAdmin(u,wk)) continue;
       if(!approvedHere.includes(u)){
         await updateDoc(approvalsRef,{[wk]:arrayUnion(u)}).catch(async()=>setDoc(approvalsRef,{[wk]:[u]},{merge:true}));
+        try{ await adminLog(u,wk,'admin-approve',scheduleData[u]?.[wk]); }catch(_){}
         approvalCount++;
         logLines.push('✓ Approved '+u+' for Wk '+(_wkNumByISO[wk]||wk));
       }
@@ -3686,6 +3882,7 @@ async function _execSimulationApprovals(){
       if(!a.winners.has(u)&&!a.draws.has(u)&&!a.reviews.has(u)){
         if(!deniedHere.includes(u)){
           await updateDoc(deniedRef,{[wk]:arrayUnion(u)}).catch(async()=>setDoc(deniedRef,{[wk]:[u]},{merge:true}));
+          try{ await adminLog(u,wk,'admin-deny',scheduleData[u]?.[wk]); }catch(_){}
           denialCount++;
           logLines.push('✕ Denied '+u+' for Wk '+(_wkNumByISO[wk]||wk));
         }
@@ -3702,10 +3899,12 @@ async function _execSimulationApprovals(){
         const ufte=getUserFTE(u);
         if(Math.round((fteUsed+ufte)*10)/10<=cap+T){
           await updateDoc(approvalsRef,{[wk]:arrayUnion(u)}).catch(async()=>setDoc(approvalsRef,{[wk]:[u]},{merge:true}));
+          try{ await adminLog(u,wk,'admin-approve',scheduleData[u]?.[wk]); }catch(_){}
           fteUsed=Math.round((fteUsed+ufte)*10)/10;
           approvalCount++; logLines.push('✓ Draw winner: '+u+' for Wk '+(_wkNumByISO[wk]||wk));
         } else {
           await updateDoc(deniedRef,{[wk]:arrayUnion(u)}).catch(async()=>setDoc(deniedRef,{[wk]:[u]},{merge:true}));
+          try{ await adminLog(u,wk,'admin-deny',scheduleData[u]?.[wk]); }catch(_){}
           denialCount++; logLines.push('✕ Draw loser: '+u+' for Wk '+(_wkNumByISO[wk]||wk));
         }
       }
@@ -3714,6 +3913,7 @@ async function _execSimulationApprovals(){
     for(const u of a.reviews){
       if(!approvedHere.includes(u)){
         await updateDoc(approvalsRef,{[wk]:arrayUnion(u)}).catch(async()=>setDoc(approvalsRef,{[wk]:[u]},{merge:true}));
+        try{ await adminLog(u,wk,'admin-approve',scheduleData[u]?.[wk]); }catch(_){}
         approvalCount++; logLines.push('✓ Review approved: '+u+' for Wk '+(_wkNumByISO[wk]||wk));
       }
     }
@@ -4079,6 +4279,7 @@ function normalizeEntry(c){
   else if(raw==='remove'||raw==='removed'||raw==='admin-remove') action='removed';
   else if(raw==='edit'||raw==='edited'||raw==='admin-edit') action='edited';
   else if(raw==='admin-approve'||raw==='approved') action='approved';
+  else if(raw==='admin-deny'||raw==='denied') action='denied';
   else if(raw==='admin-revoke'||raw==='revoked') action='revoked';
   else action=raw||'edited';
   return { actor, action, user:c.user||'—', weekKey:c.weekKey, bidValue:c.bidValue, ts:c.ts };
@@ -4165,6 +4366,7 @@ function renderChangelog(){
       edited:   {label:'EDITED',   bg:'rgba(96,165,250,.15)', color:'#005e93'},
       removed:  {label:'REMOVED',  bg:'rgba(239,68,68,.15)',  color:'#dc2626'},
       approved: {label:'APPROVED', bg:'rgba(34,197,94,.18)',  color:'#0d7a43'},
+      denied:   {label:'DENIED',   bg:'rgba(239,68,68,.18)',  color:'#dc2626'},
       revoked:  {label:'REVOKED',  bg:'rgba(251,191,36,.18)', color:'#946008'}
     };
     const m=map[a]||{label:a.toUpperCase(), bg:'rgba(148,163,184,.15)', color:'#38566e'};
@@ -4187,7 +4389,7 @@ function renderChangelog(){
     const items = g.entries.map(e=>{
       const wkStr = e.weekKey ? (()=>{try{return wLabel(wkDate(e.weekKey));}catch(_){return e.weekKey;}})() : '—';
       const actionText = e.actor==='admin'
-        ? `Admin ${e.action} ${e.action==='approved'||e.action==='revoked'?'':'bid for '}<strong>${e.user}</strong>`
+        ? `Admin ${e.action} ${e.action==='approved'||e.action==='denied'||e.action==='revoked'?'':'bid for '}<strong>${e.user}</strong>`
         : `<strong>${e.user}</strong> ${e.action} their bid`;
       return `<div class="cl-row">
         <div class="cl-time" title="${fmtAbsTime(e.ts)}">${fmtRelative(e.ts)}</div>
@@ -4233,15 +4435,18 @@ window.clearChangelog=function(){
 function syncTimer(){
   syncDurationUI();
   const en=timerData.enabled===true;
-  const tog=document.getElementById("timerToggle"); if(tog)tog.className="tog"+(en?" on-orange":"");
+  // Timer controls are BLUE in normal operation and turn RED while the global
+  // lock is on (bidding frozen), so the state is obvious at a glance.
+  const gLocked=!!locksData?.globalLock;
+  const tog=document.getElementById("timerToggle"); if(tog)tog.className="tog"+(en?(gLocked?" on-red":" on-blue"):"");
   const rb=document.getElementById("resetTimerBtn");
-  if(rb)rb.disabled=!en;
+  if(rb){ rb.disabled=!en; rb.className="btn "+(gLocked?"btn-redlock":"btn-blue"); }
   const bl=document.getElementById("timerBlock"); const lb=document.getElementById("timerLabel"); const mt=document.getElementById("timerMeta");
   if(!bl||!lb||!mt)return;
   if(!en){bl.className="timer-block";lb.textContent="Timer disabled";mt.textContent="Enable above to start.";document.getElementById("timerDigs").innerHTML="";return;}
-  if(!timerData.lastChange){bl.className="timer-block";lb.textContent="Waiting for first change";mt.textContent="Countdown starts on first bid.";document.getElementById("timerDigs").innerHTML='<span class="pill p-orange">Waiting</span>';return;}
+  if(!timerData.lastChange){bl.className="timer-block";lb.textContent="Waiting for first change";mt.textContent="Countdown starts on first bid.";document.getElementById("timerDigs").innerHTML='<span class="pill p-blue">Waiting</span>';return;}
   const rem=getDurationMs()-(Date.now()-timerData.lastChange);
-  bl.className="timer-block"+(rem<=0?" expired":" running");
+  bl.className="timer-block"+(rem<=0?" expired":" running")+(gLocked?" glocked":"");
   lb.textContent=rem<=0?"Timer expired":"Timer running";
   mt.textContent=`Last reset: ${new Date(timerData.lastChange).toLocaleString()}`;
   renderTimerDigs();
@@ -4433,7 +4638,7 @@ function renderUsersCombined(){
     const hasPass=!!passwordsData[n];
     const uname=usernamesData[n];
     const unameCell=uname
-      ? `<span style="font-weight:700;color:var(--t1)">${uname}</span>
+      ? `<span style="font-weight:700;color:var(--t1)">${esc(uname)}</span>
          <button class="btn btn-ghost" style="padding:2px 7px;font-size:11px" onclick="adminClearUsername('${n}')" title="Clear this username">Clear</button>`
       : `<span style="color:var(--t3);font-size:12px;font-style:italic">not set</span>`;
     return `<tr>
@@ -4441,7 +4646,7 @@ function renderUsersCombined(){
       <td style="white-space:nowrap">${unameCell}</td>
       <td style="white-space:nowrap"><input type="number" id="fte_${n}" class="inp" style="width:70px" value="${fte}" step="0.1" min="0" max="1">
         <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveFte('${n}')">Save</button></td>
-      <td style="white-space:nowrap"><input type="email" id="em_${n}" class="inp" style="width:190px" value="${skip?'':em}" placeholder="no email saved">${skip?' <span class="pill p-yellow">opted out</span>':''}
+      <td style="white-space:nowrap"><input type="email" id="em_${n}" class="inp" style="width:190px" value="${skip?'':esc(em)}" placeholder="no email saved">${skip?' <span class="pill p-yellow">opted out</span>':''}
         <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveEmail('${n}')">Save</button>
         <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearEmail('${n}')">Clear</button></td>
       <td style="white-space:nowrap"><span style="font-size:12px;color:${hasPass?'var(--green)':'var(--t3)'}">${hasPass?'✓ Set':'Not set'}</span>
@@ -4806,10 +5011,10 @@ window.renderDrawsReviews=function(){
     // the dashed pill; the solid ✓ APPROVED / ✕ DENIED chip is ADDED only once
     // admin decides. DRAW / UNDER REVIEW are projections, so they're dashed.
     let tag, actions;
-    if(e.type==='draw'){
-      tag=projPill('draw');
-    } else if(e.type==='review'){
-      tag=projPill('review');
+    if(e.type==='draw'||e.type==='review'){
+      // Same convention as Approvals/Denials: the dashed pill shows the NATURAL
+      // (pre-admin) projection. The row's section already says draw/review.
+      tag=projPill(natOutcome(nat,e.wk,e.user));
     } else if(e.type==='denied'){
       tag=`${projPill(natOutcome(nat,e.wk,e.user))}<span class="pill p-red">✕ DENIED</span>`;
     } else {
@@ -4844,7 +5049,8 @@ window.renderDrawsReviews=function(){
       // Only show weeks that actually have a draw or review (or approved when filter=all)
       const hasDrawOrReview=list.some(e=>e.type==='draw'||e.type==='review');
       const hasApproved=list.some(e=>e.type==='approved');
-      if(!hasDrawOrReview&&!hasApproved) return;
+      const hasDenied=list.some(e=>e.type==='denied');
+      if(!hasDrawOrReview&&!hasApproved&&!hasDenied) return;
       const drawUsers=list.filter(e=>e.type==='draw').map(e=>e.user);
       const cap=getSlots(wk);
       const a=ap[wk]||{fteWon:0,winners:new Set(),draws:new Set(),reviews:new Set()};
