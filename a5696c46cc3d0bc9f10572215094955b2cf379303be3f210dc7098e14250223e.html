@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 74;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 75;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -248,9 +248,10 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
 .btn-danger{background:var(--red-d);color:var(--red);border:1px solid rgba(198,40,40,.45)}
 .big-card{padding:22px 24px}
 .big-card .card-title{font-size:13px}
-/* Masonry-style dashboard: cards pack at natural height instead of stretching to the tallest card in a grid row */
-.dash-cols{columns:340px;column-gap:14px;margin-bottom:16px}
-.dash-cols>.card{break-inside:avoid;-webkit-column-break-inside:avoid;margin-bottom:14px;width:100%}
+/* Dashboard grid: 2 rows × 3 columns — Phase | Timer | Lock Weeks, then Reports | Messaging | Insights.
+   Cards in the same row share the row's height for a symmetric layout. */
+.dash-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;margin-bottom:16px}
+.dash-cols>.card{margin-bottom:0}
 #st-locked,#st-timer{font-size:13px!important;font-weight:800;display:inline;line-height:1.2}
 #phaseCurrentDisplay{font-size:2.2rem!important}
 .card{box-shadow:0 1px 3px rgba(10,37,64,.08)}
@@ -408,6 +409,7 @@ thead th{color:var(--t2)}
               <button class="btn btn-ghost" onclick="openSummaryTab('weekly')">📆 Weekly Summary</button>
             </div>
           </div>
+          <div id="popcornBox" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1);font-size:13px;color:var(--t2)"></div>
         </div>
         <div class="card big-card">
           <div class="card-title">Messaging Users</div>
@@ -1672,22 +1674,25 @@ function renderInsights(){
   const changes24=popcornCount24h();
   popcornSet(changes24);
   // Build the skeleton ONCE so the canvas animation survives re-renders.
-  if(!document.getElementById('pcCanvasAdm')){
+  if(!document.getElementById('strugglingBox')){
     el.innerHTML=`
       <div id="strugglingBox" style="padding:2px 0 10px;border-bottom:1px solid var(--b1)"></div>
       <div id="badBehaviorBox" style="padding:10px 0;border-bottom:1px solid var(--b1)"></div>
-      <div style="padding:10px 0;border-bottom:1px solid var(--b1)">
+      <div style="padding:10px 0 0">
         <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">📈 <strong style="color:var(--t1)">Bid activity — Phase <span id="bcPhase">1</span></strong>
           <span style="color:var(--t2)" id="bcMeta"></span></div>
         <canvas id="bidChart" style="width:100%;height:120px;display:block;background:var(--s2);border:1px solid var(--b1);border-radius:8px"></canvas>
         <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);margin-top:3px"><span>phase opened</span><span id="bcXlabel">hours since phase opened →</span><span>now</span></div>
-      </div>
-      <div style="padding:10px 0 0">
-        <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">🍿 <strong style="color:var(--t1)">Popcornometer</strong>
-          <span style="color:var(--t2)">— <span id="pcCountAdm">0</span> bid change<span id="pcPlAdm">s</span> in last 24h</span></div>
-        <div id="pcStatusAdm" style="font-size:11px;color:var(--t2);margin-bottom:6px"></div>
-        <canvas id="pcCanvasAdm" style="width:100%;height:104px;display:block;background:linear-gradient(180deg,#1e4a6d,#153755);border:1px solid var(--b1);border-radius:8px"></canvas>
       </div>`;
+  }
+  // Popcornometer lives at the bottom of the Summaries and Reports card (keeps row heights similar).
+  const pcBox=document.getElementById('popcornBox');
+  if(pcBox&&!document.getElementById('pcCanvasAdm')){
+    pcBox.innerHTML=`
+      <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">🍿 <strong style="color:var(--t1)">Popcornometer</strong>
+        <span style="color:var(--t2)">— <span id="pcCountAdm">0</span> bid change<span id="pcPlAdm">s</span> in last 24h</span></div>
+      <div id="pcStatusAdm" style="font-size:11px;color:var(--t2);margin-bottom:6px"></div>
+      <canvas id="pcCanvasAdm" style="width:100%;height:104px;display:block;background:linear-gradient(180deg,#1e4a6d,#153755);border:1px solid var(--b1);border-radius:8px"></canvas>`;
     _pcStart('pcCanvasAdm');
   }
   document.getElementById('pcCountAdm').textContent=changes24;
@@ -1897,7 +1902,7 @@ function renderStruggling(){
   };
   el.innerHTML=head
     +section('Losing every bid',list.filter(r=>r.type==='allLosing'))
-    +section('Draw/review pending, no wins',list.filter(r=>r.type==='mixed'));
+    +section('Losing/Draw/Review every bid',list.filter(r=>r.type==='mixed'));
 }
 // ── Bid-activity line chart ──
 // X: time since the current phase opened; Y: number of bid changes per bucket.
