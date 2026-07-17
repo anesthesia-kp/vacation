@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 69;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 70;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -486,12 +486,18 @@ thead th{color:var(--t2)}
     <!-- FTE AVAILABILITY -->
     <div class="panel" id="panel-slots">
       <div class="page-head"><div class="page-title">FTE Availability</div><div class="page-sub">Set how much FTE is available each week. Every week shows its current value — change a number and save. These values are used everywhere: user bidding boards, the dashboard, draws &amp; reviews, and outcome calculations.</div></div>
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-title">🔐 Smart Lock Control — what it does</div>
+        <div class="page-sub" style="margin-bottom:8px"><strong style="color:var(--t1)">Smart Lock Control is the minimum remaining FTE a week needs to stay open.</strong> When Smart Lock runs (between phases, or from the dashboard), each week is compared to its own control value: remaining FTE <strong>below</strong> the control → the week locks (or stays locked); remaining FTE <strong>at or above</strong> the control → it unlocks (or stays unlocked). Range −1.0 to +1.0 in 0.1 steps; every week starts at <strong>0.4</strong>.</div>
+        <div class="page-sub" style="margin-bottom:8px">Examples: control 0.4, week has 0.3 remaining → locks. Control 0.4, week has 0.4 remaining → stays open. Control −0.2, week has −0.1 remaining → stays open (−0.1 is above −0.2).</div>
+        <div class="page-sub">How to use it: leave everything at 0.4 and Smart Lock handles the whole year automatically between phases. Lower a week's control (even negative) to keep that week biddable deeper into overage; raise it to close a week off earlier. The FTE Overage Amount (Controls page) no longer affects locking — it only shapes draw/review projections during bidding.</div>
+      </div>
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
         <button class="btn btn-primary" onclick="saveAllSlots()">💾 Save All Weeks</button>
         <span id="slotsStatus" style="font-size:12px;color:var(--t2)"></span>
       </div>
       <div style="overflow-x:auto;max-height:640px;overflow-y:auto;border:1px solid var(--b1)">
-        <table style="width:auto;border-collapse:collapse"><thead><tr><th style="padding:5px 8px">Week</th><th style="padding:5px 8px">FTE Available</th><th style="padding:5px 6px"></th></tr></thead><tbody id="slotsBody"></tbody></table>
+        <table style="width:auto;border-collapse:collapse"><thead><tr><th style="padding:5px 8px">Week</th><th style="padding:5px 8px">FTE Available</th><th style="padding:5px 8px">Smart Lock Control</th><th style="padding:5px 6px"></th></tr></thead><tbody id="slotsBody"></tbody></table>
       </div>
     </div>
 
@@ -654,15 +660,15 @@ thead th{color:var(--t2)}
         </div>
       </div>
       <div class="card">
-        <div class="card-title">Outbid Alert Queue</div>
-        <div class="trow">
+        <div class="card-title">NP Bids by Phase</div>
+        <div class="trow" style="align-items:flex-start;flex-direction:column;gap:8px">
           <div>
-            <div class="trow-label">Outbid Alert Queue: <span id="mqCount" style="font-family:var(--mono)">0</span> pending</div>
-            <div class="trow-desc">Alerts are saved to a queue the moment a bid changes, then emailed. If the sender's browser closes first, ANY open page (user or admin) delivers them within about a minute using a claim system that prevents duplicates. The button flushes immediately from here.</div>
+            <div class="trow-desc">Allow or block NP (no-preference) bids per phase. Users may only place NP bids during phases toggled ON. Changing a toggle affects NEW bids only — existing NP bids stay as placed.</div>
           </div>
-          <button class="btn btn-primary" style="flex:unset" onclick="flushMailQueue()">📮 Send Pending</button>
+          <div id="npPhaseToggles" style="display:flex;gap:22px;flex-wrap:wrap"></div>
         </div>
       </div>
+
       <div class="card">
         <div class="card-title">Max Bids for Current Phase</div>
         <div class="trow" style="align-items:flex-start;flex-direction:column;gap:8px">
@@ -685,9 +691,11 @@ thead th{color:var(--t2)}
           <div>
             <div class="trow-label">Maximum FTE Overage</div>
             <div class="trow-desc">
-              Determines how far a week's FTE can exceed capacity before the bid is an automatic loss.
-              Used for both draws (each tied user must fit within this amount) and reviews (single user
-              over cap by this amount goes to admin review). Range 0.0–2.0, step 0.1. Default 0.5.
+              Shapes PROJECTIONS during bidding: how far over capacity a bid can be and still become a
+              DRAW (each tied user must fit within this amount) or UNDER REVIEW (single user over cap by
+              this amount) instead of an automatic loss. Range 0.0–2.0, step 0.1. Default 0.5.
+              <br>It no longer affects week locking — Smart Lock uses each week's <strong>Smart Lock
+              Control</strong> (set in FTE Availability) instead.
               <br><strong>Only editable when zero bids are placed</strong> — locked once bidding is live.
             </div>
           </div>
@@ -702,7 +710,17 @@ thead th{color:var(--t2)}
           <div id="reviewThresholdStatus" style="font-size:11px;color:var(--t2);margin-top:4px"></div>
         </div>
       </div>
-    </div>
+          <div class="card">
+        <div class="card-title">Outbid Alert Queue</div>
+        <div class="trow">
+          <div>
+            <div class="trow-label">Outbid Alert Queue: <span id="mqCount" style="font-family:var(--mono)">0</span> pending</div>
+            <div class="trow-desc">Alerts are saved to a queue the moment a bid changes, then emailed. If the sender's browser closes first, ANY open page (user or admin) delivers them within about a minute using a claim system that prevents duplicates. The button flushes immediately from here.</div>
+          </div>
+          <button class="btn btn-primary" style="flex:unset" onclick="flushMailQueue()">📮 Send Pending</button>
+        </div>
+      </div>
+      </div>
 
     <!-- APPROVALS / DENIALS -->
     <div class="panel" id="panel-appdenials">
@@ -860,6 +878,7 @@ const changesRef  = doc(db,"vacations","changes");
 const adminRef    = doc(db,"vacations","adminSettings");
 const timerRef    = doc(db,"vacations","timer");
 const worstBidsRef = doc(db,"vacations","bestBids");
+const slcRef       = doc(db,"vacations","slcMap"); // per-week Smart Lock Control
 const emailsRef   = doc(db,"vacations","emails");
 const passwordsRef = doc(db,"vacations","passcodes");
 const userListRef  = doc(db,"vacations","userList");
@@ -1200,6 +1219,20 @@ function getDefaultSlots(wk){
   if(d>=new Date('2027-05-30T00:00:00')&&d<=new Date('2027-08-22T00:00:00')) return 4;
   return 3;
 }
+let slcData={};
+onSnapshot(slcRef, snap=>{ slcData=snap.exists()?snap.data():{}; refreshAll(); });
+// Smart Lock Control: the minimum remaining FTE a week needs to STAY OPEN when
+// Smart Lock runs. remaining >= control → open; remaining < control → locked.
+// Range -1..1 (0.1 steps). Initial value 0.4 for every week (admin-requested);
+// an explicit saved value always wins.
+function getSlc(wk){
+  const v=slcData?slcData[wk]:undefined;
+  if(v!==undefined&&v!==null&&v!==''){
+    const n=Number(v);
+    if(!isNaN(n)&&n>=-1&&n<=1) return Math.round(n*10)/10;
+  }
+  return 0.4;
+}
 function getSlots(wk){
   // ONLY admin-entered values count — the built-in default was removed
   // 16 Jul 2026 so capacity can never silently revert. A week without a saved
@@ -1530,19 +1563,19 @@ function renderLockSummary(){
   // 2) Locked weeks that still have availability (+ Unlock button)
   const wa=s.lockedWithAvailability;
   html+=row('wrongLocked',
-    `<span style="color:${wa.length?'#946200':'var(--t2)'}">${wa.length?'⚠️ ':'✓ '}<strong>${wa.length}</strong> locked week${wa.length!==1?'s':''} still ${wa.length!==1?'have':'has'} availability</span>`,
+    `<span style="color:${wa.length?'#946200':'var(--t2)'}">${wa.length?'⚠️ ':'✓ '}<strong>${wa.length}</strong> locked week${wa.length!==1?'s':''} at/above ${wa.length!==1?'their':'its'} Smart Lock Control</span>`,
     wa.length, wa, '#d97706',
     wa.length?`<button class="btn" style="font-size:11px;background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="unlockAvailabilityWeeks()">🔓 Unlock these</button>`:'');
   // 3) Unlocked weeks with no availability (+ Lock button)
   const na=s.unlockedNoAvailability;
   html+=row('unlockedFull',
-    `<span style="color:${na.length?'#b91c1c':'var(--t2)'}">${na.length?'⚠️ ':'✓ '}<strong>${na.length}</strong> unlocked week${na.length!==1?'s':''} ${na.length!==1?'have':'has'} no availability</span>`,
+    `<span style="color:${na.length?'#b91c1c':'var(--t2)'}">${na.length?'⚠️ ':'✓ '}<strong>${na.length}</strong> unlocked week${na.length!==1?'s':''} below ${na.length!==1?'their':'its'} Smart Lock Control</span>`,
     na.length, na, '#dc2626',
     na.length?`<button class="btn btn-danger" style="font-size:11px" onclick="lockNoAvailabilityWeeks()">🔒 Lock these</button>`:'');
   // Smart action + all-clear note
   html+=`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:4px">
     <button class="btn btn-primary" style="font-size:12px" onclick="smartLockUnlock()">✨ Smart Lock and Unlock</button>
-    ${(!wa.length&&!na.length&&!s.globalLock)?'<span style="color:var(--green);font-weight:600;font-size:12px">✓ Locks look correct — every full week is locked and every winnable week is open.</span>':'<span style="color:var(--t2);font-size:11px">Fixes both problems above in one step.</span>'}
+    ${(!wa.length&&!na.length&&!s.globalLock)?'<span style="color:var(--green);font-weight:600;font-size:12px">✓ Locks match every week\'s Smart Lock Control.</span>':'<span style="color:var(--t2);font-size:11px">Fixes both problems above in one step.</span>'}
   </div>`;
   el.innerHTML=html;
 }
@@ -1879,7 +1912,7 @@ window.unlockAvailabilityWeeks=function(){
   if(!toUnlock.length){ toast('No locked weeks with availability.','ok'); return; }
   openConfirm({
     title:'🔓 Unlock winnable weeks',
-    body:`<div>Unlock <strong>${toUnlock.length}</strong> week${toUnlock.length!==1?'s':''} that ${toUnlock.length!==1?'are':'is'} locked but still ${toUnlock.length!==1?'have':'has'} availability?</div>
+    body:`<div>Unlock <strong>${toUnlock.length}</strong> locked week${toUnlock.length!==1?'s':''} whose remaining FTE is at or above ${toUnlock.length!==1?'their':'its'} Smart Lock Control?</div>
       <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.7;max-height:150px;overflow-y:auto">${toUnlock.map(w=>`<li>${w.label} <span style="color:var(--green)">(Remaining: ${w.remaining})</span></li>`).join('')}</ul>
       <div class="cmodal-info">Users will be able to bid on these weeks again.</div>`,
     okText:'🔓 Unlock These',
@@ -1896,9 +1929,9 @@ window.lockNoAvailabilityWeeks=function(){
   if(!toLock.length){ toast('No unlocked full weeks to lock.','ok'); return; }
   openConfirm({
     title:'🔒 Lock full weeks',
-    body:`<div>Lock <strong>${toLock.length}</strong> unlocked week${toLock.length!==1?'s':''} that ${toLock.length!==1?'have':'has'} no availability?</div>
-      <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.7;max-height:150px;overflow-y:auto">${toLock.map(w=>`<li>${w.label} <span style="color:var(--red)">(Remaining: ${w.remaining})</span></li>`).join('')}</ul>
-      <div class="cmodal-info">Users won't be able to waste bids on these full weeks.</div>`,
+    body:`<div>Lock <strong>${toLock.length}</strong> unlocked week${toLock.length!==1?'s':''} whose remaining FTE is below ${toLock.length!==1?'their':'its'} Smart Lock Control?</div>
+      <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.7;max-height:150px;overflow-y:auto">${toLock.map(w=>`<li>${w.label} <span style="color:var(--red)">(remaining ${w.remaining}, control ${w.slc})</span></li>`).join('')}</ul>
+      <div class="cmodal-info">Users won't be able to waste bids on these effectively-full weeks.</div>`,
     okText:'🔒 Lock These', danger:true,
     onConfirm:async()=>{
       const updates={}; toLock.forEach(w=>updates[w.wk]=true);
@@ -1920,7 +1953,7 @@ window.smartLockUnlock=function(){
     body:`<div>This will automatically fix your week locks in one step:</div>
       <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:13px;line-height:1.8">
         <li>🔒 <strong>Lock ${toLock.length}</strong> week${toLock.length!==1?'s':''} with <strong>no availability</strong> (full even with the allowed overage).</li>
-        <li>🔓 <strong>Unlock ${toUnlock.length}</strong> week${toUnlock.length!==1?'s':''} that <strong>still have availability</strong> (a user could still win them).</li>
+        <li>🔓 <strong>Unlock ${toUnlock.length}</strong> week${toUnlock.length!==1?'s':''} at/above their <strong>Smart Lock Control</strong> (a user could still win them).</li>
       </ul>
       <div class="cmodal-info">Locking full weeks stops wasted bids; unlocking winnable weeks lets bidding continue where there's still room.</div>`,
     okText:'✨ Apply',
@@ -2118,6 +2151,7 @@ function syncControls(){
     if(raw==='none'||raw===undefined||raw===null||raw===''){ cb.checked=true; inp.disabled=true; inp.value=''; }
     else { cb.checked=false; inp.disabled=false; inp.value=raw; }
   })();
+  renderNpToggles();
   const gl=document.getElementById("globalLockToggle");
   if(gl) gl.className="tog"+(locksData.globalLock?" on":"");
   const et=document.getElementById("emailNotifsToggle");
@@ -2656,6 +2690,28 @@ window.closePhaseBidding=function(cur){
   });
 };
 window.gotoSlotsPanel=function(){ nav('slots',document.querySelector('[onclick*="\'slots\'"]')); };
+// ── NP bids by phase ──
+// Initial policy (admin-requested): OFF for phases 1-2, ON for phases 3-4.
+function npDefaultFor(ph){ return ph>=3; }
+function npAllowedForPhase(ph){
+  const m=adminSettings?.npAllowedPhases||{};
+  const v=m[ph];
+  return v===undefined?npDefaultFor(Number(ph)):v!==false;
+}
+window.npAllowedForPhase=npAllowedForPhase;
+function renderNpToggles(){
+  const el=document.getElementById('npPhaseToggles'); if(!el) return;
+  el.innerHTML=[1,2,3,4].map(p=>`<div style="display:flex;align-items:center;gap:8px">
+    <span style="font-size:12px;color:var(--t1);font-weight:700">Phase ${p}</span>
+    <div class="tog${npAllowedForPhase(p)?' on':''}" id="npTog${p}" onclick="toggleNpPhase(${p})"></div></div>`).join('');
+}
+window.toggleNpPhase=async function(p){
+  const next=!npAllowedForPhase(p);
+  const cur={}; [1,2,3,4].forEach(x=>cur[x]=npAllowedForPhase(x));
+  cur[p]=next;
+  await setDoc(adminRef,{npAllowedPhases:cur},{merge:true});
+  toast(`NP bids ${next?'enabled':'disabled'} for Phase ${p}`, next?'ok':'warn');
+};
 function renderNextStep(){
   const el=document.getElementById('phaseNextStep'); if(!el) return;
   const cur=Number(phasesData.currentPhase||1);
@@ -2864,15 +2920,15 @@ function _beginPhaseLockDecision(next){
   const need=weeksNeedingLock(true).list;                 // should be locked
   const wrongLocked=lockedWeeksWithAvailability().list;    // should be unlocked
   if(!need.length&&!wrongLocked.length){ _commitBeginPhase(next); return; }
-  const secNeed=need.length?`<div style="font-weight:700;color:var(--red);margin-top:4px">🔒 ${need.length} full week${need.length!==1?'s':''} still UNLOCKED (no availability — users could waste bids):</div>
-          <ul style="margin:6px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.6;max-height:120px;overflow-y:auto">${need.map(w=>`<li>${w.label} <span style="color:var(--red)">(Remaining: ${w.remaining})</span></li>`).join('')}</ul>`:'';
-  const secWrong=wrongLocked.length?`<div style="font-weight:700;color:var(--yellow);margin-top:4px">🔓 ${wrongLocked.length} week${wrongLocked.length!==1?'s':''} LOCKED but still winnable (bidding is wrongly blocked):</div>
-          <ul style="margin:6px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.6;max-height:120px;overflow-y:auto">${wrongLocked.map(w=>`<li>${w.label} <span style="color:var(--green)">(Remaining: ${w.remaining})</span></li>`).join('')}</ul>`:'';
+  const secNeed=need.length?`<div style="font-weight:700;color:var(--red);margin-top:4px">🔒 ${need.length} week${need.length!==1?'s':''} still UNLOCKED below ${need.length!==1?'their':'its'} Smart Lock Control (users could waste bids):</div>
+          <ul style="margin:6px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.6;max-height:120px;overflow-y:auto">${need.map(w=>`<li>${w.label} <span style="color:var(--red)">(remaining ${w.remaining}, control ${w.slc})</span></li>`).join('')}</ul>`:'';
+  const secWrong=wrongLocked.length?`<div style="font-weight:700;color:var(--yellow);margin-top:4px">🔓 ${wrongLocked.length} week${wrongLocked.length!==1?'s':''} LOCKED but at/above ${wrongLocked.length!==1?'their':'its'} Smart Lock Control (bidding is wrongly blocked):</div>
+          <ul style="margin:6px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.6;max-height:120px;overflow-y:auto">${wrongLocked.map(w=>`<li>${w.label} <span style="color:var(--green)">(remaining ${w.remaining}, control ${w.slc})</span></li>`).join('')}</ul>`:'';
   openConfirm({
     title:'⚠️ Lock decision required before Phase '+next,
     body:`<div style="margin-bottom:6px"><strong>Phase ${next} has not started yet.</strong> Decide how to handle these weeks first:</div>
           ${secNeed}${secWrong}
-          <div class="cmodal-info"><strong>Smart Lock &amp; Unlock</strong> locks every full week and unlocks every week that still has availability — exactly like the Smart Lock and Unlock button — then begins Phase ${next}.</div>
+          <div class="cmodal-info"><strong>Smart Lock &amp; Unlock</strong> applies each week's Smart Lock Control: lock when remaining FTE is below the control, unlock when at or above it — then begins Phase ${next}.</div>
           <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="_beginPhaseOverride(${next})">▶ Begin Phase ${next} without changes (override)</button>`,
     okText:'✨ Smart Lock & Unlock, then Begin Phase '+next, danger:true,
     onConfirm:async()=>{
@@ -3931,22 +3987,24 @@ window.adDenyAllLosers=function(){
 // allowed overage — i.e. weeks with no real availability. `unlockedOnly` filters
 // out weeks the admin has already locked. Shared by the button and the phase alert.
 function weeksNeedingLock(unlockedOnly){
+  // Smart Lock rule (reworked 16 Jul 2026): a week needs locking when its
+  // remaining FTE is BELOW its per-week Smart Lock Control. The FTE overage
+  // amount no longer drives this — it only shapes draw/review projections
+  // during bidding.
   const ap=computeApprovals();
-  const T=getReviewThreshold();
-  const lowestFte=getLowestFTE();
-  const cutoff=Math.round((-(T-lowestFte))*10)/10;
   const list=[];
   mondays.forEach(d=>{
     const wk=dateKey(d);
     const a=ap[wk]; if(!a) return;
     const cap=getSlots(wk);
     const remaining=Math.round((cap-a.fteWon)*10)/10;
-    if(remaining<cutoff){
+    const slc=getSlc(wk);
+    if(remaining<slc){
       if(unlockedOnly && locksData?.weeks?.[wk]) return; // already locked
-      list.push({wk,remaining,label:wLabel(wkDate(wk))});
+      list.push({wk,remaining,slc,label:wLabel(wkDate(wk))});
     }
   });
-  return {list,cutoff,cutoffLabel:cutoff.toFixed(1),T,lowestFte};
+  return {list,cutoff:null,cutoffLabel:'per-week Smart Lock Control'};
 }
 
 window.weeksNeedingLock=weeksNeedingLock; // exposed for testing
@@ -3957,9 +4015,6 @@ window.weeksNeedingLock=weeksNeedingLock; // exposed for testing
 // never flagged here.
 function lockedWeeksWithAvailability(){
   const ap=computeApprovals();
-  const T=getReviewThreshold();
-  const lowestFte=getLowestFTE();
-  const cutoff=Math.round((-(T-lowestFte))*10)/10;
   const list=[];
   mondays.forEach(d=>{
     const wk=dateKey(d);
@@ -3967,9 +4022,10 @@ function lockedWeeksWithAvailability(){
     const a=ap[wk]; if(!a) return;
     const cap=getSlots(wk);
     const remaining=Math.round((cap-a.fteWon)*10)/10;
-    if(remaining>=cutoff){ list.push({wk,remaining,label:wLabel(wkDate(wk))}); }
+    const slc=getSlc(wk);
+    if(remaining>=slc){ list.push({wk,remaining,slc,label:wLabel(wkDate(wk))}); }
   });
-  return {list,cutoff,cutoffLabel:cutoff.toFixed(1)};
+  return {list,cutoff:null,cutoffLabel:'per-week Smart Lock Control'};
 }
 window.lockedWeeksWithAvailability=lockedWeeksWithAvailability;
 
@@ -3989,17 +4045,16 @@ function lockSummary(){
 window.lockSummary=lockSummary;
 window.lockFullWeeks=function(){
   const info=weeksNeedingLock(false);
-  const tolock=info.list; const T=info.T; const lowestFte=info.lowestFte;
-  const cutoffLabel=info.cutoffLabel;
+  const tolock=info.list;
   if(!tolock.length){
-    openConfirm({title:'🔒 Lock Full Weeks',body:`<div class="cmodal-info">No weeks currently have fewer than ${cutoffLabel} FTE available. Nothing to lock.<br><br><small style="color:var(--t2)">Threshold: FTE overage ${T.toFixed(1)}, lowest FTE user ${lowestFte}. Cutoff = -(${T.toFixed(1)} - ${lowestFte}) = ${cutoffLabel}.</small></div>`,okText:'OK',onConfirm:()=>{}});
+    openConfirm({title:'🔒 Lock Full Weeks',body:`<div class="cmodal-info">Every week still meets its Smart Lock Control (remaining FTE ≥ its control value). Nothing to lock.<br><br><small style="color:var(--t2)">Each week locks when its remaining FTE drops below its own Smart Lock Control (set per week in FTE Availability; initial value 0.4).</small></div>`,okText:'OK',onConfirm:()=>{}});
     return;
   }
   openConfirm({
-    title:'🔒 Lock Weeks with No Availability',
-    body:`<div>The following ${tolock.length} week${tolock.length!==1?'s':''} will be locked (remaining FTE &lt; ${cutoffLabel}):</div>
-          <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.7;max-height:160px;overflow-y:auto">${tolock.map(w=>`<li>${w.label} <span style="color:var(--red)">(Remaining: ${w.remaining})</span></li>`).join('')}</ul>
-          <small style="color:var(--t2);font-size:11px">Cutoff = -(FTE overage ${T.toFixed(1)} − lowest FTE ${lowestFte}) = ${cutoffLabel}. Below this, no user can win the week even with the maximum allowed overage.</small>`,
+    title:'🔒 Lock Weeks Below Smart Lock Control',
+    body:`<div>The following ${tolock.length} week${tolock.length!==1?'s':''} will be locked (remaining FTE below the week's Smart Lock Control):</div>
+          <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.7;max-height:160px;overflow-y:auto">${tolock.map(w=>`<li>${w.label} <span style="color:var(--red)">(remaining ${w.remaining}, control ${w.slc})</span></li>`).join('')}</ul>
+          <small style="color:var(--t2);font-size:11px">A week locks when remaining FTE &lt; its Smart Lock Control and opens when remaining ≥ the control. Adjust per week in FTE Availability.</small>`,
     okText:'Lock These Weeks', danger:true,
     onConfirm:async()=>{
       const updates={}; tolock.forEach(w=>updates[w.wk]=true);
@@ -5023,6 +5078,7 @@ function renderSlotsPanel(){
     return `<tr${unsaved?' style="background:rgba(251,191,36,.07)"':''}>
       <td class="mono" style="white-space:nowrap;padding:3px 8px;font-size:12px">${wLabel(d)} <span style="color:var(--t2);font-size:10px;font-weight:400">${wRange(d)}</span></td>
       <td style="padding:3px 8px"><input type="number" id="slot_${wk}" class="inp" style="width:72px;padding:3px 6px" value="${val}" step="0.1" min="0">${unsaved?' <span class="pill p-yellow" title="Live capacity is 0 until saved">NOT SAVED — capacity 0</span>':''}</td>
+      <td style="padding:3px 8px"><input type="number" id="slc_${wk}" class="inp" style="width:72px;padding:3px 6px" value="${getSlc(wk)}" step="0.1" min="-1" max="1" title="Week locks when remaining FTE drops below this; opens at or above it"></td>
       <td style="padding:3px 6px"><button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveOneSlot('${wk}')">Save</button></td>
     </tr>`;
   }).join('');
@@ -5033,6 +5089,15 @@ function renderSlotsPanel(){
 }
 
 // Read + validate one week input. Returns {ok, value}.
+function readSlcInput(wk){
+  const el=document.getElementById(`slc_${wk}`);
+  if(!el) return {ok:false};
+  const raw=el.value.trim();
+  if(raw==="") return {ok:false};
+  const n=parseFloat(raw);
+  if(isNaN(n)||n<-1||n>1) return {ok:false};
+  return {ok:true, value:Math.round(n*10)/10};
+}
 function readSlotInput(wk){
   const el=document.getElementById(`slot_${wk}`);
   if(!el) return {ok:false};
@@ -5046,22 +5111,30 @@ function readSlotInput(wk){
 window.saveOneSlot=async function(wk){
   const r=readSlotInput(wk);
   if(!r.ok){toast("Enter an FTE availability of 0 or higher","err");return;}
+  const c=readSlcInput(wk);
+  if(!c.ok){toast("Enter a Smart Lock Control between -1.0 and 1.0","err");return;}
   await setDoc(slotsRef,{[wk]:r.value},{merge:true});
-  toast(`${wLabel(wkDate(wk))} FTE availability set to ${r.value}`,"ok");
+  await setDoc(slcRef,{[wk]:c.value},{merge:true});
+  toast(`${wLabel(wkDate(wk))}: availability ${r.value}, smart lock control ${c.value}`,"ok");
 };
 
 window.saveAllSlots=async function(){
-  const updates={};
-  let bad=0;
+  const updates={}; const slcUpdates={};
+  let bad=0, badSlc=0;
   mondays.forEach(d=>{
     const wk=dateKey(d);
     const r=readSlotInput(wk);
     if(!r.ok){bad++;return;}
     updates[wk]=r.value;
+    const c=readSlcInput(wk);
+    if(!c.ok){badSlc++;return;}
+    slcUpdates[wk]=c.value;
   });
-  if(bad){toast(`${bad} week(s) have invalid values — every week needs a number 0 or higher`,"err");return;}
+  if(bad){toast(`${bad} week(s) have invalid availability — every week needs a number 0 or higher`,"err");return;}
+  if(badSlc){toast(`${badSlc} week(s) have an invalid Smart Lock Control — must be -1.0 to 1.0`,"err");return;}
   await setDoc(slotsRef,updates,{merge:true});
-  toast(`💾 Saved FTE availability for all ${mondays.length} weeks`,"ok");
+  await setDoc(slcRef,slcUpdates,{merge:true});
+  toast(`💾 Saved availability + smart lock control for all ${mondays.length} weeks`,"ok");
 };
 
 

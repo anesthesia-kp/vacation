@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 54;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 55;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -495,6 +495,7 @@ body{zoom:1.15}
         <li id="ruleMaxBids">Only 3 bids (including NP bids) may be used per phase — only bid for the number of weeks your accrued vacation and ATO will allow for</li>
         <li>Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better</li>
         <li>On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used</li>
+        <li>NP bids may only be used during the phases for which admin has turned them on</li>
         <li>To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week</li>
         <li style="margin-top:10px;color:#2c4257;font-weight:600">Understanding Outcomes</li>
       </ul>
@@ -991,6 +992,14 @@ onSnapshot(bestBidsRef,snap=>{ bestBidsData=snap.exists()?snap.data():{}; });
 onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); });
 
 // ── Maximum bids per phase (admin-set; 'none' = no limit) ──
+// NP bids allowed this phase? Admin toggles per phase (Controls → NP Bids by
+// Phase). Initial policy: OFF for phases 1-2, ON for phases 3-4.
+function npAllowedNow(){
+  const ph=Number(phasesData.currentPhase||1);
+  const m=adminSettings?.npAllowedPhases||{};
+  const v=m[ph];
+  return v===undefined?(ph>=3):v!==false;
+}
 function getMaxBidsPerPhase(){
   // ONLY what admin entered counts — no built-in default (removed 16 Jul 2026).
   // Nothing saved (or 'none') means no per-phase limit.
@@ -1371,7 +1380,12 @@ function openPriorityModal(wk){
   // Priority lock: if disabled by admin, no cap
   const prioLockOn=adminSettings.priorityLockEnabled!==false;
   const bestEver=(bestBidsData[user]||{})[wk];
-  const capPrio=bestEver!==undefined?bestEver:(existingPrio!==undefined?existingPrio:undefined);
+  // THE FLOOR COMES ONLY FROM THE STORED LOCK. Previously the user's live bid
+  // was a fallback floor — so when admin cleared the lock, the live bid
+  // silently re-imposed the same cap and "Clear Lock" appeared broken (in
+  // every phase). If admin cleared it, the user really is free; their next
+  // bid re-establishes a floor via saveBestBid as usual.
+  const capPrio=bestEver;
   const hasCap=prioLockOn&&capPrio!==undefined&&capPrio!=="NP";
   const capScore=hasCap?priorityScore(capPrio):999;
   pendingWeek=wk;
@@ -1393,7 +1407,7 @@ function openPriorityModal(wk){
     if(!v){opt.disabled=false;return;}
     // High-priority-only weeks: only allow 1, 2, 3, 1,2, 1,2,3
     if(isHighPrioOnly&&v!=="NP"&&!HIGH_PRIORITY_ALLOWED.has(v)){opt.disabled=true;return;}
-    if(v==="NP"){opt.disabled=hasCap||isHighPrioOnly;return;} // (summer NP ban removed with the 12 Jul summer restriction)
+    if(v==="NP"){opt.disabled=hasCap||isHighPrioOnly||!npAllowedNow();return;} // NP only in admin-enabled phases
     if(v==="1,2"||v==="1,2,3"){
       const nums=v.split(',').map(Number);
       opt.disabled=nums.some(n=>used.includes(n))||(hasCap&&priorityScore(nums)>capScore);
@@ -1461,6 +1475,7 @@ window.confirmPriority=async function(){
   if(isAuctionClosed()){ showCenterAlert("The auction has closed — no more changes allowed."); window.closeModal(); return; }
   if(locksData.globalLock||locksData.weeks?.[pendingWeek]){ showCenterAlert("This week has been locked by the admin — no changes allowed."); window.closeModal(); return; }
   if(!isVisibleBid(user,pendingWeek)&&bidLimitStatus(user).atLimit){ showBidLimitModal(); window.closeModal(); return; }
+  if(val==="NP"&&!npAllowedNow()){ showCenterAlert("NP bids are not enabled for Phase "+Number(phasesData.currentPhase||1)+" — the admin controls which phases allow them."); window.closeModal(); return; }
   const _prev=JSON.parse(JSON.stringify(data));
   if(val==="NP"){
     if(!data[user])data[user]={};
@@ -2473,6 +2488,7 @@ ${bullets([
   limLine,
   `Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better`,
   `On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used`,
+  `NP bids may only be used during the phases for which they are enabled by the admin`,
   `To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`
 ])}
 
