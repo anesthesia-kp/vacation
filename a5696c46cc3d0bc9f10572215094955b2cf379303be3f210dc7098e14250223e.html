@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 77;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 78;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -899,6 +899,28 @@ const bidPhaseRef  = doc(db,"vacations","bidPhase");
 const slotsRef     = doc(db,"vacations","slots"); // per-week FTE availability overrides {wk: number}
 const mailQueueRef = doc(db,"vacations","mailQueue"); // outbox for projection-change alerts
 const changesArchiveRef = doc(db,"vacations","changesArchive"); // {phaseNum: [log entries]} — archived at phase completion
+
+// Safely write ONLY specific nested fields (dotted paths like "weeks.2027-01-10"
+// or "AD.2027-01-10") without disturbing sibling data. updateDoc() is the
+// Firestore method that actually honors dot-notation paths — setDoc()+
+// {merge:true} does NOT (confirmed against production: it silently replaces
+// the whole named field instead of merging into it, which is what caused
+// week-lock and schedule-bid writes to wipe unrelated weeks/users before
+// this was fixed). updateDoc() throws if the document doesn't exist yet, so
+// this falls back to a plain setDoc in that one case — safe, since there's
+// nothing existing to preserve on a brand-new document.
+async function mergeFields(ref, dotted){
+  try{ await updateDoc(ref, dotted); }
+  catch(e){
+    const nested={};
+    for(const [k,v] of Object.entries(dotted)){
+      const parts=k.split('.'); let host=nested;
+      for(let i=0;i<parts.length-1;i++){ host[parts[i]]=host[parts[i]]||{}; host=host[parts[i]]; }
+      host[parts[parts.length-1]]=v;
+    }
+    await setDoc(ref, nested, {merge:true});
+  }
+}
 
 let names = ["AD","ADG","AF","AN","AQ","AS","BC","CC","CZ","DNS","DR","EC","GL","GV","HR","JLO","KN","KQ","LF","LO","LP","MA","MCL","MG","MK","MKA","MTN","MW","NG","RL","SC","SFI","SL","SMJ","SYK","TL","XJ"];
 const MS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -2023,8 +2045,8 @@ window.unlockAvailabilityWeeks=function(){
       <div class="cmodal-info">Users will be able to bid on these weeks again.</div>`,
     okText:'🔓 Unlock These',
     onConfirm:async()=>{
-      const updates={}; toUnlock.forEach(w=>updates[w.wk]=false);
-      await setDoc(locksRef,{weeks:updates},{merge:true});
+      const dotted={}; toUnlock.forEach(w=>dotted['weeks.'+w.wk]=false);
+      await mergeFields(locksRef,dotted);
       toast('🔓 Unlocked '+toUnlock.length+' week'+(toUnlock.length!==1?'s':''),'ok');
     }
   });
@@ -2040,8 +2062,8 @@ window.lockNoAvailabilityWeeks=function(){
       <div class="cmodal-info">Users won't be able to waste bids on these effectively-full weeks.</div>${lockLiveWarnHtml()}`,
     okText:'🔒 Lock These', danger:true,
     onConfirm:async()=>{
-      const updates={}; toLock.forEach(w=>updates[w.wk]=true);
-      await setDoc(locksRef,{weeks:updates},{merge:true});
+      const dotted={}; toLock.forEach(w=>dotted['weeks.'+w.wk]=true);
+      await mergeFields(locksRef,dotted);
       toast('🔒 Locked '+toLock.length+' week'+(toLock.length!==1?'s':''),'warn');
     }
   });
@@ -2064,10 +2086,10 @@ window.smartLockUnlock=function(){
       <div class="cmodal-info">Locking full weeks stops wasted bids; unlocking winnable weeks lets bidding continue where there's still room.</div>${lockLiveWarnHtml()}`,
     okText:'✨ Apply',
     onConfirm:async()=>{
-      const updates={};
-      toLock.forEach(w=>updates[w.wk]=true);
-      toUnlock.forEach(w=>updates[w.wk]=false);
-      await setDoc(locksRef,{weeks:updates},{merge:true});
+      const dotted={};
+      toLock.forEach(w=>dotted['weeks.'+w.wk]=true);
+      toUnlock.forEach(w=>dotted['weeks.'+w.wk]=false);
+      await mergeFields(locksRef,dotted);
       toast('✨ Locked '+toLock.length+', unlocked '+toUnlock.length,'ok');
     }
   });
@@ -2407,7 +2429,7 @@ window.toggleWeekLock=async function(wk){
       body:`<div>Lock <strong>${wLabel(wkDate(wk))}</strong> for bidding?</div>${lockLiveWarnHtml()}`,
       okText:'Lock Anyway', danger:true,
       onConfirm:async()=>{
-        await setDoc(locksRef,{weeks:{[wk]:true}},{merge:true});
+        await mergeFields(locksRef,{['weeks.'+wk]:true});
         toast("🔒 Locked",'warn');
       }
     });
@@ -2426,14 +2448,14 @@ window.toggleWeekLock=async function(wk){
               <div class="cmodal-warn" style="margin-top:8px">⚠️ This week is <strong>below its Smart Lock Control</strong> (remaining ${remaining}, control ${slc}) — it is effectively full, and users could waste bids on it. Confirm to override.</div>`,
         okText:'Unlock Anyway', danger:true,
         onConfirm:async()=>{
-          await setDoc(locksRef,{weeks:{[wk]:false}},{merge:true});
+          await mergeFields(locksRef,{['weeks.'+wk]:false});
           toast("🔓 Unlocked",'ok');
         }
       });
       return;
     }
   }
-  await setDoc(locksRef,{weeks:{[wk]:!cur}},{merge:true});
+  await mergeFields(locksRef,{['weeks.'+wk]:!cur});
   toast(cur?"🔓 Unlocked":"🔒 Locked",cur?"ok":"warn");
 };
 window.lockAllWeeks=function(){
@@ -2442,8 +2464,8 @@ window.lockAllWeeks=function(){
     body:`<div>Lock all 52 weeks?</div><div class="cmodal-warn">No user will be able to add, edit, or remove bids on any week until they are unlocked.</div>${lockLiveWarnHtml()}`,
     okText:'Lock All', danger:true,
     onConfirm:async()=>{
-      const w={}; mondays.forEach(d=>{w[dateKey(d)]=true;});
-      await setDoc(locksRef,{weeks:w},{merge:true}); toast("🔒 All locked","warn");
+      const dotted={}; mondays.forEach(d=>{dotted['weeks.'+dateKey(d)]=true;});
+      await mergeFields(locksRef,dotted); toast("🔒 All locked","warn");
     }
   });
 };
@@ -2471,13 +2493,18 @@ window.lockAllExceptHighDemand=function(){
           <div class="cmodal-warn">All other weeks will be locked — users cannot change bids on those weeks.</div>${lockLiveWarnHtml()}`,
     okText:'Lock All Except High Demand', danger:true,
     onConfirm:async()=>{
-      const w={};
+      // Explicitly set high-demand weeks to false (not just "leave untouched")
+      // — the feature's intent is that they stay OPEN, and a safe per-field
+      // merge write no longer implicitly clears a week's prior lock state,
+      // unlike the old (buggy) full-field replace this replaced.
+      const dotted={}; let lockedCount=0;
       mondays.forEach(d=>{
         const wk=dateKey(d);
-        if(!HIGH_DEMAND_WEEKS.has(wk)) w[wk]=true;
+        if(HIGH_DEMAND_WEEKS.has(wk)){ dotted['weeks.'+wk]=false; }
+        else { dotted['weeks.'+wk]=true; lockedCount++; }
       });
-      await setDoc(locksRef,{weeks:w},{merge:true});
-      toast("🔒 Locked all weeks except high demand ("+Object.keys(w).length+" weeks)","warn");
+      await mergeFields(locksRef,dotted);
+      toast("🔒 Locked all weeks except high demand ("+lockedCount+" weeks)","warn");
     }
   });
 };
@@ -2661,9 +2688,13 @@ window.runSimulation=async function(){
   // preserve prior-phase bids (which are still stored as history for the algorithm).
   try {
     if(cur>1){
-      // Merge — don't overwrite prior-phase data
+      // Merge — don't overwrite prior-phase data. mergeFields() writes each
+      // week as its own dotted field, so it genuinely preserves prior-phase
+      // weeks; the old setDoc(...,{merge:true}) here silently wiped them
+      // instead, contradicting this very comment.
       for(const user of Object.keys(newSchedule)){
-        await setDoc(scheduleRef, {[user]: newSchedule[user]}, {merge:true});
+        const dotted={}; for(const wk of Object.keys(newSchedule[user])) dotted[user+'.'+wk]=newSchedule[user][wk];
+        await mergeFields(scheduleRef, dotted);
       }
     } else {
       // Phase 1 — safe to overwrite entire schedule
@@ -2681,7 +2712,8 @@ window.runSimulation=async function(){
     try {
       if(cur>1){
         for(const user of Object.keys(phaseTag)){
-          await setDoc(bidPhaseRef, {[user]: phaseTag[user]}, {merge:true});
+          const dotted={}; for(const wk of Object.keys(phaseTag[user])) dotted[user+'.'+wk]=phaseTag[user][wk];
+          await mergeFields(bidPhaseRef, dotted);
         }
       } else {
         await setDoc(bidPhaseRef, phaseTag);
@@ -2695,7 +2727,12 @@ window.runSimulation=async function(){
     try{
       const nowTs=Date.now(); const timeTag={};
       for(const user of Object.keys(newSchedule)){ timeTag[user]={}; for(const wk of Object.keys(newSchedule[user])) timeTag[user][wk]=nowTs; }
-      if(cur>1){ for(const user of Object.keys(timeTag)) await setDoc(bidTimesRef,{[user]:timeTag[user]},{merge:true}); }
+      if(cur>1){
+        for(const user of Object.keys(timeTag)){
+          const dotted={}; for(const wk of Object.keys(timeTag[user])) dotted[user+'.'+wk]=timeTag[user][wk];
+          await mergeFields(bidTimesRef, dotted);
+        }
+      }
       else { await setDoc(bidTimesRef, timeTag); }
     }catch(_){/* non-critical */}
     // Set priority locks (worstBidsRef): the simulated bid becomes each user's floor for that week
@@ -2708,7 +2745,8 @@ window.runSimulation=async function(){
     }
     if(cur>1){
       for(const user of Object.keys(priorityLocks)){
-        await setDoc(worstBidsRef, {[user]: priorityLocks[user]}, {merge:true}).catch(()=>{});
+        const dotted={}; for(const wk of Object.keys(priorityLocks[user])) dotted[user+'.'+wk]=priorityLocks[user][wk];
+        await mergeFields(worstBidsRef, dotted).catch(()=>{});
       }
     } else {
       await setDoc(worstBidsRef, priorityLocks).catch(()=>{});
@@ -3086,10 +3124,10 @@ function _beginPhaseLockDecision(next){
           <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="_beginPhaseOverride(${next})">▶ Begin Phase ${next} without changes (override)</button>`,
     okText:'✨ Smart Lock & Unlock, then Begin Phase '+next, danger:true,
     onConfirm:async()=>{
-      const updates={};
-      need.forEach(w=>updates[w.wk]=true);
-      wrongLocked.forEach(w=>updates[w.wk]=false);
-      await setDoc(locksRef,{weeks:updates},{merge:true});
+      const dotted={};
+      need.forEach(w=>dotted['weeks.'+w.wk]=true);
+      wrongLocked.forEach(w=>dotted['weeks.'+w.wk]=false);
+      await mergeFields(locksRef,dotted);
       await _commitBeginPhase(next);
       toast('🔧 Fixed '+(need.length+wrongLocked.length)+' week'+((need.length+wrongLocked.length)!==1?'s':''),'ok');
     }
@@ -3946,8 +3984,8 @@ function readinessWarnHtml(){
 // dialog — they act immediately (no nested confirm, which would replace the
 // dialog the admin is in) and then refresh the warning box in place.
 async function _lockEveryWeek(){
-  const w={}; mondays.forEach(d=>{w[dateKey(d)]=true;});
-  await setDoc(locksRef,{weeks:w},{merge:true});
+  const dotted={}; mondays.forEach(d=>{dotted['weeks.'+dateKey(d)]=true;});
+  await mergeFields(locksRef,dotted);
 }
 function _refreshReadinessBox(){
   const box=document.getElementById('readinessWarnBox'); if(!box) return;
@@ -4211,8 +4249,8 @@ window.lockFullWeeks=function(){
           <small style="color:var(--t2);font-size:11px">A week locks when remaining FTE &lt; its Smart Lock Control and opens when remaining ≥ the control. Adjust per week in FTE Availability.</small>`,
     okText:'Lock These Weeks', danger:true,
     onConfirm:async()=>{
-      const updates={}; tolock.forEach(w=>updates[w.wk]=true);
-      await setDoc(locksRef,{weeks:updates},{merge:true});
+      const dotted={}; tolock.forEach(w=>dotted['weeks.'+w.wk]=true);
+      await mergeFields(locksRef,dotted);
       toast('🔒 Locked '+tolock.length+' week'+( tolock.length!==1?'s':''),'warn');
     }
   });
@@ -4357,11 +4395,13 @@ window.renderEditTable=function(){
   tb.innerHTML=rows.length?rows.join(''):`<tr><td colspan="6" style="text-align:center;color:var(--t2);padding:20px">No bids match filter.</td></tr>`;
 };
 window.adminChangePriority=async function(u,wk,val){
-  // Direct dropdown change in Edit Selections — safe per-field writes
+  // Direct dropdown change in Edit Selections — real per-field writes via
+  // mergeFields() (updateDoc-based); plain setDoc+merge on a nested object
+  // silently wipes the user's OTHER weeks, which is what this used to do.
   if(!scheduleData[u])scheduleData[u]={};
   scheduleData[u][wk]=val==="NP"?"NP":val.includes(",")?val.split(",").map(Number):Number(val);
-  await setDoc(scheduleRef,{[u]:{[wk]:scheduleData[u][wk]}},{merge:true});
-  await setDoc(bidPhaseRef,{[u]:{[wk]:Number(phasesData.currentPhase||1)}},{merge:true}).catch(()=>{});
+  await mergeFields(scheduleRef,{[u+'.'+wk]:scheduleData[u][wk]});
+  await mergeFields(bidPhaseRef,{[u+'.'+wk]:Number(phasesData.currentPhase||1)}).catch(()=>{});
   await updateDoc(worstBidsRef,{[`${u}.${wk}`]:deleteField()}).catch(()=>{});
   // Clear approval atomically
   await updateDoc(approvalsRef,{[wk]:arrayRemove(u)}).catch(()=>{});
@@ -4401,8 +4441,8 @@ window.adminAddSelection=function(){
     onConfirm:async()=>{
       if(!scheduleData[u])scheduleData[u]={};
       scheduleData[u][wk]=pv==="NP"?"NP":pv.includes(",")?pv.split(",").map(Number):Number(pv);
-      await setDoc(scheduleRef,{[u]:{[wk]:scheduleData[u][wk]}},{merge:true});
-      await setDoc(bidPhaseRef,{[u]:{[wk]:Number(phasesData.currentPhase||1)}},{merge:true}).catch(()=>{});
+      await mergeFields(scheduleRef,{[u+'.'+wk]:scheduleData[u][wk]});
+      await mergeFields(bidPhaseRef,{[u+'.'+wk]:Number(phasesData.currentPhase||1)}).catch(()=>{});
       await adminLog(u,wk,'admin-add',scheduleData[u][wk]); toast(`➕ Added`,"ok");
     }
   });
@@ -5584,9 +5624,12 @@ window.confirmAdminEdit=function(user,wk){
       const val=document.getElementById("cmEditSel").value;
       if(!scheduleData[user]) scheduleData[user]={};
       scheduleData[user][wk]=val==="NP"?"NP":val.includes(",")?val.split(",").map(Number):Number(val);
-      // SAFE: per-field merge write
-      await setDoc(scheduleRef,{[user]:{[wk]:scheduleData[user][wk]}},{merge:true});
-      await setDoc(bidPhaseRef,{[user]:{[wk]:Number(phasesData.currentPhase||1)}},{merge:true}).catch(()=>{});
+      // Real per-field write via mergeFields() (updateDoc-based) — the old
+      // comment here said "SAFE: per-field merge write" but plain
+      // setDoc+merge on a nested object actually wipes the user's other
+      // weeks; confirmed and fixed.
+      await mergeFields(scheduleRef,{[user+'.'+wk]:scheduleData[user][wk]});
+      await mergeFields(bidPhaseRef,{[user+'.'+wk]:Number(phasesData.currentPhase||1)}).catch(()=>{});
       // Atomic delete of the priority lock for this user/week
       await updateDoc(worstBidsRef,{[`${user}.${wk}`]:deleteField()}).catch(()=>{});
       // Atomic array remove for approval
