@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 70;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 72;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -490,7 +490,7 @@ thead th{color:var(--t2)}
         <div class="card-title">🔐 Smart Lock Control — what it does</div>
         <div class="page-sub" style="margin-bottom:8px"><strong style="color:var(--t1)">Smart Lock Control is the minimum remaining FTE a week needs to stay open.</strong> When Smart Lock runs (between phases, or from the dashboard), each week is compared to its own control value: remaining FTE <strong>below</strong> the control → the week locks (or stays locked); remaining FTE <strong>at or above</strong> the control → it unlocks (or stays unlocked). Range −1.0 to +1.0 in 0.1 steps; every week starts at <strong>0.4</strong>.</div>
         <div class="page-sub" style="margin-bottom:8px">Examples: control 0.4, week has 0.3 remaining → locks. Control 0.4, week has 0.4 remaining → stays open. Control −0.2, week has −0.1 remaining → stays open (−0.1 is above −0.2).</div>
-        <div class="page-sub">How to use it: leave everything at 0.4 and Smart Lock handles the whole year automatically between phases. Lower a week's control (even negative) to keep that week biddable deeper into overage; raise it to close a week off earlier. The FTE Overage Amount (Controls page) no longer affects locking — it only shapes draw/review projections during bidding.</div>
+        <div class="page-sub">How to use it: leave everything at 0.4 and Smart Lock handles the whole year automatically between phases. Lower a week's control (even negative) to keep that week biddable deeper into overage; raise it to close a week off earlier.</div>
       </div>
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
         <button class="btn btn-primary" onclick="saveAllSlots()">💾 Save All Weeks</button>
@@ -1672,6 +1672,7 @@ function renderInsights(){
   if(!document.getElementById('pcCanvasAdm')){
     el.innerHTML=`
       <div id="strugglingBox" style="padding:2px 0 10px;border-bottom:1px solid var(--b1)"></div>
+      <div id="badBehaviorBox" style="padding:10px 0;border-bottom:1px solid var(--b1)"></div>
       <div style="padding:10px 0;border-bottom:1px solid var(--b1)">
         <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">📈 <strong style="color:var(--t1)">Bid activity — Phase <span id="bcPhase">1</span></strong>
           <span style="color:var(--t2)" id="bcMeta"></span></div>
@@ -1691,7 +1692,80 @@ function renderInsights(){
   document.getElementById('pcStatusAdm').textContent=popcornStatus(changes24);
   renderBidChart();
   renderStruggling();
+  renderBadBehavior();
 }
+// ── Bad Behavior screen ──
+// Flags CURRENT-PHASE bidding patterns that slow the auction or push other
+// users into higher bids than they needed — intentionally or not. Heuristics
+// from the change log (which clears at each phase close, so this is always
+// per-phase):
+//  • win-cancel  — placed a STRONG bid (1-3 or any combo), later removed it.
+//                  Others may have overbid to beat a bid that then vanished.
+//  • last-second — bid arrived after ≥85% of the countdown had run since the
+//                  previous activity (each change restarts the timer, so
+//                  last-second bids stretch the whole auction out).
+//  • timer-reset — "edited" a bid to the SAME value: no substantive change,
+//                  but it restarts everyone's countdown.
+//  • churn       — 4+ changes on one week in this phase: bid noise that fires
+//                  outbid e-mails and clouds projections.
+//  • slow-start  — no bids yet though the phase has been open 24+ hours.
+function computeBadBehavior(){
+  const cur=Number(phasesData.currentPhase||1);
+  const events=(changesLog||[]).filter(e=>e&&typeof e.ts==='number'&&e.actor!=='admin'&&!isDecisionEntry(e)&&e.ts>=(changesResetAt||0)).sort((a,b)=>a.ts-b.ts);
+  const strong=v=>{ if(v===undefined||v===null||v==='NP') return false; if(Array.isArray(v)) return true; const n=Number(v); return !isNaN(n)&&n<=3; };
+  const flags={}; // user → {winCancel, lastSecond, timerReset, churn, slowStart}
+  const bump=(u,k)=>{ (flags[u]=flags[u]||{winCancel:0,lastSecond:0,timerReset:0,churn:0,slowStart:0})[k]++; };
+  // sequential per-user/week value tracking for win-cancel + timer-reset
+  const lastVal={};
+  const perWeekCount={};
+  let prevTs=null;
+  const durMs=getDurationMs();
+  for(const e of events){
+    const key=(e.user||'')+'|'+(e.weekKey||'');
+    perWeekCount[key]=(perWeekCount[key]||0)+1;
+    if(perWeekCount[key]===4) bump(e.user,'churn'); // counted once per week
+    if(e.action==='removed'){
+      const v=e.bidValue!==undefined?e.bidValue:lastVal[key];
+      if(strong(v)) bump(e.user,'winCancel');
+      delete lastVal[key];
+    } else {
+      if(e.action==='edited'&&e.bidValue!==undefined&&lastVal[key]!==undefined
+         &&JSON.stringify(e.bidValue)===JSON.stringify(lastVal[key])) bump(e.user,'timerReset');
+      if(e.bidValue!==undefined) lastVal[key]=e.bidValue;
+    }
+    if(prevTs!==null&&timerData?.enabled&&durMs>0){
+      const gap=e.ts-prevTs;
+      if(gap>=0.85*durMs&&gap<durMs) bump(e.user,'lastSecond');
+    }
+    prevTs=e.ts;
+  }
+  // slow starters: phase open 24h+ and still no current-phase bids
+  const began=phasesData.phaseBeganAt?.[cur];
+  if(began&&phase1Started()&&!phasesData.completedPhases?.[cur]&&(Date.now()-began)>=24*3600000){
+    for(const u of names){
+      let has=false;
+      for(const wk in (scheduleData[u]||{})){ if(scheduleData[u][wk]!==undefined&&isCurrentPhaseBidAdmin(u,wk)){has=true;break;} }
+      if(!has) bump(u,'slowStart');
+    }
+  }
+  return Object.entries(flags).map(([user,f])=>({user,...f,total:f.winCancel+f.lastSecond+f.timerReset+f.churn+f.slowStart}))
+    .filter(r=>r.total>0).sort((a,b)=>b.total-a.total||a.user.localeCompare(b.user));
+}
+function renderBadBehavior(){
+  const el=document.getElementById('badBehaviorBox'); if(!el) return;
+  const head=`<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">🚩 <strong style="color:var(--t1)">Bad Behavior</strong><span style="color:var(--t2)">— patterns that slow the auction or push others to overbid</span></div>`;
+  if(!phase1Started()){ el.innerHTML=head+'<div style="font-size:12px;color:var(--t3)">Screening begins when bidding opens.</div>'; return; }
+  const list=computeBadBehavior();
+  if(!list.length){ el.innerHTML=head+'<div style="font-size:12px;color:var(--green)">✅ None detected this phase.</div>'; return; }
+  const part=(n,label)=>n?`${n} ${label}${n!==1?'s':''}`:null;
+  el.innerHTML=head+list.map(r=>{
+    const parts=[part(r.winCancel,'strong-bid cancel'),part(r.lastSecond,'last-second bid'),part(r.timerReset,'no-change timer reset'),part(r.churn,'high-churn week'),r.slowStart?'no bids 24h+ into the phase':null].filter(Boolean).join(' · ');
+    return `<div style="display:flex;align-items:center;gap:10px;padding:3px 0;font-size:12px">
+      <strong class="mono" style="color:var(--t1);min-width:44px">${esc(r.user)}</strong>
+      <span style="color:${r.total>=3?'var(--red)':'var(--yellow)'}">${parts}</span></div>`;
+  }).join('')+'<div style="font-size:10px;color:var(--t3);margin-top:4px">Heuristic screen — verify in the Change Log before acting. "Strong-bid cancel" means a 1–3 or combo bid was later removed; the screen can\'t know for certain the user was winning at the time.</div>';
+}
+window.computeBadBehavior=computeBadBehavior;
 // ── Struggling-user flag ──
 // Flags users with ZERO wins anywhere in the auction who are currently losing.
 // 🔴 stuck  — none of their remaining bid numbers is strong enough to beat (or
@@ -1923,7 +1997,7 @@ window.unlockAvailabilityWeeks=function(){
     }
   });
 };
-// Lock every unlocked week that has no availability (full even with the overage).
+// Lock every unlocked week whose remaining FTE is below its Smart Lock Control.
 window.lockNoAvailabilityWeeks=function(){
   const toLock=weeksNeedingLock(true).list;
   if(!toLock.length){ toast('No unlocked full weeks to lock.','ok'); return; }
@@ -1931,7 +2005,7 @@ window.lockNoAvailabilityWeeks=function(){
     title:'🔒 Lock full weeks',
     body:`<div>Lock <strong>${toLock.length}</strong> unlocked week${toLock.length!==1?'s':''} whose remaining FTE is below ${toLock.length!==1?'their':'its'} Smart Lock Control?</div>
       <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.7;max-height:150px;overflow-y:auto">${toLock.map(w=>`<li>${w.label} <span style="color:var(--red)">(remaining ${w.remaining}, control ${w.slc})</span></li>`).join('')}</ul>
-      <div class="cmodal-info">Users won't be able to waste bids on these effectively-full weeks.</div>`,
+      <div class="cmodal-info">Users won't be able to waste bids on these effectively-full weeks.</div>${lockLiveWarnHtml()}`,
     okText:'🔒 Lock These', danger:true,
     onConfirm:async()=>{
       const updates={}; toLock.forEach(w=>updates[w.wk]=true);
@@ -1952,10 +2026,10 @@ window.smartLockUnlock=function(){
     title:'✨ Smart Lock and Unlock',
     body:`<div>This will automatically fix your week locks in one step:</div>
       <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:13px;line-height:1.8">
-        <li>🔒 <strong>Lock ${toLock.length}</strong> week${toLock.length!==1?'s':''} with <strong>no availability</strong> (full even with the allowed overage).</li>
+        <li>🔒 <strong>Lock ${toLock.length}</strong> week${toLock.length!==1?'s':''} below ${toLock.length!==1?'their':'its'} <strong>Smart Lock Control</strong> (effectively full).</li>
         <li>🔓 <strong>Unlock ${toUnlock.length}</strong> week${toUnlock.length!==1?'s':''} at/above their <strong>Smart Lock Control</strong> (a user could still win them).</li>
       </ul>
-      <div class="cmodal-info">Locking full weeks stops wasted bids; unlocking winnable weeks lets bidding continue where there's still room.</div>`,
+      <div class="cmodal-info">Locking full weeks stops wasted bids; unlocking winnable weeks lets bidding continue where there's still room.</div>${lockLiveWarnHtml()}`,
     okText:'✨ Apply',
     onConfirm:async()=>{
       const updates={};
@@ -2277,16 +2351,63 @@ function renderLockPanel(){
   }).join('');
 }
 window.selectLockMonth=function(m){selLockMonth=m;renderLockPanel();};
+// TRUE while users can actively bid: phase started, not completed, timer alive.
+// Locking weeks in this state is generally NOT recommended (users lose access
+// mid-bidding) — most locking/unlocking belongs between phases.
+function biddingIsLive(){
+  const cur=Number(phasesData.currentPhase||1);
+  if(!phase1Started()) return false;
+  if(phasesData.completedPhases?.[cur]) return false;
+  if(!timerData?.enabled||!timerData?.lastChange) return false;
+  return (getDurationMs()-(Date.now()-timerData.lastChange))>0;
+}
+function lockLiveWarnHtml(){
+  return biddingIsLive()
+    ? `<div class="cmodal-warn" style="margin-top:8px"><strong>⚠️ Bidding is LIVE right now.</strong> Locking weeks mid-phase is generally not recommended — users lose access while actively bidding. Most locking and unlocking should happen while bidding is closed (between phases). Confirm below to override.</div>`
+    : '';
+}
 window.toggleWeekLock=async function(wk){
   const cur=!!(locksData.weeks?.[wk]);
-  // Atomic single-field update — preserves all other locks even if locksData is stale
+  // LOCKING during a live bidding phase warns (users lose access mid-bidding).
+  if(!cur&&biddingIsLive()){
+    openConfirm({
+      title:'🔒 Lock '+wLabel(wkDate(wk))+'?',
+      body:`<div>Lock <strong>${wLabel(wkDate(wk))}</strong> for bidding?</div>${lockLiveWarnHtml()}`,
+      okText:'Lock Anyway', danger:true,
+      onConfirm:async()=>{
+        await setDoc(locksRef,{weeks:{[wk]:true}},{merge:true});
+        toast("🔒 Locked",'warn');
+      }
+    });
+    return;
+  }
+  // UNLOCKING an effectively-full week warns too — users could waste bids on
+  // a week that is below its Smart Lock Control.
+  if(cur){
+    const a=computeApprovals()[wk];
+    const remaining=Math.round((getSlots(wk)-(a?.fteWon||0))*10)/10;
+    const slc=getSlc(wk);
+    if(remaining<slc){
+      openConfirm({
+        title:'🔓 Unlock '+wLabel(wkDate(wk))+'?',
+        body:`<div>Unlock <strong>${wLabel(wkDate(wk))}</strong>?</div>
+              <div class="cmodal-warn" style="margin-top:8px">⚠️ This week is <strong>below its Smart Lock Control</strong> (remaining ${remaining}, control ${slc}) — it is effectively full, and users could waste bids on it. Confirm to override.</div>`,
+        okText:'Unlock Anyway', danger:true,
+        onConfirm:async()=>{
+          await setDoc(locksRef,{weeks:{[wk]:false}},{merge:true});
+          toast("🔓 Unlocked",'ok');
+        }
+      });
+      return;
+    }
+  }
   await setDoc(locksRef,{weeks:{[wk]:!cur}},{merge:true});
   toast(cur?"🔓 Unlocked":"🔒 Locked",cur?"ok":"warn");
 };
 window.lockAllWeeks=function(){
   openConfirm({
     title:'🔒 Lock All Weeks',
-    body:`<div>Lock all 52 weeks?</div><div class="cmodal-warn">No user will be able to add, edit, or remove bids on any week until they are unlocked.</div>`,
+    body:`<div>Lock all 52 weeks?</div><div class="cmodal-warn">No user will be able to add, edit, or remove bids on any week until they are unlocked.</div>${lockLiveWarnHtml()}`,
     okText:'Lock All', danger:true,
     onConfirm:async()=>{
       const w={}; mondays.forEach(d=>{w[dateKey(d)]=true;});
@@ -2297,7 +2418,8 @@ window.lockAllWeeks=function(){
 window.unlockAllWeeks=function(){
   openConfirm({
     title:'🔓 Unlock All Weeks',
-    body:`<div>Unlock all 52 weeks?</div><div class="cmodal-info">Users will be able to add, edit, and remove bids on any week.</div>`,
+    body:(()=>{const ap=computeApprovals();let full=0;mondays.forEach(d=>{const wk=dateKey(d);const a=ap[wk];const rem=Math.round((getSlots(wk)-(a?.fteWon||0))*10)/10;if(rem<getSlc(wk))full++;});
+      return `<div>Unlock all 52 weeks?</div><div class="cmodal-info">Users will be able to add, edit, and remove bids on any week.</div>${full?`<div class="cmodal-warn" style="margin-top:8px">⚠️ ${full} week${full!==1?'s are':' is'} below ${full!==1?'their':'its'} Smart Lock Control (effectively full) — users could waste bids there.</div>`:''}`;})(),
     okText:'Unlock All',
     onConfirm:async()=>{
       await setDoc(locksRef,{weeks:{}},{merge:true}); toast("🔓 All unlocked","ok");
@@ -2314,7 +2436,7 @@ window.lockAllExceptHighDemand=function(){
     title:'🔒 Lock All Except High Demand',
     body:`<div style="font-size:13px;line-height:1.5">Lock all 52 weeks <strong>except</strong> the 6 high-demand weeks, which will remain open for bidding:</div>
           <ul style="margin:10px 0 10px 18px;font-size:12px;color:var(--t2);line-height:1.7">${hdList.map(w=>`<li>${w}</li>`).join('')}</ul>
-          <div class="cmodal-warn">All other weeks will be locked — users cannot change bids on those weeks.</div>`,
+          <div class="cmodal-warn">All other weeks will be locked — users cannot change bids on those weeks.</div>${lockLiveWarnHtml()}`,
     okText:'Lock All Except High Demand', danger:true,
     onConfirm:async()=>{
       const w={};
@@ -3984,7 +4106,7 @@ window.adDenyAllLosers=function(){
 };
 
 // Weeks whose remaining FTE is so low that no user can win even with the max
-// allowed overage — i.e. weeks with no real availability. `unlockedOnly` filters
+// week's Smart Lock Control — i.e. weeks that are effectively full. `unlockedOnly` filters
 // out weeks the admin has already locked. Shared by the button and the phase alert.
 function weeksNeedingLock(unlockedOnly){
   // Smart Lock rule (reworked 16 Jul 2026): a week needs locking when its
