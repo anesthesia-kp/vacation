@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 72;     // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 73;     // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1713,8 +1713,11 @@ function computeBadBehavior(){
   const cur=Number(phasesData.currentPhase||1);
   const events=(changesLog||[]).filter(e=>e&&typeof e.ts==='number'&&e.actor!=='admin'&&!isDecisionEntry(e)&&e.ts>=(changesResetAt||0)).sort((a,b)=>a.ts-b.ts);
   const strong=v=>{ if(v===undefined||v===null||v==='NP') return false; if(Array.isArray(v)) return true; const n=Number(v); return !isNaN(n)&&n<=3; };
-  const flags={}; // user → {winCancel, lastSecond, timerReset, churn, slowStart}
-  const bump=(u,k)=>{ (flags[u]=flags[u]||{winCancel:0,lastSecond:0,timerReset:0,churn:0,slowStart:0})[k]++; };
+  const flags={}; // user → {counts..., incidents:[{type,wk,ts,detail}]}
+  const bump=(u,k,wk,ts,detail)=>{
+    const f=(flags[u]=flags[u]||{winCancel:0,lastSecond:0,timerReset:0,churn:0,slowStart:0,incidents:[]});
+    f[k]++; f.incidents.push({type:k,wk:wk||null,ts:ts||null,detail:detail||''});
+  };
   // sequential per-user/week value tracking for win-cancel + timer-reset
   const lastVal={};
   const perWeekCount={};
@@ -1723,19 +1726,19 @@ function computeBadBehavior(){
   for(const e of events){
     const key=(e.user||'')+'|'+(e.weekKey||'');
     perWeekCount[key]=(perWeekCount[key]||0)+1;
-    if(perWeekCount[key]===4) bump(e.user,'churn'); // counted once per week
+    if(perWeekCount[key]===4) bump(e.user,'churn',e.weekKey,e.ts,'4+ changes on this week this phase');
     if(e.action==='removed'){
       const v=e.bidValue!==undefined?e.bidValue:lastVal[key];
-      if(strong(v)) bump(e.user,'winCancel');
+      if(strong(v)) bump(e.user,'winCancel',e.weekKey,e.ts,'removed a strong bid ('+bidLblAdmin(v)+')');
       delete lastVal[key];
     } else {
       if(e.action==='edited'&&e.bidValue!==undefined&&lastVal[key]!==undefined
-         &&JSON.stringify(e.bidValue)===JSON.stringify(lastVal[key])) bump(e.user,'timerReset');
+         &&JSON.stringify(e.bidValue)===JSON.stringify(lastVal[key])) bump(e.user,'timerReset',e.weekKey,e.ts,'re-saved the same bid ('+bidLblAdmin(e.bidValue)+') — timer restarted, nothing changed');
       if(e.bidValue!==undefined) lastVal[key]=e.bidValue;
     }
     if(prevTs!==null&&timerData?.enabled&&durMs>0){
       const gap=e.ts-prevTs;
-      if(gap>=0.85*durMs&&gap<durMs) bump(e.user,'lastSecond');
+      if(gap>=0.85*durMs&&gap<durMs) bump(e.user,'lastSecond',e.weekKey,e.ts,'arrived after '+Math.round(gap/durMs*100)+'% of the countdown had run');
     }
     prevTs=e.ts;
   }
@@ -1745,7 +1748,7 @@ function computeBadBehavior(){
     for(const u of names){
       let has=false;
       for(const wk in (scheduleData[u]||{})){ if(scheduleData[u][wk]!==undefined&&isCurrentPhaseBidAdmin(u,wk)){has=true;break;} }
-      if(!has) bump(u,'slowStart');
+      if(!has) bump(u,'slowStart',null,null,'no bids '+Math.floor((Date.now()-began)/3600000)+'h after the phase opened');
     }
   }
   return Object.entries(flags).map(([user,f])=>({user,...f,total:f.winCancel+f.lastSecond+f.timerReset+f.churn+f.slowStart}))
@@ -1756,15 +1759,34 @@ function renderBadBehavior(){
   const head=`<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">🚩 <strong style="color:var(--t1)">Bad Behavior</strong><span style="color:var(--t2)">— patterns that slow the auction or push others to overbid</span></div>`;
   if(!phase1Started()){ el.innerHTML=head+'<div style="font-size:12px;color:var(--t3)">Screening begins when bidding opens.</div>'; return; }
   const list=computeBadBehavior();
-  if(!list.length){ el.innerHTML=head+'<div style="font-size:12px;color:var(--green)">✅ None detected this phase.</div>'; return; }
-  const part=(n,label)=>n?`${n} ${label}${n!==1?'s':''}`:null;
-  el.innerHTML=head+list.map(r=>{
-    const parts=[part(r.winCancel,'strong-bid cancel'),part(r.lastSecond,'last-second bid'),part(r.timerReset,'no-change timer reset'),part(r.churn,'high-churn week'),r.slowStart?'no bids 24h+ into the phase':null].filter(Boolean).join(' · ');
-    return `<div style="display:flex;align-items:center;gap:10px;padding:3px 0;font-size:12px">
-      <strong class="mono" style="color:var(--t1);min-width:44px">${esc(r.user)}</strong>
-      <span style="color:${r.total>=3?'var(--red)':'var(--yellow)'}">${parts}</span></div>`;
-  }).join('')+'<div style="font-size:10px;color:var(--t3);margin-top:4px">Heuristic screen — verify in the Change Log before acting. "Strong-bid cancel" means a 1–3 or combo bid was later removed; the screen can\'t know for certain the user was winning at the time.</div>';
+  if(!list.length){ el.innerHTML=head+'<div style="font-size:12px;color:var(--green)">✅ No users flagged this phase.</div>'; return; }
+  const n=list.length, inc=list.reduce((s,r)=>s+r.total,0);
+  el.innerHTML=head+`<div style="display:flex;align-items:center;gap:12px;font-size:12.5px">
+    <span style="color:${list.some(r=>r.total>=3)?'var(--red)':'var(--yellow)'}">⚠️ <strong>${n}</strong> user${n!==1?'s':''} flagged (${inc} incident${inc!==1?'s':''} this phase)</span>
+    <button class="btn btn-ghost" style="padding:3px 10px;font-size:11px" onclick="openBadBehaviorReport()">👁 View Report</button>
+  </div>`;
 }
+// Full report in a new tab — same style as the other summary reports.
+window.openBadBehaviorReport=function(){
+  const cur=Number(phasesData.currentPhase||1);
+  const stamp=new Date().toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
+  const list=computeBadBehavior();
+  const TYPE_LABEL={winCancel:'Strong-bid cancel',lastSecond:'Last-second bid',timerReset:'No-change timer reset',churn:'High-churn week',slowStart:'Slow start'};
+  const TYPE_COLOR={winCancel:'#dc2626',lastSecond:'#d97706',timerReset:'#7c3aed',churn:'#1d4ed8',slowStart:'#64748b'};
+  const body=list.length?list.map(r=>{
+    const rows=r.incidents.map(i=>`<tr>
+      <td><span class="chip" style="background:${TYPE_COLOR[i.type]||'#64748b'}">${TYPE_LABEL[i.type]||i.type}</span></td>
+      <td>${i.wk?('W'+(_wkNumByISO[i.wk]||'?')+' · '+fmtWk(i.wk)):'—'}</td>
+      <td>${i.ts?new Date(i.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'—'}</td>
+      <td>${esc(i.detail)}</td></tr>`).join('');
+    return `<div class="wk"><div class="wk-head">${esc(r.user)}<span class="fte">${r.total} incident${r.total!==1?'s':''}</span></div>
+      <table><thead><tr><th>Type</th><th>Week</th><th>When</th><th>Detail</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }).join(''):'<p>✅ No users flagged this phase.</p>';
+  const ok=openReportTab('Vacation Auction — Bad Behavior Report',`Phase ${cur} (current)`,
+    `Snapshot ${stamp} · Heuristic screen — verify in the Change Log before acting. "Strong-bid cancel" = a 1–3 or combo bid later removed; the screen cannot know for certain the user was winning at the time.`,
+    body,false);
+  if(ok) toast('👁 Bad Behavior report opened in a new tab','ok');
+};
 window.computeBadBehavior=computeBadBehavior;
 // ── Struggling-user flag ──
 // Flags users with ZERO wins anywhere in the auction who are currently losing.
