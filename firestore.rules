@@ -3,23 +3,22 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ── Admins ────────────────────────────────────────────────────────────────
+    // The admin list lives in vacations/adminAccess (shared by both admin sites).
     function accessDocExists() {
       return exists(/databases/$(database)/documents/vacations/adminAccess)
         && get(/databases/$(database)/documents/vacations/adminAccess).data.get('emails', []).size() > 0;
     }
-
     function isListedAdmin() {
       return request.auth.token.email.lower() in
              get(/databases/$(database)/documents/vacations/adminAccess).data.get('emails', []);
     }
-
     function isDefaultAdmin() {
       return request.auth.token.email.lower() in [
         'dr.vacation.goddess@gmail.com',
         'aaronjfrankel@gmail.com'
       ];
     }
-
     function isAdmin() {
       return request.auth != null
         && request.auth.token.email_verified == true
@@ -27,10 +26,24 @@ service cloud.firestore {
             || (!accessDocExists() && isDefaultAdmin()));
     }
 
-    function isSignedIn() {
-      return request.auth != null;
+    // ── Registered end-users ──────────────────────────────────────────────────
+    // A regular user may only write once they are signed in with a VERIFIED
+    // Google account whose e-mail is in the shared vacations/loginEmails allow-list
+    // (the admin fills this in per person). Emails are stored lower-cased by the
+    // admin UI, so this case-sensitive membership check is reliable. This is what
+    // replaces the old "any anonymous session may write" rule.
+    function isRegisteredUser() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/vacations/loginEmails)
+        && request.auth.token.email.lower() in
+           get(/databases/$(database)/documents/vacations/loginEmails).data.values();
     }
 
+    // ── Vacation Auction collection ───────────────────────────────────────────
+    // Admin-only documents (the auction's control surface + the shared roster,
+    // admin list, and login-email allow-list). loginEmails is admin-only so users
+    // can never edit who is allowed in.
     function isAdminOnlyDoc(docId) {
       return docId in [
         'approvals',
@@ -43,6 +56,7 @@ service cloud.firestore {
         'userList',
         'adminSettings',
         'adminAccess',
+        'loginEmails',
         'changesArchive',
         'meta'
       ];
@@ -51,9 +65,10 @@ service cloud.firestore {
     match /vacations/{docId} {
       allow read: if true;
       allow write: if (isAdminOnlyDoc(docId) && isAdmin())
-                   || (!isAdminOnlyDoc(docId) && isSignedIn());
+                   || (!isAdminOnlyDoc(docId) && (isRegisteredUser() || isAdmin()));
     }
 
+    // ── Daily Schedule collection ─────────────────────────────────────────────
     function isSchedAdminOnlyDoc(docId) {
       return docId in ['shiftCatalog', 'eligibility', 'openShifts', 'callTotals']
         || docId.matches('sched_.*');
@@ -62,7 +77,7 @@ service cloud.firestore {
     match /dailysched/{docId} {
       allow read: if true;
       allow write: if (isSchedAdminOnlyDoc(docId) && isAdmin())
-                   || (!isSchedAdminOnlyDoc(docId) && isSignedIn());
+                   || (!isSchedAdminOnlyDoc(docId) && (isRegisteredUser() || isAdmin()));
     }
 
     match /{document=**} {
