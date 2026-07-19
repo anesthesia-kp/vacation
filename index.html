@@ -1139,10 +1139,26 @@ onSnapshot(userListRef, snap=>{
   // Rebuild sign-in list and dropdown
   personSelect.innerHTML="";
   names.forEach(n=>{ const o=document.createElement("option"); o.value=o.textContent=n; personSelect.appendChild(o); });
-  if(!document.getElementById("accountSelectModal").classList.contains("show")){
-    personSelect.value=getCurrentUser();
-  } else {
+  if(document.getElementById("accountSelectModal").classList.contains("show")){
+    // Still on the sign-in screen (not signed in yet) — just refresh that screen.
     if(typeof refreshLoginUsers==='function') refreshLoginUsers();
+  } else if(selectedSignInName && names.includes(selectedSignInName)){
+    // Signed in and still on the roster: restore the REAL identity from the
+    // authoritative sign-in value. (The old code read personSelect.value here,
+    // but the innerHTML rebuild above just reset the menu to its FIRST option —
+    // which silently switched the signed-in user to whoever is first on the list.)
+    personSelect.value=selectedSignInName;
+  } else if(selectedSignInName){
+    // The admin removed the signed-in user from the roster mid-session. Don't
+    // strand them on a blank/first-person identity — send them back to sign-in.
+    selectedSignInName="";
+    try{ localStorage.removeItem(REMEMBER_KEY); }catch(_){}
+    personSelect.disabled=false; personSelect.style.display=""; personSelect.value="";
+    const _pl=document.getElementById("personLabel"); if(_pl) _pl.style.display="none";
+    if(typeof mainContainer!=='undefined' && mainContainer) mainContainer.style.display="none";
+    document.getElementById("accountSelectModal").classList.add("show");
+    if(typeof refreshLoginUsers==='function') refreshLoginUsers();
+    showSigninError("Your account was changed by an admin. Please sign in again.");
   }
 });
 onSnapshot(timerRef,  snap=>{
