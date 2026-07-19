@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 57;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 58;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -326,9 +326,9 @@ body{zoom:1.15}
       <!-- Two-step on ONE screen: username first, then password reveals below if needed -->
       <div id="signinPicker">
         <h2 class="modal-title" style="margin-bottom:4px">Sign in</h2>
-        <div style="font-size:.8rem;color:#48607a;margin-bottom:16px">Enter your initials or your saved username.</div>
+        <div style="font-size:.8rem;color:#48607a;margin-bottom:16px">Enter your username below.</div>
         <label class="modal-label" for="loginUsername">Username</label>
-        <input id="loginUsername" type="text" autocomplete="off" placeholder="Your initials"
+        <input id="loginUsername" type="text" autocomplete="off" placeholder="Username"
                oninput="onLoginUserInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();loginContinue();}"
                style="width:100%;padding:12px 14px;font-size:1.05rem;font-weight:600;border:2px solid #9fb4c6;border-radius:10px;background:#fff;color:#111827;box-sizing:border-box">
         <!-- Password block — revealed only after a valid username when passwords are on -->
@@ -460,7 +460,7 @@ body{zoom:1.15}
       <div class="countdown-left">
         <div class="countdown-icon" id="countdownIcon">⏳</div>
         <div>
-          <div class="countdown-label">Time remaining until auction closes</div>
+          <div class="countdown-label" id="countdownLabel">Time remaining until auction closes</div>
           <div class="countdown-desc" id="countdownDesc"></div>
         </div>
       </div>
@@ -1182,6 +1182,10 @@ onSnapshot(timerRef,  snap=>{
 let _auctionClosedShown=false;
 function showAuctionClosedModal(){
   if(_auctionClosedShown) return;
+  // Never pop this up before the user has actually signed in — the timer
+  // snapshot listener is live from page load, well before sign-in, so
+  // without this guard the alert could appear on top of the login screen.
+  if(!mainContainer || mainContainer.style.display==="none") return;
   _auctionClosedShown=true;
   const m=document.getElementById("auctionClosedModal");
   if(m) m.classList.add("show");
@@ -1203,6 +1207,21 @@ function startCountdownTick(){
 function renderCountdown(){
   const banner=document.getElementById("countdownBanner");
   if(!banner) return;
+  const timeEl=document.getElementById("countdownTime");
+  const descEl=document.getElementById("countdownDesc");
+  // Before Phase 1 has even begun, there's no timer running yet — showing
+  // "the window has closed" (or a stale leftover timer doc) here would be
+  // flat wrong, since bidding never opened in the first place. Just hide the
+  // timer box entirely — #notStartedBanner (below it) already tells the user
+  // bidding hasn't started, so there's no need to say it a second time here.
+  // The "phase completed, next phase not begun yet" case is different and
+  // intentionally NOT special-cased — that alert correctly communicates "no
+  // more changes right now," same as before.
+  if(!biddingOpen()){
+    banner.classList.remove("visible","urgent","warning");
+    if(countdownInterval){clearInterval(countdownInterval);countdownInterval=null;}
+    return;
+  }
   if(!timerData.enabled||!timerData.lastChange){
     banner.classList.remove("visible","urgent","warning"); return;
   }
@@ -1210,10 +1229,8 @@ function renderCountdown(){
   const remaining=DURATION-(Date.now()-timerData.lastChange);
   banner.classList.add("visible");
   banner.classList.remove("urgent","warning");
-  const timeEl=document.getElementById("countdownTime");
-  const descEl=document.getElementById("countdownDesc");
   if(remaining<=0){
-    timeEl.innerHTML='<div class="countdown-expired">⛔ You\'ve run out of time</div>';
+    timeEl.innerHTML='<div class="countdown-expired">Bidding closed</div>';
     descEl.textContent="The auction window has closed — no more changes can be made";
     banner.classList.add("urgent");
     if(countdownInterval){clearInterval(countdownInterval);countdownInterval=null;}
@@ -2256,11 +2273,14 @@ function refreshLoginUsers(){
 }
 window.refreshLoginUsers=refreshLoginUsers;
 
-// Resolve typed initials/username -> the user's initials (internal id), or null.
+// Resolve typed text -> the user's initials (internal id), or null. Matches
+// against each user's CURRENT displayName only — their custom username if
+// they've set one, or their initials by default if they haven't. So initials
+// work to sign in until a user picks a custom username; from that point on
+// ONLY the custom username works — bare initials stop resolving.
 function resolveUser(raw){
   const q=(raw||"").trim().toUpperCase();
   if(!q) return null;
-  for(const n of names){ if(n.toUpperCase()===q) return n; }
   for(const n of names){ if(displayName(n).toUpperCase()===q) return n; }
   return null;
 }
@@ -2303,10 +2323,10 @@ window.onLoginUserInput=function(){
 window.loginContinue=function(){
   clearSigninError();
   const raw=(document.getElementById("loginUsername")?.value||"").trim();
-  if(!raw){ showSigninError("Please enter your initials or username."); return; }
+  if(!raw){ showSigninError("Please enter your username."); return; }
   if(!signinReady()){ _pendingLogin=raw; const l=document.getElementById("signinLoading"); if(l)l.style.display="block"; return; }
   const initials=resolveUser(raw);
-  if(!initials){ showSigninError("We don't recognize that — check your initials or username."); return; }
+  if(!initials){ showSigninError("We don't recognize that username."); return; }
   selectedSignInName=initials;
   if(adminSettings.passcodesEnabled===true){
     const blk=document.getElementById("loginPwBlock"); if(blk) blk.style.display="block";
@@ -2324,7 +2344,7 @@ window.doLogin=async function(){
   clearSigninError();
   const raw=(document.getElementById("loginUsername")?.value||"").trim();
   const initials=selectedSignInName||resolveUser(raw);
-  if(!initials){ showSigninError("We don't recognize that — check your initials or username."); return; }
+  if(!initials){ showSigninError("We don't recognize that username."); return; }
   selectedSignInName=initials;
   if(adminSettings.passcodesEnabled===true){
     const pw=document.getElementById("loginPassword")?.value||"";
