@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 82;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 83;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -765,6 +765,7 @@ thead th{color:var(--t2)}
       <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
         <button class="btn btn-success" style="font-size:12px" onclick="adApproveAllWinners()">✓ Approve All Current Winners</button>
         <button class="btn btn-danger" style="font-size:12px" onclick="adDenyAllLosers()">✕ Deny All Current Losers</button>
+        <button class="btn btn-primary" style="font-size:12px" onclick="jumpToNextDecision()">⏭ Jump to Next Decision</button>
         <span style="margin-left:auto;font-size:11px;color:var(--t3);align-self:center">Reports moved to the dashboard → Results Reports</span>
       </div>
       <div id="adBody"></div>
@@ -2793,6 +2794,11 @@ window.runSimulation=async function(){
         if(e.code==='not-found') await setDoc(changesRef, { log: logEntries });
         else throw e;
       }
+      // A real bid resets the 48h rolling countdown (setDoc(timerRef,{lastChange:...}) in
+      // persistScheduleChange on the user site) — simulated bids are real bid activity for
+      // every other purpose (Popcornometer, callTotals, etc.) so they must do this too,
+      // or the timer stops accurately reflecting "time since the last bid activity."
+      if(timerData.enabled) await setDoc(timerRef,{lastChange:Date.now()},{merge:true}).catch(()=>{});
     }
     log.innerHTML='<div style="color:#0d7a43;font-weight:700;margin-bottom:8px">✅ Phase '+cur+' simulation complete — '+Object.keys(newSchedule).length+' users assigned</div>'+lines.map(l=>'<div>'+l+'</div>').join('');
     toast('🎲 Phase '+cur+' simulation complete','ok');
@@ -3075,6 +3081,17 @@ window.completePhase=function(){
       // between phases. The next Begin Phase runs Smart Lock & Unlock to reopen
       // exactly the weeks that still have availability.
       await _lockEveryWeek();
+      // Priority locks (worstBids) only mean anything WITHIN a phase — they
+      // stop a user from re-bidding worse than their current attempt on a
+      // week they haven't won yet. They must NEVER carry into the next
+      // phase: a week a user lost is wide open again next phase, with no
+      // memory of how well they bid for it before. (Weeks a user actually
+      // WON stay off-limits, but that's tracked separately via the
+      // completedPhases snapshot's approvals/schedule, not by this doc.)
+      // This is the same clear the admin can trigger by hand via "Clear ALL
+      // Priority Locks" — now it also happens automatically every time a
+      // phase closes, so nobody has to remember to click it.
+      await setDoc(worstBidsRef,{}).catch(()=>{});
       // Archive this phase's change log and reset ALL 24h activity counters —
       // the Popcornometer and "changes in last 24h" must read 0 on both sites
       // after a phase closes. resetAt also fences off bidTimes stamps from the
@@ -3083,7 +3100,7 @@ window.completePhase=function(){
         await setDoc(changesArchiveRef,{[cur]:changesLog},{merge:true}).catch(()=>{});
       }
       await setDoc(changesRef,{log:[],resetAt:Date.now()}).catch(()=>{});
-      toast('✓ Phase '+cur+' completed — all weeks locked','ok');
+      toast('✓ Phase '+cur+' completed — all weeks locked, priority locks released','ok');
       // Guide the admin straight to the natural next action: sending results.
       setTimeout(()=>sendPhaseResultsEmails(),500);
     }
@@ -3927,7 +3944,10 @@ window.renderAppDenials=function(){
     } else {
       actions=`<button class="btn" style="padding:3px 8px;font-size:11px;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="adRevokeDeny('${e.user}','${e.wk}')">↶ Revoke Denial</button>`;
     }
-    return `<div class="dr-row">
+    // A "decision" is any current-phase bid still awaiting Approve/Deny — used
+    // by "Jump to Next Decision" to find and scroll to the next one in DOM order.
+    const needsDecision=!isHistorical&&!e.approved&&!e.denied;
+    return `<div class="dr-row" id="drrow_${e.wk}_${e.user}"${needsDecision?' data-undecided="1"':''}>
       ${wkHtml}
       <div class="dr-user">${phaseBadge}${e.user}</div>
       <div class="dr-bid">${lbl} · FTE ${getUserFTE(e.user)}</div>
@@ -3975,6 +3995,25 @@ window.renderAppDenials=function(){
     });
   }
   body.innerHTML=html||'<div style="text-align:center;color:var(--t2);padding:20px">No bids.</div>';
+};
+
+// "Jump to Next Decision" — scrolls to the next current-phase bid still
+// awaiting Approve/Deny, in DOM order (so it follows whatever filter/view-by
+// is currently active). Repeated clicks advance through the list; clicking
+// again after the last one wraps back to the first, same idea as the bid
+// board's scrollToWeek highlight on the user site.
+window.jumpToNextDecision=function(){
+  const rows=[...document.querySelectorAll('#adBody .dr-row[data-undecided="1"]')];
+  if(!rows.length){ toast('✓ No decisions left to make — every current bid is approved or denied.','ok'); return; }
+  // Anything meaningfully below the top of the viewport (past a small margin
+  // for the sticky page header) counts as "not yet seen" — jump to the first
+  // of those. If we've scrolled past all of them, wrap around to the first.
+  const next=rows.find(r=>r.getBoundingClientRect().top>120)||rows[0];
+  next.scrollIntoView({behavior:'smooth',block:'center'});
+  const prevShadow=next.style.boxShadow, prevTransition=next.style.transition;
+  next.style.transition='box-shadow .25s';
+  next.style.boxShadow='0 0 0 3px var(--blue), 0 8px 24px rgba(0,107,166,.35)';
+  setTimeout(()=>{ next.style.boxShadow=prevShadow; setTimeout(()=>{ next.style.transition=prevTransition; },300); },1600);
 };
 
 // Approvals/denials should ideally only happen once bidding is closed and every
