@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 89;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 90;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -221,39 +221,47 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
 
 /* Draws & Reviews panel */
 .dr-card{background:var(--card);border:1px solid var(--b1);border-radius:10px;padding:14px;margin-bottom:12px}
-/* Approvals/Denials and Draws & Reviews share ONE 6-column grid, used by both
-   the card head and every row, so Prior Phase Results (column 6) always
-   lands directly under its toggle button (also column 6) — regardless of
-   how many action buttons a row has, or how long the week label / Cap ·
-   Winning · Remaining text is. Column 1 is only used by rows that show a
-   per-row week label (user-view mode); it's simply left empty everywhere
-   else, including the card head, so no separate math is needed per mode.
-   Column widths: 1=week label 110 · 2=user 64 · 3=bid 110 · 4=status 175 ·
-   5=actions 280 (fits the 3-button Approve-as-Win/Deny/Cancel case) · 6=rest. */
-.dr-card-head{display:grid;grid-template-columns:110px 64px 110px 175px 280px 1fr;column-gap:10px;align-items:center;margin-bottom:10px}
-.dr-card-head-info{grid-column:2/6;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.dr-card-head .btn-ghost{grid-column:6}
+/* Approvals/Denials and Draws & Reviews render each card's header AND all its
+   data rows as <tr>s inside ONE <table> (wrapped in .dr-table-wrap so it can
+   scroll horizontally instead of breaking page layout on narrow screens). A
+   real table auto-sizes every column to the width of its widest cell across
+   the WHOLE table — so columns stay exactly as tight as their content needs
+   (no fixed oversized widths, no dead gaps to "shift left") while the
+   header's Prior Phase Results button (the table's last column) still lands
+   in the exact same column as every row's history badge (also the last
+   column), for free, with no manual pixel math. The optional leading
+   week-label column only exists in "user view" tables (5 cols → 6 cols); a
+   given table instance is always ALL week-view or ALL user-view, never
+   mixed, so every <tr> in a table has the same cell count — the header
+   row's colspan is (numColumns-1) for the label/info cell + 1 for the
+   trailing button cell. */
+.dr-table-wrap{overflow-x:auto}
+.dr-table{border-collapse:collapse}
+.dr-table td{vertical-align:middle;padding:6px 14px 6px 0}
+.dr-table td:last-child{padding-right:0}
+.dr-head-row td{padding-bottom:10px}
+.dr-card-head-info{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .dr-week{font-size:14px;font-weight:700;color:var(--t1)}
-.dr-row{display:grid;grid-template-columns:110px 64px 110px 175px 280px 1fr;column-gap:10px;align-items:center;padding:6px 0;border-top:1px dashed var(--b1)}
-.dr-row:first-of-type{border-top:none}
-.dr-weeklabel{grid-column:1;font-family:var(--mono);font-size:11px;color:var(--t2)}
-.dr-user{grid-column:2;font-weight:700;color:var(--t1);width:64px}
-.dr-bid{grid-column:3;font-family:var(--mono);color:var(--t2);font-size:11px;width:110px}
-.dr-status{grid-column:4;display:flex;align-items:center;gap:6px;width:175px;flex-wrap:wrap}
-/* 280px fits the 3-button Draws & Reviews case (Approve as Win / Deny /
-   Cancel) without wrapping — the same column also carries the 1-2 button
-   Approvals/Denials case and the "context only"/"locked" text cases. */
-.dr-actions{grid-column:5;display:flex;gap:6px;flex-wrap:wrap;width:280px}
-.dr-history{grid-column:6;display:none;gap:10px;flex-wrap:wrap;align-items:center;font-size:11px}
+.dr-weeklabel{font-family:var(--mono);font-size:11px;color:var(--t2)}
+.dr-user{font-weight:700;color:var(--t1)}
+.dr-bid{font-family:var(--mono);color:var(--t2);font-size:11px}
+.dr-status{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dr-actions{display:flex;gap:6px;flex-wrap:wrap}
+/* Kept as an inner <div> (not the <td> itself) so display can be toggled
+   between none/flex freely without fighting table-cell display rules; the
+   <td> around it always renders (keeping column alignment), just looks
+   empty when the inner div is hidden. */
+.dr-history{display:none;gap:10px;flex-wrap:wrap;align-items:center;font-size:11px}
 .dr-card.show-history .dr-history{display:flex}
-/* Mobile: fall back to the old wrapping flex layout — a fixed 6-column grid
-   doesn't fit a phone width, and precise column alignment matters far less
-   on the small screen than avoiding horizontal overflow. */
+.dr-row td{border-top:1px dashed var(--b1)}
+/* No dashed line directly under the header row, or directly under the
+   "Other bids on this week" caption row (which already carries its own). */
+.dr-head-row+tr td,.dr-caption-row+tr td{border-top:none}
+.dr-caption-row td{padding-top:10px;border-top:1px dashed var(--b1);font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em}
+/* Mobile: the table doesn't reflow — .dr-table-wrap scrolls it horizontally
+   so it can't blow out the page's own width. */
 @media (max-width:900px){
-  .dr-card-head{display:flex;flex-wrap:wrap;gap:8px}
-  .dr-card-head-info{width:auto}
-  .dr-row{display:flex;flex-wrap:wrap;max-width:100%}
-  .dr-weeklabel{width:auto}
+  .dr-table{min-width:640px}
 }
 
 /* Locked Weeks browse panel — visually similar to Draws & Reviews rows but
@@ -305,7 +313,6 @@ thead th{color:var(--t2)}
   [style*="grid-template-columns:repeat(auto-fit,minmax(360px"]{grid-template-columns:1fr!important}
   /* tables scroll horizontally instead of overflowing */
   table{min-width:520px}
-  .dr-row{flex-wrap:wrap;max-width:100%}
   /* header action rows wrap tightly */
   .btn{padding:8px 12px}
 }
@@ -1507,10 +1514,9 @@ function userPhaseHistory(u){
   return {phaseNums,rows};
 }
 // Compact color-coded strip: "P1: 2W", "P2: 1L", "P3: –" (no bid that phase).
-// Delineated by phase, red/green only — no overall total. Renders as a
-// full-width line inside the bidder's row (via dr-history's width:100% in a
-// wrapped flex row), with its own dashed top border so it reads as a natural
-// continuation of the row rather than a separate box.
+// Delineated by phase, red/green only — no overall total. Rendered inside the
+// row's trailing "history" table cell, so it lines up directly under the
+// card header's Prior Phase Results button (same column, native to <table>).
 function priorPhaseInlineHtml(u){
   const hist=userPhaseHistory(u);
   if(!hist.phaseNums.length) return ''; // Phase 1, nothing completed yet
@@ -4014,7 +4020,7 @@ window.renderAppDenials=function(){
   const renderEntry=(e,showWeek)=>{
     const lbl=e.priority==='NP'?'NP':(Array.isArray(e.priority)?e.priority.join(','):e.priority);
     const m=wkDate(e.wk);
-    const wkHtml=showWeek?`<div class="dr-weeklabel">${wLabel(m)}</div>`:'';
+    const wkHtml=showWeek?`<td class="dr-weeklabel">${wLabel(m)}</td>`:'';
     const phaseBadge=phaseFilter==='all'?`<span style="background:rgba(96,165,250,.15);color:var(--blue);font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;margin-right:4px">P${e.phase}</span>`:'';
     // Historical bids (bidPh < cur) get no action buttons — they're locked in
     const isHistorical=e.phase<(Number(phasesData.currentPhase||1));
@@ -4032,20 +4038,20 @@ window.renderAppDenials=function(){
     // A "decision" is any current-phase bid still awaiting Approve/Deny — used
     // by "Jump to Next Decision" to find and scroll to the next one in DOM order.
     const needsDecision=!isHistorical&&!e.approved&&!e.denied;
-    return `<div class="dr-row" id="drrow_${e.wk}_${e.user}"${needsDecision?' data-undecided="1"':''}>
+    return `<tr class="dr-row" id="drrow_${e.wk}_${e.user}"${needsDecision?' data-undecided="1"':''}>
       ${wkHtml}
-      <div class="dr-user">${phaseBadge}${e.user}</div>
-      <div class="dr-bid">${lbl} · FTE ${getUserFTE(e.user)}</div>
-      <div class="dr-status">${
+      <td class="dr-user">${phaseBadge}${e.user}</td>
+      <td class="dr-bid">${lbl} · FTE ${getUserFTE(e.user)}</td>
+      <td><div class="dr-status">${
         // Undecided bids: the dashed projection pill alone (the solid chip would
         // just repeat it). The solid ✓ APPROVED / ✕ DENIED chip is ADDED once
         // admin decides. Historical/no-proj rows fall back to the outcome chip.
         (e.approved||e.denied)?`${e.proj?projPill(e.proj):''}${outcomeChip(e.outcome)}`
         :(e.proj?projPill(e.proj):outcomeChip(e.outcome))
-      }</div>
-      <div class="dr-actions">${actions}</div>
-      ${priorPhaseInlineHtml(e.user)}
-    </div>`;
+      }</div></td>
+      <td><div class="dr-actions">${actions}</div></td>
+      <td>${priorPhaseInlineHtml(e.user)}</td>
+    </tr>`;
   };
 
   let html='';
@@ -4060,15 +4066,21 @@ window.renderAppDenials=function(){
       byWk[wk].sort((a,b)=>outcomeRank(a.outcome)-outcomeRank(b.outcome)||a.user.localeCompare(b.user));
       const drawUsers=byWk[wk].filter(e=>e.outcome==='draw').map(e=>e.user);
       const spinBtn=drawUsers.length>=2?`<button class="btn btn-primary" style="padding:3px 10px;font-size:11px;margin-top:6px" onclick='openWheel("${wk}",${JSON.stringify(drawUsers)})'>🎡 Spin Randomizer (${drawUsers.length} in draw)</button>`:'';
+      // Week-view table: 5 columns (user, bid, status, actions, history) — no
+      // leading week-label column. Header colspan = 4 (info) + 1 (button).
       html+=`<div class="dr-card">
-        <div class="dr-card-head">
-          <div class="dr-card-head-info">
-            <div class="dr-week">${wLabel(m)} <span style="color:var(--t2);font-size:11px">(${wRange(m)})</span></div>
-            <div style="font-size:11px;color:var(--t2)">Cap: ${cap} · Winning: ${a.fteWon} · <span style="color:${remaining<0?'var(--red)':'var(--t2)'}">Remaining: ${remaining}</span></div>
-          </div>
-          <button class="btn btn-ghost" style="padding:2px 8px;font-size:10px" onclick="toggleWeekPriorPhase(this)">📋 Prior Phase Results</button>
-        </div>
-        ${byWk[wk].map(e=>renderEntry(e,false)).join('')}
+        <div class="dr-table-wrap"><table class="dr-table">
+          <tr class="dr-head-row">
+            <td colspan="4">
+              <div class="dr-card-head-info">
+                <div class="dr-week">${wLabel(m)} <span style="color:var(--t2);font-size:11px">(${wRange(m)})</span></div>
+                <div style="font-size:11px;color:var(--t2)">Cap: ${cap} · Winning: ${a.fteWon} · <span style="color:${remaining<0?'var(--red)':'var(--t2)'}">Remaining: ${remaining}</span></div>
+              </div>
+            </td>
+            <td><button class="btn btn-ghost" style="padding:2px 8px;font-size:10px" onclick="toggleWeekPriorPhase(this)">📋 Prior Phase Results</button></td>
+          </tr>
+          ${byWk[wk].map(e=>renderEntry(e,false)).join('')}
+        </table></div>
         ${spinBtn}
       </div>`;
     });
@@ -4077,9 +4089,16 @@ window.renderAppDenials=function(){
     filtered.forEach(e=>{ (byUser[e.user]=byUser[e.user]||[]).push(e); });
     Object.keys(byUser).sort().forEach(u=>{
       byUser[u].sort((a,b)=>outcomeRank(a.outcome)-outcomeRank(b.outcome)||a.wk.localeCompare(b.wk));
+      // User-view table: 6 columns (weeklabel, user, bid, status, actions,
+      // history). Header colspan = 5 (info) + 1 (button).
       html+=`<div class="dr-card">
-        <div class="dr-card-head"><div class="dr-card-head-info"><div class="dr-week">${u}</div><div style="font-size:11px;color:var(--t2)">FTE ${getUserFTE(u)}</div></div><button class="btn btn-ghost" style="padding:2px 8px;font-size:10px" onclick="toggleWeekPriorPhase(this)">📋 Prior Phase Results</button></div>
-        ${byUser[u].map(e=>renderEntry(e,true)).join('')}
+        <div class="dr-table-wrap"><table class="dr-table">
+          <tr class="dr-head-row">
+            <td colspan="5"><div class="dr-card-head-info"><div class="dr-week">${u}</div><div style="font-size:11px;color:var(--t2)">FTE ${getUserFTE(u)}</div></div></td>
+            <td><button class="btn btn-ghost" style="padding:2px 8px;font-size:10px" onclick="toggleWeekPriorPhase(this)">📋 Prior Phase Results</button></td>
+          </tr>
+          ${byUser[u].map(e=>renderEntry(e,true)).join('')}
+        </table></div>
       </div>`;
     });
   }
@@ -5632,15 +5651,15 @@ window.renderDrawsReviews=function(){
         <button class="btn btn-danger" style="padding:3px 9px;font-size:11px;opacity:.7" onclick="confirmAdminCancel('${e.user}','${e.wk}')">✕ Cancel</button>`;
     }
     const m=wkDate(e.wk);
-    const weekCol=showWeekLabel?`<div class="dr-weeklabel">${wLabel(m)}</div>`:'';
-    return `<div class="dr-row">
+    const weekCol=showWeekLabel?`<td class="dr-weeklabel">${wLabel(m)}</td>`:'';
+    return `<tr class="dr-row">
       ${weekCol}
-      <div class="dr-user">${e.user}</div>
-      <div class="dr-bid">${lbl} · FTE ${getUserFTE(e.user)}</div>
-      <div class="dr-status">${tag}</div>
-      <div class="dr-actions">${actions}</div>
-      ${priorPhaseInlineHtml(e.user)}
-    </div>`;
+      <td class="dr-user">${e.user}</td>
+      <td class="dr-bid">${lbl} · FTE ${getUserFTE(e.user)}</td>
+      <td><div class="dr-status">${tag}</div></td>
+      <td><div class="dr-actions">${actions}</div></td>
+      <td>${priorPhaseInlineHtml(e.user)}</td>
+    </tr>`;
   };
   let html='';
   if(sortBy==='week'){
@@ -5658,17 +5677,19 @@ window.renderDrawsReviews=function(){
       const fteWonNow=Math.round(a.fteWon*10)/10;
       const remaining=Math.round((cap-fteWonNow)*10)/10;
       const remainingColor=remaining<0?'var(--red)':'var(--t2)';
+      // Week-view table: 5 columns (user, bid, status, actions, history) — no
+      // leading week-label column. Header colspan = 4 (info) + 1 (button).
       html+=`<div class="dr-card">
-        <div class="dr-card-head">
-          <div class="dr-card-head-info">
-            <div class="dr-week">${wLabel(m)} <span style="color:var(--t2);font-weight:400;font-size:11px">(${wRange(m)})</span></div>
-            <div style="font-size:11px;color:var(--t2)">Cap: ${cap} · Winning: ${fteWonNow} · <span style="color:${remainingColor}">Remaining: ${remaining}</span></div>
-          </div>
-          <button class="btn btn-ghost" style="padding:2px 8px;font-size:10px" onclick="toggleWeekPriorPhase(this)">📋 Prior Phase Results</button>
-        </div>`;
-      if(drawUsers.length>=2){
-        html+=`<div style="margin-bottom:8px"><button class="btn btn-primary" style="padding:4px 10px;font-size:11px" onclick='openWheel("${wk}",${JSON.stringify(drawUsers)})'>🎡 Spin Randomizer</button></div>`;
-      }
+        <div class="dr-table-wrap"><table class="dr-table">
+          <tr class="dr-head-row">
+            <td colspan="4">
+              <div class="dr-card-head-info">
+                <div class="dr-week">${wLabel(m)} <span style="color:var(--t2);font-weight:400;font-size:11px">(${wRange(m)})</span></div>
+                <div style="font-size:11px;color:var(--t2)">Cap: ${cap} · Winning: ${fteWonNow} · <span style="color:${remainingColor}">Remaining: ${remaining}</span></div>
+              </div>
+            </td>
+            <td><button class="btn btn-ghost" style="padding:2px 8px;font-size:10px" onclick="toggleWeekPriorPhase(this)">📋 Prior Phase Results</button></td>
+          </tr>`;
       // Render the draw/review/approved entries (with action buttons)
       list.slice().sort((a,b)=>outcomeRank(a.type)-outcomeRank(b.type)||a.user.localeCompare(b.user)).forEach(e=>{ html+=renderRow(e,false); });
       // Also show projected wins/losses for context (read-only, no action buttons)
@@ -5689,16 +5710,23 @@ window.renderDrawsReviews=function(){
         const color=o==='win'?'p-green':'';
         const bgcolor=o==='win'?'rgba(52,211,153,.12)':'rgba(148,163,184,.08)';
         const lbl=Array.isArray(b.priority)?b.priority.join(','):b.priority;
-        contextRows.push(`<div class="dr-row" style="background:${bgcolor};opacity:.8">
-          <div class="dr-user">${b.user}</div>
-          <div class="dr-bid">${lbl} · FTE ${getUserFTE(b.user)}</div>
-          <div class="dr-status"><span class="pill ${color}" style="${o==='win'?'':'background:rgba(148,163,184,.2);color:var(--t2)'}">${label}</span></div>
-          <div class="dr-actions" style="color:var(--t3);font-size:11px;font-style:italic">context only</div>
-          ${priorPhaseInlineHtml(b.user)}
-        </div>`);
+        contextRows.push(`<tr class="dr-row" style="background:${bgcolor};opacity:.8">
+          <td class="dr-user">${b.user}</td>
+          <td class="dr-bid">${lbl} · FTE ${getUserFTE(b.user)}</td>
+          <td><div class="dr-status"><span class="pill ${color}" style="${o==='win'?'':'background:rgba(148,163,184,.2);color:var(--t2)'}">${label}</span></div></td>
+          <td><span style="color:var(--t3);font-size:11px;font-style:italic">context only</span></td>
+          <td>${priorPhaseInlineHtml(b.user)}</td>
+        </tr>`);
       });
       if(contextRows.length){
-        html+=`<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--b1)"><div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Other bids on this week</div>${contextRows.join('')}</div>`;
+        // "Other bids on this week" is a full-width caption <tr> in the SAME
+        // table (colspan spans all 5 week-view columns) so it doesn't break
+        // the table's column auto-sizing / alignment.
+        html+=`<tr class="dr-caption-row"><td colspan="5">Other bids on this week</td></tr>${contextRows.join('')}`;
+      }
+      html+=`</table></div>`;
+      if(drawUsers.length>=2){
+        html+=`<div style="margin-top:8px"><button class="btn btn-primary" style="padding:4px 10px;font-size:11px" onclick='openWheel("${wk}",${JSON.stringify(drawUsers)})'>🎡 Spin Randomizer</button></div>`;
       }
       html+=`</div>`;
     });
@@ -5706,16 +5734,22 @@ window.renderDrawsReviews=function(){
     const byUser={}; entries.forEach(e=>{ (byUser[e.user]=byUser[e.user]||[]).push(e); });
     Object.keys(byUser).sort().forEach(u=>{
       const list=byUser[u];
+      // User-view table: 6 columns (weeklabel, user, bid, status, actions,
+      // history). Header colspan = 5 (info) + 1 (button).
       html+=`<div class="dr-card">
-        <div class="dr-card-head">
-          <div class="dr-card-head-info">
-            <div class="dr-week">${u} <span style="color:var(--t2);font-weight:400;font-size:11px">(FTE ${getUserFTE(u)})</span></div>
-            <div style="font-size:11px;color:var(--t2)">${list.length} pending</div>
-          </div>
-          <button class="btn btn-ghost" style="padding:2px 8px;font-size:10px" onclick="toggleWeekPriorPhase(this)">📋 Prior Phase Results</button>
-        </div>`;
+        <div class="dr-table-wrap"><table class="dr-table">
+          <tr class="dr-head-row">
+            <td colspan="5">
+              <div class="dr-card-head-info">
+                <div class="dr-week">${u} <span style="color:var(--t2);font-weight:400;font-size:11px">(FTE ${getUserFTE(u)})</span></div>
+                <div style="font-size:11px;color:var(--t2)">${list.length} pending</div>
+              </div>
+            </td>
+            <td><button class="btn btn-ghost" style="padding:2px 8px;font-size:10px" onclick="toggleWeekPriorPhase(this)">📋 Prior Phase Results</button></td>
+          </tr>`;
       list.sort((a,b)=>outcomeRank(a.type)-outcomeRank(b.type)||a.wk.localeCompare(b.wk)).forEach(e=>{ html+=renderRow(e,true); });
-      html+=`</div>`;
+      html+=`</table></div>
+      </div>`;
     });
   }
   body.innerHTML=html;
