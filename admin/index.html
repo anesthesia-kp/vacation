@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 93;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 95;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -616,7 +616,7 @@ thead th{color:var(--t2)}
           <button class="btn btn-danger" style="background:rgba(198,40,40,.22);border-color:rgba(198,40,40,.6)" onclick="deleteAllUsers()">🗑 Delete All Users</button>
         </div>
         <div style="overflow-x:auto;max-height:560px;overflow-y:auto;border:1px solid var(--b1)">
-          <table><thead><tr><th>Initials</th><th>Username</th><th>FTE</th><th>E-mail</th><th>Password</th><th></th></tr></thead><tbody id="usersBody"></tbody></table>
+          <table><thead><tr><th>Initials</th><th>Username</th><th>FTE</th><th>Login e-mail (Google)</th><th>Secondary e-mail</th><th>Password</th><th></th></tr></thead><tbody id="usersBody"></tbody></table>
         </div>
       </div>
     </div>
@@ -959,7 +959,8 @@ const adminRef    = doc(db,"vacations","adminSettings");
 const timerRef    = doc(db,"vacations","timer");
 const worstBidsRef = doc(db,"vacations","bestBids");
 const slcRef       = doc(db,"vacations","slcMap"); // per-week Smart Lock Control
-const emailsRef   = doc(db,"vacations","emails");
+const emailsRef   = doc(db,"vacations","emails"); // SECONDARY e-mail (user → address)
+const loginEmailsRef = doc(db,"vacations","loginEmails"); // PRIMARY / Google login e-mail (user → address)
 const passwordsRef = doc(db,"vacations","passcodes");
 const userListRef  = doc(db,"vacations","userList");
 const usernamesRef = doc(db,"vacations","usernames"); // {initials: customDisplayName}
@@ -1004,7 +1005,18 @@ let phasesData={currentPhase:1,completedPhases:{},phaseHistory:{}}; // {currentP
 let deniedData={}; // {wk: [user,...]} — admin denials per week
 let bidPhaseData={}; // {user:{wk:phaseNum}} — which phase each live bid was placed in
 let slotsData={};    // {wk: number} — admin-entered per-week FTE availability overrides
-let emailsDataAdmin={}; // user → email
+let emailsDataAdmin={}; // user → SECONDARY email
+let loginEmailsDataAdmin={}, loginEmailsData={}; // user → PRIMARY (Google login) email
+// Recipients for any alert to a user: the primary (Google login) e-mail always,
+// plus the secondary e-mail when one is set. "__skip__" on the secondary means
+// "no secondary" — the primary still receives alerts. De-duped, lower-cased.
+function recipientsFor(user){
+  const out=[]; const seen=new Set();
+  const add=(e)=>{ if(!e||typeof e!=='string') return; const v=e.trim(); if(!v||v==='__skip__'||!v.includes('@')) return; const k=v.toLowerCase(); if(seen.has(k)) return; seen.add(k); out.push(v); };
+  add(loginEmailsDataAdmin[user]);
+  add(emailsDataAdmin[user]);
+  return out;
+}
 let changesLog=[], changesResetAt=0, adminSettings={emailNotifsEnabled:true}, timerData={enabled:false,lastChange:null};
 function getReviewThreshold(){ const raw=adminSettings?.reviewThreshold; if(raw===undefined||raw===null)return 0.5; const n=Number(raw); if(isNaN(n))return 0.5; const clamped=Math.max(0,Math.min(2,n)); return Math.round(clamped*10)/10; }
 // Returns the FTE of the lowest-FTE user in the roster. Used by the auto-lock rule.
@@ -1199,6 +1211,7 @@ onSnapshot(worstBidsRef, snap=>{
   if(panel&&panel.classList.contains("on")) renderBestBidsTable();
 });
 onSnapshot(emailsRef,   snap=>{ emailsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
+onSnapshot(loginEmailsRef, snap=>{ loginEmailsData=snap.exists()?snap.data():{}; loginEmailsDataAdmin=loginEmailsData; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
 onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; if(typeof renderInsights==='function') renderInsights(); });
 onSnapshot(passwordsRef,snap=>{ passwordsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
@@ -1247,14 +1260,17 @@ async function processMailQueue(minAgeMs){
       const e=mailQueueData[qid];
       if(!e||typeof e!=='object'){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
       if(!_mqEligible(e,Date.now(),minAgeMs)) continue;
-      const email=e.email||emailsDataAdmin[e.user];
-      if(!email||email==='__skip__'){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
+      // Recipients: primary (login) + secondary; fall back to the address the
+      // queuing page recorded if the user has no addresses on file yet.
+      let recips=recipientsFor(e.user);
+      if(!recips.length && e.email && e.email!=='__skip__' && String(e.email).includes('@')) recips=[e.email];
+      if(!recips.length){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
       try{
         // Claim, let the claim settle, verify we still own it, then send.
         await updateDoc(mailQueueRef,{[qid+'.claimedAt']:Date.now(),[qid+'.claimedBy']:MQ_ID});
         await new Promise(r=>setTimeout(r,2500));
         if(mailQueueData[qid]?.claimedBy!==MQ_ID) continue; // another page won this one
-        await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:e.body||''});
+        for(const email of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:e.body||''}); }
         await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
         sent++;
       }catch(err){ console.warn('Queue send failed for',e.user,err); }
@@ -3391,11 +3407,13 @@ function trackEmailSent(){
   updateDoc(mailStatsRef,{[k]:increment(1)}).catch(()=>setDoc(mailStatsRef,{[k]:1},{merge:true}).catch(()=>{}));
 }
 function adminSendEmail(user,subject,body){
-  const email=emailsDataAdmin[user]; if(!email||email==='__skip__') return;
-  try{
-    emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body});
-    trackEmailSent();
-  }catch(e){console.warn('Email failed:',e);}
+  const recips=recipientsFor(user); if(!recips.length) return;
+  for(const email of recips){
+    try{
+      emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body});
+      trackEmailSent();
+    }catch(e){console.warn('Email failed:',e);}
+  }
 }
 let mailStatsData={};
 onSnapshot(mailStatsRef, snap=>{ mailStatsData=snap.exists()?snap.data():{}; renderMailMeter(); });
@@ -3456,8 +3474,7 @@ window.sendReminderEmails=function(){
     onConfirm:async()=>{
       let sent=0, skipped=0;
       for(const u of noBidders){
-        const email=emailsDataAdmin[u];
-        if(!email||email==='__skip__'){ skipped++; continue; }
+        if(!recipientsFor(u).length){ skipped++; continue; }
         adminSendEmail(u,'Vacation Bidding Reminder — Phase '+cur,
           `Hello ${u},
 
@@ -3517,7 +3534,7 @@ window.sendPhaseResultsEmails=function(){
     onConfirm:async()=>{
       let sent=0, skipped=0;
       for(const u of usersWithResults){
-        const email=emailsDataAdmin[u]; if(!email||email==='__skip__'){ skipped++; continue; }
+        if(!recipientsFor(u).length){ skipped++; continue; }
         const {approved,denied}=summary[u];
         approved.sort(); denied.sort();
         const appLines=approved.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(scheduleData[u]?.[wk])})`;}).join('\n');
@@ -4716,13 +4733,31 @@ window.adminSaveEmail=async function(u){
 };
 window.adminClearEmail=function(u){
   openConfirm({
-    title:'🗑 Clear Email',
-    body:`<div>Clear stored email for <strong>${u}</strong>?</div><div class="cmodal-warn">They will not receive notifications until an email is re-saved.</div>`,
+    title:'🗑 Clear Secondary Email',
+    body:`<div>Clear the secondary e-mail for <strong>${u}</strong>?</div><div class="cmodal-warn">Alerts will still go to their primary (Google login) e-mail.</div>`,
     okText:'Clear', danger:true,
     onConfirm:async()=>{
       // Atomic field delete — never overwrites other users' emails
       await updateDoc(emailsRef,{[u]:deleteField()}).catch(()=>{});
       toast(`🗑 Cleared ${u}`,"warn");
+    }
+  });
+};
+// Primary / Google login e-mail — this is what signs the user in AND the first
+// alert recipient. Stored in the loginEmails doc (user → address).
+window.adminSaveLoginEmail=async function(u){
+  const val=document.getElementById(`lem_${u}`)?.value.trim();
+  if(!val||!val.includes("@")){toast("Invalid email","err");return;}
+  await setDoc(loginEmailsRef,{[u]:val},{merge:true}); toast(`🔑 Login e-mail saved for ${u}`,"ok");
+};
+window.adminClearLoginEmail=function(u){
+  openConfirm({
+    title:'🗑 Clear Login Email',
+    body:`<div>Clear the primary (Google login) e-mail for <strong>${u}</strong>?</div><div class="cmodal-warn">Once Google login is live, this user will not be able to sign in until a login e-mail is re-saved.</div>`,
+    okText:'Clear', danger:true,
+    onConfirm:async()=>{
+      await updateDoc(loginEmailsRef,{[u]:deleteField()}).catch(()=>{});
+      toast(`🗑 Cleared login e-mail for ${u}`,"warn");
     }
   });
 };
@@ -5312,7 +5347,10 @@ function renderUsersCombined(){
       <td style="white-space:nowrap">${unameCell}</td>
       <td style="white-space:nowrap"><input type="number" id="fte_${n}" class="inp" style="width:70px" value="${fte}" step="0.1" min="0" max="1">
         <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveFte('${n}')">Save</button></td>
-      <td style="white-space:nowrap"><input type="email" id="em_${n}" class="inp" style="width:190px" value="${skip?'':esc(em)}" placeholder="no email saved">${skip?' <span class="pill p-yellow">opted out</span>':''}
+      <td style="white-space:nowrap"><input type="email" id="lem_${n}" class="inp" style="width:200px" value="${esc(loginEmailsData[n]||'')}" placeholder="their-google@gmail.com">
+        <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveLoginEmail('${n}')">Save</button>
+        <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearLoginEmail('${n}')">Clear</button></td>
+      <td style="white-space:nowrap"><input type="email" id="em_${n}" class="inp" style="width:190px" value="${skip?'':esc(em)}" placeholder="optional 2nd address">${skip?' <span class="pill p-yellow">opted out</span>':''}
         <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveEmail('${n}')">Save</button>
         <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearEmail('${n}')">Clear</button></td>
       <td style="white-space:nowrap"><span style="font-size:12px;color:${hasPass?'var(--green)':'var(--t3)'}">${hasPass?'✓ Set':'Not set'}</span>
@@ -5404,6 +5442,7 @@ window.removeUser=function(u){
           updateDoc(scheduleRef,{[u]:deleteField()}).catch(()=>{}),
           updateDoc(passwordsRef,{[u]:deleteField()}).catch(()=>{}),
           updateDoc(emailsRef,{[u]:deleteField()}).catch(()=>{}),
+          updateDoc(loginEmailsRef,{[u]:deleteField()}).catch(()=>{}),
           updateDoc(worstBidsRef,{[u]:deleteField()}).catch(()=>{}),
           updateDoc(bidTimesRef,{[u]:deleteField()}).catch(()=>{}),
           updateDoc(fteRef,{[u]:deleteField()}).catch(()=>{}),
