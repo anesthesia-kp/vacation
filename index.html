@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 60;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 61;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -128,7 +128,6 @@ select:focus{outline:none;border-color:#006ba6}
 .remove-btn{background:rgba(239,68,68,.2);color:#b91c1c;border:none;padding:2px 6px;border-radius:3px;cursor:pointer;font-size:.72rem;font-weight:600;transition:background .2s;flex:unset}
 .remove-btn:hover{background:rgba(239,68,68,.35)}
 .empty-msg{color:#9fb4c6;font-style:italic;font-size:.85rem}
-.export-btn{display:none}
 
 /* Standings panel */
 .standings-panel{background:rgba(255,255,255,.75);border:1px solid #c2cfdb;border-radius:14px;margin-bottom:24px;backdrop-filter:blur(10px);overflow:hidden}
@@ -453,7 +452,6 @@ body{zoom:1.15}
       <span id="personLabel" style="color:#132f49;font-weight:700;font-size:.95rem;display:none"></span>
     </div>
     <div style="display:flex;gap:10px;align-items:center">
-      <button class="export-btn" id="exportBtn" onclick="exportToSheets()">📊 Backup</button>
       <button class="party-btn" onclick="launchParty()" title="">🎉</button>
     </div>
   </div>
@@ -1283,7 +1281,6 @@ async function logOwnChange(user,wk,action,bidValue){
 
 
 // ── Save ──
-let sheetDebounce=null;
 // SAFE concurrent-write helper: only touches one user's specific week, never overwrites the whole doc.
 async function persistScheduleChange(user, wk, bid, prevSnapshot){
   // bid===null or undefined → remove. Otherwise → set.
@@ -1318,8 +1315,6 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
       setDoc(bidPhaseRef, {[user]: {[wk]: Number(phasesData.currentPhase||1)}}, {merge:true}).catch(()=>{});
     }
     if(timerData.enabled) setDoc(timerRef,{lastChange:Date.now()},{merge:true}).catch(()=>{});
-    clearTimeout(sheetDebounce);
-    sheetDebounce=setTimeout(()=>syncSheet().catch(()=>{}),3000);
     if(prevSnapshot&&adminSettings.emailNotifsEnabled!==false) sendEmailNotifications(prevSnapshot,data,user).catch(()=>{});
   }catch(e){
     showError("Save failed: "+e.message);
@@ -2124,75 +2119,8 @@ window.setBoardView=function(v){
   renderCalendar(user,computeApprovals());
 };
 
-const SHEET_ID="198BT_YeZVn85Wm_VHZ0oTFwIY8Q1LXoVoqwumTbaVYc";
-const SA_EMAIL="vacationkp@vacation-495402.iam.gserviceaccount.com";
-const SA_KEY=`-----BEGIN PRIVATE KEY-----
-MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDCcwZLYbtWlW/b
-Q1BHcHJHou36WYOKXXen+TuEBHMV7A9DKkYVAEjvYFBfuMK19ZdUFQ2vKR3Dc+be
-H1YQPIpnaiJt9H5pkz/EbOc4tDwt7jkdTQe5RXLLdig61JT0kDXTUEL0P1Vrb9v6
-KacJTEK7jq83bLU51foQusCChMWWzp4kXT/8z6bKKbaNbzi09OiZ726Sy/tWTJO1
-1McUHGjid5IZ7CroRDJ1Lk4uPMR9AJqaV1VXN2E8yRI/e5Qeg/+Mfgl0yw1geJgY
-IkZiCMNbAeCxlxxf2/FxzHF42eu7J+seitn/bzmSaDStQ7m8oCQqQQNs464D456u
-8teYqk1NAgMBAAECgf8uUAJPPeMqHhvO0FSgneS0JLA/F8bqlWp/uy1lBwPywKTs
-Ex3lmZFgRVBL0AwLBeSewN/hUJ+MqMKr1gKDlVQ+4vbAZx2CBwW6ydGWluM1Cm6A
-1L5FFrxcgaZIFHpAMgX1N7doPuReeltFGzUKc8eJtWwQ7gnvOT7xJfeh4zPeU3bk
-c5Cx2d5teLGuz35eXyuXc1T15JZC7PXtH23Na2maOs4+kq6lH62SciDhZPWcdoMG
-okA8fG/GOz0rty4Shw/ipAallgrwl+Nfxj9aBFQZVQUk8N/hL5UODUFyv4BFNWdB
-BumfbnOZlW4iM6tpezDluggYxir3Ps0OQ3yxKcECgYEA+4BEFYt0niJH5elZxEyt
-sxzrphRWq+r1jenSW3y1EdwHnvNE6Qki753TdBR9mER6qJ7YIAXLlixFXbLXCxGy
-u2vrRAkOYDzPSLqv0l7nwksBFweEu5vduZMK87drPTAFyrhCgjug7PDZ81m+eEvz
-1unTB8PYKERQySfSO++oB0ECgYEAxe1+YFVcZEZ6q5+NOJEY8Dk0u2BYB38VACUG
-7Klfqk+bEAbijw0IJgXU6EGGiSo4LqjOT5tDzzyzVABuSL58aP5CB9jnV7+fjDD1
-TViX+OV/SGJ2ZoAZjOZ6QjjyDXMwx717XEcICaqIvPKZxrAIU5vNsRypv+B7qNlc
-2FWNLw0CgYEA4ccqV/UTwgqgZQPxtEnp/cvOuQ+1Jy0NOFNapwrzOo8+wDFAAbxU
-Aqy68ZCbl6CSROIkv8q0E6K2uwEcEDHZNGwTjsZag4bTx0ThJohQopnW5qe3Pv0U
-Nc6NnHFi8lE0QeLcwjFprIwj/VTpqvD0fFD5RBVK7gs2Qv9eurPRMoECgYEApZ/z
-5bbohny3wA/Wg+RfQv4L01RutW8xapqRbc7Z39GXh1TLlzsne3Hb1LKoWvV6aAkY
-A2OA3dUElyF5J+RGhTFmndxy0mnmn9CEJMIjAcNBvJewTluZhd+DpRCz9G9U/X/g
-z7oczsHmhH5aEfpSLWyuNiwvHAJEWGnzmJAWga0CgYBEL0ZoXneLUUx9QlZjFoxa
-ySrOGBw0hetrIm9hQTkgpjlit/bp7AJUCYoNBMWUxQyHT61nNjAh2fKpR4khPaDR
-h0VtFsr4OpW5N7euuCkZ+ZSnOF6o5AQ64xvZC9eEWeyo4c5IEikVCQkZo+tP3UUe
-gxEBL76bQshAu/ikg/xBmA==
------END PRIVATE KEY-----`;
-function b64url(s){return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
-function b64urlBytes(b){let s='';for(const x of b)s+=String.fromCharCode(x);return b64url(s);}
-async function getAccessToken(){
-  const now=Math.floor(Date.now()/1000);
-  const hdr=b64url(JSON.stringify({alg:"RS256",typ:"JWT"}));
-  const clm=b64url(JSON.stringify({iss:SA_EMAIL,scope:"https://www.googleapis.com/auth/spreadsheets",aud:"https://oauth2.googleapis.com/token",iat:now,exp:now+3600}));
-  const si=`${hdr}.${clm}`;
-  const pem=SA_KEY.replace(/-----[^-]+-----/g,'').replace(/\s/g,'');
-  const kb=Uint8Array.from(atob(pem),c=>c.charCodeAt(0));
-  const key=await crypto.subtle.importKey("pkcs8",kb.buffer,{name:"RSASSA-PKCS1-v1_5",hash:"SHA-256"},false,["sign"]);
-  const sb=await crypto.subtle.sign("RSASSA-PKCS1-v1_5",key,new TextEncoder().encode(si));
-  const jwt=`${si}.${b64urlBytes(new Uint8Array(sb))}`;
-  const r=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:`grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`});
-  const j=await r.json(); if(!j.access_token)throw new Error("Auth failed"); return j.access_token;
-}
-async function syncSheet(){
-  try{
-    const token=await getAccessToken(), ap=computeApprovals();
-    const wks=mondays.map(d=>dateKey(d));
-    const active=names.filter(n=>data[n]&&Object.keys(data[n]).length>0);
-    const rows=[["Name",...wks.map(wk=>weekMeta[wk].range)]];
-    active.forEach(n=>{ const row=[n]; wks.forEach(wk=>{ const p=data[n]?.[wk]; if(p===undefined){row.push("");return;} const o=getOutcome(wk,n,ap); row.push(`${o==='approved'?'APPROVED':o==='win'?'WIN':o==='draw'?'DRAW':o==='review'?'Under Review':'LOSE'} ${bidLbl(p)}`); }); rows.push(row); });
-    rows.push([],["# Bids",...wks.map(wk=>Object.values(data).filter(u=>u?.[wk]!==undefined).length||"")]);
-    const base=`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}`,ah={"Authorization":`Bearer ${token}`,"Content-Type":"application/json"};
-    // Write FIRST, then clear leftovers — never wipe the sheet before a successful write,
-    // so a failed write can't leave the backup empty.
-    const wr=await fetch(`${base}/values/A1?valueInputOption=RAW`,{method:"PUT",headers:ah,body:JSON.stringify({range:"A1",majorDimension:"ROWS",values:rows})});
-    if(!wr.ok){const e=await wr.json();throw new Error(e.error?.message||"Write failed");}
-    // Clear any stale rows/columns left over from a previous, larger export
-    const nRows=rows.length, nCols=Math.max(...rows.map(r=>r.length),1);
-    const colLetter=n=>{let l='';while(n>0){const m=(n-1)%26;l=String.fromCharCode(65+m)+l;n=Math.floor((n-1)/26);}return l;};
-    await fetch(`${base}/values/A${nRows+1}:ZZ1000:clear`,{method:"POST",headers:ah}).catch(()=>{});
-    await fetch(`${base}/values/${colLetter(nCols+1)}1:ZZ${nRows}:clear`,{method:"POST",headers:ah}).catch(()=>{});
-  }catch(e){ console.warn("Sheet sync:",e.message); }
-}
-window.exportToSheets=async function(){
-  const btn=document.getElementById("exportBtn"); btn.disabled=true;
-  await syncSheet(); btn.disabled=false;
-};
+// Google Sheets auto-backup removed (feature retired; the embedded service-account
+// key it required has been deleted from this file).
 
 // ── Email notifications ──
 async function sendEmailNotifications(prevSnap,newSnap,actor){
