@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 92;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 93;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -911,6 +911,13 @@ thead th{color:var(--t2)}
   <div class="ag-panel">
     <div class="ag-inner">
       <div id="authGateChecking" class="ag-checking">Checking sign-in…</div>
+      <div id="authGateWelcome" style="display:none">
+        <div style="font-size:.78rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#48607a;margin-bottom:6px">Welcome back</div>
+        <div id="authGateWelcomeEmail" style="font-size:1.4rem;font-weight:800;color:#006ba6;margin:0 0 18px;word-break:break-all"></div>
+        <button class="ag-gbtn" style="background:linear-gradient(135deg,#006ba6,#3b82f6);color:#fff;border-color:transparent;justify-content:center;width:220px" onclick="adminContinue()">Continue →</button>
+        <div style="margin-top:14px"><a onclick="adminSignInAsOther()" style="cursor:pointer;color:#006ba6;text-decoration:underline;font-size:.85rem">Sign in as someone else</a></div>
+        <div id="authGateWelcomeErr" style="margin-top:8px;font-size:12px;color:#dc2626"></div>
+      </div>
       <div id="authGateCard" style="display:none">
         <div class="ag-h">Admin sign-in</div>
         <div class="ag-sub">Sign in with an authorized Google account to continue.</div>
@@ -918,6 +925,7 @@ thead th{color:var(--t2)}
       <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
       Sign in with Google
         </button>
+        <label style="display:flex;align-items:center;gap:8px;font-size:.85rem;color:#3b566d;cursor:pointer;margin-top:16px"><input type="checkbox" id="authRememberMe" checked> Remember me on this device</label>
         <div id="authGateWho" style="margin-top:14px;font-size:12px;color:#b45309"></div>
         <div id="authGateErr" style="margin-top:8px;font-size:12px;color:#dc2626"></div>
       </div>
@@ -929,7 +937,7 @@ thead th{color:var(--t2)}
 import { initializeApp }    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, doc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, getDoc, increment, onSnapshot as _onSnapshot }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut }
+import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const app = initializeApp({
@@ -1036,24 +1044,47 @@ async function checkAdminAccess(u){
 }
 let _authResolve;
 const authReady = new Promise(resolve => { _authResolve = resolve; });
+// The gate always LANDS on the hero screen (like the user sites). A returning,
+// "remembered" admin sees a one-tap "Continue as <email>"; only that click (or a
+// fresh sign-in) actually opens the panel. _justSignedIn is true only in the
+// brief window right after the admin actively clicks "Sign in with Google", so a
+// fresh sign-in goes straight in rather than bouncing to the Continue screen.
+let _justSignedIn=false, _pendingAdminUser=null;
+function _enterAdmin(u){
+  const gate=document.getElementById('authGate');
+  _currentAdminEmail=u.email.toLowerCase();
+  if(gate) gate.style.display='none';
+  const badge=document.getElementById('adminWhoami');
+  if(badge) badge.textContent=u.email;
+  _authResolve(u); // listeners attach; the panel comes alive
+}
+window.adminContinue=function(){ if(_pendingAdminUser) _enterAdmin(_pendingAdminUser); };
+window.adminSignInAsOther=function(){ try{localStorage.removeItem('adminRemembered');}catch(_){}; _pendingAdminUser=null; signOut(auth).catch(()=>{}); };
 onAuthStateChanged(auth, async u => {
+  const justNow=_justSignedIn; _justSignedIn=false;
   const ok=await checkAdminAccess(u);
   const gate=document.getElementById('authGate');
   const who=document.getElementById('authGateWho');
+  const chk=document.getElementById('authGateChecking'); if(chk) chk.style.display='none';
+  const welcome=document.getElementById('authGateWelcome');
+  const card=document.getElementById('authGateCard');
   if(ok){
-    _currentAdminEmail=u.email.toLowerCase();
-    if(gate) gate.style.display='none';
-    const badge=document.getElementById('adminWhoami');
-    if(badge) badge.textContent=u.email;
-    _authResolve(u); // listeners attach; the panel comes alive
-  } else {
-    _currentAdminEmail=null;
+    let remembered=false; try{ remembered=!!localStorage.getItem('adminRemembered'); }catch(_){}
+    // Fresh sign-in this moment, or not a remembered device → straight in.
+    if(justNow || !remembered){ _enterAdmin(u); return; }
+    // Returning + remembered → land on the hero with a one-tap Continue.
+    _pendingAdminUser=u;
     if(gate) gate.style.display='flex';
-    // Only NOW reveal the sign-in card — while Firebase restores an existing
-    // session the gate shows a quiet "Checking sign-in…" instead of flashing
-    // the login form at an already-signed-in admin.
-    const chk=document.getElementById('authGateChecking'); if(chk) chk.style.display='none';
-    const card=document.getElementById('authGateCard'); if(card) card.style.display='block';
+    if(card) card.style.display='none';
+    if(welcome){
+      const em=document.getElementById('authGateWelcomeEmail'); if(em) em.textContent=u.email;
+      welcome.style.display='block';
+    }
+  } else {
+    _pendingAdminUser=null; _currentAdminEmail=null;
+    if(gate) gate.style.display='flex';
+    if(welcome) welcome.style.display='none';
+    if(card) card.style.display='block';
     if(who) who.textContent=(u&&u.email)?('Signed in as '+u.email+' — this account is not authorized.'):'';
   }
 });
@@ -1061,15 +1092,23 @@ window.adminGoogleSignIn=async function(){
   const err=document.getElementById('authGateErr');
   if(err) err.textContent='';
   try{
-    await signOut(auth).catch(()=>{}); // lets a wrong account switch cleanly
+    // Remember-me controls both the one-tap Continue on return AND how long the
+    // Google session survives: checked → persists across browser restarts;
+    // unchecked → this session only, and next visit needs a fresh sign-in.
+    const remember=document.getElementById('authRememberMe');
+    const doRemember = !remember || remember.checked;
+    await setPersistence(auth, doRemember ? browserLocalPersistence : browserSessionPersistence).catch(()=>{});
+    try{ if(doRemember) localStorage.setItem('adminRemembered','1'); else localStorage.removeItem('adminRemembered'); }catch(_){}
+    _justSignedIn=true;
     const provider=new GoogleAuthProvider();
     if(provider.setCustomParameters) provider.setCustomParameters({prompt:'select_account'});
     await signInWithPopup(auth, provider);
   }catch(e){
+    _justSignedIn=false;
     if(err) err.textContent='Sign-in failed: '+((e&&e.message)||e)+' — if a pop-up was blocked, allow pop-ups for this site and try again.';
   }
 };
-window.adminSignOut=function(){ signOut(auth).catch(()=>{}); };
+window.adminSignOut=function(){ try{localStorage.removeItem('adminRemembered');}catch(_){}; signOut(auth).catch(()=>{}); };
 
 // ── Admin Access management (Manage Users → Admin Access card) ──
 let adminAccessEmails=[];
