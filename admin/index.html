@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 97;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 98;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -5445,6 +5445,10 @@ window.removeUser=function(u){
           updateDoc(bidTimesRef,{[u]:deleteField()}).catch(()=>{}),
           updateDoc(fteRef,{[u]:deleteField()}).catch(()=>{}),
           updateDoc(bidPhaseRef,{[u]:deleteField()}).catch(()=>{}),
+          // Also drop this user's custom display name so a reused-initials new hire
+          // doesn't inherit the departed person's username. (loginEmails already
+          // cleared above — that's what stops the old Google login from working.)
+          updateDoc(usernamesRef,{[u]:deleteField()}).catch(()=>{}),
         ]);
         // Remove user from each week's approvals array
         if(approvalsData){
@@ -5501,6 +5505,10 @@ window.deleteAllUsers=function(){
               setDoc(scheduleRef,{}), setDoc(passwordsRef,{}), setDoc(emailsRef,{}),
               setDoc(worstBidsRef,{}), setDoc(bidTimesRef,{}), setDoc(fteRef,{}),
               setDoc(bidPhaseRef,{}), setDoc(approvalsRef,{}), setDoc(deniedRef,{}),
+              // Also wipe the shared Google-login map and custom display names, so a
+              // later roster rebuilt with the SAME initials can't let a removed person
+              // still sign in as (or show the old name of) a brand-new user.
+              setDoc(loginEmailsRef,{}), setDoc(usernamesRef,{}),
             ]);
             try { await adminLog('ALL','ALL','admin-delete-all-users'); } catch(_){}
             toast('🗑 Deleted all '+doomed.length+' users and their data','warn');
