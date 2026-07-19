@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 83;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 84;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1451,6 +1451,83 @@ function getOutcome(wk,u,ap){
   if(a.winners?.has(u)) return 'win';
   return 'lose';
 }
+
+// ── Prior Phase Results — quick per-user history lookup for Approvals/Denials
+// and Draws & Reviews, so admin has easy context ("has this user already won
+// elsewhere? lost repeatedly?") right where a judgment call is being made. ──
+// Every user with a live current-phase bid on this week — same "who's
+// actually bidding here right now" filter used throughout both panels.
+function currentPhaseBiddersForWeek(wk){
+  const out=[];
+  for(const u in scheduleData){
+    if(scheduleData[u]?.[wk]===undefined) continue;
+    if(!isCurrentPhaseBidAdmin(u,wk)) continue;
+    out.push(u);
+  }
+  return out.sort();
+}
+// One user's outcome in every COMPLETED phase (never the live current phase —
+// that's still being decided). Reads the same completedPhases snapshot the
+// rest of the app already treats as the source of truth for phase history.
+function userPhaseHistory(u){
+  const cur=Number(phasesData.currentPhase||1);
+  const cp=phasesData.completedPhases||{};
+  const phaseNums=Object.keys(cp).map(Number).filter(n=>n<cur).sort((a,b)=>a-b);
+  const rows=[]; let totalW=0, totalL=0;
+  for(const ph of phaseNums){
+    const snap=cp[ph]||{};
+    const sched=snap.schedule?.[u]||{};
+    const apr=snap.approvals||{}, den=snap.denials||{};
+    let w=0,l=0,unresolved=0;
+    for(const wk of Object.keys(sched)){
+      if(Array.isArray(apr[wk])&&apr[wk].includes(u)) w++;
+      else if(Array.isArray(den[wk])&&den[wk].includes(u)) l++;
+      else unresolved++; // shouldn't normally happen — a completed phase requires every bid decided — but don't hide it if it does
+    }
+    rows.push({phase:ph,w,l,unresolved,bid:(w+l+unresolved)>0});
+    totalW+=w; totalL+=l;
+  }
+  return {phaseNums,rows,totalW,totalL};
+}
+function priorPhaseResultsBody(wk){
+  const bidders=currentPhaseBiddersForWeek(wk);
+  if(!bidders.length) return '<div style="color:var(--t2);text-align:center;padding:16px">No current bidders on this week.</div>';
+  const cur=Number(phasesData.currentPhase||1);
+  const phaseNums=Object.keys(phasesData.completedPhases||{}).map(Number).filter(n=>n<cur).sort((a,b)=>a-b);
+  if(!phaseNums.length){
+    return '<div style="color:var(--t2);text-align:center;padding:16px">This is Phase 1 — there are no completed phases yet, so no prior results exist.</div>';
+  }
+  const cellFor=(row)=>{
+    if(!row||!row.bid) return '<span style="color:var(--t3)">—</span>';
+    const parts=[];
+    if(row.w) parts.push(`<span style="color:var(--green);font-weight:700">${row.w}W</span>`);
+    if(row.l) parts.push(`<span style="color:var(--red);font-weight:700">${row.l}L</span>`);
+    if(row.unresolved) parts.push(`<span style="color:var(--t3)">${row.unresolved}?</span>`);
+    return parts.join(' ');
+  };
+  let head='<tr><th style="text-align:left;padding:4px 8px">User</th>'+phaseNums.map(p=>`<th style="padding:4px 8px">Phase ${p}</th>`).join('')+'<th style="padding:4px 8px">Overall</th></tr>';
+  let rows='';
+  bidders.forEach(u=>{
+    const hist=userPhaseHistory(u);
+    const byPhase={}; hist.rows.forEach(r=>byPhase[r.phase]=r);
+    const overallColor=hist.totalW>hist.totalL?'var(--green)':(hist.totalL>hist.totalW?'var(--red)':'var(--t2)');
+    rows+=`<tr>
+      <td style="padding:4px 8px;font-weight:700;text-align:left">${esc(u)}</td>
+      ${phaseNums.map(p=>`<td style="padding:4px 8px;text-align:center">${cellFor(byPhase[p])}</td>`).join('')}
+      <td style="padding:4px 8px;text-align:center;font-weight:700;color:${overallColor}">${hist.totalW}W ${hist.totalL}L</td>
+    </tr>`;
+  });
+  return `<div style="font-size:12px;color:var(--t2);margin-bottom:8px">Each bidder's outcome in every completed phase so far — use it to weigh judgment calls (e.g. favor someone who's lost repeatedly over someone who's already won elsewhere).</div>
+    <div style="overflow-x:auto"><table class="grid" style="width:100%;font-size:12px">${head}${rows}</table></div>`;
+}
+window.showPriorPhaseResults=function(wk){
+  const m=wkDate(wk);
+  openConfirm({
+    title:'📋 Prior Phase Results — '+wLabel(m),
+    body:priorPhaseResultsBody(wk),
+    okText:'Close'
+  });
+};
 // Natural (pre-decision) projection: win/draw/review/lose from the bidding rules
 // alone, ignoring any admin approve/deny. `nat` is the result of computeApprovals(true).
 function natOutcome(nat,wk,u){
@@ -2542,9 +2619,13 @@ const SIM_SUMMER_END  =new Date('2027-08-22T00:00:00');
 function simRandItem(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
 
 function simGetAllowedBids(wk){
-  if(HIGH_DEMAND_WEEKS.has(wk)) return SIM_HIGH_PRIORITY_ALLOWED;
+  if(HIGH_DEMAND_WEEKS.has(wk)) return SIM_HIGH_PRIORITY_ALLOWED; // never includes NP — matches the real per-user rule that high-priority-only weeks disable NP regardless of phase
   // Summer restriction removed 12 Jul 2026 — all bids allowed on summer weeks.
-  return SIM_ALL_BIDS;
+  // NP must follow the SAME admin-controlled per-phase toggle a real user's UI
+  // enforces (npAllowedForPhase) — otherwise the simulator can produce NP bids
+  // in phases where the admin has explicitly turned NP off.
+  const cur=Number(phasesData.currentPhase||1);
+  return npAllowedForPhase(cur)?SIM_ALL_BIDS:SIM_ALL_BIDS.filter(b=>b!=='NP');
 }
 
 function simHasBids(){
@@ -3977,7 +4058,7 @@ window.renderAppDenials=function(){
       html+=`<div class="dr-card">
         <div class="dr-card-head">
           <div class="dr-week">${wLabel(m)} <span style="color:var(--t2);font-size:11px">(${wRange(m)})</span></div>
-          <div style="font-size:11px;color:var(--t2)">Cap: ${cap} · Winning: ${a.fteWon} · <span style="color:${remaining<0?'var(--red)':'var(--t2)'}">Remaining: ${remaining}</span></div>
+          <div style="font-size:11px;color:var(--t2)">Cap: ${cap} · Winning: ${a.fteWon} · <span style="color:${remaining<0?'var(--red)':'var(--t2)'}">Remaining: ${remaining}</span> <button class="btn btn-ghost" style="padding:2px 8px;font-size:10px;margin-left:6px" onclick="showPriorPhaseResults('${wk}')">📋 Prior Phase Results</button></div>
         </div>
         ${byWk[wk].map(e=>renderEntry(e,false)).join('')}
         ${spinBtn}
@@ -4033,12 +4114,13 @@ function readinessWarnHtml(){
   const r=approvalReadiness();
   if(r.ready) return '';
   const cur=Number(phasesData.currentPhase||1);
-  return `<div class="cmodal-warn" id="readinessWarnBox" style="margin-top:8px"><strong>⚠️ Bidding isn't fully closed yet.</strong> Approvals &amp; denials should ideally wait until the phase is closed and all weeks are locked. Right now:
+  return `<div class="cmodal-warn" id="readinessWarnBox" style="margin-top:8px"><strong>⚠️ Bidding isn't fully closed yet.</strong> Approvals &amp; denials should ideally wait until bidding is stopped and all weeks are locked. Right now:
     <ul style="margin:6px 0 0 16px;line-height:1.6">${r.problems.map(p=>`<li>${p}</li>`).join('')}</ul>
     <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-      <button type="button" class="btn btn-ghost" style="font-size:11px" onclick="_fixClosePhaseBidding(${cur})">⏱ Close Phase ${cur} bidding &amp; lock all weeks</button>
+      <button type="button" class="btn btn-ghost" style="font-size:11px" onclick="_fixClosePhaseBidding(${cur})">⏱ Stop bidding &amp; lock all weeks now</button>
       <button type="button" class="btn btn-ghost" style="font-size:11px" onclick="_fixLockAllWeeksInline()">🔒 Lock all weeks</button>
     </div>
+    <div style="margin-top:4px;font-size:11px;color:var(--t3)">(This only stops bidding — it doesn't complete Phase ${cur}. You'll still click Complete Phase afterward, once every bid below is decided.)</div>
     <div style="margin-top:6px">…or override and proceed by confirming below.</div></div>`;
 }
 // Inline fixes launched from the readiness warning INSIDE an approve/deny
@@ -4053,7 +4135,10 @@ function _refreshReadinessBox(){
   const r=approvalReadiness();
   if(r.ready){
     box.className='cmodal-info';
-    box.innerHTML='✓ Bidding is now closed and all weeks are locked — safe to approve/deny.';
+    // This step only stops bidding — it does NOT complete the phase. Say so
+    // explicitly here, since this inline path (unlike the dashboard's "Close
+    // Phase Bidding" button) has no confirm dialog to explain it up front.
+    box.innerHTML='✓ Bidding is now closed and all weeks are locked — safe to approve/deny. Once every bid is decided, come back to the dashboard and click <strong>Complete Phase</strong> to finish — that\'s still a separate, later step.';
   } else {
     box.outerHTML=readinessWarnHtml();
   }
@@ -4065,7 +4150,7 @@ window._fixClosePhaseBidding=async function(cur){
   if(timerData.enabled===true){
     await setDoc(timerRef,{lastChange:Date.now()-getDurationMs()-1000},{merge:true});
   }
-  toast('⏱ Phase '+cur+' bidding closed — timer expired, all weeks locked','ok');
+  toast('⏱ Phase '+cur+' bidding closed. This does NOT complete the phase — decide the bids below, then use Complete Phase on the dashboard.','ok');
   _refreshReadinessBox();
 };
 window._fixLockAllWeeksInline=async function(){
@@ -5565,7 +5650,7 @@ window.renderDrawsReviews=function(){
       html+=`<div class="dr-card">
         <div class="dr-card-head">
           <div class="dr-week">${wLabel(m)} <span style="color:var(--t2);font-weight:400;font-size:11px">(${wRange(m)})</span></div>
-          <div style="font-size:11px;color:var(--t2)">Cap: ${cap} · Winning: ${fteWonNow} · <span style="color:${remainingColor}">Remaining: ${remaining}</span></div>
+          <div style="font-size:11px;color:var(--t2)">Cap: ${cap} · Winning: ${fteWonNow} · <span style="color:${remainingColor}">Remaining: ${remaining}</span> <button class="btn btn-ghost" style="padding:2px 8px;font-size:10px;margin-left:6px" onclick="showPriorPhaseResults('${wk}')">📋 Prior Phase Results</button></div>
         </div>`;
       if(drawUsers.length>=2){
         html+=`<div style="margin-bottom:8px"><button class="btn btn-primary" style="padding:4px 10px;font-size:11px" onclick='openWheel("${wk}",${JSON.stringify(drawUsers)})'>🎡 Spin Randomizer</button></div>`;
