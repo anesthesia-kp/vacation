@@ -422,6 +422,13 @@ body{zoom:1.15}
     <span id="topBarInitials" style="font-size:12px;color:#48607a;font-weight:700;background:rgba(15,39,68,.06);padding:2px 8px;border-radius:7px"></span>
     <button onclick="userSignOut()" style="flex:0 0 auto;font-size:12px;font-weight:700;color:#132f49;background:transparent;border:1px solid #c2cfdb;border-radius:8px;padding:5px 12px;cursor:pointer">Sign out</button>
   </div>
+  <!-- Admin-only shortcut, directly under the Sign out button on the right. Hidden for
+       non-admins (see _refreshOtherSystems). ?portal=1 marks this as an admin portal jump
+       so the Vacation Admin page can skip its login screen for an already-signed-in admin
+       (see the portal-bypass logic); a plain bookmark without it still shows the login. -->
+  <div id="otherSystems" style="display:none;text-align:right;margin:0 0 10px">
+    <a href="https://anesthesia-kp.github.io/vacation/admin/?portal=1" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;font-size:.78rem;font-weight:700;color:#006ba6;text-decoration:none;border:1px solid #9fb4c6;border-radius:9px;padding:4px 11px;background:#fff">🔧 Vacation Admin →</a>
+  </div>
   <header style="position:relative">
     <h1 class="header-top">Vacation Auction</h1>
     <p class="header-sub">Department of Anesthesia &nbsp;·&nbsp; 2027</p>
@@ -430,13 +437,6 @@ body{zoom:1.15}
       <a onclick="openPhaseHistory()" style="font-size:.7rem;font-weight:600;color:#006ba6;cursor:pointer;text-decoration:underline;text-underline-offset:3px">📋 View previous phases</a>
     </div>
   </header>
-  <!-- Other Systems — only rendered for signed-in ADMIN accounts (see _refreshOtherSystems).
-       This is a convenience shortcut; the Vacation Admin page is still independently
-       gated by its own admin check and the Firestore security rules. -->
-  <div id="otherSystems" style="display:none;margin:0 0 14px;padding:9px 14px;background:rgba(255,255,255,.72);border:1px solid #9fb4c6;border-radius:12px">
-    <span style="font-size:.68rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#48607a;margin-right:10px">Other Systems</span>
-    <a href="https://anesthesia-kp.github.io/vacation/admin/" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;font-size:.78rem;font-weight:700;color:#006ba6;text-decoration:none;border:1px solid #9fb4c6;border-radius:9px;padding:4px 11px;background:#fff">🔧 Vacation Admin →</a>
-  </div>
   <!-- Timer (left 2/3) + Popcornometer with the 24h-changes chip (right 1/3) -->
   <div id="timerRow" style="display:flex;gap:14px;align-items:stretch;flex-wrap:wrap">
     <div id="countdownBanner" style="flex:1 1 62%;min-width:min(420px,100%)">
@@ -573,6 +573,10 @@ const adminAccessRef = doc(db,"vacations","adminAccess"); // {emails:[...]} — 
 // Built-in admins that work while the adminAccess list is empty — MUST match the
 // isDefaultAdmin() list in firestore.rules, stored lower-cased.
 const DEFAULT_ADMIN_EMAILS = ['dr.vacation.goddess@gmail.com','aaronjfrankel@gmail.com'];
+// True when this page was opened from an admin "Other Systems" portal link (?portal=1).
+// Used ONLY to skip the "Continue as X" click when a live, authorized session already
+// exists — never to grant access (the account still has to resolve to a registered user).
+const _portalBypass = /[?&]portal=1(?:&|$)/.test(location.search);
 const userListRef   = doc(db,"vacations","userList");
 const fteRef        = doc(db,"vacations","fteMap");
 const approvalsRef  = doc(db,"vacations","approvals");
@@ -2322,9 +2326,14 @@ onAuthStateChanged(auth, async u => {
   }
   selectedSignInName=initials;
   let remembered=null; try{ remembered=localStorage.getItem(REMEMBER_KEY); }catch(_){}
+  // Portal bypass: arriving via an admin "Other Systems" link (?portal=1) with a live,
+  // registered Google session skips the "Continue as X" click and enters directly. It
+  // only reaches here AFTER resolveByEmail() confirmed the account is registered, so the
+  // flag never grants access on its own — an unregistered account still hits the branch
+  // above, and a plain visit with no ?portal shows the normal screen.
   // Mirror the admin gate: a fresh click this moment (or no remembered value) goes
   // straight in; a restored session on return lands on the "Continue as X" hero.
-  if(justNow || !remembered){
+  if(justNow || !remembered || _portalBypass){
     _userJustSignedIn=false;
     clearSigninError();
     completeSignIn();

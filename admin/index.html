@@ -356,9 +356,13 @@ thead th{color:var(--t2)}
       <div class="nav-section">Testing</div>
       <a onclick="nav('simulator',this)">🎲 Simulator</a>
       <div class="nav-section">Other Systems</div>
-      <a href="https://anesthesia-kp.github.io/vacation/" target="_blank" rel="noopener">🏖️ User Vacation →</a>
-      <a href="https://anesthesia-kp.github.io/schedule/" target="_blank" rel="noopener">📅 User Scheduling →</a>
-      <a href="https://anesthesia-kp.github.io/schedule/admin/" target="_blank" rel="noopener">🔧 Scheduling Admin →</a>
+      <!-- ?portal=1 marks these as admin portal jumps: the destination skips its login
+           screen ONLY when a live, authorized Google session is already present (the admin
+           is signed in). Without a valid session the param does nothing and the normal
+           login shows — so the flag can't grant access on its own. -->
+      <a href="https://anesthesia-kp.github.io/vacation/?portal=1" target="_blank" rel="noopener">🏖️ User Vacation →</a>
+      <a href="https://anesthesia-kp.github.io/schedule/?portal=1" target="_blank" rel="noopener">📅 User Scheduling →</a>
+      <a href="https://anesthesia-kp.github.io/schedule/admin/?portal=1" target="_blank" rel="noopener">🔧 Scheduling Admin →</a>
     </div>
   </nav>
 
@@ -845,7 +849,7 @@ thead th{color:var(--t2)}
       <div class="card">
         <div class="card-title">Reset</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <button class="btn btn-danger" style="background:rgba(220,38,38,.25);border-color:rgba(220,38,38,.6)" onclick="clearEverything()">💣 Remove ALL Data incl. Approvals &amp; Denials</button>
+          <button class="btn btn-danger" style="background:rgba(220,38,38,.25);border-color:rgba(220,38,38,.6)" onclick="clearEverything()">💣 Reset Auction</button>
         </div>
       </div>
     </div>
@@ -1043,6 +1047,10 @@ let selLockMonth=null, tickInterval=null;
 // (first run, or catastrophic deletion) these DEFAULT accounts get in and the
 // document is re-seeded with them. The security rules mirror this exactly.
 const DEFAULT_ADMIN_EMAILS=['dr.vacation.goddess@gmail.com','aaronjfrankel@gmail.com'];
+// Opened from an admin "Other Systems" portal link (?portal=1): skip the one-tap Continue
+// hero when this session is ALREADY an authorized admin. It's only ever consulted after
+// checkAdminAccess() passes, so it cannot grant access — a non-admin still gets the gate.
+const _portalBypass = /[?&]portal=1(?:&|$)/.test(location.search);
 const adminAccessRef = doc(db,"vacations","adminAccess");
 let _currentAdminEmail=null;
 async function checkAdminAccess(u){
@@ -1089,8 +1097,9 @@ onAuthStateChanged(auth, async u => {
   const card=document.getElementById('authGateCard');
   if(ok){
     let remembered=false; try{ remembered=!!localStorage.getItem('adminRemembered'); }catch(_){}
-    // Fresh sign-in this moment, or not a remembered device → straight in.
-    if(justNow || !remembered){ _enterAdmin(u); return; }
+    // Fresh sign-in this moment, not a remembered device, or an admin portal jump
+    // (?portal=1) with this already-authorized session → straight in, no Continue click.
+    if(justNow || !remembered || _portalBypass){ _enterAdmin(u); return; }
     // Returning + remembered → land on the hero with a one-tap Continue.
     _pendingAdminUser=u;
     if(gate) gate.style.display='flex';
