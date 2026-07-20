@@ -529,7 +529,7 @@ body{zoom:1.15}
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, increment, onSnapshot as _onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, doc, getDoc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, increment, onSnapshot as _onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 // ── Firebase setup ──
@@ -608,7 +608,10 @@ function applySlotOverrides(){
 // Track whether security-critical collections have loaded from Firestore.
 // Defaults assume passcodes ON / email prompt ON — but until snapshots fire we
 // don't actually know the admin's settings. Confirm button waits for both.
-let _adminSettingsReady=false, _passcodesReady=false, _emailsReady=false, _usernamesReady=false;
+// _emailsReady starts TRUE: the secondary-email doc is not needed to render the
+// login screen (it's read after sign-in), so the Continue button must not wait on
+// it — this also keeps sign-in unblocked when the rules forbid anonymous email reads.
+let _adminSettingsReady=false, _passcodesReady=false, _emailsReady=true, _usernamesReady=false;
 // Fallback: unlock Continue button after 1.5s if Firestore hasn't fired by then.
 // Firestore typically responds in <500ms; this just guards against rules issues,
 // auth failures, or network blocks so users are never stuck on "Loading…".
@@ -1298,11 +1301,15 @@ async function logOwnChange(user,wk,action,bidValue){
 
 // ── Save ──
 // SAFE concurrent-write helper: only touches one user's specific week, never overwrites the whole doc.
+// Returns TRUE only if the schedule write actually landed, so callers can gate
+// their side effects (priority-lock floor, bid timestamp, change log) on success
+// and never leave a phantom floor for a bid that a timer/lock rejected. Returns
+// FALSE on any gate bail, limit block, or write error.
 async function persistScheduleChange(user, wk, bid, prevSnapshot){
   // bid===null or undefined → remove. Otherwise → set.
-  if(!biddingOpen()){ showCenterAlert("Bidding hasn't started yet — the auction opens when admin begins Phase 1."); return; }
-  if(isAuctionClosed()){ showCenterAlert("The auction has closed — no more changes allowed."); return; }
-  if(locksData.globalLock||locksData.weeks?.[wk]){ showCenterAlert("This week has been locked by the admin — no changes allowed."); return; }
+  if(!biddingOpen()){ showCenterAlert("Bidding hasn't started yet — the auction opens when admin begins Phase 1."); return false; }
+  if(isAuctionClosed()){ showCenterAlert("The auction has closed — no more changes allowed."); return false; }
+  if(locksData.globalLock||locksData.weeks?.[wk]){ showCenterAlert("This week has been locked by the admin — no changes allowed."); return false; }
   // Enforce the admin-set per-phase bid limit — NEW bids only (edits/removals always allowed).
   if(bid!==null&&bid!==undefined&&prevSnapshot&&(prevSnapshot[user]===undefined||prevSnapshot[user][wk]===undefined)){
     const lim=getMaxBidsPerPhase();
@@ -1314,11 +1321,11 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
         if(data[user]&&prevSnapshot[user]?.[wk]===undefined) delete data[user][wk]; // undo optimistic add
         scheduleRender();
         showCenterAlert("You have reached the maximum of "+lim+" bid"+(lim!==1?"s":"")+" for this phase. Remove a bid first.");
-        return;
+        return false;
       }
     }
   }
-  if(saveInProgress) return; saveInProgress=true;
+  if(saveInProgress) return false; saveInProgress=true;
   const safety=setTimeout(()=>{saveInProgress=false;},8000);
   try{
     if(bid===null||bid===undefined){
@@ -1332,8 +1339,10 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
     }
     if(timerData.enabled) setDoc(timerRef,{lastChange:Date.now()},{merge:true}).catch(()=>{});
     if(prevSnapshot&&adminSettings.emailNotifsEnabled!==false) sendEmailNotifications(prevSnapshot,data,user).catch(()=>{});
+    return true;
   }catch(e){
     showError("Save failed: "+e.message);
+    return false;
   } finally {
     clearTimeout(safety);
     saveInProgress=false;
@@ -1488,13 +1497,18 @@ window.confirmPriority=async function(){
     if(!data[user])data[user]={};
     const isNewNP=data[user]?.[pendingWeek]===undefined;
     data[user][pendingWeek]="NP";
-    await saveBestBid(user,pendingWeek,"NP");
-    logOwnChange(user,pendingWeek,isNewNP?'added':'edited',"NP");
-    const nowTs=Date.now();
-    if(!bidTimesData[user]) bidTimesData[user]={};
-    bidTimesData[user][pendingWeek]=nowTs;
-    await setDoc(bidTimesRef,{[user]:{[pendingWeek]:nowTs}},{merge:true});
-    await persistScheduleChange(user,pendingWeek,"NP",_prev); window.closeModal(); return;
+    // Persist FIRST; only stamp the floor/time/log if the write actually landed,
+    // so a bid rejected by the timer/lock re-check leaves no phantom priority floor.
+    const okSaveNP=await persistScheduleChange(user,pendingWeek,"NP",_prev);
+    if(okSaveNP){
+      await saveBestBid(user,pendingWeek,"NP");
+      logOwnChange(user,pendingWeek,isNewNP?'added':'edited',"NP");
+      const nowTs=Date.now();
+      if(!bidTimesData[user]) bidTimesData[user]={};
+      bidTimesData[user][pendingWeek]=nowTs;
+      await setDoc(bidTimesRef,{[user]:{[pendingWeek]:nowTs}},{merge:true});
+    }
+    window.closeModal(); return;
   }
   const priorities=val.split(',').map(p=>parseInt(p.trim())).filter(p=>!isNaN(p));
   if(!priorities.length){showError("Invalid bid");return;}
@@ -1509,14 +1523,19 @@ window.confirmPriority=async function(){
   const newPrio=priorities.length===1?priorities[0]:priorities;
   const isNewBid=data[user]?.[pendingWeek]===undefined;
   data[user][pendingWeek]=newPrio;
-  await saveBestBid(user,pendingWeek,newPrio);
-  logOwnChange(user,pendingWeek,isNewBid?'added':'edited',newPrio);
-  // Record the timestamp this bid was placed/replaced
-  const nowTs2=Date.now();
-  if(!bidTimesData[user]) bidTimesData[user]={};
-  bidTimesData[user][pendingWeek]=nowTs2;
-  await setDoc(bidTimesRef,{[user]:{[pendingWeek]:nowTs2}},{merge:true});
-  await persistScheduleChange(user,pendingWeek,newPrio,_prev); window.closeModal();
+  // Persist FIRST; only stamp the floor/time/log if the write actually landed, so a
+  // bid rejected by the timer/lock re-check leaves no phantom priority floor.
+  const okSaveBid=await persistScheduleChange(user,pendingWeek,newPrio,_prev);
+  if(okSaveBid){
+    await saveBestBid(user,pendingWeek,newPrio);
+    logOwnChange(user,pendingWeek,isNewBid?'added':'edited',newPrio);
+    // Record the timestamp this bid was placed/replaced
+    const nowTs2=Date.now();
+    if(!bidTimesData[user]) bidTimesData[user]={};
+    bidTimesData[user][pendingWeek]=nowTs2;
+    await setDoc(bidTimesRef,{[user]:{[pendingWeek]:nowTs2}},{merge:true});
+  }
+  window.closeModal();
 };
 
 async function removeSelection(wk){
@@ -1536,14 +1555,19 @@ async function removeSelection(wk){
   const msg=`<div style="font-size:.95rem;font-weight:600;color:#132f49">You are removing your bid for <span style="color:#006ba6">Week ${meta.weekNum}</span> (${meta.range}).</div>
   <div style="margin-top:8px;font-size:.85rem;color:#2c4257">Current bid: <strong style="color:#005e93">${bidLbl(prio)}</strong></div>${lockMsg}`;
   if(!await showConfirm(msg,{yesText:'Confirm Remove',noText:'Cancel'})) return;
-  await saveBestBid(user,wk,prio);
-  // Clear bid timestamp — atomic delete of nested key
-  if(bidTimesData[user]) bidTimesData[user][wk]=null;
-  await updateDoc(bidTimesRef,{[`${user}.${wk}`]:deleteField()}).catch(()=>setDoc(bidTimesRef,{[user]:{[wk]:null}},{merge:true}));
-  logOwnChange(user,wk,'removed',prio);
   const _prev=JSON.parse(JSON.stringify(data));
-  delete data[user][wk];
-  await persistScheduleChange(user,wk,null,_prev);
+  // Persist the removal FIRST; only clear the local bid, stamp the floor, drop the
+  // bid time, and log it if the delete actually landed — a removal rejected by the
+  // timer/lock re-check must leave the bid (and its state) untouched.
+  const okRemove=await persistScheduleChange(user,wk,null,_prev);
+  if(okRemove){
+    delete data[user][wk];
+    await saveBestBid(user,wk,prio);
+    // Clear bid timestamp — atomic delete of nested key
+    if(bidTimesData[user]) bidTimesData[user][wk]=null;
+    await updateDoc(bidTimesRef,{[`${user}.${wk}`]:deleteField()}).catch(()=>setDoc(bidTimesRef,{[user]:{[wk]:null}},{merge:true}));
+    logOwnChange(user,wk,'removed',prio);
+  }
 }
 window.removeSelection=removeSelection;
 
@@ -1808,10 +1832,10 @@ function renderNotifications(user,ap){
   const mineSlot=document.getElementById("notifMine");
   const allSlot=document.getElementById("notifAll");
   const mineHtml=mine.length
-    ?mine.map(e=>{const t=new Date(e.ts);const ts=t.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});return `<div class="notif-row mine-row"><span style="color:#48607a;font-size:.68rem">${ts}</span> ${e.user} ${icon(e)} ${formatShort(e.weekKey)} → your bid: <b>${e.outcome.toUpperCase()}</b></div>`;}).join('')
+    ?mine.map(e=>{const t=new Date(e.ts);const ts=t.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});return `<div class="notif-row mine-row"><span style="color:#48607a;font-size:.68rem">${ts}</span> ${escH(e.user)} ${icon(e)} ${escH(formatShort(e.weekKey))} → your bid: <b>${escH(e.outcome.toUpperCase())}</b></div>`;}).join('')
     :'<div class="notif-empty-sm">No recent changes on your weeks</div>';
   const totalHtml=total.length
-    ?total.map(e=>{const t=new Date(e.ts);const ts=t.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});return `<div class="notif-row"><span style="color:#48607a;font-size:.68rem">${ts}</span> ${e.user===user?'<b>You</b>':e.user||'?'} ${icon(e)} ${formatShort(e.weekKey)}</div>`;}).join('')
+    ?total.map(e=>{const t=new Date(e.ts);const ts=t.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});return `<div class="notif-row"><span style="color:#48607a;font-size:.68rem">${ts}</span> ${e.user===user?'<b>You</b>':escH(e.user||'?')} ${icon(e)} ${escH(formatShort(e.weekKey))}</div>`;}).join('')
     :'<div class="notif-empty-sm">No changes in last 24h</div>';
   if(mineSlot) mineSlot.innerHTML=`
     <div class="notif-popover" id="notifPop1" onmouseleave="this.classList.remove('open')">
@@ -2240,10 +2264,29 @@ window.userGoogleSignIn = async function(){
   }
 };
 
+// After the first real Google sign-in, keep the PII docs (login map + secondary
+// emails) live via authenticated listeners. Called once; harmless if re-invoked.
+let _sensitiveSubbed=false;
+function _subscribeSensitiveOnce(){
+  if(_sensitiveSubbed) return; _sensitiveSubbed=true;
+  onSnapshot(loginEmailsRef, snap=>{ loginEmailsData=snap.exists()?snap.data():{}; });
+  onSnapshot(emailsRef, snap=>{ emailsData=snap.exists()?snap.data():{}; _emailsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
+}
 // SECOND auth handler (the anonymous bootstrap one above is left intact). Fires on
 // every auth change but only acts on a non-anonymous Google user with an email.
-onAuthStateChanged(auth, u => {
+onAuthStateChanged(auth, async u => {
   if(!(u && !u.isAnonymous && u.email)) return;      // ignore the anon read session
+  // Now that we hold a real (non-anonymous) Google token, read the login map with
+  // OUR OWN credentials. This is what lets the security rules forbid ANONYMOUS reads
+  // of loginEmails/emails (the PII) while sign-in still works: we no longer depend on
+  // those docs having been pre-loaded during the anonymous bootstrap.
+  try{ const s=await getDoc(loginEmailsRef); loginEmailsData=s.exists()?s.data():{}; }catch(_){}
+  try{ const s=await getDoc(emailsRef); emailsData=s.exists()?s.data():{}; _emailsReady=true; }catch(_){}
+  // Roster-load race guard: resolveByEmail() scans `names`, so if the userList
+  // snapshot hasn't arrived yet (cold start) fetch it now — otherwise a valid user
+  // is wrongly told "not registered".
+  if(!names.length){ try{ const s=await getDoc(userListRef); const d=s.exists()?s.data():{}; if(Array.isArray(d.users)){ names.length=0; d.users.forEach(n=>names.push(n)); } }catch(_){} }
+  _subscribeSensitiveOnce();
   const justNow=_userJustSignedIn;
   const initials=resolveByEmail(u.email);
   if(!initials){
@@ -2310,10 +2353,19 @@ window.signinShowPicker=function(){
 window.quickContinue=function(){
   if(!_rememberedName) return;
   const cb=document.getElementById("rememberMe"); if(cb) cb.checked=true;
-  // The Google session is already active on return — finish via the existing flow.
-  selectedSignInName=_rememberedName;
   clearSigninError();
-  completeSignIn();
+  const cu=auth.currentUser;
+  if(cu && !cu.isAnonymous && cu.email){
+    // Live Google session confirmed — finish via the existing flow.
+    selectedSignInName=_rememberedName;
+    completeSignIn();
+  } else {
+    // The remembered Google session is gone (expired/revoked, or a shared/kiosk
+    // device where the saved name lingers but the session doesn't). Don't drop the
+    // user into a session-less state where every bid save is silently rejected —
+    // re-authenticate for real via the Google picker instead.
+    if(typeof userGoogleSignIn==='function') userGoogleSignIn();
+  }
 };
 function updateSigninPhase(){
   const el=document.getElementById("signinPhaseLine"); if(!el) return;
