@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 67;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 69;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -364,12 +364,12 @@ body{zoom:1.15}
 </div>
 <div id="emailModal" class="modal">
   <div class="modal-content">
-    <h2 class="modal-title">Email Notifications</h2>
-    <p style="color:#3b566d;font-size:.85rem;margin-bottom:16px">Get notified when others bid on your weeks.</p>
-    <label class="modal-label">Email address</label>
-    <input type="email" id="emailInput" class="priority-input" placeholder="you@example.com">
+    <h2 class="modal-title">Add your KP e-mail</h2>
+    <p style="color:#3b566d;font-size:.85rem;margin-bottom:16px">Enter your Kaiser (KP) e-mail so auction alerts reach your KP inbox too. You'll get every alert on <strong>both</strong> your Google account and your KP e-mail.</p>
+    <label class="modal-label">KP e-mail address</label>
+    <input type="email" id="emailInput" class="priority-input" placeholder="you@kp.org">
     <div class="modal-buttons" style="flex-direction:column;gap:8px">
-      <button class="btn-primary" onclick="saveEmail()">Save &amp; Enable Notifications</button>
+      <button class="btn-primary" onclick="saveEmail()">Save KP e-mail</button>
       <button class="btn-secondary" onclick="remindLater()" style="font-size:.8rem">Remind me later</button>
     </div>
   </div>
@@ -1130,20 +1130,30 @@ function scheduleMailQueueRelay(){
   if(!Object.values(mailQueueData||{}).some(e=>_mqEligible(e,now))) return;
   _mqTimer=setTimeout(()=>{ _mqTimer=null; relayMailQueue().catch(()=>{}); },5000+Math.random()*10000);
 }
+// Every alert goes to BOTH the user's Google login e-mail (always) AND their KP
+// e-mail (when entered) — same rule the admin site uses. De-duped, lower-cased.
+// A missing/"__skip__" KP e-mail just means the Google login e-mail still gets it.
+function recipientsFor(user){
+  const out=[], seen=new Set();
+  const add=v=>{ if(!v) return; const s=String(v).trim().toLowerCase(); if(!s||s==='__skip__'||seen.has(s)) return; seen.add(s); out.push(s); };
+  add(loginEmailsData[user]); add(emailsData[user]);
+  return out;
+}
+window._recipientsFor=recipientsFor; // exposed for testing
 async function relayMailQueue(){
   if(_mqBusy) return; _mqBusy=true;
   try{
     for(const qid of Object.keys(mailQueueData||{})){
       const e=mailQueueData[qid];
       if(!_mqEligible(e,Date.now())) continue;
-      const email=e.email||emailsData[e.user];
-      if(!email||email==='__skip__'){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
+      const recips=recipientsFor(e.user);
+      if(!recips.length){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
       try{
         await updateDoc(mailQueueRef,{[qid+'.claimedAt']:Date.now(),[qid+'.claimedBy']:MQ_ID});
         await new Promise(r=>setTimeout(r,2500));
         if(mailQueueData[qid]?.claimedBy!==MQ_ID) continue; // another page won it
         if(typeof emailjs==='undefined') continue;
-        await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:e.body||''});
+        for(const to of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:to,changes:e.body||''}); }
         trackEmailSent();
         updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
       }catch(_){/* claim expires in 90s; someone retries */}
@@ -2206,8 +2216,9 @@ async function sendEmailNotifications(prevSnap,newSnap,actor){
       }
     }
     for(const [user,changes] of Object.entries(notif)){
-      const email=emailsData[user];
-      if(!email||email==="__skip__") continue;
+      // Send to BOTH the Google login e-mail and the KP e-mail (whichever exist).
+      const recips=recipientsFor(user);
+      if(!recips.length) continue;
       // Greeting/context lives HERE now (not in the EmailJS template) so other
       // emails (phase results, reminders) aren't forced to carry this intro.
       const bodyText=`Hi ${user},\n\nThere was activity on weeks you've bid on:\n\n`+changes.join("\n");
@@ -2215,10 +2226,10 @@ async function sendEmailNotifications(prevSnap,newSnap,actor){
       // itself), then try to send. On success the entry is removed; if this
       // browser dies mid-send, the admin panel flushes the queue later.
       const qid=`${Date.now()}_${user}_${Math.floor(Math.random()*1e6)}`;
-      try{ await setDoc(mailQueueRef,{[qid]:{user,email,body:bodyText,ts:Date.now()}},{merge:true}); }catch(_){}
+      try{ await setDoc(mailQueueRef,{[qid]:{user,body:bodyText,ts:Date.now()}},{merge:true}); }catch(_){}
       try{
         if(typeof emailjs!=="undefined"){
-          await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:bodyText});
+          for(const to of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:to,changes:bodyText}); }
           trackEmailSent();
           updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
         }
@@ -2457,18 +2468,21 @@ function completeSignIn(){
     const _teb=document.getElementById('topBarEmail'); if(_teb) _teb.textContent=_em;
     const _tbi=document.getElementById('topBarInitials'); if(_tbi) _tbi.textContent=displayName(selectedSignInName);
   }catch(_){}
-  // Email prompt: decide BEFORE revealing the board so it appears as part of the
-  // sign-in flow, not a laggy pop-in 800ms after the page loads. All the data it
-  // needs (adminSettings + emails) is guaranteed loaded — sign-in is gated on it.
-  const needsEmail = adminSettings.emailPromptEnabled===true
-    && (()=>{ const s=emailsData[selectedSignInName]; return !s||s===""||s==="__skip__"; })();
   document.getElementById("accountSelectModal").classList.remove("show");
   mainContainer.style.display="block";
   startListening();
   startCountdownTick();
-  if(needsEmail){
-    document.getElementById("emailModal").classList.add("show");
-    setTimeout(()=>{ document.getElementById("emailInput")?.focus(); },100);
+  // KP e-mail prompt: if the admin has it enabled (default ON) and this user has not
+  // entered a real KP e-mail yet, ask for it. "Remind me later" just defers — the user
+  // is asked again at every login until a KP e-mail is saved (persistent reminder).
+  // The Google login e-mail already receives alerts regardless; the KP e-mail is added
+  // so both accounts are notified. Once saved it lands in the shared e-mail doc, so it
+  // shows on both admin sites.
+  const _kpEnabled = adminSettings.kpEmailPromptEnabled!==false;
+  const _kp = emailsData[selectedSignInName];
+  const _hasKp = _kp && _kp!=="__skip__" && String(_kp).includes("@");
+  if(_kpEnabled && !_hasKp){
+    setTimeout(()=>{ document.getElementById("emailModal")?.classList.add("show"); document.getElementById("emailInput")?.focus(); }, 300);
   }
 }
 

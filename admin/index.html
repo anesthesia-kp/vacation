@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 101;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 103;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -385,12 +385,11 @@ thead th{color:var(--t2)}
         <div id="phaseCurrentDisplay" style="font-size:1.8rem;font-weight:800;color:var(--blue);margin:6px 0 4px"></div>
         <div id="phaseStatusMsg" style="font-size:12px;color:var(--t2);margin-bottom:10px"></div>
         <div id="phaseProgress" style="margin-bottom:12px"></div>
+        <!-- The single guided "Next Step" box above is the ONLY phase control now.
+             The old Begin/Complete/Begin-Next buttons that used to sit here were
+             removed: they duplicated the guide and (the Complete one) bypassed the
+             "bidding must be closed" gate. Every action lives in the guide instead. -->
         <div id="phaseNextStep" style="margin-bottom:12px"></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-success" id="beginPhase1Btn" onclick="beginPhase1()" style="display:none">▶ Begin Phase 1 — Open Bidding</button>
-          <button class="btn btn-danger" id="completePhaseBtn" onclick="completePhase()">✓ Complete Phase</button>
-          <button class="btn btn-success" id="beginNextPhaseBtn" onclick="beginNextPhase()" style="display:none">▶ Begin Phase <span id="nextPhaseNum"></span></button>
-        </div>
         <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <div style="font-size:12px;font-weight:800;color:var(--t1)"><span id="noBidsCount">—</span> user<span id="noBidsPlural">s</span> without bids in Phase <span id="noBidsPhase">1</span></div>
@@ -601,11 +600,11 @@ thead th{color:var(--t2)}
           <input type="text" id="newUserInput" class="inp" style="width:100px;text-transform:uppercase" placeholder="Initials *" maxlength="10">
           <input type="text" id="newUserFullName" class="inp" style="width:170px" placeholder="Full name">
           <input type="email" id="newUserLoginEmail" class="inp" style="width:210px" placeholder="Login e-mail (Google)">
-          <input type="email" id="newUserEmail2" class="inp" style="width:200px" placeholder="Secondary e-mail">
+          <input type="email" id="newUserEmail2" class="inp" style="width:200px" placeholder="KP e-mail">
           <input type="number" id="newUserFte" class="inp" style="width:78px" placeholder="FTE" step="0.1" min="0" max="1" value="1.0">
           <button class="btn btn-primary" onclick="addUser()">Add</button>
         </div>
-        <div class="page-sub" style="margin-top:6px">Only <strong>initials</strong> are required. Full name, login e-mail and secondary e-mail are shared with the Daily Schedule; FTE here is this site's own (defaults to 1.0).</div>
+        <div class="page-sub" style="margin-top:6px">Only <strong>initials</strong> are required. Full name, login e-mail and KP e-mail are shared with the Daily Schedule; FTE here is this site's own (defaults to 1.0). Users can also enter their own KP e-mail at login.</div>
       </div>
       <div class="card">
         <div class="card-title">🔐 Admin Access (Google sign-in)</div>
@@ -618,13 +617,13 @@ thead th{color:var(--t2)}
       </div>
       <div class="card">
         <div class="card-title">All Users (<span id="userCount">0</span>)</div>
-        <div class="page-sub" style="margin-bottom:12px">One row per user. "Initials" is the account ID admin sets. The <strong>Login e-mail (Google)</strong> is the account each user signs in with; the <strong>Secondary e-mail</strong> is an optional extra alert address. Delete removes the user and all their data.</div>
+        <div class="page-sub" style="margin-bottom:12px">One row per user. "Initials" is the account ID admin sets. The <strong>Login e-mail (Google)</strong> is the account each user signs in with; the <strong>KP e-mail</strong> is their Kaiser address, which receives the same alerts as the login e-mail (users can enter their own at login). Delete removes the user and all their data.</div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px;flex-wrap:wrap">
           <button class="btn" style="background:rgba(59,130,246,.14);color:var(--blue);border:1px solid rgba(59,130,246,.35)" onclick="clearAllUsernames()">Clear All Usernames</button>
           <button class="btn btn-danger" style="background:rgba(198,40,40,.22);border-color:rgba(198,40,40,.6)" onclick="deleteAllUsers()">🗑 Delete All Users</button>
         </div>
         <div style="overflow-x:auto;max-height:560px;overflow-y:auto;border:1px solid var(--b1)">
-          <table><thead><tr><th>Initials</th><th>Username</th><th>FTE</th><th>Login e-mail (Google)</th><th>Secondary e-mail</th><th></th></tr></thead><tbody id="usersBody"></tbody></table>
+          <table><thead><tr><th>Initials</th><th>Username</th><th>FTE</th><th>Login e-mail (Google)</th><th>KP e-mail</th><th></th></tr></thead><tbody id="usersBody"></tbody></table>
         </div>
       </div>
     </div>
@@ -663,36 +662,10 @@ thead th{color:var(--t2)}
     <!-- CONTROLS -->
     <div class="panel" id="panel-controls">
       <div class="page-head"><div class="page-title">Controls</div><div class="page-sub">Global schedule settings.</div></div>
-      <div class="card">
-        <div class="card-title">Update Username Prompt</div>
-        <div class="trow">
-          <div>
-            <div class="trow-label">Prompt users to update their username</div>
-            <div class="trow-desc">When ON, users are offered a chance to set a custom display name (username) when they sign in. When OFF, users just sign in with their initials and are not prompted. Any username a user picks is visible to admin in the Users list.</div>
-          </div>
-          <div class="tog" id="usernamePromptToggle" onclick="toggleUsernamePrompt()"></div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-title">Email Prompt on Login</div>
-        <div class="trow">
-          <div>
-            <div class="trow-label">Email Prompt on Login</div>
-            <div class="trow-desc">When ON, users are asked to enter their email when they sign in. When OFF, the prompt is skipped.</div>
-          </div>
-          <div class="tog" id="emailPromptToggle" onclick="toggleEmailPrompt()"></div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-title">Require Passwords</div>
-        <div class="trow">
-          <div>
-            <div class="trow-label">Require Passwords</div>
-            <div class="trow-desc">When ON, users must set and enter a password to sign in. When OFF, anyone can sign in without a password.</div>
-          </div>
-          <div class="tog" id="passwordsToggle" onclick="togglePasswords()"></div>
-        </div>
-      </div>
+      <!-- Username Prompt, Email Prompt on Login, and Require Passwords were removed
+           (Jul 2026): Google sign-in now provides identity and the login e-mail, so a
+           separate username/email prompt and password are obsolete. Removing the Email
+           Prompt toggle also retires the backwards default it had. -->
       <div class="card">
         <div class="card-title">Priority Lock</div>
         <div class="trow">
@@ -711,6 +684,16 @@ thead th{color:var(--t2)}
             <div class="trow-desc">When ON, users receive emails when their bid outcome changes. When OFF, no emails are sent.</div>
           </div>
           <div class="tog" id="emailNotifsToggle" onclick="toggleEmailNotifs()"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">KP E-mail Prompt on Login</div>
+        <div class="trow">
+          <div>
+            <div class="trow-label">Ask users for their KP e-mail at login</div>
+            <div class="trow-desc">When ON, a user who hasn't yet saved a Kaiser (KP) e-mail is prompted for it right after signing in with Google. They may pick "Remind me later," but they'll be asked again at every login until they enter it. Once saved, their KP e-mail receives every alert their Google login e-mail receives, and it appears on both admin sites.</div>
+          </div>
+          <div class="tog" id="kpPromptToggle" onclick="toggleKpPrompt()"></div>
         </div>
       </div>
       <div class="card">
@@ -2498,12 +2481,8 @@ function syncControls(){
   if(gl) gl.className="tog"+(locksData.globalLock?" on":"");
   const et=document.getElementById("emailNotifsToggle");
   if(et) et.className="tog"+(adminSettings.emailNotifsEnabled!==false?" on":"");
-  const pt=document.getElementById("passwordsToggle");
-  if(pt) pt.className="tog"+(adminSettings.passcodesEnabled!==false?" on":"");
-  const ep=document.getElementById("emailPromptToggle");
-  if(ep) ep.className="tog"+(adminSettings.emailPromptEnabled!==false?" on":"");
-  const ut=document.getElementById("usernamePromptToggle");
-  if(ut) ut.className="tog"+(adminSettings.usernamePromptEnabled===true?" on":"");
+  const kp=document.getElementById("kpPromptToggle");
+  if(kp) kp.className="tog"+(adminSettings.kpEmailPromptEnabled!==false?" on":"");
   const pl=document.getElementById("prioLockToggle");
   if(pl) pl.className="tog"+(adminSettings.priorityLockEnabled!==false?" on":"");
   // Review threshold slider/textbox
@@ -3042,7 +3021,15 @@ window.clearEverything=function(){
               setDoc(bidPhaseRef,{}),
               setDoc(approvalsRef,{}),
               setDoc(deniedRef,{}),
+              // Reset to a clean pre-auction state: Phase 1, NOT started (phase1Started
+              // omitted → bidding stays closed until the admin clicks Begin Phase 1).
               setDoc(phasesRef,{currentPhase:1,completedPhases:{}}),
+              // Unlock every week so a fresh auction is ready to bid the moment Phase 1
+              // begins — but bidding is still gated by phase1Started, so unlocking here
+              // does NOT let anyone bid before Begin Phase 1.
+              setDoc(locksRef,{globalLock:false,weeks:{}}),
+              // Timer back to zero/off; Begin Phase 1 re-arms it to a fresh 48h.
+              setDoc(timerRef,{enabled:false,lastChange:null,durationHours:48}),
               // Change log + resetAt fence → Popcornometer and the "changes in
               // last 24h" counters read 0 on BOTH sites after a full reset.
               setDoc(changesRef,{log:[],resetAt:Date.now()}),
@@ -3127,6 +3114,22 @@ window.toggleNpPhase=async function(p){
   await setDoc(adminRef,{npAllowedPhases:cur},{merge:true});
   toast(`NP bids ${next?'enabled':'disabled'} for Phase ${p}`, next?'ok':'warn');
 };
+// Testing-only: mark a completed phase's results as "sent" WITHOUT e-mailing anyone,
+// so the workflow can advance to Begin Next Phase during testing. This is the ONLY step
+// that can be skipped — every other step (begin, close, decide, complete) is mandatory.
+window.skipPhaseResults=function(cur){
+  cur=Number(cur||phasesData.currentPhase||1);
+  openConfirm({
+    title:'⏭ Skip sending Phase '+cur+' results?',
+    body:`<div>This marks Phase <strong>${cur}</strong> results as sent <strong>without e-mailing anyone</strong>.</div>
+          <div class="cmodal-warn" style="margin-top:8px">For testing only — users will NOT receive their results e-mail. You can still send them later from the Approvals/Denials results tools if needed.</div>`,
+    okText:'Skip — don’t e-mail', danger:true,
+    onConfirm:async()=>{
+      await setDoc(phasesRef,{resultsSent:{...(phasesData.resultsSent||{}),[cur]:Date.now()}},{merge:true}).catch(()=>{});
+      toast('⏭ Phase '+cur+' results skipped (no e-mail sent)','warn');
+    }
+  });
+};
 function renderNextStep(){
   const el=document.getElementById('phaseNextStep'); if(!el) return;
   const cur=Number(phasesData.currentPhase||1);
@@ -3142,7 +3145,9 @@ function renderNextStep(){
     html=box('Bidding has not begun. Begin Phase 1 to open the auction to users.',btn('▶ Begin Phase 1','beginPhase1()','btn-success'));
   } else if(phasesData.completedPhases?.[cur]){
     if(!phasesData.resultsSent?.[cur]){
-      html=box(`Phase ${cur} is complete, but users have NOT been e-mailed their results yet.`,btn('📮 Send Phase '+cur+' Results','sendPhaseResultsEmails()','btn-success'));
+      html=box(`Phase ${cur} is complete, but users have NOT been e-mailed their results yet.`,
+        btn('📮 Send Phase '+cur+' Results','sendPhaseResultsEmails()','btn-success')
+        + '&nbsp;' + btn('⏭ Skip sending (testing)','skipPhaseResults('+cur+')','btn-ghost'));
     } else if(cur>=4){
       html=box('Phase 4 is complete and results are sent — the auction is finished. 🎉','');
     } else {
@@ -3170,36 +3175,23 @@ function renderPhasePanel(){
   const isComplete=!!completed[cur];
   const el=document.getElementById('phaseCurrentDisplay');
   const msgEl=document.getElementById('phaseStatusMsg');
-  const completeBtn=document.getElementById('completePhaseBtn');
-  const beginBtn=document.getElementById('beginNextPhaseBtn');
-  const begin1Btn=document.getElementById('beginPhase1Btn');
-  const nextNumEl=document.getElementById('nextPhaseNum');
   if(!el) return;
   if(!phase1Started()){
     el.textContent='Not started';
     el.style.color='var(--yellow)';
-    msgEl.textContent='Bidding has not begun — users cannot place bids until you begin Phase 1.';
-    if(begin1Btn) begin1Btn.style.display='';
-    completeBtn.style.display='none';
-    beginBtn.style.display='none';
+    if(msgEl) msgEl.textContent='Bidding has not begun — users cannot place bids until you begin Phase 1.';
     const histEl0=document.getElementById('phaseHistoryBody');
     if(histEl0) histEl0.innerHTML='<div style="color:var(--t3)">No completed phases yet.</div>';
     return;
   }
-  if(begin1Btn) begin1Btn.style.display='none';
   if(isComplete){
     el.textContent='Phase '+cur+' ✓ Complete';
     el.style.color='var(--green)';
-    msgEl.textContent='Phase '+cur+' is complete. Ready to begin Phase '+(cur+1)+'.';
-    completeBtn.style.display='none';
-    beginBtn.style.display='';
-    if(nextNumEl) nextNumEl.textContent=cur+1;
+    if(msgEl) msgEl.textContent='Phase '+cur+' is complete. Ready to begin Phase '+(cur+1)+'.';
   } else {
     el.textContent='Phase '+cur;
     el.style.color='var(--blue)';
-    msgEl.textContent='Phase '+cur+' is active. Approve or deny all bids before completing.';
-    completeBtn.style.display='';
-    beginBtn.style.display='none';
+    if(msgEl) msgEl.textContent='Phase '+cur+' is active. Approve or deny all bids before completing.';
   }
   // History
   const histEl=document.getElementById('phaseHistoryBody');
@@ -3220,6 +3212,21 @@ function renderPhasePanel(){
 
 window.completePhase=function(){
   const cur=Number(phasesData.currentPhase||1);
+  // FAIL-SAFE: a phase can NEVER be completed while bidding is still live. Bidding must
+  // be closed first (timer expired AND all weeks locked). This backs up the guided flow
+  // so completion can't happen mid-bidding even if this is called some other way.
+  const rdy=approvalReadiness();
+  if(!rdy.ready){
+    openConfirm({
+      title:'⚠️ Close bidding first',
+      body:`<div style="color:var(--red);font-weight:600;margin-bottom:8px">Phase ${cur} bidding is still open — it must be closed before the phase can be completed.</div>
+            <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:13px;line-height:1.6">${rdy.problems.map(p=>'<li>'+p+'</li>').join('')}</ul>
+            <div style="color:var(--t2);font-size:12px">Closing bidding expires the timer and locks all 52 weeks. You can then decide bids and complete the phase.</div>`,
+      okText:'⏱ Close Phase '+cur+' bidding', danger:true,
+      onConfirm:()=>{ if(typeof closePhaseBidding==='function') closePhaseBidding(cur); }
+    });
+    return;
+  }
   const ap=computeApprovals();
   // Only current-phase bids need a decision. Historical bids are already locked in.
   const pending=[];
@@ -3296,8 +3303,8 @@ window.completePhase=function(){
       }
       await setDoc(changesRef,{log:[],resetAt:Date.now()}).catch(()=>{});
       toast('✓ Phase '+cur+' completed — all weeks locked, priority locks released','ok');
-      // Guide the admin straight to the natural next action: sending results.
-      setTimeout(()=>sendPhaseResultsEmails(),500);
+      // Sending results is now its own deliberate step in the "Next Step" guide
+      // (with a Skip option for testing), so we no longer auto-open the e-mail dialog.
     }
   });
 };
@@ -4765,8 +4772,8 @@ window.adminSaveEmail=async function(u){
 };
 window.adminClearEmail=function(u){
   openConfirm({
-    title:'🗑 Clear Secondary Email',
-    body:`<div>Clear the secondary e-mail for <strong>${u}</strong>?</div><div class="cmodal-warn">Alerts will still go to their primary (Google login) e-mail.</div>`,
+    title:'🗑 Clear KP E-mail',
+    body:`<div>Clear the KP e-mail for <strong>${u}</strong>?</div><div class="cmodal-warn">Alerts will still go to their Google login e-mail. If the KP prompt is on, they'll be asked for a KP e-mail again at their next login.</div>`,
     okText:'Clear', danger:true,
     onConfirm:async()=>{
       // Atomic field delete — never overwrites other users' emails
@@ -5333,22 +5340,13 @@ window.clearAllPasswords=function(){
   });
 };
 
-window.toggleEmailPrompt=async function(){
-  const cur=adminSettings.emailPromptEnabled!==false;
-  await setDoc(adminRef,{emailPromptEnabled:!cur},{merge:true});
-  toast(!cur?"✉️ Email prompt enabled":"🔕 Email prompt disabled",!cur?"ok":"warn");
-};
-
-window.togglePasswords=async function(){
-  const cur=adminSettings.passcodesEnabled!==false;
-  await setDoc(adminRef,{passcodesEnabled:!cur},{merge:true});
-  toast(!cur?"🔑 Passwords enabled":"🔓 Passwords disabled",!cur?"ok":"warn");
-};
-
-window.toggleUsernamePrompt=async function(){
-  const cur=adminSettings.usernamePromptEnabled===true;
-  await setDoc(adminRef,{usernamePromptEnabled:!cur},{merge:true});
-  toast(!cur?"👤 Username prompt enabled":"🔕 Username prompt disabled",!cur?"ok":"warn");
+// toggleEmailPrompt / togglePasswords / toggleUsernamePrompt were removed (Jul 2026):
+// Google sign-in supplies identity + the login e-mail, so these settings are obsolete.
+// The new KP-e-mail prompt (default ON) replaces the old generic e-mail prompt.
+window.toggleKpPrompt=async function(){
+  const cur=adminSettings.kpEmailPromptEnabled!==false;
+  await setDoc(adminRef,{kpEmailPromptEnabled:!cur},{merge:true});
+  toast(!cur?"✉️ KP e-mail prompt enabled":"🔕 KP e-mail prompt disabled",!cur?"ok":"warn");
 };
 
 // ── User Management ──
@@ -5383,7 +5381,7 @@ function renderUsersCombined(){
       <td style="white-space:nowrap"><input type="email" id="lem_${n}" class="inp" style="width:200px" value="${esc(loginEmailsData[n]||'')}" placeholder="their-google@gmail.com">
         <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveLoginEmail('${n}')">Save</button>
         <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearLoginEmail('${n}')">Clear</button></td>
-      <td style="white-space:nowrap"><input type="email" id="em_${n}" class="inp" style="width:190px" value="${skip?'':esc(em)}" placeholder="optional 2nd address">${skip?' <span class="pill p-yellow">opted out</span>':''}
+      <td style="white-space:nowrap"><input type="email" id="em_${n}" class="inp" style="width:190px" value="${skip?'':esc(em)}" placeholder="KP e-mail">${skip?' <span class="pill p-yellow">none</span>':''}
         <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveEmail('${n}')">Save</button>
         <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearEmail('${n}')">Clear</button></td>
       <td><button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="removeUser('${n}')">🗑 Delete</button></td>
@@ -5395,7 +5393,7 @@ window.adminClearUsername=function(u){
   openConfirm({
     title:'🗑 Clear username',
     body:`<div>Clear <strong>${u}</strong>'s username?</div>
-          <div class="cmodal-info">Their display name goes back to their initials (<strong>${u}</strong>). If the username prompt is on, they'll be asked to choose one again at their next login.</div>`,
+          <div class="cmodal-info">Their display name goes back to their initials (<strong>${u}</strong>). You can set a new display name for them anytime from the Users list.</div>`,
     okText:'Clear',danger:true,
     onConfirm:async()=>{
       await updateDoc(usernamesRef,{[u]:deleteField()}).catch(async()=>{ const d={...usernamesData}; delete d[u]; await setDoc(usernamesRef,d); });
@@ -5409,7 +5407,7 @@ window.clearAllUsernames=function(){
   openConfirm({
     title:'🗑 Clear ALL Usernames',
     body:`<div>Clear <strong>${count}</strong> saved username${count!==1?'s':''}?</div>
-          <div class="cmodal-danger">Every user's display name returns to their initials. If the username prompt is on, users will be asked to choose one again at their next login.</div>`,
+          <div class="cmodal-danger">Every user's display name returns to their initials. You can set display names again anytime from the Users list.</div>`,
     okText:'Clear All Usernames',danger:true,
     onConfirm:async()=>{
       await setDoc(usernamesRef,{}); // replace with empty map
