@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 74;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 75;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -401,12 +401,13 @@ body{zoom:1.15}
 <div id="emailModal" class="modal">
   <div class="modal-content">
     <h2 class="modal-title">Add your KP e-mail</h2>
-    <p style="color:#3b566d;font-size:.85rem;margin-bottom:16px">Enter your Kaiser (KP) e-mail so auction alerts reach your KP inbox too. You'll get every alert on <strong>both</strong> your Google account and your KP e-mail.</p>
+    <p style="color:#3b566d;font-size:.85rem;margin-bottom:16px">Want auction alerts in your Kaiser (KP) inbox too? Add your KP e-mail and every alert will reach <strong>both</strong> your Google account and your KP e-mail. Your Google account always receives alerts either way.</p>
     <label class="modal-label">KP e-mail address</label>
     <input type="email" id="emailInput" class="priority-input" placeholder="you@kp.org">
     <div class="modal-buttons" style="flex-direction:column;gap:8px">
-      <button class="btn-primary" onclick="saveEmail()">Save KP e-mail</button>
+      <button class="btn-primary" onclick="saveEmail()">Save KP e-mail &amp; get alerts</button>
       <button class="btn-secondary" onclick="remindLater()" style="font-size:.8rem">Remind me later</button>
+      <button class="btn-secondary" onclick="declineEmail()" style="font-size:.8rem;opacity:.85">No thanks — don't ask again</button>
     </div>
   </div>
 </div>
@@ -539,6 +540,7 @@ body{zoom:1.15}
         <li>If you are in a Draw or Under Review for a week and do not win after it is resolved, you will get the bid back for the next phase</li>
         <li style="margin-top:8px"><strong style="color:#2c4257">These are projections, not final results — outcomes can shift as others place bids or as unexpected staffing needs change</strong></li>
       </ul>
+      <div onclick="collapseRules()" style="margin-top:14px;padding-top:12px;border-top:1px solid #c2cfdb;text-align:center;cursor:pointer;color:#006ba6;font-weight:600;font-size:.82rem;user-select:none">▲ Collapse Rules &amp; Reminders</div>
     </div>
   </div>
 
@@ -1221,7 +1223,11 @@ async function relayMailQueue(){
     for(const qid of Object.keys(mailQueueData||{})){
       const e=mailQueueData[qid];
       if(!_mqEligible(e,Date.now())) continue;
-      const recips=recipientsFor(e.user);
+      // A `to` field means single-target (welcome e-mail) — send ONLY there. Otherwise
+      // (outbid/results alerts) fan out to both the Google login and KP addresses.
+      const recips=(e.to && String(e.to).includes('@') && String(e.to)!=='__skip__')
+        ? [String(e.to).trim().toLowerCase()]
+        : recipientsFor(e.user);
       if(!recips.length){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
       try{
         await updateDoc(mailQueueRef,{[qid+'.claimedAt']:Date.now(),[qid+'.claimedBy']:MQ_ID});
@@ -2545,16 +2551,25 @@ function completeSignIn(){
   mainContainer.style.display="block";
   startListening();
   startCountdownTick();
-  // KP e-mail prompt: if the admin has it enabled (default ON) and this user has not
-  // entered a real KP e-mail yet, ask for it. "Remind me later" just defers — the user
-  // is asked again at every login until a KP e-mail is saved (persistent reminder).
-  // The Google login e-mail already receives alerts regardless; the KP e-mail is added
-  // so both accounts are notified. Once saved it lands in the shared e-mail doc, so it
-  // shows on both admin sites.
+  // Google-account welcome: the FIRST login with a given Google address gets exactly
+  // one welcome to that address. It is keyed by the address, so if admin later changes
+  // a user's Google account, the new account is welcomed on its first login. Reset
+  // Auction clears the log, so each new auction cycle welcomes once again.
+  try{
+    const _gm=(auth.currentUser && !auth.currentUser.isAnonymous && auth.currentUser.email) || loginEmailsData[selectedSignInName] || '';
+    if(_gm) welcomeOnce(selectedSignInName,_gm);
+  }catch(_){}
+  // KP e-mail prompt: only when admin has it enabled AND the user has neither entered
+  // a KP e-mail NOR declined. Three choices on the prompt:
+  //   • Save          → KP e-mail saved (and welcomed once); never asked again.
+  //   • Remind later  → nothing stored; asked again at the next login.
+  //   • No thanks     → stored as "__skip__"; never asked again. Admin can still add a
+  //                     KP e-mail later, which welcomes that address once at that time.
   const _kpEnabled = adminSettings.kpEmailPromptEnabled!==false;
   const _kp = emailsData[selectedSignInName];
-  const _hasKp = _kp && _kp!=="__skip__" && String(_kp).includes("@");
-  if(_kpEnabled && !_hasKp){
+  const _declined = _kp==="__skip__";
+  const _hasKp = _kp && !_declined && String(_kp).includes("@");
+  if(_kpEnabled && !_hasKp && !_declined){
     setTimeout(()=>{ document.getElementById("emailModal")?.classList.add("show"); document.getElementById("emailInput")?.focus(); }, 300);
   }
 }
@@ -2621,7 +2636,10 @@ async function sendWelcomeEmail(user,email){
   // to send; the entry is removed on success and relayed by any open page if not.
   const body=buildWelcomeEmailBody(user);
   const qid=`${Date.now()}_welcome_${user}_${Math.floor(Math.random()*1e6)}`;
-  try{ await setDoc(mailQueueRef,{[qid]:{user,email,body,ts:Date.now()}},{merge:true}); }catch(_){}
+  // `to` = a SINGLE explicit recipient (this welcome targets one address only — the
+  // Google login OR the KP address, never both). The relay honors `to` and does NOT
+  // fan out to recipientsFor(user), so a KP welcome never reaches the Google account.
+  try{ await setDoc(mailQueueRef,{[qid]:{user,to:email,body,ts:Date.now()}},{merge:true}); }catch(_){}
   try{
     if(typeof emailjs!=="undefined"){
       await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body});
@@ -2661,12 +2679,30 @@ window.saveEmail=async function(){
   welcomeOnce(user,val);
 };
 window.remindLater=function(){ document.getElementById("emailModal").classList.remove("show"); };
+// Decline: record "__skip__" so the user is NEVER prompted again this cycle. Alerts
+// still reach their Google account; admin can add a KP e-mail for them later (which
+// welcomes that address once). No welcome is sent for declining.
+window.declineEmail=async function(){
+  const user=getCurrentUser();
+  try{ await setDoc(emailsRef,{[user]:"__skip__"},{merge:true}); }catch(_){}
+  document.getElementById("emailModal").classList.remove("show");
+};
 
 window.toggleRules=function(){
   const body=document.getElementById("rulesBody");
   const chev=document.getElementById("rulesChevron");
   const open=body.classList.toggle("open");
   chev.classList.toggle("open",open);
+};
+// Bottom "Collapse" control: always closes the section and scrolls back to its header
+// so the user isn't left stranded at the bottom of a long, now-collapsed panel.
+window.collapseRules=function(){
+  const body=document.getElementById("rulesBody");
+  const chev=document.getElementById("rulesChevron");
+  if(body){ body.classList.remove("open"); }
+  if(chev){ chev.classList.remove("open"); }
+  const hdr=document.querySelector(".rules-banner");
+  if(hdr && hdr.scrollIntoView) hdr.scrollIntoView({behavior:"smooth",block:"start"});
 };
 
 document.addEventListener("keydown",e=>{

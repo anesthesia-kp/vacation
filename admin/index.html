@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 112;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 113;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -743,7 +743,7 @@ thead th{color:var(--t2)}
         <div class="trow">
           <div>
             <div class="trow-label">Ask users for their KP e-mail at login</div>
-            <div class="trow-desc">When ON, a user who hasn't yet saved a Kaiser (KP) e-mail is prompted for it right after signing in with Google. They may pick "Remind me later," but they'll be asked again at every login until they enter it. Once saved, their KP e-mail receives every alert their Google login e-mail receives, and it appears on both admin sites.</div>
+            <div class="trow-desc">When ON, a user who hasn't yet saved a Kaiser (KP) e-mail is prompted for it right after signing in with Google. On that prompt they can save it, pick "Remind me later" (asked again next login), or "No thanks — don't ask again" (never asked again). If they decline, you can still add a KP e-mail for them on the Users tab — that address gets one welcome e-mail when you save it. Once set, the KP e-mail receives every alert the Google login e-mail receives, and it appears on both admin sites.</div>
           </div>
           <div class="tog" id="kpPromptToggle" onclick="toggleKpPrompt()"></div>
         </div>
@@ -1007,6 +1007,7 @@ const worstBidsRef = doc(db,"vacations","bestBids");
 const slcRef       = doc(db,"vacations","slcMap"); // per-week Smart Lock Control
 const emailsRef   = doc(db,"vacations","emails"); // SECONDARY e-mail (user → address)
 const loginEmailsRef = doc(db,"vacations","loginEmails"); // PRIMARY / Google login e-mail (user → address)
+const welcomeLogRef = doc(db,"vacations","welcomeLog"); // {sent:{<addrKey>:true}} — addresses already welcomed THIS cycle (cleared by Reset Auction)
 const passwordsRef = doc(db,"vacations","passcodes");
 const userListRef  = doc(db,"vacations","userList");
 const usernamesRef = doc(db,"vacations","usernames"); // {initials: customDisplayName}
@@ -1312,10 +1313,16 @@ async function processMailQueue(minAgeMs){
       const e=mailQueueData[qid];
       if(!e||typeof e!=='object'){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
       if(!_mqEligible(e,Date.now(),minAgeMs)) continue;
-      // Recipients: primary (login) + secondary; fall back to the address the
-      // queuing page recorded if the user has no addresses on file yet.
-      let recips=recipientsFor(e.user);
-      if(!recips.length && e.email && e.email!=='__skip__' && String(e.email).includes('@')) recips=[e.email];
+      // A `to` field means single-target (welcome e-mail) — send ONLY there, never
+      // fanning out to both addresses. Otherwise: primary (login) + secondary, with a
+      // fallback to the recorded `email` if the user has no addresses on file yet.
+      let recips;
+      if(e.to && e.to!=='__skip__' && String(e.to).includes('@')){
+        recips=[String(e.to).trim().toLowerCase()];
+      } else {
+        recips=recipientsFor(e.user);
+        if(!recips.length && e.email && e.email!=='__skip__' && String(e.email).includes('@')) recips=[e.email];
+      }
       if(!recips.length){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
       try{
         // Claim, let the claim settle, verify we still own it, then send.
@@ -3508,6 +3515,95 @@ function adminSendEmail(user,subject,body){
     }catch(e){console.warn('Email failed:',e);}
   }
 }
+
+// ── Welcome e-mail (admin side) ───────────────────────────────────────────────
+// Same enrollment/welcome e-mail the user site sends. Used when ADMIN enters or
+// changes a user's KP e-mail: the new KP address receives one welcome at that time.
+// Guarded by welcomeLog so no address is ever welcomed twice in a cycle.
+let welcomeLogData={};
+onSnapshot(welcomeLogRef, snap=>{ welcomeLogData=snap.exists()?snap.data():{}; });
+function _wlKey(email){ return String(email||"").trim().toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_|_$/g,""); }
+function _amMaxBids(){
+  const raw=adminSettings?.maxBidsPerPhase;
+  if(raw===undefined||raw===null||raw===''||raw==='none') return null;
+  const n=parseInt(raw,10);
+  if(isNaN(n)||n<1||n>10) return null;
+  return n;
+}
+function _emBold(s){
+  return [...s].map(ch=>{
+    const c=ch.codePointAt(0);
+    if(c>=65&&c<=90)  return String.fromCodePoint(0x1D5D4+c-65);
+    if(c>=97&&c<=122) return String.fromCodePoint(0x1D5EE+c-97);
+    if(c>=48&&c<=57)  return String.fromCodePoint(0x1D7EC+c-48);
+    return ch;
+  }).join('');
+}
+function buildWelcomeEmailBody(user){
+  const lim=_amMaxBids();
+  const limLine=lim===null
+    ? `There is no per-phase bid limit — you are limited only by the bid numbers you have available; only bid for the number of weeks your accrued vacation and ATO will allow for`
+    : `Only ${lim} bid${lim!==1?'s':''} (including NP bids) may be used per phase — only bid for the number of weeks your accrued vacation and ATO will allow for`;
+  const B=_emBold;
+  const bullets=arr=>arr.map(t=>'• '+t).join('\n');
+  return `Hi ${user},
+
+Welcome to the 2027 Anesthesia Vacation Auction!
+
+This confirms you are enrolled in e-mail alerts. You will receive an e-mail:
+${bullets([
+  `When someone places a bid that changes your projected outcome for a week (outbid alerts)`,
+  `When a bidding phase concludes and your results (approved/denied) are sent`,
+  `As an occasional reminder if you have not yet placed any bids in an open phase`
+])}
+
+${B('RULES AND REMINDERS OF THE AUCTION')}
+${bullets([
+  `Vacation selections are called "bids" — the process works like an auction, where bids compete for limited slots based on priority`,
+  `Enter your bids early, it benefits everyone`,
+  `Sniping is not possible, do not try it`,
+  limLine,
+  `Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better`,
+  `On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used`,
+  `NP bids may only be used during the phases for which they are enabled by the admin`,
+  `To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`
+])}
+
+${B('UNDERSTANDING OUTCOMES')}
+${bullets([
+  `Winning (W): your bid is projected to be approved for this week`,
+  `Draw (D): you are tied with one or more people and combined FTE exceeds availability; a spin-off or admin approval will resolve the tie`,
+  `Under Review (R): your bid is slightly over the cap; admin may still approve under certain circumstances`,
+  `Losing (L): your bid is projected not to be approved for this week`,
+  `If you are in a Draw or Under Review for a week and do not win after it is resolved, you get the bid back for the next phase`,
+  `These are projections, not final results — outcomes can shift as others place bids or as unexpected staffing needs change`
+])}
+
+Happy bidding!`;
+}
+async function sendWelcomeEmail(user,email){
+  const body=buildWelcomeEmailBody(user);
+  const qid=`${Date.now()}_welcome_${user}_${Math.floor(Math.random()*1e6)}`;
+  // `to` = single explicit recipient; the relay sends ONLY there (never both addresses).
+  try{ await setDoc(mailQueueRef,{[qid]:{user,to:email,body,ts:Date.now()}},{merge:true}); }catch(_){}
+  try{
+    if(typeof emailjs!=="undefined"){
+      await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body});
+      trackEmailSent();
+      updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
+    }
+  }catch(_){/* stays queued — relayed later */}
+}
+// One welcome per address per cycle. Marks the address in welcomeLog, then sends.
+async function welcomeOnce(user,email){
+  const key=_wlKey(email); if(!key) return;
+  const sent=(welcomeLogData&&welcomeLogData.sent)||{};
+  if(sent[key]) return;
+  welcomeLogData.sent=Object.assign({},sent,{[key]:true});
+  try{ await setDoc(welcomeLogRef,{sent:{[key]:true}},{merge:true}); }catch(_){}
+  sendWelcomeEmail(user,email).catch(()=>{});
+}
+window._welcomeOnce=welcomeOnce; // exposed for testing
 let mailStatsData={};
 onSnapshot(mailStatsRef, snap=>{ mailStatsData=snap.exists()?snap.data():{}; renderMailMeter(); });
 function renderMailMeter(){
@@ -4938,7 +5034,12 @@ function renderEmailsPanel(){
 window.adminSaveEmail=async function(u){
   const val=document.getElementById(`em_${u}`)?.value.trim();
   if(!val||!val.includes("@")){toast("Invalid email","err");return;}
+  const prev=String(emailsData?.[u]||"").trim().toLowerCase();
   await setDoc(emailsRef,{[u]:val},{merge:true}); toast(`✉️ Saved for ${u}`,"ok");
+  // Admin entered/updated this user's KP address → welcome the NEW address once (e.g.
+  // the user declined at login and admin adds it for them, or admin changes it). The
+  // welcomeLog guard means re-saving the same address never re-sends.
+  if(val.toLowerCase()!==prev) welcomeOnce(u,val);
 };
 window.adminClearEmail=function(u){
   openConfirm({
@@ -5396,7 +5497,7 @@ function renderTimerRules(){
       if(typeof openConfirm!=='function'){ saveTimerRules(); return; }
       openConfirm({
         title:'⏱ Save timer rule change?',
-        body:'Apply this timer-rule change now? It takes effect on the next bid.',
+        body:'Save this change to the timer rules? It applies from now on. Only the starting reset takes effect right away (at the start of each phase); the other reset lengths kick in later — once the auction has been open the number of days you set for each one.',
         okText:'Save change',
         onConfirm:async()=>{ await saveTimerRules(); },
         onCancel:()=>{ renderTimerRules(); }, // discard the edit, restore saved values
@@ -5712,9 +5813,12 @@ window.addUser=async function(){
   // Shared with the Daily Schedule (port to the other site): full name, login e-mail, secondary e-mail.
   if(fullName) await setDoc(usernamesRef,{[val]:fullName},{merge:true}).catch(()=>{});
   if(loginEmail) await setDoc(loginEmailsRef,{[val]:loginEmail},{merge:true}).catch(()=>{});
-  if(email2) await setDoc(emailsRef,{[val]:email2},{merge:true}).catch(()=>{});
+  if(email2 && email2.includes('@')) await setDoc(emailsRef,{[val]:email2},{merge:true}).catch(()=>{});
   ['newUserInput','newUserFullName','newUserLoginEmail','newUserEmail2'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
   if(fteEl) fteEl.value="1.0";
+  // If admin pre-set a KP e-mail at creation, welcome that address once (login-e-mail
+  // welcomes fire on the user's first login instead, not here). welcomeLog dedups.
+  if(email2 && email2.includes('@')) welcomeOnce(val,email2);
   toast("👤 Added "+val+(fullName?" ("+fullName+")":"")+" · FTE "+fte,"ok");
 };
 
