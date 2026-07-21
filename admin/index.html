@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 108;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 109;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -25,6 +25,28 @@
       })
       .catch(function () {});
   } catch (e) {}
+})();
+</script>
+<script>
+/* Autofill kill-switch — the browser must NEVER auto-fill a saved value (e.g. a
+   different person's e-mail) into any field on this site. Applies to every field
+   present now and any added later (user rows, modals, report fields, etc.). */
+(function(){
+  function off(el){ try{ el.setAttribute('autocomplete','off'); }catch(e){} }
+  function sweep(root){ try{ (root||document).querySelectorAll('input,select,textarea').forEach(off); }catch(e){} }
+  function start(){
+    sweep(document);
+    try{
+      new MutationObserver(function(muts){
+        muts.forEach(function(m){ m.addedNodes && m.addedNodes.forEach(function(node){
+          if(!node||node.nodeType!==1) return;
+          if(node.matches && node.matches('input,select,textarea')) off(node);
+          if(node.querySelectorAll) sweep(node);
+        }); });
+      }).observe(document.documentElement,{childList:true,subtree:true});
+    }catch(e){}
+  }
+  if(document.readyState!=='loading') start(); else document.addEventListener('DOMContentLoaded', start);
 })();
 </script>
 <title>Vacation Auction Admin</title>
@@ -598,11 +620,14 @@ thead th{color:var(--t2)}
       <div class="card">
         <div class="card-title">Add User</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <input type="text" id="newUserInput" class="inp" style="width:100px;text-transform:uppercase" placeholder="Initials *" maxlength="10">
-          <input type="text" id="newUserFullName" class="inp" style="width:170px" placeholder="Full name">
-          <input type="email" id="newUserLoginEmail" class="inp" style="width:210px" placeholder="Login e-mail (Google)">
-          <input type="email" id="newUserEmail2" class="inp" style="width:200px" placeholder="KP e-mail">
-          <input type="number" id="newUserFte" class="inp" style="width:78px" placeholder="FTE" step="0.1" min="0" max="1" value="1.0">
+          <!-- autocomplete="off" on every field: stops the browser from auto-filling a
+               DIFFERENT person's saved e-mail/name into this form (a wrong e-mail on the
+               wrong user would be dangerous). Each field is typed in by hand. -->
+          <input type="text" id="newUserInput" class="inp" style="width:100px;text-transform:uppercase" placeholder="Initials *" maxlength="10" autocomplete="off">
+          <input type="text" id="newUserFullName" class="inp" style="width:170px" placeholder="Full name" autocomplete="off">
+          <input type="email" id="newUserLoginEmail" class="inp" style="width:210px" placeholder="Login e-mail (Google)" autocomplete="off">
+          <input type="email" id="newUserEmail2" class="inp" style="width:200px" placeholder="KP e-mail" autocomplete="off">
+          <input type="number" id="newUserFte" class="inp" style="width:78px" placeholder="FTE" step="0.1" min="0" max="1" value="1.0" autocomplete="off">
           <button class="btn btn-primary" onclick="addUser()">Add</button>
         </div>
         <div class="page-sub" style="margin-top:6px">Only <strong>initials</strong> are required. Full name, login e-mail and KP e-mail are shared with the Daily Schedule; FTE here is this site's own (defaults to 1.0). Users can also enter their own KP e-mail at login.</div>
@@ -619,6 +644,7 @@ thead th{color:var(--t2)}
       <div class="card">
         <div class="card-title">All Users (<span id="userCount">0</span>)</div>
         <div class="page-sub" style="margin-bottom:12px">One row per user. "Initials" is the account ID admin sets. The <strong>Login e-mail (Google)</strong> is the account each user signs in with; the <strong>KP e-mail</strong> is their Kaiser address, which receives the same alerts as the login e-mail (users can enter their own at login). Delete removes the user and all their data.</div>
+        <div id="fteLockNote" style="font-size:12px;color:var(--yellow);font-weight:600;margin-bottom:10px"></div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px;flex-wrap:wrap">
           <button class="btn btn-danger" style="background:rgba(198,40,40,.22);border-color:rgba(198,40,40,.6)" onclick="deleteAllUsers()">🗑 Delete All Users</button>
         </div>
@@ -3265,6 +3291,20 @@ window.completePhase=function(){
       const snap=JSON.parse(JSON.stringify(scheduleData));
       const apSnap=JSON.parse(JSON.stringify(approvalsData||{}));
       const denSnap=JSON.parse(JSON.stringify(deniedData||{}));
+      // Freeze each week's FTE header (approved / available / of-cap) AS OF this phase's
+      // completion, so a prior-phase report never drifts later when another phase
+      // approves more people or when FTE/capacity is edited. It is the union of every
+      // completed phase's approvals plus this phase's, valued with the FTE and capacity
+      // in effect right now. Prior-phase reports read this instead of recomputing live.
+      const fteHeadSnap={};
+      { const cpNow=phasesData.completedPhases||{};
+        mondays.forEach(d=>{ const wk=dateKey(d); const set=new Set();
+          for(const ph of Object.keys(cpNow)){ const arr=cpNow[ph]?.approvals?.[wk]; if(Array.isArray(arr)) arr.forEach(u=>set.add(u)); }
+          const a=apSnap[wk]; if(Array.isArray(a)) a.forEach(u=>set.add(u));
+          let fte=0; set.forEach(u=>{fte+=getUserFTE(u);}); const cap=getSlots(wk);
+          fteHeadSnap[wk]={approved:Math.round(fte*10)/10, available:Math.round((cap-fte)*10)/10, cap};
+        });
+      }
       await setDoc(phasesRef,{
         currentPhase:cur,
         completedPhases:{...(phasesData.completedPhases||{}),[cur]:{
@@ -3272,6 +3312,7 @@ window.completePhase=function(){
           approvals:apSnap,
           denials:denSnap,
           schedule:snap,
+          fteHead:fteHeadSnap,               // frozen FTE header per week (immutable report)
           projections:serializeProjections() // pre-admin outcomes, kept for reports
         }}
       },{merge:true});
@@ -3779,7 +3820,12 @@ function bidsByWeekModel(scope){
     }
     if(!bids.length) return;
     bids.sort((a,b)=>bwOutcomeRank(a.outcome)-bwOutcomeRank(b.outcome)||a.score-b.score||a.user.localeCompare(b.user));
-    groups.push({wk,wn,date:`${MS[d.getMonth()]} ${d.getDate()}`,type:weekTypeLabel(wk,d),bids,fte:finalFteForWeek(wk)});
+    // A specific prior-phase report uses that phase's FROZEN FTE header (immutable);
+    // 'current'/'all' views recompute it live. Older snapshots without a frozen header
+    // fall back to the live figure.
+    const frozenHead = snapMode ? ((phasesData.completedPhases||{})[lockedPhase]||{}).fteHead : null;
+    const wkFte = (frozenHead && frozenHead[wk]) ? frozenHead[wk] : finalFteForWeek(wk);
+    groups.push({wk,wn,date:`${MS[d.getMonth()]} ${d.getDate()}`,type:weekTypeLabel(wk,d),bids,fte:wkFte});
   });
   return groups;
 }
@@ -5479,6 +5525,11 @@ onSnapshot(userListRef, snap=>{
 function renderUsersCombined(){
   const tb=document.getElementById('usersBody'); if(!tb) return;
   const count=document.getElementById('userCount'); if(count) count.textContent=names.length;
+  // FTE is locked once the auction is live (Phase 1 has begun) — it can only be changed
+  // before Phase 1 starts, so a person's FTE can't shift the capacity math mid-auction.
+  const fteLocked=phase1Started();
+  const note=document.getElementById('fteLockNote');
+  if(note) note.innerHTML=fteLocked?'🔒 FTE is locked while the auction is live — it can only be changed before Phase 1 begins.':'';
   tb.innerHTML=names.map(n=>{
     const fte=getUserFTE(n);
     const em=emailsData[n]||''; const skip=em==='__skip__';
@@ -5486,8 +5537,8 @@ function renderUsersCombined(){
       <td class="mono" style="white-space:nowrap"><strong>${n}</strong></td>
       <td style="white-space:nowrap"><input type="text" id="ufn_${n}" class="inp" style="width:160px" value="${esc(usernamesData[n]||'')}" placeholder="Full name">
         <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveFullName('${n}')">Save</button></td>
-      <td style="white-space:nowrap"><input type="number" id="fte_${n}" class="inp" style="width:70px" value="${fte}" step="0.1" min="0" max="1">
-        <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveFte('${n}')">Save</button></td>
+      <td style="white-space:nowrap"><input type="number" id="fte_${n}" class="inp" style="width:70px" value="${fte}" step="0.1" min="0" max="1"${fteLocked?' disabled title="FTE is locked while the auction is live"':''}>
+        ${fteLocked?'<span title="FTE can only be changed before Phase 1 begins" style="font-size:13px;color:var(--t3)">🔒</span>':`<button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveFte('${n}')">Save</button>`}</td>
       <td style="white-space:nowrap"><input type="email" id="lem_${n}" class="inp" style="width:200px" value="${esc(loginEmailsData[n]||'')}" placeholder="their-google@gmail.com">
         <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveLoginEmail('${n}')">Save</button>
         <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearLoginEmail('${n}')">Clear</button></td>
@@ -5675,6 +5726,10 @@ function renderFtePanel(){
 }
 
 window.saveFte=async function(u){
+  // Hard guard: FTE can only change BEFORE Phase 1 begins. Once the auction is live it
+  // is frozen, so nobody's FTE can shift the week-capacity math mid-auction. (Backs up
+  // the disabled input — this blocks the write no matter how it's triggered.)
+  if(phase1Started()){ toast('FTE is locked while the auction is live — it can only be changed before Phase 1 begins.','warn'); return; }
   const val=parseFloat(document.getElementById(`fte_${u}`)?.value);
   if(isNaN(val)||val<0||val>1){toast("FTE must be between 0 and 1","err");return;}
   await setDoc(fteRef,{[u]:val},{merge:true});
