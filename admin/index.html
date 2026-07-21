@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 113;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 114;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -5036,10 +5036,14 @@ window.adminSaveEmail=async function(u){
   if(!val||!val.includes("@")){toast("Invalid email","err");return;}
   const prev=String(emailsData?.[u]||"").trim().toLowerCase();
   await setDoc(emailsRef,{[u]:val},{merge:true}); toast(`✉️ Saved for ${u}`,"ok");
-  // Admin entered/updated this user's KP address → welcome the NEW address once (e.g.
-  // the user declined at login and admin adds it for them, or admin changes it). The
-  // welcomeLog guard means re-saving the same address never re-sends.
-  if(val.toLowerCase()!==prev) welcomeOnce(u,val);
+  // Welcome the NEW KP address once — but ONLY if the user has already logged in this
+  // cycle (their Google address is in the welcome log). No welcome is ever sent before a
+  // user's first login: if they haven't logged in yet, the KP welcome goes out then.
+  if(val.toLowerCase()!==prev){
+    const gk=_wlKey(loginEmailsData?.[u]||'');
+    const loggedIn=!!(gk && welcomeLogData.sent && welcomeLogData.sent[gk]);
+    if(loggedIn) welcomeOnce(u,val);
+  }
 };
 window.adminClearEmail=function(u){
   openConfirm({
@@ -5816,9 +5820,9 @@ window.addUser=async function(){
   if(email2 && email2.includes('@')) await setDoc(emailsRef,{[val]:email2},{merge:true}).catch(()=>{});
   ['newUserInput','newUserFullName','newUserLoginEmail','newUserEmail2'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
   if(fteEl) fteEl.value="1.0";
-  // If admin pre-set a KP e-mail at creation, welcome that address once (login-e-mail
-  // welcomes fire on the user's first login instead, not here). welcomeLog dedups.
-  if(email2 && email2.includes('@')) welcomeOnce(val,email2);
+  // NO welcome e-mail is sent at user creation. Welcomes only ever go out once the user
+  // logs in for the first time: their Google address and (if set here) their KP address
+  // are both welcomed then, and the KP prompt is skipped because it's already on file.
   toast("👤 Added "+val+(fullName?" ("+fullName+")":"")+" · FTE "+fte,"ok");
 };
 
