@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 115;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 116;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -398,7 +398,9 @@ thead th{color:var(--t2)}
            login shows — so the flag can't grant access on its own. -->
       <a href="https://anesthesia-kp.github.io/vacation/?portal=1" target="_blank" rel="noopener">🏖️ User Vacation →</a>
       <a href="https://anesthesia-kp.github.io/schedule/?portal=1" target="_blank" rel="noopener">📅 User Scheduling →</a>
-      <a href="https://anesthesia-kp.github.io/schedule/admin/?portal=1" target="_blank" rel="noopener">🔧 Scheduling Admin →</a>
+      <!-- Scheduling Admin link is shown ONLY to signed-in admins who are ALSO admins on
+           the Daily Schedule (dailysched/adminAccess). A vacation-only admin never sees it. -->
+      <a id="otherSysSchedAdmin" href="https://anesthesia-kp.github.io/schedule/admin/?portal=1" target="_blank" rel="noopener" style="display:none">🔧 Scheduling Admin →</a>
     </div>
   </nav>
 
@@ -1088,7 +1090,23 @@ const DEFAULT_ADMIN_EMAILS=['dr.vacation.goddess@gmail.com','aaronjfrankel@gmail
 // checkAdminAccess() passes, so it cannot grant access — a non-admin still gets the gate.
 const _portalBypass = /[?&]portal=1(?:&|$)/.test(location.search);
 const adminAccessRef = doc(db,"vacations","adminAccess");
+const schedAdminAccessRef = doc(db,"dailysched","adminAccess"); // Daily Schedule's OWN admin list
 let _currentAdminEmail=null;
+// Schedule-admin allow-list (independent of the vacation admin list). Empty list → the
+// two built-in default admins apply, mirroring the schedule site's own rule.
+let _schedAdminEmails=[];
+function _isSchedAdmin(email){
+  if(!email) return false;
+  const em=String(email).toLowerCase();
+  return _schedAdminEmails.length ? _schedAdminEmails.includes(em) : DEFAULT_ADMIN_EMAILS.includes(em);
+}
+// Show the "Scheduling Admin" Other-Systems link ONLY to a signed-in admin who is also a
+// schedule admin. A vacation-only admin sees just User Vacation + User Scheduling.
+function _refreshSchedAdminLink(){
+  const el=document.getElementById('otherSysSchedAdmin'); if(!el) return;
+  el.style.display=_isSchedAdmin(_currentAdminEmail)?'':'none';
+}
+window._isSchedAdmin=_isSchedAdmin; window._refreshSchedAdminLink=_refreshSchedAdminLink; // testing
 async function checkAdminAccess(u){
   if(!u || u.isAnonymous || typeof u.email!=='string' || u.emailVerified===false) return false;
   const em=u.email.toLowerCase();
@@ -1119,6 +1137,7 @@ function _enterAdmin(u){
   if(gate) gate.style.display='none';
   const badge=document.getElementById('adminWhoami');
   if(badge) badge.textContent=u.email;
+  _refreshSchedAdminLink(); // show the Scheduling Admin link only for schedule admins
   _authResolve(u); // listeners attach; the panel comes alive
 }
 window.adminContinue=function(){ if(_pendingAdminUser) _enterAdmin(_pendingAdminUser); };
@@ -1179,6 +1198,11 @@ let adminAccessEmails=[];
 onSnapshot(adminAccessRef, snap=>{
   adminAccessEmails=snap.exists()?(snap.data().emails||[]).map(x=>String(x).toLowerCase()):[];
   renderAdminAccess();
+});
+// Keep the schedule-admin list current; a change may flip the Scheduling Admin link.
+onSnapshot(schedAdminAccessRef, snap=>{
+  _schedAdminEmails=snap.exists()?(snap.data().emails||[]).map(x=>String(x).toLowerCase()):[];
+  _refreshSchedAdminLink();
 });
 function renderAdminAccess(){
   const el=document.getElementById('adminAccessList'); if(!el) return;
