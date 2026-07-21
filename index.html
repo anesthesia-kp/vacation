@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 76;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 77;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1225,17 +1225,23 @@ async function relayMailQueue(){
       if(!_mqEligible(e,Date.now())) continue;
       // A `to` field means single-target (welcome e-mail) — send ONLY there. Otherwise
       // (outbid/results alerts) fan out to both the Google login and KP addresses.
-      const recips=(e.to && String(e.to).includes('@') && String(e.to)!=='__skip__')
-        ? [String(e.to).trim().toLowerCase()]
-        : recipientsFor(e.user);
+      const isWelcome=!!(e.to && String(e.to).includes('@') && String(e.to)!=='__skip__');
+      const wkey=isWelcome?(e.wkey||_wlKey(e.to)):null;
+      // A welcome whose address is ALREADY in the welcome log was delivered once already
+      // (this is a leftover copy whose delete didn't land). Drop it — never re-send.
+      if(isWelcome && _welcomed(wkey)){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
+      const recips=isWelcome ? [String(e.to).trim().toLowerCase()] : recipientsFor(e.user);
       if(!recips.length){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
       try{
         await updateDoc(mailQueueRef,{[qid+'.claimedAt']:Date.now(),[qid+'.claimedBy']:MQ_ID});
         await new Promise(r=>setTimeout(r,2500));
         if(mailQueueData[qid]?.claimedBy!==MQ_ID) continue; // another page won it
         if(typeof emailjs==='undefined') continue;
+        if(isWelcome && _welcomed(wkey)){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; } // re-check after the claim settle
         for(const to of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:to,changes:e.body||''}); }
         trackEmailSent();
+        // Mark the welcome log after a confirmed relay send so no other page re-sends it.
+        if(isWelcome && wkey){ try{ await setDoc(welcomeLogRef,{sent:{[wkey]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[wkey]=true; }catch(_){} }
         updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
       }catch(_){/* claim expires in 90s; someone retries */}
     }
@@ -2636,42 +2642,45 @@ ${bullets([
 
 Happy bidding!`;
 }
-async function sendWelcomeEmail(user,email){
-  // Outbox pattern (same as outbid alerts): persist to the queue first, then try
-  // to send; the entry is removed on success and relayed by any open page if not.
+async function sendWelcomeEmail(user,email,key){
+  // Outbox pattern: persist to the queue first, then try to send. The welcome log is
+  // marked ONLY after a confirmed send (so a failed send still retries via the relay),
+  // and the queue entry carries its log key (wkey) so the relay can consult the log.
+  key=key||_wlKey(email);
   const body=buildWelcomeEmailBody(user);
   const qid=`${Date.now()}_welcome_${user}_${Math.floor(Math.random()*1e6)}`;
   // `to` = a SINGLE explicit recipient (this welcome targets one address only — the
   // Google login OR the KP address, never both). The relay honors `to` and does NOT
   // fan out to recipientsFor(user), so a KP welcome never reaches the Google account.
-  try{ await setDoc(mailQueueRef,{[qid]:{user,to:email,body,ts:Date.now()}},{merge:true}); }catch(_){}
+  try{ await setDoc(mailQueueRef,{[qid]:{user,to:email,wkey:key,body,ts:Date.now()}},{merge:true}); }catch(_){}
   try{
     if(typeof emailjs!=="undefined"){
       await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body});
       trackEmailSent();
+      try{ await setDoc(welcomeLogRef,{sent:{[key]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[key]=true; }catch(_){}
       updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
     }
-  }catch(_){/* stays queued — delivered by the relay */}
+  }catch(_){/* send failed → stays queued (log NOT marked); the relay retries */}
 }
 // ── One-welcome-per-address-per-cycle guard ──
 // Each e-mail address (Google login OR KP) may receive AT MOST ONE welcome per
-// auction cycle. welcomeLog.sent records the addresses already welcomed; Reset
-// Auction wipes it so the next cycle starts fresh. Keyed by the address itself,
-// so editing a KP address welcomes the NEW address once but never re-welcomes an
-// address that already got one — and entering a KP address never re-welcomes the
-// separate Google login address.
+// auction cycle. welcomeLog.sent is the AUTHORITY: it is checked (from Firestore,
+// not just the cached snapshot) before any send, and marked only after a send
+// confirms. Reset Auction wipes it. Keyed by the address itself.
 let welcomeLogData={};
+const _welcomeInFlight=new Set(); // addresses being welcomed in THIS session (pre-persist guard)
 onSnapshot(welcomeLogRef, snap=>{ welcomeLogData=snap.exists()?snap.data():{}; });
 function _wlKey(email){ return String(email||"").trim().toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_|_$/g,""); }
+function _welcomed(key){ return !!(key && welcomeLogData && welcomeLogData.sent && welcomeLogData.sent[key]); }
 async function welcomeOnce(user,email){
   const key=_wlKey(email); if(!key) return;
-  const sent=(welcomeLogData&&welcomeLogData.sent)||{};
-  if(sent[key]) return; // this address already got its one welcome this cycle
-  // Mark locally FIRST so a rapid double-save can't fire two sends before the
-  // write round-trips, then persist, then send (the send itself is queued/relayed).
-  welcomeLogData.sent=Object.assign({},sent,{[key]:true});
-  try{ await setDoc(welcomeLogRef,{sent:{[key]:true}},{merge:true}); }catch(_){}
-  sendWelcomeEmail(user,email).catch(()=>{});
+  if(_welcomed(key) || _welcomeInFlight.has(key)) return;
+  _welcomeInFlight.add(key);
+  // Authoritative re-check straight from Firestore — the cached snapshot may not have
+  // loaded yet right after sign-in, and THAT is what let a fresh login re-welcome an
+  // address that was already welcomed. A live read closes that race.
+  try{ const s=await getDoc(welcomeLogRef); const d=s.exists()?s.data():{}; welcomeLogData=d; if(d.sent&&d.sent[key]) return; }catch(_){}
+  await sendWelcomeEmail(user,email,key).catch(()=>{});
 }
 window.saveEmail=async function(){
   const val=document.getElementById("emailInput").value.trim();

@@ -40,6 +40,24 @@ service cloud.firestore {
            get(/databases/$(database)/documents/vacations/loginEmails).data.values();
     }
 
+    // A verified, NON-anonymous account (i.e. a real Google sign-in). Anonymous
+    // bootstrap sessions have no verified e-mail, so this is false for them — which
+    // is exactly how the sensitive documents below stay hidden from anonymous
+    // internet users while still being readable once someone has signed in.
+    function isVerifiedAccount() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    // ── Sensitive documents (PII / access control) ────────────────────────────
+    // These hold staff e-mail addresses, the Google-login map, and the admin
+    // allow-list. They used to be world-readable; now a reader must be signed in
+    // with a verified Google account. The apps read them only AFTER sign-in (the
+    // staff sites via an authenticated fetch, the admin sites only once an admin
+    // has signed in), so nothing in the anonymous login bootstrap depends on them.
+    function isSensitiveDoc(docId) {
+      return docId in ['loginEmails', 'emails', 'adminAccess'];
+    }
+
     // ── Vacation Auction collection ───────────────────────────────────────────
     // Admin-only documents (the auction's control surface + the shared roster,
     // admin list, and login-email allow-list). loginEmails is admin-only so users
@@ -63,21 +81,45 @@ service cloud.firestore {
     }
 
     match /vacations/{docId} {
-      allow read: if true;
+      // Public read for the non-sensitive docs the anonymous login screen needs
+      // (roster, usernames, phases, schedule, …); sensitive docs require sign-in.
+      allow read: if !isSensitiveDoc(docId) || isVerifiedAccount();
+      // welcomeLog only records which addresses have already been welcomed (no PII, no
+      // control data). Any verified Google sign-in may write it, so the "already
+      // welcomed" mark can never be silently denied and cause duplicate welcome e-mails.
       allow write: if (isAdminOnlyDoc(docId) && isAdmin())
+                   || (docId == 'welcomeLog' && isVerifiedAccount())
                    || (!isAdminOnlyDoc(docId) && (isRegisteredUser() || isAdmin()));
     }
 
     // ── Daily Schedule collection ─────────────────────────────────────────────
+    // The Daily Schedule has its OWN admin list (dailysched/adminAccess), fully
+    // independent of the Vacation Auction's vacations/adminAccess — granting or
+    // revoking a schedule admin never affects who can administer the auction. The
+    // two built-in default admins still work on both sites while a list is empty.
+    function schedAccessDocExists() {
+      return exists(/databases/$(database)/documents/dailysched/adminAccess)
+        && get(/databases/$(database)/documents/dailysched/adminAccess).data.get('emails', []).size() > 0;
+    }
+    function isSchedAdmin() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && ((schedAccessDocExists()
+              && request.auth.token.email.lower() in
+                 get(/databases/$(database)/documents/dailysched/adminAccess).data.get('emails', []))
+            || (!schedAccessDocExists() && isDefaultAdmin()));
+    }
     function isSchedAdminOnlyDoc(docId) {
-      return docId in ['shiftCatalog', 'eligibility', 'openShifts', 'callTotals']
+      return docId in ['shiftCatalog', 'eligibility', 'openShifts', 'callTotals', 'callBaseline', 'adminAccess']
         || docId.matches('sched_.*');
     }
 
     match /dailysched/{docId} {
-      allow read: if true;
-      allow write: if (isSchedAdminOnlyDoc(docId) && isAdmin())
-                   || (!isSchedAdminOnlyDoc(docId) && (isRegisteredUser() || isAdmin()));
+      // The schedule's own admin list names people, so it is not world-readable;
+      // everything else in the schedule stays public for the anonymous bootstrap.
+      allow read: if docId != 'adminAccess' || isVerifiedAccount();
+      allow write: if (isSchedAdminOnlyDoc(docId) && isSchedAdmin())
+                   || (!isSchedAdminOnlyDoc(docId) && (isRegisteredUser() || isSchedAdmin()));
     }
 
     match /{document=**} {

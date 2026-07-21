@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 116;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 117;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1340,8 +1340,13 @@ async function processMailQueue(minAgeMs){
       // A `to` field means single-target (welcome e-mail) — send ONLY there, never
       // fanning out to both addresses. Otherwise: primary (login) + secondary, with a
       // fallback to the recorded `email` if the user has no addresses on file yet.
+      const isWelcome=!!(e.to && e.to!=='__skip__' && String(e.to).includes('@'));
+      const wkey=isWelcome?(e.wkey||_wlKey(e.to)):null;
+      // A welcome already recorded in the welcome log was delivered once — drop this
+      // leftover copy rather than re-sending it.
+      if(isWelcome && _welcomed(wkey)){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
       let recips;
-      if(e.to && e.to!=='__skip__' && String(e.to).includes('@')){
+      if(isWelcome){
         recips=[String(e.to).trim().toLowerCase()];
       } else {
         recips=recipientsFor(e.user);
@@ -1353,7 +1358,9 @@ async function processMailQueue(minAgeMs){
         await updateDoc(mailQueueRef,{[qid+'.claimedAt']:Date.now(),[qid+'.claimedBy']:MQ_ID});
         await new Promise(r=>setTimeout(r,2500));
         if(mailQueueData[qid]?.claimedBy!==MQ_ID) continue; // another page won this one
+        if(isWelcome && _welcomed(wkey)){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; } // re-check after claim
         for(const email of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:e.body||''}); }
+        if(isWelcome && wkey){ try{ await setDoc(welcomeLogRef,{sent:{[wkey]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[wkey]=true; }catch(_){} }
         await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
         sent++;
       }catch(err){ console.warn('Queue send failed for',e.user,err); }
@@ -3614,27 +3621,32 @@ ${bullets([
 
 Happy bidding!`;
 }
-async function sendWelcomeEmail(user,email){
+async function sendWelcomeEmail(user,email,key){
+  key=key||_wlKey(email);
   const body=buildWelcomeEmailBody(user);
   const qid=`${Date.now()}_welcome_${user}_${Math.floor(Math.random()*1e6)}`;
-  // `to` = single explicit recipient; the relay sends ONLY there (never both addresses).
-  try{ await setDoc(mailQueueRef,{[qid]:{user,to:email,body,ts:Date.now()}},{merge:true}); }catch(_){}
+  // `to` = single explicit recipient; `wkey` = welcome-log key so the relay can consult
+  // the log. The log is marked ONLY after a confirmed send (failed sends still retry).
+  try{ await setDoc(mailQueueRef,{[qid]:{user,to:email,wkey:key,body,ts:Date.now()}},{merge:true}); }catch(_){}
   try{
     if(typeof emailjs!=="undefined"){
       await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body});
       trackEmailSent();
+      try{ await setDoc(welcomeLogRef,{sent:{[key]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[key]=true; }catch(_){}
       updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
     }
-  }catch(_){/* stays queued — relayed later */}
+  }catch(_){/* send failed → stays queued (log NOT marked); relayed later */}
 }
-// One welcome per address per cycle. Marks the address in welcomeLog, then sends.
+const _welcomeInFlight=new Set();
+function _welcomed(key){ return !!(key && welcomeLogData && welcomeLogData.sent && welcomeLogData.sent[key]); }
+// One welcome per address per cycle. welcomeLog is the authority: an authoritative read
+// gates the send, and the log is marked only after the send confirms.
 async function welcomeOnce(user,email){
   const key=_wlKey(email); if(!key) return;
-  const sent=(welcomeLogData&&welcomeLogData.sent)||{};
-  if(sent[key]) return;
-  welcomeLogData.sent=Object.assign({},sent,{[key]:true});
-  try{ await setDoc(welcomeLogRef,{sent:{[key]:true}},{merge:true}); }catch(_){}
-  sendWelcomeEmail(user,email).catch(()=>{});
+  if(_welcomed(key) || _welcomeInFlight.has(key)) return;
+  _welcomeInFlight.add(key);
+  try{ const s=await getDoc(welcomeLogRef); const d=s.exists()?s.data():{}; welcomeLogData=d; if(d.sent&&d.sent[key]) return; }catch(_){}
+  await sendWelcomeEmail(user,email,key).catch(()=>{});
 }
 window._welcomeOnce=welcomeOnce; // exposed for testing
 let mailStatsData={};
