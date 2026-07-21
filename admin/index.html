@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 118;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 119;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -3609,6 +3609,15 @@ function _emBold(s){
     return ch;
   }).join('');
 }
+// Plain-text Timer Rules for the welcome e-mail — generated from the SAME getTimerRules
+// source the site uses, so the e-mail always reflects the live timer settings.
+function timerRulesEmailText(){
+  const r=getTimerRules(), st=r.stages;
+  const lines=st.map((s,i)=> i===0 ? `At the start of the round: resets to ${s.hours} hours` : `After ${s.days} days: resets to ${s.hours} hours`);
+  let quiet='';
+  if(r.quietEnabled){ quiet=`\n\nOnce the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between ${fmtHour12(r.quietStart)} and ${fmtHour12(r.quietEnd)} Pacific time, it's pushed to ${fmtHour12(r.quietEnd)} so nothing closes while you're asleep.`; }
+  return `Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}`;
+}
 function buildWelcomeEmailBody(user){
   const lim=_amMaxBids();
   const limLine=lim===null
@@ -3639,6 +3648,9 @@ ${bullets([
   `To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`
 ])}
 
+${B('TIMER RULES')}
+${timerRulesEmailText()}
+
 ${B('UNDERSTANDING OUTCOMES')}
 ${bullets([
   `Winning (W): your bid is projected to be approved for this week`,
@@ -3651,6 +3663,7 @@ ${bullets([
 
 Happy bidding!`;
 }
+window.buildWelcomeEmailBody=buildWelcomeEmailBody; window.timerRulesEmailText=timerRulesEmailText; // testing
 async function sendWelcomeEmail(user,email,key){
   key=key||_wlKey(email);
   const body=buildWelcomeEmailBody(user);
