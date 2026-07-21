@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 117;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 118;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -512,6 +512,10 @@ thead th{color:var(--t2)}
           <div class="trow" style="align-items:center;margin-top:10px;padding-top:12px;border-top:1px solid var(--b1)">
             <div><div class="trow-label">Outbid alerts — <span id="mqCountTop" style="font-family:var(--mono)">0</span> queued</div><div class="trow-desc">Alerts queued when a user is outbid; sent automatically, or flush them now</div></div>
             <button class="btn" style="flex:unset;white-space:nowrap;background:rgba(180,83,9,.1);color:var(--yellow);border:1px solid rgba(180,83,9,.35)" onclick="flushMailQueue()">🔔 Send Pending</button>
+          </div>
+          <div class="trow" style="align-items:center;margin-top:10px;padding-top:12px;border-top:1px solid var(--b1)">
+            <div><div class="trow-label">Clear pending welcome e-mails</div><div class="trow-desc">Deletes any leftover welcome e-mails still in the outbox and marks every current address as already welcomed this cycle — stops stray welcomes without sending anything. Users still get a fresh welcome after the next Reset Auction.</div></div>
+            <button class="btn" style="flex:unset;white-space:nowrap;background:rgba(220,38,38,.1);color:var(--red);border:1px solid rgba(220,38,38,.35)" onclick="clearPendingWelcomes()">🧹 Clear Welcomes</button>
           </div>
         </div>
         <div class="card big-card">
@@ -1375,6 +1379,30 @@ window.flushMailQueue=async function(){
   const sent=await processMailQueue(5000); // 5s guard against racing an in-flight bidder send
   if(!sent) toast('Nothing old enough to send yet (or another page just took it) — try again shortly','warn');
 };
+// Purge leftover welcome e-mails from the outbox and seal every current address in the
+// welcome log so no stray welcome can fire again this cycle. Deletes ONLY welcome entries
+// (those with a `to` target); outbid/results alerts in the queue are left untouched.
+window.clearPendingWelcomes=async function(){
+  const q=mailQueueData||{};
+  const welcomeQids=Object.keys(q).filter(qid=>{ const e=q[qid]; return e && e.to && String(e.to).includes('@') && String(e.to)!=='__skip__'; });
+  openConfirm({
+    title:'🧹 Clear pending welcome e-mails',
+    body:`<div>Delete <strong>${welcomeQids.length}</strong> leftover welcome e-mail${welcomeQids.length!==1?'s':''} from the outbox and mark every current login &amp; KP address as already welcomed for this cycle?</div>
+          <div class="cmodal-warn" style="margin-top:8px">Nothing is sent. Outbid and results alerts in the queue are not affected. Users still receive a fresh welcome after the next Reset Auction.</div>`,
+    okText:'Clear pending welcomes',
+    onConfirm:async()=>{
+      // 1) Seal every known address in the welcome log FIRST (so even an entry we miss is deduped).
+      const sent={};
+      for(const u of Object.keys(loginEmailsData||{})){ const k=_wlKey(loginEmailsData[u]); if(k) sent[k]=true; }
+      for(const u of Object.keys(emailsData||{})){ const v=emailsData[u]; if(v && v!=='__skip__' && String(v).includes('@')){ const k=_wlKey(v); if(k) sent[k]=true; } }
+      try{ await setDoc(welcomeLogRef,{sent},{merge:true}); if(welcomeLogData){ welcomeLogData.sent=Object.assign({},welcomeLogData.sent||{},sent); } }catch(_){}
+      // 2) Delete the leftover welcome entries from the outbox.
+      if(welcomeQids.length){ const dels={}; welcomeQids.forEach(qid=>{ dels[qid]=deleteField(); }); try{ await updateDoc(mailQueueRef,dels); }catch(_){} }
+      toast(`🧹 Cleared ${welcomeQids.length} pending welcome${welcomeQids.length!==1?'s':''}; ${Object.keys(sent).length} addresses sealed`,'ok');
+    }
+  });
+};
+window._clearPendingWelcomes=clearPendingWelcomes; // testing
 
 // ── Nav ──
 window.toggleNav=function(){
@@ -3129,6 +3157,8 @@ window.clearEverything=function(){
               // New auction cycle → clear the welcome-e-mail log so each user can
               // receive their one welcome per account again next cycle.
               setDoc(doc(db,"vacations","welcomeLog"),{sent:{}}),
+              // Drain the outbox too, so no leftover welcome/alert can fire after a reset.
+              setDoc(mailQueueRef,{}),
             ]);
             // No adminLog here — logging the wipe would itself put the fresh
             // change counters at 1 instead of 0.
