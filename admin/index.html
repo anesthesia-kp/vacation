@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 114;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 115;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -3335,13 +3335,21 @@ window.completePhase=function(){
       // approves more people or when FTE/capacity is edited. It is the union of every
       // completed phase's approvals plus this phase's, valued with the FTE and capacity
       // in effect right now. Prior-phase reports read this instead of recomputing live.
-      const fteHeadSnap={};
+      // Two frozen headers per week: cumulative (everyone approved through this phase)
+      // and phase-specific (this phase's OWN new approvals only). Phase 1 makes them
+      // identical because its own approvals ARE the whole cumulative.
+      const fteHeadSnap={}, fteHeadPhaseSnap={};
       { const cpNow=phasesData.completedPhases||{};
-        mondays.forEach(d=>{ const wk=dateKey(d); const set=new Set();
-          for(const ph of Object.keys(cpNow)){ const arr=cpNow[ph]?.approvals?.[wk]; if(Array.isArray(arr)) arr.forEach(u=>set.add(u)); }
-          const a=apSnap[wk]; if(Array.isArray(a)) a.forEach(u=>set.add(u));
-          let fte=0; set.forEach(u=>{fte+=getUserFTE(u);}); const cap=getSlots(wk);
-          fteHeadSnap[wk]={approved:Math.round(fte*10)/10, available:Math.round((cap-fte)*10)/10, cap};
+        mondays.forEach(d=>{ const wk=dateKey(d);
+          const cumSet=new Set(), priorSet=new Set();
+          for(const ph of Object.keys(cpNow)){ const arr=cpNow[ph]?.approvals?.[wk]; if(Array.isArray(arr)) arr.forEach(u=>{cumSet.add(u); priorSet.add(u);}); }
+          const a=apSnap[wk]; if(Array.isArray(a)) a.forEach(u=>cumSet.add(u));
+          const ownSet=new Set([...(Array.isArray(a)?a:[])].filter(u=>!priorSet.has(u)));
+          let cf=0; cumSet.forEach(u=>{cf+=getUserFTE(u);});
+          let of=0; ownSet.forEach(u=>{of+=getUserFTE(u);});
+          const cap=getSlots(wk); const R=x=>Math.round(x*10)/10;
+          fteHeadSnap[wk]={approved:R(cf), available:R(cap-cf), cap};
+          fteHeadPhaseSnap[wk]={approved:R(of), available:R(cap-of), cap};
         });
       }
       await setDoc(phasesRef,{
@@ -3351,7 +3359,8 @@ window.completePhase=function(){
           approvals:apSnap,
           denials:denSnap,
           schedule:snap,
-          fteHead:fteHeadSnap,               // frozen FTE header per week (immutable report)
+          fteHead:fteHeadSnap,               // frozen CUMULATIVE header per week (immutable)
+          fteHeadPhase:fteHeadPhaseSnap,      // frozen PHASE-SPECIFIC header per week (immutable)
           projections:serializeProjections() // pre-admin outcomes, kept for reports
         }}
       },{merge:true});
@@ -3857,18 +3866,59 @@ function snapshotProjection(phN){
 // phase. Projected/natural winners never count. This is the number shown in
 // every report's week heading, regardless of which phase is being viewed.
 function finalFteForWeek(wk){
+  // LIVE cumulative "consumed" FTE for the current/all views. Counts:
+  //   • everyone approved in prior completed phases,
+  //   • plus, for the ACTIVE phase, the projected winners (computeApprovals winners —
+  //     which already includes prior winners + admin approvals). Draws/reviews are NOT
+  //     counted (still unresolved). This is why a live week shows FTE consumed by the
+  //     projected outcome, not just by bids the admin has manually approved so far.
   const users=new Set();
   const cp=phasesData.completedPhases||{};
   for(const phNum of Object.keys(cp)){
     const arr=cp[phNum]?.approvals?.[wk];
     if(Array.isArray(arr)) arr.forEach(u=>users.add(u));
   }
+  const ap=computeApprovals();
+  const win=ap[wk]?.winners;
+  if(win && typeof win.forEach==='function') win.forEach(u=>users.add(u));
   const live=approvalsData?.[wk];
   if(Array.isArray(live)) live.forEach(u=>users.add(u));
   let fte=0; users.forEach(u=>{fte+=getUserFTE(u);});
   const cap=getSlots(wk);
   return {approved:Math.round(fte*10)/10, available:Math.round((cap-fte)*10)/10, cap};
 }
+// Frozen FTE header for a COMPLETED phase + week. Returns {cum, phase}, each
+// {approved, available, cap}:
+//   cum   = cumulative — everyone approved across all phases UP THROUGH this one.
+//   phase = this phase's OWN approvals only (its new winners).
+// Prefers the snapshot frozen at completion (fteHead / fteHeadPhase). For phases that
+// were completed BEFORE the freeze existed, it backfills from that phase's IMMUTABLE
+// stored approvals (never the live approvals doc), so a historical report can't drift.
+// Approvals reset each phase (see _commitBeginPhase), so each completed phase's stored
+// approvals are its own new winners; the cumulative is the union through phase N.
+function phaseFteHeader(phaseN, wk){
+  const cp=phasesData.completedPhases||{};
+  const snap=cp[phaseN]||{};
+  const cumF = snap.fteHead && snap.fteHead[wk];
+  const phF  = snap.fteHeadPhase && snap.fteHeadPhase[wk];
+  if(cumF && phF) return {cum:cumF, phase:phF};
+  const cumSet=new Set(), priorSet=new Set();
+  for(const p of Object.keys(cp)){
+    const n=Number(p); if(n>phaseN) continue;
+    const arr=cp[p]?.approvals?.[wk];
+    if(Array.isArray(arr)) arr.forEach(u=>{ cumSet.add(u); if(n<phaseN) priorSet.add(u); });
+  }
+  const ownSet=new Set([...cumSet].filter(u=>!priorSet.has(u)));
+  const cap=getSlots(wk); const R=x=>Math.round(x*10)/10;
+  let cf=0; cumSet.forEach(u=>cf+=getUserFTE(u));
+  let of=0; ownSet.forEach(u=>of+=getUserFTE(u));
+  return {
+    cum:  cumF || {approved:R(cf), available:R(cap-cf), cap},
+    phase:phF  || {approved:R(of), available:R(cap-of), cap}
+  };
+}
+window._phaseFteHeader=phaseFteHeader;   // exposed for testing
+window._finalFteForWeek=finalFteForWeek; // exposed for testing
 // Natural (pre-admin) projections, serialized for the completed-phase snapshot
 // so reports can show "what the algorithm projected" even after the phase closes.
 function serializeProjections(){
@@ -3948,12 +3998,14 @@ function bidsByWeekModel(scope){
     }
     if(!bids.length) return;
     bids.sort((a,b)=>bwOutcomeRank(a.outcome)-bwOutcomeRank(b.outcome)||a.score-b.score||a.user.localeCompare(b.user));
-    // A specific prior-phase report uses that phase's FROZEN FTE header (immutable);
-    // 'current'/'all' views recompute it live. Older snapshots without a frozen header
-    // fall back to the live figure.
-    const frozenHead = snapMode ? ((phasesData.completedPhases||{})[lockedPhase]||{}).fteHead : null;
-    const wkFte = (frozenHead && frozenHead[wk]) ? frozenHead[wk] : finalFteForWeek(wk);
-    groups.push({wk,wn,date:`${MS[d.getMonth()]} ${d.getDate()}`,type:weekTypeLabel(wk,d),bids,fte:wkFte});
+    // A specific LOCKED-phase report shows two frozen lines: cumulative (fte) and this
+    // phase only (ftePhase). 'current'/'all' views recompute the cumulative live (which
+    // now includes projected winners) and carry NO phase-specific line. Phases completed
+    // before the freeze existed are backfilled from their immutable stored approvals.
+    let wkFte, wkFtePhase=null;
+    if(snapMode){ const h=phaseFteHeader(lockedPhase,wk); wkFte=h.cum; wkFtePhase=h.phase; }
+    else { wkFte=finalFteForWeek(wk); }
+    groups.push({wk,wn,date:`${MS[d.getMonth()]} ${d.getDate()}`,type:weekTypeLabel(wk,d),bids,fte:wkFte,ftePhase:wkFtePhase});
   });
   return groups;
 }
@@ -3999,7 +4051,11 @@ function projChipHtml(projected){
 }
 function wkHeadHtml(g){
   const typeTag=g.type?` <span class="typetag" style="background:${g.type==='Summer'?'#38bdf8':'#f59e0b'}">${g.type}</span>`:'';
-  return `<div class="wk-head">Week ${g.wn} · ${g.date}${typeTag}<span class="fte">FTE approved ${g.fte.approved} · available ${g.fte.available} of ${g.fte.cap}</span></div>`;
+  // Locked-phase reports show BOTH: the cumulative line and a phase-specific line.
+  // Live (current/all) reports show only the cumulative line.
+  const cum=`Cumulative — approved ${g.fte.approved} · available ${g.fte.available} of ${g.fte.cap}`;
+  const ph=g.ftePhase?` <span class="fte" style="opacity:.82">This phase — approved ${g.ftePhase.approved} · available ${g.ftePhase.available} of ${g.ftePhase.cap}</span>`:'';
+  return `<div class="wk-head">Week ${g.wn} · ${g.date}${typeTag}<span class="fte">${cum}</span>${ph}</div>`;
 }
 function openReportTab(title,phaseLabel,subtitle,bodyHtml,autoPrint){
   const w=window.open('','_blank');
@@ -4060,7 +4116,7 @@ window.exportPhaseResults=function(format,scopeOverride){
       groups.forEach(g=>{
         const r=aoa.length;
         const headTxt=`Week ${g.wn} · ${g.date}${g.type?' — '+g.type:''}`;
-        const fteTxt=`FTE approved ${g.fte.approved} · available ${g.fte.available} of ${g.fte.cap}`;
+        const fteTxt=`Cumulative — approved ${g.fte.approved} · available ${g.fte.available} of ${g.fte.cap}`+(g.ftePhase?`   ·   This phase — approved ${g.ftePhase.approved} · available ${g.ftePhase.available} of ${g.ftePhase.cap}`:'');
         // Week header: one merged cell — FTE status sits right next to the week/date.
         const headCells=Array(nCols).fill(''); headCells[0]=`${headTxt}   ·   ${fteTxt}`;
         const headStyles=Array(nCols).fill(S_WKHEAD);
