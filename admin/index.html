@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 121;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 122;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -4168,6 +4168,15 @@ function wkHeadHtml(g){
   const bp=(g.byPhase&&g.byPhase.length)?` <span class="fte" style="opacity:.82">Closed phase approvals — ${g.byPhase.map(x=>`P${x.phase}: ${x.approved}`).join('&nbsp;&nbsp;-&nbsp;&nbsp;')}</span>`:'';
   return `<div class="wk-head">Week ${g.wn} · ${g.date}${typeTag}<span class="fte">${cum}</span>${bp}</div>`;
 }
+// "AF (1.0)" — a user's initials with their FTE, shown next to names in every report.
+function fteName(u){ return `${u} (${(+getUserFTE(u)).toFixed(1)})`; }
+// Excel column widths sized to the LONGEST value in each column, so nothing is ever cut
+// off. `rows` should exclude merged banner rows (their long text would inflate col A).
+function _autoCols(rows, nCols){
+  const w=new Array(nCols).fill(0);
+  rows.forEach(row=>{ if(!Array.isArray(row)) return; for(let c=0;c<nCols;c++){ const v=row[c]; const len=(v==null?'':String(v)).length; if(len>w[c]) w[c]=len; } });
+  return w.map(x=>({wch: Math.min(60, Math.max(6, x+2))}));
+}
 function openReportTab(title,phaseLabel,subtitle,bodyHtml,autoPrint){
   const w=window.open('','_blank');
   if(!w){ toast('Pop-up blocked — allow pop-ups for this site','warn'); return false; }
@@ -4237,8 +4246,8 @@ window.exportPhaseResults=function(format,scopeOverride){
         g.bids.forEach(b=>{
           const resTxt=b.decided?bwOutcomeLabel(b.outcome):'—';
           const resSty=b.decided?resultStyle(b.outcome):S_DASH;
-          const row=showPhaseCol?[b.user,String(b.bid),'P'+b.phase,projTxt(b.projected),resTxt]
-                                :[b.user,String(b.bid),projTxt(b.projected),resTxt];
+          const row=showPhaseCol?[fteName(b.user),String(b.bid),'P'+b.phase,projTxt(b.projected),resTxt]
+                                :[fteName(b.user),String(b.bid),projTxt(b.projected),resTxt];
           const st=showPhaseCol?[S_USER,S_CELL,S_CELL,projStyle(b.projected),resSty]
                                :[S_USER,S_CELL,projStyle(b.projected),resSty];
           push(row,st);
@@ -4254,7 +4263,8 @@ window.exportPhaseResults=function(format,scopeOverride){
         ws[addr].s=s;
       }));
       ws['!merges']=merges;
-      ws['!cols']=showPhaseCol?[{wch:14},{wch:10},{wch:8},{wch:11},{wch:34}]:[{wch:14},{wch:10},{wch:11},{wch:34}];
+      { const _mr=new Set(); merges.forEach(m=>{ if(m.e.c>m.s.c) for(let r=m.s.r;r<=m.e.r;r++) _mr.add(r); });
+        ws['!cols']=_autoCols(aoa.filter((_,r)=>!_mr.has(r)), nCols); }
       ws['!rows']=rowHts.map(h=>h?{hpt:h}:{});
       const wb=XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb,ws,'Bids by Week');
@@ -4268,8 +4278,8 @@ window.exportPhaseResults=function(format,scopeOverride){
     groups.forEach(g=>{
       g.bids.forEach(b=>{
         const resTxt=b.decided?bwOutcomeLabel(b.outcome):'—';
-        const row=showPhaseCol?[g.wn,g.date,g.type||'',g.fte.approved,g.fte.available,b.user,String(b.bid),'P'+b.phase,projTxt(b.projected),resTxt]
-                              :[g.wn,g.date,g.type||'',g.fte.approved,g.fte.available,b.user,String(b.bid),projTxt(b.projected),resTxt];
+        const row=showPhaseCol?[g.wn,g.date,g.type||'',g.fte.approved,g.fte.available,fteName(b.user),String(b.bid),'P'+b.phase,projTxt(b.projected),resTxt]
+                              :[g.wn,g.date,g.type||'',g.fte.approved,g.fte.available,fteName(b.user),String(b.bid),projTxt(b.projected),resTxt];
         dataRows.push(row);
       });
     });
@@ -4288,7 +4298,7 @@ window.exportPhaseResults=function(format,scopeOverride){
   // auto-print, so admin can read it live in the browser.
   const isView=format==='view';
   const sections=groups.map(g=>{
-    const rows=g.bids.map(b=>`<tr><td><strong>${b.user}</strong></td><td>${b.bid}</td>${showPhaseCol?`<td>P${b.phase}</td>`:''}<td>${projChipHtml(b.projected)}</td><td>${resultCellHtml(b)}</td></tr>`).join('');
+    const rows=g.bids.map(b=>`<tr><td><strong>${b.user}</strong> <span style="color:#587690;font-size:11px">(${(+getUserFTE(b.user)).toFixed(1)})</span></td><td>${b.bid}</td>${showPhaseCol?`<td>P${b.phase}</td>`:''}<td>${projChipHtml(b.projected)}</td><td>${resultCellHtml(b)}</td></tr>`).join('');
     return `<div class="wk">${wkHeadHtml(g)}
       <table><thead><tr><th>User</th><th>Bid</th>${showPhaseCol?'<th>Phase</th>':''}<th>Projected</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }).join('');
@@ -4363,7 +4373,8 @@ window.exportUserSummary=function(format,scopeOverride){
       const ws=XLSX.utils.aoa_to_sheet(aoa);
       styles.forEach((rowSt,r)=>rowSt.forEach((s,c)=>{ if(!s) return; const addr=XLSX.utils.encode_cell({r,c}); if(!ws[addr]) ws[addr]={t:'s',v:''}; ws[addr].s=s; }));
       ws['!merges']=merges;
-      ws['!cols']=showPhaseCol?[{wch:8},{wch:14},{wch:9},{wch:8},{wch:8},{wch:11},{wch:12}]:[{wch:8},{wch:14},{wch:9},{wch:8},{wch:11},{wch:12}];
+      { const _mr=new Set(); merges.forEach(m=>{ if(m.e.c>m.s.c) for(let r=m.s.r;r<=m.e.r;r++) _mr.add(r); });
+        ws['!cols']=_autoCols(aoa.filter((_,r)=>!_mr.has(r)), nCols); }
       ws['!rows']=rowHts.map(h=>h?{hpt:h}:{});
       const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'User Summary'); XLSX.writeFile(wb,fname+'.xlsx');
       toast('📊 Excel exported','ok'); return;
