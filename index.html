@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 71;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 73;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -32,7 +32,21 @@
    different person's e-mail) into any field on this site. Applies to every field
    present now and any added later (user rows, modals, report fields, etc.). */
 (function(){
-  function off(el){ try{ el.setAttribute('autocomplete','off'); }catch(e){} }
+  function off(el){
+    try{
+      // "new-password" reliably stops Chrome's contact/e-mail autofill where "off" is
+      // ignored; a random name breaks its field-name matching; and holding text fields
+      // readonly until first focus sidesteps the on-load autofill that mis-fills boxes.
+      el.setAttribute('autocomplete','new-password');
+      var tag=el.tagName, t=(el.type||'').toLowerCase();
+      if(tag==='INPUT' && t!=='radio' && t!=='checkbox' && !el.name){ el.name='nf_'+Math.random().toString(36).slice(2); }
+      if(tag==='INPUT' && /^(text|email|tel|search|url|number|)$/.test(t) && !el.__afRO){
+        el.__afRO=true; el.setAttribute('readonly','readonly');
+        var unlock=function(){ el.removeAttribute('readonly'); };
+        el.addEventListener('focus',unlock); el.addEventListener('mousedown',unlock); el.addEventListener('touchstart',unlock);
+      }
+    }catch(e){}
+  }
   function sweep(root){ try{ (root||document).querySelectorAll('input,select,textarea').forEach(off); }catch(e){} }
   function start(){
     sweep(document);
@@ -467,6 +481,7 @@ body{zoom:1.15}
         <div>
           <div class="countdown-label" id="countdownLabel">Time remaining until auction closes</div>
           <div class="countdown-desc" id="countdownDesc"></div>
+          <div class="countdown-desc" id="phaseOpenFor" style="margin-top:2px;opacity:.9"></div>
         </div>
       </div>
       <div class="countdown-time" id="countdownTime"></div>
@@ -477,6 +492,10 @@ body{zoom:1.15}
       <div style="margin-top:6px"><span id="notifAll"></span></div>
     </div>
   </div>
+  <details id="timerRulesInfo" style="margin:-6px 0 14px;background:rgba(255,255,255,.9);border:1px solid #9fb4c6;border-radius:12px;padding:8px 14px">
+    <summary style="cursor:pointer;font-size:.8rem;font-weight:800;color:#132f49;letter-spacing:.02em">⏱ Timer Rules</summary>
+    <div id="timerRulesInfoBody" style="font-size:.82rem;color:#3b566d;line-height:1.65;margin-top:8px"></div>
+  </details>
   <div class="toolbar">
     <div class="person-selector">
       <label for="personSelect">Signed in as:</label>
@@ -972,6 +991,39 @@ function biddingOpen(){
   const cp=Number(phasesData?.currentPhase||1);
   return cp>1 || phasesData?.phase1Started===true;
 }
+// ── Dynamic bidding-timer rules (admin-configurable via adminSettings.timerRules) ──
+// The reset window shrinks as a phase ages; when short it won't let bidding CLOSE
+// overnight (quiet hours, Pacific time). Identical logic runs on the staff & admin sites.
+const DEFAULT_TIMER_RULES={stages:[{days:0,hours:48},{days:7,hours:24},{days:10,hours:12},{days:12,hours:6},{days:14,hours:3}],quietEnabled:true,quietStart:21,quietEnd:9,quietWhenHoursLE:6};
+function getTimerRules(){
+  const r=(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.timerRules)?adminSettings.timerRules:null;
+  if(!r||!Array.isArray(r.stages)||!r.stages.length) return DEFAULT_TIMER_RULES;
+  return {stages:r.stages.slice().filter(s=>s&&typeof s.hours==='number').sort((a,b)=>(a.days||0)-(b.days||0)),quietEnabled:r.quietEnabled!==false,quietStart:(typeof r.quietStart==='number')?r.quietStart:21,quietEnd:(typeof r.quietEnd==='number')?r.quietEnd:9,quietWhenHoursLE:(typeof r.quietWhenHoursLE==='number')?r.quietWhenHoursLE:6};
+}
+function _laParts(ms){ const p=new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}).formatToParts(new Date(ms)).reduce((a,x)=>{a[x.type]=x.value;return a;},{}); let h=+p.hour; if(h===24) h=0; return {year:+p.year,month:+p.month,day:+p.day,hour:h,minute:+p.minute}; }
+function _laWallToMs(y,mo,d,h,mi){ const guess=Date.UTC(y,mo-1,d,h,mi); const p=_laParts(guess); const back=Date.UTC(p.year,p.month-1,p.day,p.hour,p.minute); return guess+(guess-back); }
+function _inQuiet(h,qs,qe){ return (qs<qe)?(h>=qs&&h<qe):(h>=qs||h<qe); }
+function _quietAdjustExpiry(expiryMs,r){ if(!r.quietEnabled) return expiryMs; const p=_laParts(expiryMs); if(!_inQuiet(p.hour,r.quietStart,r.quietEnd)) return expiryMs; let y=p.year,mo=p.month,d=p.day; if(p.hour>=r.quietEnd){ const np=_laParts(_laWallToMs(p.year,p.month,p.day,12,0)+86400000); y=np.year;mo=np.month;d=np.day; } return _laWallToMs(y,mo,d,r.quietEnd,0); }
+function timerResetHours(phaseStartMs,nowMs){ const r=getTimerRules(); const st=r.stages; const elapsedDays=(nowMs-(phaseStartMs||nowMs))/86400000; let base=st.length?st[0].hours:48; for(const s of st){ if(elapsedDays>=(s.days||0)) base=s.hours; } let hours=base; if(r.quietEnabled && base<=(r.quietWhenHoursLE||6)){ const adj=_quietAdjustExpiry(nowMs+base*3600000,r); hours=(adj-nowMs)/3600000; } return Math.max(0.05, Math.round(hours*100)/100); }
+function timerPhaseStartMs(){ try{ const cur=Number((typeof phasesData!=='undefined'&&phasesData.currentPhase)||1); const b=(typeof phasesData!=='undefined'&&phasesData.phaseBeganAt)?phasesData.phaseBeganAt[cur]:null; return b||(timerData&&timerData.lastChange)||Date.now(); }catch(e){ return Date.now(); } }
+// Current BASE reset length (one of 48/24/12/6/3) for right now, from the stages + elapsed.
+function currentStageHours(){ const r=getTimerRules(); const st=r.stages; const elapsedDays=(Date.now()-timerPhaseStartMs())/86400000; let base=st.length?st[0].hours:48; for(const s of st){ if(elapsedDays>=(s.days||0)) base=s.hours; } return base; }
+function fmtElapsed(ms){ if(!(ms>0)) ms=0; const tm=Math.floor(ms/60000); const d=Math.floor(tm/1440), h=Math.floor((tm%1440)/60), mi=tm%60; return d+'d '+h+'h '+mi+'m'; }
+function updatePhaseOpen(){ const el=document.getElementById('phaseOpenFor'); if(!el) return; const cur=Number((phasesData&&phasesData.currentPhase)||1); const began=(phasesData&&phasesData.phaseBeganAt)?phasesData.phaseBeganAt[cur]:null; const open=began&&(phasesData&&(phasesData.phase1Started||cur>1)); el.textContent=open?('Phase '+cur+' has been open for '+fmtElapsed(Date.now()-began)):''; }
+try{ setInterval(function(){ try{ updatePhaseOpen(); }catch(e){} }, 20000); }catch(e){}
+function fmtHour12(h){ h=((h%24)+24)%24; const ap=h<12?'AM':'PM'; let hh=h%12; if(hh===0) hh=12; return hh+' '+ap; }
+window.currentStageHours=currentStageHours; window.updatePhaseOpen=updatePhaseOpen; window.timerResetHours=timerResetHours; window.getTimerRules=getTimerRules; window.renderTimerRulesInfo=renderTimerRulesInfo;
+// Plain-language "Timer Rules" explainer for the staff timer box (updates with settings).
+function renderTimerRulesInfo(){
+  const el=document.getElementById('timerRulesInfoBody'); if(!el) return;
+  const r=getTimerRules(), st=r.stages;
+  const li=(label,hours)=>`<li>${label}: resets to <strong>${hours} hours</strong></li>`;
+  let items='';
+  st.forEach((s,i)=>{ items+= i===0 ? li('At the start of the round', s.hours) : li('After '+s.days+' days', s.hours); });
+  let quiet='';
+  if(r.quietEnabled){ quiet=`<p style="margin:8px 0 0">Once the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between <strong>${fmtHour12(r.quietStart)}</strong> and <strong>${fmtHour12(r.quietEnd)}</strong> Pacific time, it's pushed to ${fmtHour12(r.quietEnd)} so nothing closes while you're asleep.</p>`; }
+  el.innerHTML=`<p style="margin:0 0 6px">Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:</p><ul style="margin:0 0 0 18px;padding:0">${items}</ul>${quiet}`;
+}
 function isAuctionClosed(){
   if(!timerData.enabled||!timerData.lastChange) return false;
   return ((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)<=0;
@@ -1016,7 +1068,7 @@ onSnapshot(locksRef,  snap=>{ locksData=snap.exists()?snap.data():{globalLock:fa
 onSnapshot(changesRef,snap=>{ changesData=snap.exists()?snap.data():{log:[]}; if(!changesData.log)changesData.log=[]; scheduleRender(); });
 onSnapshot(emailsRef, snap=>{ emailsData=snap.exists()?snap.data():{}; _emailsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
 onSnapshot(bestBidsRef,snap=>{ bestBidsData=snap.exists()?snap.data():{}; });
-onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); });
+onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); });
 
 // ── Maximum bids per phase (admin-set; 'none' = no limit) ──
 // NP bids allowed this phase? Admin toggles per phase (Controls → NP Bids by
@@ -1259,6 +1311,7 @@ function startCountdownTick(){
 function renderCountdown(){
   const banner=document.getElementById("countdownBanner");
   if(!banner) return;
+  updatePhaseOpen();
   const timeEl=document.getElementById("countdownTime");
   const descEl=document.getElementById("countdownDesc");
   // Before Phase 1 has even begun, there's no timer running yet — showing
@@ -1301,7 +1354,7 @@ function renderCountdown(){
     // colour change on the banner (no amber "warning" / red "urgent" escalation).
     descEl.textContent=`Timer is expiring soon. (Last change: ${lastStr})`;
   } else {
-    descEl.textContent=`Resets to ${timerData.durationHours||48}h with each bid change. (Last change: ${lastStr})`;
+    descEl.textContent=`Resets to ${currentStageHours()}h with each bid change. (Last change: ${lastStr})`;
   }
   timeEl.innerHTML=`
     <div class="time-block"><span class="time-value">${pad(h)}</span><span class="time-unit">hours</span></div>
@@ -1392,7 +1445,7 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
       await setDoc(scheduleRef, {[user]: {[wk]: bid}}, {merge:true});
       setDoc(bidPhaseRef, {[user]: {[wk]: Number(phasesData.currentPhase||1)}}, {merge:true}).catch(()=>{});
     }
-    if(timerData.enabled) setDoc(timerRef,{lastChange:Date.now()},{merge:true}).catch(()=>{});
+    if(timerData.enabled){ const _n=Date.now(); setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{}); }
     if(prevSnapshot&&adminSettings.emailNotifsEnabled!==false) sendEmailNotifications(prevSnapshot,data,user).catch(()=>{});
     return true;
   }catch(e){

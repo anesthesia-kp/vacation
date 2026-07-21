@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 109;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 111;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -32,7 +32,21 @@
    different person's e-mail) into any field on this site. Applies to every field
    present now and any added later (user rows, modals, report fields, etc.). */
 (function(){
-  function off(el){ try{ el.setAttribute('autocomplete','off'); }catch(e){} }
+  function off(el){
+    try{
+      // "new-password" reliably stops Chrome's contact/e-mail autofill where "off" is
+      // ignored; a random name breaks its field-name matching; and holding text fields
+      // readonly until first focus sidesteps the on-load autofill that mis-fills boxes.
+      el.setAttribute('autocomplete','new-password');
+      var tag=el.tagName, t=(el.type||'').toLowerCase();
+      if(tag==='INPUT' && t!=='radio' && t!=='checkbox' && !el.name){ el.name='nf_'+Math.random().toString(36).slice(2); }
+      if(tag==='INPUT' && /^(text|email|tel|search|url|number|)$/.test(t) && !el.__afRO){
+        el.__afRO=true; el.setAttribute('readonly','readonly');
+        var unlock=function(){ el.removeAttribute('readonly'); };
+        el.addEventListener('focus',unlock); el.addEventListener('mousedown',unlock); el.addEventListener('touchstart',unlock);
+      }
+    }catch(e){}
+  }
   function sweep(root){ try{ (root||document).querySelectorAll('input,select,textarea').forEach(off); }catch(e){} }
   function start(){
     sweep(document);
@@ -433,6 +447,8 @@ thead th{color:var(--t2)}
               <div id="timerDigs"></div>
             </div>
           </div>
+          <div id="phaseOpenFor" style="font-size:12px;color:var(--t2);font-weight:600;margin-top:10px"></div>
+          <div id="timerResetInfo" style="font-size:12px;color:var(--t2);margin-top:3px"></div>
           <div style="margin-top:12px">
             <div style="font-size:11px;color:var(--t2);margin-bottom:6px">Auction window — <span id="durationDisplay" style="color:var(--t1);font-weight:700">48h</span> <span style="color:var(--t3)">(0 = timer off)</span></div>
             <input type="range" id="durSlider" min="0" max="6" step="1" value="6" style="width:100%;accent-color:#3b82f6"
@@ -688,6 +704,12 @@ thead th{color:var(--t2)}
     <!-- CONTROLS -->
     <div class="panel" id="panel-controls">
       <div class="page-head"><div class="page-title">Controls</div><div class="page-sub">Global schedule settings.</div></div>
+      <div class="card">
+        <div class="card-title">⏱ Timer Rules</div>
+        <div class="page-sub" style="margin-bottom:10px">The bidding countdown resets every time someone bids. It starts long and gets shorter as the round goes on. When the reset gets short, bidding won't close overnight. Adjust the days, the reset lengths, and the overnight window below.</div>
+        <div id="timerRulesBody"></div>
+        <button class="btn btn-primary" style="margin-top:12px" onclick="saveTimerRules()">💾 Save Timer Rules</button>
+      </div>
       <!-- Username Prompt, Email Prompt on Login, and Require Passwords were removed
            (Jul 2026): Google sign-in now provides identity and the login e-mail, so a
            separate username/email prompt and password are obsolete. Removing the Email
@@ -2492,6 +2514,9 @@ function renderOverview(){
 
 // ── Controls ──
 function syncControls(){
+  // Rebuild the Timer Rules editor from saved settings, but not while the admin is
+  // mid-edit in one of its fields (ids start with "tr_").
+  if(typeof renderTimerRules==='function' && !(document.activeElement && /^tr_/.test(document.activeElement.id||''))) renderTimerRules();
   // Maximum bids per phase control (starts at 3; 'none' = no limit)
   (function(){
     const inp=document.getElementById('maxBidsInput'); const cb=document.getElementById('maxBidsNoLimit');
@@ -2998,7 +3023,7 @@ window.runSimulation=async function(){
       // persistScheduleChange on the user site) — simulated bids are real bid activity for
       // every other purpose (Popcornometer, callTotals, etc.) so they must do this too,
       // or the timer stops accurately reflecting "time since the last bid activity."
-      if(timerData.enabled) await setDoc(timerRef,{lastChange:Date.now()},{merge:true}).catch(()=>{});
+      if(timerData.enabled){ const _n=Date.now(); await setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{}); }
     }
     log.innerHTML='<div style="color:#0d7a43;font-weight:700;margin-bottom:8px">✅ Phase '+cur+' simulation complete — '+Object.keys(newSchedule).length+' users assigned</div>'+lines.map(l=>'<div>'+l+'</div>').join('');
     toast('🎲 Phase '+cur+' simulation complete','ok');
@@ -3358,7 +3383,7 @@ async function _commitBeginPhase(next){
   }
   // Beginning any phase resets the countdown to a fresh 48-hour window so
   // every phase opens with the full default bidding time.
-  await setDoc(timerRef,{enabled:true,durationHours:48,lastChange:Date.now()},{merge:true}).catch(()=>{});
+  { const _n=Date.now(); await setDoc(timerRef,{enabled:true,durationHours:timerResetHours(_n,_n),lastChange:_n},{merge:true}).catch(()=>{}); }
   toast('▶ Phase '+next+' begun — bidding is open (timer reset to 48h)','ok');
 }
 // Begin Phase 1: opens bidding for the first time. Runs the same lock decision
@@ -5311,6 +5336,65 @@ window.clearChangelog=function(){
     onConfirm:async()=>{ await setDoc(changesRef,{log:[]}); toast("🗑 Log cleared","ok"); }
   });
 };
+// ── Dynamic bidding-timer rules (admin-configurable via adminSettings.timerRules) ──
+// The reset window shrinks as a phase ages; when short it won't let bidding CLOSE
+// overnight (quiet hours, Pacific time). Identical logic runs on the staff & admin sites.
+const DEFAULT_TIMER_RULES={stages:[{days:0,hours:48},{days:7,hours:24},{days:10,hours:12},{days:12,hours:6},{days:14,hours:3}],quietEnabled:true,quietStart:21,quietEnd:9,quietWhenHoursLE:6};
+function getTimerRules(){
+  const r=(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.timerRules)?adminSettings.timerRules:null;
+  if(!r||!Array.isArray(r.stages)||!r.stages.length) return DEFAULT_TIMER_RULES;
+  return {stages:r.stages.slice().filter(s=>s&&typeof s.hours==='number').sort((a,b)=>(a.days||0)-(b.days||0)),quietEnabled:r.quietEnabled!==false,quietStart:(typeof r.quietStart==='number')?r.quietStart:21,quietEnd:(typeof r.quietEnd==='number')?r.quietEnd:9,quietWhenHoursLE:(typeof r.quietWhenHoursLE==='number')?r.quietWhenHoursLE:6};
+}
+function _laParts(ms){ const p=new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}).formatToParts(new Date(ms)).reduce((a,x)=>{a[x.type]=x.value;return a;},{}); let h=+p.hour; if(h===24) h=0; return {year:+p.year,month:+p.month,day:+p.day,hour:h,minute:+p.minute}; }
+function _laWallToMs(y,mo,d,h,mi){ const guess=Date.UTC(y,mo-1,d,h,mi); const p=_laParts(guess); const back=Date.UTC(p.year,p.month-1,p.day,p.hour,p.minute); return guess+(guess-back); }
+function _inQuiet(h,qs,qe){ return (qs<qe)?(h>=qs&&h<qe):(h>=qs||h<qe); }
+function _quietAdjustExpiry(expiryMs,r){ if(!r.quietEnabled) return expiryMs; const p=_laParts(expiryMs); if(!_inQuiet(p.hour,r.quietStart,r.quietEnd)) return expiryMs; let y=p.year,mo=p.month,d=p.day; if(p.hour>=r.quietEnd){ const np=_laParts(_laWallToMs(p.year,p.month,p.day,12,0)+86400000); y=np.year;mo=np.month;d=np.day; } return _laWallToMs(y,mo,d,r.quietEnd,0); }
+function timerResetHours(phaseStartMs,nowMs){ const r=getTimerRules(); const st=r.stages; const elapsedDays=(nowMs-(phaseStartMs||nowMs))/86400000; let base=st.length?st[0].hours:48; for(const s of st){ if(elapsedDays>=(s.days||0)) base=s.hours; } let hours=base; if(r.quietEnabled && base<=(r.quietWhenHoursLE||6)){ const adj=_quietAdjustExpiry(nowMs+base*3600000,r); hours=(adj-nowMs)/3600000; } return Math.max(0.05, Math.round(hours*100)/100); }
+function timerPhaseStartMs(){ try{ const cur=Number((typeof phasesData!=='undefined'&&phasesData.currentPhase)||1); const b=(typeof phasesData!=='undefined'&&phasesData.phaseBeganAt)?phasesData.phaseBeganAt[cur]:null; return b||(timerData&&timerData.lastChange)||Date.now(); }catch(e){ return Date.now(); } }
+function fmtElapsed(ms){ if(!(ms>0)) ms=0; const tm=Math.floor(ms/60000); const d=Math.floor(tm/1440), h=Math.floor((tm%1440)/60), mi=tm%60; return d+'d '+h+'h '+mi+'m'; }
+// The BASE reset length for right now (one of 48/24/12/6/3) from the stages + elapsed.
+function currentStageHours(){ const r=getTimerRules(); const st=r.stages; const elapsedDays=(Date.now()-timerPhaseStartMs())/86400000; let base=st.length?st[0].hours:48; for(const s of st){ if(elapsedDays>=(s.days||0)) base=s.hours; } return base; }
+function updatePhaseOpen(){
+  const cur=Number((phasesData&&phasesData.currentPhase)||1);
+  const began=(phasesData&&phasesData.phaseBeganAt)?phasesData.phaseBeganAt[cur]:null;
+  const open=began&&(phasesData&&(phasesData.phase1Started||cur>1));
+  const el=document.getElementById('phaseOpenFor');
+  if(el) el.textContent=open?('Phase '+cur+' has been open for '+fmtElapsed(Date.now()-began)):'';
+  const ri=document.getElementById('timerResetInfo');
+  if(ri) ri.textContent=(open && timerData && timerData.enabled)?('Each bid now resets the timer to '+currentStageHours()+' hours.'):'';
+}
+try{ setInterval(function(){ try{ updatePhaseOpen(); }catch(e){} }, 20000); }catch(e){}
+window.currentStageHours=currentStageHours; window.updatePhaseOpen=updatePhaseOpen; window.timerResetHours=timerResetHours; window.getTimerRules=getTimerRules;
+function fmtHour12(h){ h=((h%24)+24)%24; const ap=h<12?'AM':'PM'; let hh=h%12; if(hh===0) hh=12; return hh+' '+ap; }
+const TIMER_HOUR_OPTS=[48,24,12,6,3];
+function renderTimerRules(){
+  const el=document.getElementById('timerRulesBody'); if(!el) return;
+  const r=getTimerRules();
+  const hoursSel=(id,val)=>`<select id="${id}" class="sel" style="width:78px">${TIMER_HOUR_OPTS.map(h=>`<option value="${h}"${h===val?' selected':''}>${h} h</option>`).join('')}</select>`;
+  const dayInp=(id,val)=>`<input type="number" id="${id}" class="inp" style="width:60px" min="0" max="90" value="${val}">`;
+  const hourSel=(id,val)=>`<select id="${id}" class="sel" style="width:88px">${Array.from({length:24},(_,h)=>`<option value="${h}"${h===val?' selected':''}>${fmtHour12(h)}</option>`).join('')}</select>`;
+  const st=r.stages;
+  const row=(inner)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;font-size:13px;color:var(--t1)">${inner}</div>`;
+  let rows=row(`<span style="color:var(--t2);min-width:150px">At the start of a round</span><span>reset to</span> ${hoursSel('tr_h0',(st[0]||{}).hours||48)}`);
+  for(let i=1;i<=4;i++){ const s=st[i]||{days:[7,10,12,14][i-1],hours:[24,12,6,3][i-1]}; rows+=row(`<span style="color:var(--t2)">After</span> ${dayInp('tr_d'+i,s.days)} <span style="color:var(--t2)">days,</span><span>reset to</span> ${hoursSel('tr_h'+i,s.hours)}`); }
+  const quiet=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t1);font-weight:600;cursor:pointer"><input type="checkbox" id="tr_quiet" ${r.quietEnabled?'checked':''}> Don't let bidding close overnight</label>
+    <div style="font-size:12.5px;color:var(--t2);margin-top:8px;line-height:1.7">When the reset is ${hoursSel('tr_qle',r.quietWhenHoursLE)} <span>or less, bidding won't close between</span> ${hourSel('tr_qs',r.quietStart)} <span>and</span> ${hourSel('tr_qe',r.quietEnd)} <strong>Pacific time</strong>. If it would, the countdown is extended to the ${fmtHour12(r.quietEnd)} instead.</div>
+  </div>`;
+  el.innerHTML=rows+quiet;
+}
+window.saveTimerRules=async function(){
+  const getH=id=>{ const v=parseInt(document.getElementById(id)?.value,10); return TIMER_HOUR_OPTS.includes(v)?v:null; };
+  const getD=id=>{ let v=parseInt(document.getElementById(id)?.value,10); if(isNaN(v)||v<0) v=0; return v; };
+  const stages=[{days:0,hours:getH('tr_h0')||48}];
+  for(let i=1;i<=4;i++){ const h=getH('tr_h'+i); if(h!=null) stages.push({days:getD('tr_d'+i),hours:h}); }
+  stages.sort((a,b)=>a.days-b.days);
+  let qs=parseInt(document.getElementById('tr_qs')?.value,10); if(isNaN(qs)) qs=21;
+  let qe=parseInt(document.getElementById('tr_qe')?.value,10); if(isNaN(qe)) qe=9;
+  const rules={ stages, quietEnabled:document.getElementById('tr_quiet')?.checked!==false, quietWhenHoursLE:getH('tr_qle')||6, quietStart:qs, quietEnd:qe };
+  await setDoc(adminRef,{timerRules:rules},{merge:true}).catch(()=>{});
+  toast('⏱ Timer rules saved','ok');
+};
 // ── Timer ──
 function syncTimer(){
   syncDurationUI();
@@ -5367,7 +5451,8 @@ async function _autoCloseOnExpiry(){
 }
 function startTick(){
   if(tickInterval)clearInterval(tickInterval);
-  if(timerData.enabled&&timerData.lastChange){ tickInterval=setInterval(()=>{renderTimerDigs();updateStats();_autoCloseOnExpiry();},1000); }
+  if(timerData.enabled&&timerData.lastChange){ tickInterval=setInterval(()=>{renderTimerDigs();updateStats();_autoCloseOnExpiry();updatePhaseOpen();},1000); }
+  updatePhaseOpen();
 }
 function getDurationMs(){ return ((timerData.durationHours||48)*3600000); }
 function getDurationHrs(){ return timerData.durationHours||48; }
@@ -5451,7 +5536,7 @@ window.adminResetTimer=function(){
     title:'↺ Reset Timer',
     body:`<div>Reset timer to <strong>${fmtDuration(getDurationHrs())}</strong> from this moment?</div>`,
     okText:'Reset',
-    onConfirm:async()=>{ await setDoc(timerRef,{lastChange:Date.now()},{merge:true}); toast("↺ Timer reset","ok"); }
+    onConfirm:async()=>{ const _n=Date.now(); await setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}); toast("↺ Timer reset","ok"); }
   });
 };
 // (Clear Timer removed — the slider's 0 position and the enable toggle cover it.)
