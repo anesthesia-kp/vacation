@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 111;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 112;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -705,10 +705,14 @@ thead th{color:var(--t2)}
     <div class="panel" id="panel-controls">
       <div class="page-head"><div class="page-title">Controls</div><div class="page-sub">Global schedule settings.</div></div>
       <div class="card">
-        <div class="card-title">⏱ Timer Rules</div>
-        <div class="page-sub" style="margin-bottom:10px">The bidding countdown resets every time someone bids. It starts long and gets shorter as the round goes on. When the reset gets short, bidding won't close overnight. Adjust the days, the reset lengths, and the overnight window below.</div>
-        <div id="timerRulesBody"></div>
-        <button class="btn btn-primary" style="margin-top:12px" onclick="saveTimerRules()">💾 Save Timer Rules</button>
+        <div class="card-title" id="timerRulesHead" onclick="toggleTimerRules()" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
+          <span>⏱ Timer Rules</span>
+          <span id="trChevron" style="font-size:13px;color:var(--t2);font-weight:600">▸ Show</span>
+        </div>
+        <div id="timerRulesWrap" style="display:none">
+          <div class="page-sub" style="margin:10px 0">The bidding countdown resets every time someone bids. It starts long and gets shorter as the round goes on. When the reset gets short, bidding won't close overnight. Adjust the days, the reset lengths, and the overnight window below — <strong>each change asks you to confirm and saves right away</strong>.</div>
+          <div id="timerRulesBody"></div>
+        </div>
       </div>
       <!-- Username Prompt, Email Prompt on Login, and Require Passwords were removed
            (Jul 2026): Google sign-in now provides identity and the login e-mail, so a
@@ -3084,6 +3088,9 @@ window.clearEverything=function(){
               // Change log + resetAt fence → Popcornometer and the "changes in
               // last 24h" counters read 0 on BOTH sites after a full reset.
               setDoc(changesRef,{log:[],resetAt:Date.now()}),
+              // New auction cycle → clear the welcome-e-mail log so each user can
+              // receive their one welcome per account again next cycle.
+              setDoc(doc(db,"vacations","welcomeLog"),{sent:{}}),
             ]);
             // No adminLog here — logging the wipe would itself put the fresh
             // change counters at 1 instead of 0.
@@ -5382,7 +5389,28 @@ function renderTimerRules(){
     <div style="font-size:12.5px;color:var(--t2);margin-top:8px;line-height:1.7">When the reset is ${hoursSel('tr_qle',r.quietWhenHoursLE)} <span>or less, bidding won't close between</span> ${hourSel('tr_qs',r.quietStart)} <span>and</span> ${hourSel('tr_qe',r.quietEnd)} <strong>Pacific time</strong>. If it would, the countdown is extended to the ${fmtHour12(r.quietEnd)} instead.</div>
   </div>`;
   el.innerHTML=rows+quiet;
+  // Every change asks for confirmation and, on OK, saves immediately. On Cancel
+  // we re-render from the saved rules, which reverts the field the admin touched.
+  el.querySelectorAll('select,input').forEach(f=>{
+    f.addEventListener('change',()=>{
+      if(typeof openConfirm!=='function'){ saveTimerRules(); return; }
+      openConfirm({
+        title:'⏱ Save timer rule change?',
+        body:'Apply this timer-rule change now? It takes effect on the next bid.',
+        okText:'Save change',
+        onConfirm:async()=>{ await saveTimerRules(); },
+        onCancel:()=>{ renderTimerRules(); }, // discard the edit, restore saved values
+      });
+    });
+  });
 }
+window.toggleTimerRules=function(){
+  const w=document.getElementById('timerRulesWrap'), c=document.getElementById('trChevron');
+  if(!w) return;
+  const show=w.style.display==='none';
+  w.style.display=show?'':'none';
+  if(c) c.textContent=show?'▾ Hide':'▸ Show';
+};
 window.saveTimerRules=async function(){
   const getH=id=>{ const v=parseInt(document.getElementById(id)?.value,10); return TIMER_HOUR_OPTS.includes(v)?v:null; };
   const getD=id=>{ let v=parseInt(document.getElementById(id)?.value,10); if(isNaN(v)||v<0) v=0; return v; };
@@ -5451,8 +5479,8 @@ async function _autoCloseOnExpiry(){
 }
 function startTick(){
   if(tickInterval)clearInterval(tickInterval);
-  if(timerData.enabled&&timerData.lastChange){ tickInterval=setInterval(()=>{renderTimerDigs();updateStats();_autoCloseOnExpiry();updatePhaseOpen();},1000); }
-  updatePhaseOpen();
+  if(timerData.enabled&&timerData.lastChange){ tickInterval=setInterval(()=>{renderTimerDigs();updateStats();_autoCloseOnExpiry();updatePhaseOpen();syncDurationUI();},1000); }
+  updatePhaseOpen(); syncDurationUI();
 }
 function getDurationMs(){ return ((timerData.durationHours||48)*3600000); }
 function getDurationHrs(){ return timerData.durationHours||48; }
@@ -5508,12 +5536,18 @@ window.onDurSliderChange=function(idx){
 window.setDuration=function(hrs){ onDurSliderChange(durIdxFor(hrs)); };
 
 function syncDurationUI(){
+  // The slider AUTO-FOLLOWS the current stage's reset length (48/24/12/6/3) as the phase
+  // ages, so it always shows what each bid currently resets the timer to. It stays
+  // manually usable: while the admin is dragging it we don't overwrite, and dragging to
+  // 0 still expires the timer. (The rules are authoritative — a manual set lasts only
+  // until the next bid, which re-applies the stage.)
   const en=timerData.enabled===true;
-  const hrs=en?(timerData.durationHours||48):0;
   const dd=document.getElementById("durationDisplay");
-  if(dd) dd.textContent=en?(timerData.durationHours||48)+"h":"Timer off";
   const sl=document.getElementById("durSlider");
-  if(sl) sl.value=durIdxFor(hrs); // durIdxFor(0)=0 → slider parked at "off"
+  if(!en){ if(dd) dd.textContent="Timer off"; if(sl && document.activeElement!==sl) sl.value=0; return; }
+  const h=(typeof currentStageHours==='function')?currentStageHours():(timerData.durationHours||48);
+  if(dd) dd.textContent=h+"h";
+  if(sl && document.activeElement!==sl) sl.value=durIdxFor(h);
 }
 
 window.toggleTimerEnabled=function(){
@@ -5899,23 +5933,29 @@ window.saveAllSlots=async function(){
 
 
 // ── Confirmation modal ──
-let cmCallback=null;
-window.openConfirm=function({title,body,okText='Confirm',danger=false,onConfirm}){
+let cmCallback=null, cmCancelCallback=null;
+window.openConfirm=function({title,body,okText='Confirm',danger=false,onConfirm,onCancel}){
   document.getElementById("cmTitle").innerHTML=title||'⚠️ Confirm';
   document.getElementById("cmBody").innerHTML=body||'';
   const okBtn=document.getElementById("cmOk");
   okBtn.textContent=okText;
   okBtn.className='btn '+(danger?'btn-danger':'btn-primary');
   cmCallback=onConfirm;
+  cmCancelCallback=onCancel||null;
   okBtn.onclick=async()=>{
     // Capture callback BEFORE closing (closeConfirm clears cmCallback)
     const cb=cmCallback;
+    cmCancelCallback=null; // confirmed: don't also fire the cancel handler
     closeConfirm();
     if(cb) await cb();
   };
   document.getElementById("confirmModal").classList.add("show");
 };
-window.closeConfirm=function(){ document.getElementById("confirmModal").classList.remove("show"); cmCallback=null; };
+window.closeConfirm=function(){
+  document.getElementById("confirmModal").classList.remove("show");
+  const cc=cmCancelCallback; cmCancelCallback=null; cmCallback=null;
+  if(cc){ try{ cc(); }catch(e){} }
+};
 
 // ── Randomizer wheel ──
 let wheelUsers=[], wheelWk=null, wheelSpinning=false, wheelRotation=0;

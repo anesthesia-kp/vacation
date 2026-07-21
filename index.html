@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 73;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 74;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -492,10 +492,6 @@ body{zoom:1.15}
       <div style="margin-top:6px"><span id="notifAll"></span></div>
     </div>
   </div>
-  <details id="timerRulesInfo" style="margin:-6px 0 14px;background:rgba(255,255,255,.9);border:1px solid #9fb4c6;border-radius:12px;padding:8px 14px">
-    <summary style="cursor:pointer;font-size:.8rem;font-weight:800;color:#132f49;letter-spacing:.02em">⏱ Timer Rules</summary>
-    <div id="timerRulesInfoBody" style="font-size:.82rem;color:#3b566d;line-height:1.65;margin-top:8px"></div>
-  </details>
   <div class="toolbar">
     <div class="person-selector">
       <label for="personSelect">Signed in as:</label>
@@ -522,6 +518,10 @@ body{zoom:1.15}
         <li>On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used</li>
         <li>NP bids may only be used during the phases for which admin has turned them on</li>
         <li>To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week</li>
+      </ul>
+      <div style="margin-top:12px;color:#2c4257;font-weight:600">⏱ Timer Rules</div>
+      <div id="timerRulesInfoBody" style="font-size:.82rem;color:#3b566d;line-height:1.65;margin-top:4px"></div>
+      <ul class="rules-list" style="margin-top:2px">
         <li style="margin-top:10px;color:#2c4257;font-weight:600">Understanding Outcomes</li>
       </ul>
       <div style="margin-top:8px;background:rgba(255,255,255,.88);border:1px solid #c2cfdb;border-radius:10px;padding:10px 12px;display:grid;grid-template-columns:auto 1fr;gap:8px 14px;align-items:start">
@@ -610,6 +610,7 @@ const bidTimesRef   = doc(db,"vacations","bidTimes");
 const passcodesRef  = doc(db,"vacations","passcodes");
 const usernamesRef  = doc(db,"vacations","usernames"); // {initials: customDisplayName}
 const loginEmailsRef = doc(db,"vacations","loginEmails"); // {INITIALS: google-email} — Google login mapping
+const welcomeLogRef = doc(db,"vacations","welcomeLog"); // {sent:{<addrKey>:true}} — which addresses already got a welcome THIS auction cycle (cleared by Reset Auction)
 const adminAccessRef = doc(db,"vacations","adminAccess"); // {emails:[...]} — Vacation Admin allow-list (shared with vacation admin site)
 // Built-in admins that work while the adminAccess list is empty — MUST match the
 // isDefaultAdmin() list in firestore.rules, stored lower-cased.
@@ -2629,15 +2630,35 @@ async function sendWelcomeEmail(user,email){
     }
   }catch(_){/* stays queued — delivered by the relay */}
 }
+// ── One-welcome-per-address-per-cycle guard ──
+// Each e-mail address (Google login OR KP) may receive AT MOST ONE welcome per
+// auction cycle. welcomeLog.sent records the addresses already welcomed; Reset
+// Auction wipes it so the next cycle starts fresh. Keyed by the address itself,
+// so editing a KP address welcomes the NEW address once but never re-welcomes an
+// address that already got one — and entering a KP address never re-welcomes the
+// separate Google login address.
+let welcomeLogData={};
+onSnapshot(welcomeLogRef, snap=>{ welcomeLogData=snap.exists()?snap.data():{}; });
+function _wlKey(email){ return String(email||"").trim().toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_|_$/g,""); }
+async function welcomeOnce(user,email){
+  const key=_wlKey(email); if(!key) return;
+  const sent=(welcomeLogData&&welcomeLogData.sent)||{};
+  if(sent[key]) return; // this address already got its one welcome this cycle
+  // Mark locally FIRST so a rapid double-save can't fire two sends before the
+  // write round-trips, then persist, then send (the send itself is queued/relayed).
+  welcomeLogData.sent=Object.assign({},sent,{[key]:true});
+  try{ await setDoc(welcomeLogRef,{sent:{[key]:true}},{merge:true}); }catch(_){}
+  sendWelcomeEmail(user,email).catch(()=>{});
+}
 window.saveEmail=async function(){
   const val=document.getElementById("emailInput").value.trim();
   if(!val||!val.includes("@")){showError("Please enter a valid email.");return;}
   const user=getCurrentUser();
   await setDoc(emailsRef,{[user]:val},{merge:true});
   document.getElementById("emailModal").classList.remove("show");
-  // Welcome/enrollment confirmation goes out EVERY time a user enters an e-mail
-  // address here — including re-entry after admin cleared their saved address.
-  sendWelcomeEmail(user,val).catch(()=>{});
+  // Welcome goes out only the FIRST time this KP address is saved in a cycle —
+  // re-entry or edits of the same address will not trigger another welcome.
+  welcomeOnce(user,val);
 };
 window.remindLater=function(){ document.getElementById("emailModal").classList.remove("show"); };
 
