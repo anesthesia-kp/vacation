@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 120;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 121;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -4110,9 +4110,12 @@ function bidsByWeekModel(scope){
     //     each phase's frozen/backfilled own approved (historical, stable).
     //   • current/all view → cumulative live (incl. projected winners); by-phase = phases
     //     1..current, the live phase counting its own approved-so-far + projected winners.
+    // Closed-phase approvals only. Locked phase-N report → phases 1..N (all closed).
+    // current/all → phases 1..(current-1), i.e. every COMPLETED phase (the live phase is
+    // excluded here; its effect is already in the cumulative line).
     let wkFte, wkByPhase;
     if(snapMode){ wkFte=phaseFteHeader(lockedPhase,wk).cum; wkByPhase=perPhaseApprovedList(wk,lockedPhase,false); }
-    else { wkFte=finalFteForWeek(wk); wkByPhase=perPhaseApprovedList(wk,Number(phasesData.currentPhase||1),true); }
+    else { wkFte=finalFteForWeek(wk); wkByPhase=perPhaseApprovedList(wk,Number(phasesData.currentPhase||1)-1,false); }
     groups.push({wk,wn,date:`${MS[d.getMonth()]} ${d.getDate()}`,type:weekTypeLabel(wk,d),bids,fte:wkFte,byPhase:wkByPhase});
   });
   return groups;
@@ -4162,7 +4165,7 @@ function wkHeadHtml(g){
   // Line 1: cumulative approved/available. Line 2: FTE approved broken out by phase
   // (no per-phase available). Shown on every report; omitted only if no phase has any.
   const cum=`Cumulative — approved ${g.fte.approved} · available ${g.fte.available} of ${g.fte.cap}`;
-  const bp=(g.byPhase&&g.byPhase.length)?` <span class="fte" style="opacity:.82">By phase — ${g.byPhase.map(x=>`Phase ${x.phase}: ${x.approved}`).join(' · ')}</span>`:'';
+  const bp=(g.byPhase&&g.byPhase.length)?` <span class="fte" style="opacity:.82">Closed phase approvals — ${g.byPhase.map(x=>`P${x.phase}: ${x.approved}`).join('&nbsp;&nbsp;-&nbsp;&nbsp;')}</span>`:'';
   return `<div class="wk-head">Week ${g.wn} · ${g.date}${typeTag}<span class="fte">${cum}</span>${bp}</div>`;
 }
 function openReportTab(title,phaseLabel,subtitle,bodyHtml,autoPrint){
@@ -4224,7 +4227,7 @@ window.exportPhaseResults=function(format,scopeOverride){
       groups.forEach(g=>{
         const r=aoa.length;
         const headTxt=`Week ${g.wn} · ${g.date}${g.type?' — '+g.type:''}`;
-        const fteTxt=`Cumulative — approved ${g.fte.approved} · available ${g.fte.available} of ${g.fte.cap}`+((g.byPhase&&g.byPhase.length)?`   ·   By phase — ${g.byPhase.map(x=>`Phase ${x.phase}: ${x.approved}`).join(' · ')}`:'');
+        const fteTxt=`Cumulative — approved ${g.fte.approved} · available ${g.fte.available} of ${g.fte.cap}`+((g.byPhase&&g.byPhase.length)?`   ·   Closed phase approvals — ${g.byPhase.map(x=>`P${x.phase}: ${x.approved}`).join('   -   ')}`:'');
         // Week header: one merged cell — FTE status sits right next to the week/date.
         const headCells=Array(nCols).fill(''); headCells[0]=`${headTxt}   ·   ${fteTxt}`;
         const headStyles=Array(nCols).fill(S_WKHEAD);
@@ -4435,11 +4438,11 @@ function buildDashboardRows(phaseFilter){
     const fw=Math.round((a.fteWon||0)*10)/10;
     const isSummer=d>=new Date('2027-05-30T00:00:00')&&d<=new Date('2027-08-22T00:00:00');
     const tag=specLabels[wk]||(isSummer?'Summer':'');
-    // FTE approved broken out by phase (same rule as the other reports).
+    // Closed-phase approvals only (locked report → 1..N; current/all → completed phases 1..cur-1).
     const _bp = (m&&Number(m[1])<curPhase)
       ? perPhaseApprovedList(wk, Number(m[1]), false)
-      : perPhaseApprovedList(wk, curPhase, true);
-    const byPhaseStr = _bp.map(x=>`P${x.phase}: ${x.approved}`).join('  ');
+      : perPhaseApprovedList(wk, curPhase-1, false);
+    const byPhaseStr = _bp.map(x=>`P${x.phase}: ${x.approved}`).join('   -   ');
     return { wn:_wkNumByISO[wk]||'', date:`${MS[d.getMonth()]} ${d.getDate()}`, tag, cap,
       won:fw, rem:Math.round((cap-fw)*10)/10, byPhase:byPhaseStr,
       winners:[...(a.winners||[])].join(', '), draws:[...(a.draws||[])].join(', '),
@@ -4455,13 +4458,16 @@ window.exportDashboard=function(format){
   const rows=buildDashboardRows(phaseFilter);
   const now=new Date();
   const stamp=now.toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
-  const header=['Week #','Date','Type','FTE Available','FTE Won','FTE Remaining','FTE Approved by Phase','Winners','Draws','Under Review','Lost'];
+  const header=['Week #','Date','Type','FTE Available','FTE Won','FTE Remaining','Closed Phase Approvals','Winners','Draws','Under Review','Lost'];
   const dataRows=rows.map(r=>[r.wn,r.date,r.tag,r.cap,r.won,r.rem,r.byPhase,r.winners,r.draws,r.reviews,r.losers]);
   const fname=`vacation-dashboard-${now.toISOString().slice(0,10)}`;
   if(format==='xlsx'){
     if(typeof XLSX!=='undefined'){
+      // Width the "Closed Phase Approvals" column to the widest value so the text is never
+      // cut off (each closed phase adds ~"P#: 0.0" plus the 3-space separator).
+      const _bpMax=Math.max(22, ...dataRows.map(r=>String(r[6]||'').length+2));
       const ws=XLSX.utils.aoa_to_sheet([[`Vacation Auction Dashboard — ${exportLabel} — exported ${stamp}`],header,...dataRows]);
-      ws['!cols']=[{wch:7},{wch:9},{wch:12},{wch:12},{wch:9},{wch:12},{wch:22},{wch:28},{wch:20},{wch:20},{wch:28}];
+      ws['!cols']=[{wch:7},{wch:9},{wch:12},{wch:12},{wch:9},{wch:12},{wch:_bpMax},{wch:28},{wch:20},{wch:20},{wch:28}];
       const wb=XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb,ws,'Weekly Summary');
       XLSX.writeFile(wb,fname+'.xlsx');
