@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 129;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 130;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1695,6 +1695,45 @@ function getOutcome(wk,u,ap){
   return 'lose';
 }
 
+// ── Outbid alerts for ADMIN-side bid changes ────────────────────────────────
+// Real users' browsers generate outbid alerts when THEY bid (the user site's
+// persistScheduleChange → sendEmailNotifications). Bids written from THIS page
+// (manual add/edit/remove/cancel and the Simulator) used to generate NONE — other
+// users' projections flipped silently with no e-mail. These helpers mirror the
+// user site's logic: diff NATURAL projections (ignoring admin decisions, same as
+// the user site sees) before vs after the change, and queue one alert per affected
+// user into the shared mailQueue outbox — the existing sweep on any open page
+// (admin or user) delivers them, so quota tracking and claim protocol all apply.
+function snapshotSchedule(){ try{ return JSON.parse(JSON.stringify(scheduleData||{})); }catch(_){ return {}; } }
+async function queueProjectionAlerts(prevSched, excludeUser, newSchedOverride){
+  try{
+    const liveSched=scheduleData;
+    const newSched=newSchedOverride||liveSched;
+    let prevAp,newAp;
+    // computeApprovals reads the module-global scheduleData; swap it briefly.
+    // Safe: fully synchronous, and always restored in finally.
+    try{ scheduleData=prevSched; prevAp=computeApprovals(true); } finally { scheduleData=liveSched; }
+    try{ scheduleData=newSched; newAp=computeApprovals(true); } finally { scheduleData=liveSched; }
+    const notif={};
+    for(const user of new Set([...Object.keys(prevSched||{}),...Object.keys(newSched||{})])){
+      if(excludeUser&&user===excludeUser) continue;
+      const pu=(prevSched&&prevSched[user]&&typeof prevSched[user]==='object')?prevSched[user]:{};
+      const nu=(newSched[user]&&typeof newSched[user]==='object')?newSched[user]:{};
+      for(const wk of new Set([...Object.keys(pu),...Object.keys(nu)])){
+        const po=getOutcome(wk,user,prevAp), no=getOutcome(wk,user,newAp);
+        if(po!==no) (notif[user]=notif[user]||[]).push(`Your projection for ${wLabel(wkDate(wk))} changed from ${po.toUpperCase()} to ${no.toUpperCase()}`);
+      }
+    }
+    let queued=0;
+    for(const [user,changes] of Object.entries(notif)){
+      const body=`Hi ${user},\n\nThere was activity on weeks you've bid on:\n\n`+changes.join('\n');
+      const qid=`${Date.now()}_${user}_${Math.floor(Math.random()*1e6)}`;
+      try{ await setDoc(mailQueueRef,{[qid]:{user,body,ts:Date.now()}},{merge:true}); queued++; }catch(_){}
+    }
+    return queued;
+  }catch(e){ console.warn('queueProjectionAlerts failed:',e); return 0; }
+}
+
 // ── Prior Phase Results — shown inline in each bidder's own row in
 // Approvals/Denials and Draws & Reviews, so admin has easy context ("has
 // this user already won elsewhere? lost repeatedly?") right where a
@@ -2951,6 +2990,7 @@ window.runSimulation=async function(){
   }
   const lines=[];
   const cur=Number(phasesData.currentPhase||1);
+  const prevSchedSnap=snapshotSchedule(); // pre-sim schedule, for outbid-alert diffing
 
   // Build schedule: for each user, pick random weeks with random bids
   // Bids must be unique per priority number across their bids IN THIS PHASE +
@@ -3093,8 +3133,18 @@ window.runSimulation=async function(){
       // or the timer stops accurately reflecting "time since the last bid activity."
       if(timerData.enabled){ const _n=Date.now(); await setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{}); }
     }
-    log.innerHTML='<div style="color:#0d7a43;font-weight:700;margin-bottom:8px">✅ Phase '+cur+' simulation complete — '+Object.keys(newSchedule).length+' users assigned</div>'+lines.map(l=>'<div>'+l+'</div>').join('');
-    toast('🎲 Phase '+cur+' simulation complete','ok');
+    // Outbid alerts: simulated bids are real bid activity, so affected users get
+    // the same projection-change alerts a real bid triggers. One batched diff of
+    // pre-sim vs post-sim projections (not per-bid — avoids alert storms).
+    // NOTE: these go to real addresses on file and count against the e-mail quota.
+    let simAlerts=0;
+    try{
+      const mergedSched=JSON.parse(JSON.stringify(prevSchedSnap));
+      for(const u of Object.keys(newSchedule)) mergedSched[u]=Object.assign({},mergedSched[u]||{},newSchedule[u]);
+      simAlerts=await queueProjectionAlerts(prevSchedSnap,null,mergedSched);
+    }catch(_){}
+    log.innerHTML='<div style="color:#0d7a43;font-weight:700;margin-bottom:8px">✅ Phase '+cur+' simulation complete — '+Object.keys(newSchedule).length+' users assigned'+(simAlerts?' · '+simAlerts+' outbid alert'+(simAlerts!==1?'s':'')+' queued':'')+'</div>'+lines.map(l=>'<div>'+l+'</div>').join('');
+    toast('🎲 Phase '+cur+' simulation complete'+(simAlerts?' · '+simAlerts+' alerts queued':''),'ok');
     renderSimPanel();
     const approveBtn=document.getElementById('runSimApprovalsBtn');
     if(approveBtn) approveBtn.style.display='';
@@ -5188,6 +5238,7 @@ window.adminChangePriority=async function(u,wk,val){
   // Direct dropdown change in Edit Selections — real per-field writes via
   // mergeFields() (updateDoc-based); plain setDoc+merge on a nested object
   // silently wipes the user's OTHER weeks, which is what this used to do.
+  const _prev=snapshotSchedule();
   if(!scheduleData[u])scheduleData[u]={};
   scheduleData[u][wk]=val==="NP"?"NP":val.includes(",")?val.split(",").map(Number):Number(val);
   await mergeFields(scheduleRef,{[u+'.'+wk]:scheduleData[u][wk]});
@@ -5198,6 +5249,7 @@ window.adminChangePriority=async function(u,wk,val){
   await updateDoc(approvalsRef,{[wk]:arrayRemove(u)}).catch(()=>{});
   await updateDoc(deniedRef,{[wk]:arrayRemove(u)}).catch(()=>{});
   await adminLog(u,wk,'admin-edit',scheduleData[u][wk]); toast(`✏️ ${u} ${wk} updated · lock cleared`,"ok");
+  queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
 };
 window.adminRemove=function(u,wk){
   const m=wkDate(wk);
@@ -5210,6 +5262,7 @@ window.adminRemove=function(u,wk){
     danger:true,
     onConfirm:async()=>{
       if(!scheduleData[u])return;
+      const _prev=snapshotSchedule();
       const oldBid=scheduleData[u][wk];
       delete scheduleData[u][wk];
       // Atomic deletes — never touch other users' or other weeks' data
@@ -5219,6 +5272,7 @@ window.adminRemove=function(u,wk){
       await updateDoc(approvalsRef,{[wk]:arrayRemove(u)}).catch(()=>{});
       await updateDoc(deniedRef,{[wk]:arrayRemove(u)}).catch(()=>{});
       await adminLog(u,wk,'admin-remove',oldBid); toast(`🗑 Removed · lock cleared`,"warn");
+      queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
     }
   });
 };
@@ -5232,6 +5286,7 @@ window.adminAddSelection=function(){
     body:`<div>Add bid <strong style="font-family:var(--mono)">${pv}</strong> for <strong>${u}</strong> on week of <strong>${wLabel(m)}</strong> (${wRange(m)})?</div>`,
     okText:'Add',
     onConfirm:async()=>{
+      const _prev=snapshotSchedule();
       if(!scheduleData[u])scheduleData[u]={};
       scheduleData[u][wk]=pv==="NP"?"NP":pv.includes(",")?pv.split(",").map(Number):Number(pv);
       await mergeFields(scheduleRef,{[u+'.'+wk]:scheduleData[u][wk]});
@@ -5241,6 +5296,7 @@ window.adminAddSelection=function(){
       await updateDoc(approvalsRef,{[wk]:arrayRemove(u)}).catch(()=>{});
       await updateDoc(deniedRef,{[wk]:arrayRemove(u)}).catch(()=>{});
       await adminLog(u,wk,'admin-add',scheduleData[u][wk]); toast(`➕ Added`,"ok");
+      queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
     }
   });
 };
@@ -6609,6 +6665,7 @@ window.confirmAdminEdit=function(user,wk){
     okText:'Save Changes',
     onConfirm:async()=>{
       const val=document.getElementById("cmEditSel").value;
+      const _prev=snapshotSchedule();
       if(!scheduleData[user]) scheduleData[user]={};
       scheduleData[user][wk]=val==="NP"?"NP":val.includes(",")?val.split(",").map(Number):Number(val);
       // Real per-field write via mergeFields() (updateDoc-based) — the old
@@ -6625,6 +6682,7 @@ window.confirmAdminEdit=function(user,wk){
       await updateDoc(deniedRef,{[wk]:arrayRemove(user)}).catch(()=>{});
       await adminLog(user,wk,'admin-edit',scheduleData[user][wk]);
       toast(`✏️ ${user} ${wk} edited; lock cleared`,'ok');
+      queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
     }
   });
 };
@@ -6640,6 +6698,7 @@ window.confirmAdminCancel=function(user,wk){
     okText:'Cancel Bid',
     danger:true,
     onConfirm:async()=>{
+      const _prev=snapshotSchedule();
       const oldBid=scheduleData[user]?.[wk];
       if(scheduleData[user]) delete scheduleData[user][wk];
       // Atomic deletes — only touch this one user/week, never overwrite other data
@@ -6649,6 +6708,7 @@ window.confirmAdminCancel=function(user,wk){
       await updateDoc(deniedRef,{[wk]:arrayRemove(user)}).catch(()=>{});
       await adminLog(user,wk,'admin-remove',oldBid);
       toast(`✕ ${user} ${wk} cancelled; lock cleared`,'warn');
+      queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
     }
   });
 };
