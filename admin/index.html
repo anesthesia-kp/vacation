@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 143;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 144;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -816,7 +816,10 @@ thead th{color:var(--t2)}
               this amount) instead of an automatic loss. Range 0.0–2.0, step 0.1. Default 0.5.
               <br>It no longer affects week locking — Smart Lock uses each week's <strong>Smart Lock
               Control</strong> (set in FTE Availability) instead.
-              <br><strong>Only editable when zero bids are placed</strong> — locked once bidding is live.
+              <br><strong style="color:var(--green)">✨ New:</strong> you can now <strong>adjust this between phases.</strong>
+              It locks only while the <em>current</em> phase has bids; once a phase completes (and before the
+              next phase takes bids) you can change it. Past phases are unaffected — their results are frozen at
+              completion — so a change only applies to the current and later phases.
             </div>
           </div>
           <div style="display:flex;align-items:center;gap:12px;width:100%;flex-wrap:wrap">
@@ -2688,16 +2691,17 @@ function syncControls(){
       rSl.value=cur;
       rTx.value=cur.toFixed(1);
     }
-    const hasBids=anyBidsExist();
+    const cur=Number(phasesData.currentPhase||1);
+    const hasBids=anyCurrentPhaseBidsExist();
     rSl.disabled=hasBids;
     rTx.disabled=hasBids;
     if(rBtn) rBtn.disabled=hasBids;
     if(rSt){
       if(hasBids){
-        rSt.textContent='🔒 Locked — bids exist. Remove all bids to change this setting.';
+        rSt.textContent='🔒 Locked while Phase '+cur+' has bids — you can adjust it between phases.';
         rSt.style.color='var(--red)';
       } else {
-        rSt.textContent='✏️ Editable — no bids currently placed.';
+        rSt.textContent='✏️ Editable now — no bids in the current phase.';
         rSt.style.color='var(--green)';
       }
     }
@@ -2705,12 +2709,26 @@ function syncControls(){
 }
 
 // Any live bids at all across any user, any week, any phase (denied bids count)?
-// This is used only to gate the reviewThreshold control.
 function anyBidsExist(){
   for(const u in scheduleData){
     const uw=scheduleData[u]; if(!uw||typeof uw!=='object') continue;
     for(const wk of Object.keys(uw)){
       if(uw[wk]!==undefined&&uw[wk]!==null) return true;
+    }
+  }
+  return false;
+}
+// L-7: bids in the CURRENT phase only. The overage threshold locks only while the current
+// phase is actively taking bids — it stays editable BETWEEN phases. Safe because completed
+// phases store FROZEN projections/FTE headers, so changing the threshold never alters a past
+// phase's reports; it only affects the live math of the current and future phases.
+function anyCurrentPhaseBidsExist(){
+  const cur=Number(phasesData.currentPhase||1);
+  for(const u in scheduleData){
+    const uw=scheduleData[u]; if(!uw||typeof uw!=='object') continue;
+    for(const wk of Object.keys(uw)){
+      if(uw[wk]===undefined||uw[wk]===null) continue;
+      if(getUserBidPhaseAdmin(u,wk)===cur) return true;
     }
   }
   return false;
@@ -2726,8 +2744,8 @@ window.onReviewThresholdInput=function(v){
   if(tx&&document.activeElement!==tx) tx.value=clamped.toFixed(1);
 };
 window.saveReviewThreshold=async function(){
-  if(anyBidsExist()){
-    toast('Cannot change threshold while bids exist','warn'); return;
+  if(anyCurrentPhaseBidsExist()){
+    toast('Locked while the current phase has bids — adjust it between phases','warn'); return;
   }
   const tx=document.getElementById("reviewThresholdText");
   const raw=Number(tx?.value);
