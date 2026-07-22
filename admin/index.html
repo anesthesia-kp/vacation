@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 136;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 137;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1735,6 +1735,10 @@ async function queueProjectionAlerts(prevSched, excludeUser, newSchedOverride){
     }
     let queued=0;
     for(const [user,changes] of Object.entries(notif)){
+      // Skip users with no e-mail address on file — there is nothing to deliver, so
+      // queuing them just inflates the "queued" count with entries that get discarded
+      // unsent. Matches the user site, which also skips address-less users before queuing.
+      if(!recipientsFor(user).length) continue;
       const body=`Hi ${user},\n\nThere was activity on weeks you've bid on:\n\n`+changes.join('\n');
       const qid=`${Date.now()}_${user}_${Math.floor(Math.random()*1e6)}`;
       try{ await setDoc(mailQueueRef,{[qid]:{user,body,ts:Date.now(),origin:'admin'}},{merge:true}); queued++; }catch(_){}
