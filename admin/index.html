@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 140;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 141;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1393,13 +1393,17 @@ async function processMailQueue(minAgeMs){
         if(!recips.length && e.email && e.email!=='__skip__' && String(e.email).includes('@')) recips=[e.email];
       }
       if(!recips.length){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
+      // M-7: don't re-send to an address this entry already reached — a 2nd-recipient
+      // failure must never re-deliver the 1st on a later retry. sentTo grows per success.
+      { const done=Array.isArray(e.sentTo)?e.sentTo:[]; recips=recips.filter(to=>!done.includes(to)); }
+      if(!recips.length){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
       try{
         // Claim, let the claim settle, verify we still own it, then send.
         await updateDoc(mailQueueRef,{[qid+'.claimedAt']:Date.now(),[qid+'.claimedBy']:MQ_ID});
         await new Promise(r=>setTimeout(r,2500));
         if(mailQueueData[qid]?.claimedBy!==MQ_ID) continue; // another page won this one
         if(isWelcome && _welcomed(wkey)){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; } // re-check after claim
-        for(const email of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:e.body||''}); trackEmailSent(); }
+        for(const email of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:e.body||''}); trackEmailSent(); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(email)}).catch(()=>{}); }
         if(isWelcome && wkey){ try{ await setDoc(welcomeLogRef,{sent:{[wkey]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[wkey]=true; }catch(_){} }
         await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
         sent++;
@@ -1872,7 +1876,8 @@ function renderNoBidders(){
     let has=false; const uw=scheduleData[u]||{};
     for(const wk in uw){
       if(uw[wk]===undefined) continue;
-      if(Array.isArray(deniedData?.[wk])&&deniedData[wk].includes(u)) continue;
+      // H-9: denied bids still count as "placed" (see sendReminderEmails) — this drives the
+      // same count/button, so both must agree or the card and reminder list would disagree.
       if(getUserBidPhaseAdmin(u,wk)===cur){ has=true; break; }
     }
     if(!has) noBidders.push(u);
@@ -3659,14 +3664,19 @@ function trackEmailSent(){
   const k=emailCycleKey();
   updateDoc(mailStatsRef,{[k]:increment(1)}).catch(()=>setDoc(mailStatsRef,{[k]:1},{merge:true}).catch(()=>{}));
 }
-function adminSendEmail(user,subject,body){
-  const recips=recipientsFor(user); if(!recips.length) return;
+// H-8: AWAIT each send so an async rejection (over quota, network down) is actually
+// caught, the meter counts only real sends, and callers learn the true ok/fail counts.
+// The old version fired emailjs.send() without await, so failures were uncatchable and
+// every attempt counted — letting "results sent: N" show while zero e-mails went out.
+async function adminSendEmail(user,subject,body){
+  const recips=recipientsFor(user); let ok=0,fail=0;
   for(const email of recips){
     try{
-      emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body});
-      trackEmailSent();
-    }catch(e){console.warn('Email failed:',e);}
+      await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body});
+      trackEmailSent(); ok++;
+    }catch(e){ console.warn('Email failed:',e); fail++; }
   }
+  return {ok,fail};
 }
 
 // ── Welcome e-mail (admin side) ───────────────────────────────────────────────
@@ -3808,7 +3818,10 @@ window.sendReminderEmails=function(){
     const uw=scheduleData[u]||{};
     for(const wk of Object.keys(uw)){
       if(uw[wk]===undefined) continue;
-      if(Array.isArray(deniedData?.[wk])&&deniedData[wk].includes(u)) continue;
+      // H-9: do NOT skip denied bids here. A user whose bids were denied mid-phase still
+      // SEES them as live projections on their own board (the user site has no denials
+      // listener), so telling them "you have no bids" would leak that an admin decided
+      // them before results are e-mailed. "No bids" must mean "placed none this phase."
       const bp=getUserBidPhaseAdmin(u,wk);
       if(bp===cur){ hasCurrentPhaseBid=true; break; }
     }
@@ -3826,10 +3839,10 @@ window.sendReminderEmails=function(){
           <div class="cmodal-info" style="margin-top:8px">Users without a saved email will be silently skipped.</div>`,
     okText:'Send Reminders',
     onConfirm:async()=>{
-      let sent=0, skipped=0;
+      let ok=0, fail=0, skipped=0;
       for(const u of noBidders){
         if(!recipientsFor(u).length){ skipped++; continue; }
-        adminSendEmail(u,'Vacation Bidding Reminder — Phase '+cur,
+        const r=await adminSendEmail(u,'Vacation Bidding Reminder — Phase '+cur,
           `Hello ${u},
 
 You have not yet placed any bids in Phase ${cur} of the vacation auction. Please place your bids as soon as possible.
@@ -3839,9 +3852,11 @@ Placing bids early benefits everyone — it moves the process along more quickly
 Place your bids here: https://anesthesia-kp.github.io/vacation/
 
 Thank you!`);
-        sent++;
+        ok+=r.ok; fail+=r.fail;
       }
-      toast(`📧 Reminders sent: ${sent}${skipped?` (${skipped} skipped — no email)`:''}`,'ok');
+      toast(fail===0
+        ? `📧 Reminders: ${ok} e-mail${ok!==1?'s':''} sent${skipped?` (${skipped} had no e-mail)`:''}`
+        : `⚠️ Reminders: ${ok} sent, ${fail} FAILED — check EmailJS and retry.`, fail===0?'ok':'warn');
     }
   });
 };
@@ -3894,7 +3909,7 @@ window.sendPhaseResultsEmails=function(){
           <div class="cmodal-info">Each user gets a single e-mail listing every approved and denied week. Users without an e-mail address on file are skipped.</div>`,
     okText:'Send Results',
     onConfirm:async()=>{
-      let sent=0, skipped=0;
+      let ok=0, fail=0, skipped=0;
       for(const u of usersWithResults){
         if(!recipientsFor(u).length){ skipped++; continue; }
         const {approved,denied}=summary[u];
@@ -3908,13 +3923,18 @@ Phase ${cur} of the Vacation Auction is complete.
 Here are your Phase ${cur} results:
 
 ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.length?`DENIED (${denied.length}):\n${denLines}\n\nDenied bid numbers become available again for you to use in the next phase.`:''}`.trimEnd();
-        adminSendEmail(u,`Vacation Auction — Phase ${cur} Results`,bodyText);
-        sent++;
+        const r=await adminSendEmail(u,`Vacation Auction — Phase ${cur} Results`,bodyText);
+        ok+=r.ok; fail+=r.fail;
       }
-      // Record that results were sent for this phase — Begin Phase checks this
-      // and reminds the admin if the e-mails were never sent.
-      await setDoc(phasesRef,{resultsSent:{...(phasesData.resultsSent||{}),[cur]:Date.now()}},{merge:true}).catch(()=>{});
-      toast(`📮 Phase ${cur} results sent: ${sent}${skipped?` (${skipped} skipped)`:''}`,'ok');
+      // H-8: only mark results as SENT if every e-mail actually went out. If any failed
+      // (EmailJS down/over quota), leave resultsSent UNSET so the admin can retry — and
+      // say so — instead of silently recording "sent" while users learned nothing.
+      if(fail===0){
+        await setDoc(phasesRef,{resultsSent:{...(phasesData.resultsSent||{}),[cur]:Date.now()}},{merge:true}).catch(()=>{});
+        toast(`📮 Phase ${cur} results: ${ok} e-mail${ok!==1?'s':''} sent${skipped?` (${skipped} had no e-mail)`:''}`,'ok');
+      } else {
+        toast(`⚠️ Phase ${cur} results: ${ok} sent, ${fail} FAILED — NOT marked complete. Check EmailJS and click Send again to retry.`,'warn');
+      }
     }
   });
 };

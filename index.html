@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 83;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 84;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1235,7 +1235,9 @@ async function relayMailQueue(){
       // A welcome whose address is ALREADY in the welcome log was delivered once already
       // (this is a leftover copy whose delete didn't land). Drop it — never re-send.
       if(isWelcome && _welcomed(wkey)){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
-      const recips=isWelcome ? [String(e.to).trim().toLowerCase()] : recipientsFor(e.user);
+      let recips=isWelcome ? [String(e.to).trim().toLowerCase()] : recipientsFor(e.user);
+      // M-7: skip addresses this entry already reached, so a partial failure never re-sends.
+      { const done=Array.isArray(e.sentTo)?e.sentTo:[]; recips=recips.filter(to=>!done.includes(to)); }
       if(!recips.length){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
       try{
         await updateDoc(mailQueueRef,{[qid+'.claimedAt']:Date.now(),[qid+'.claimedBy']:MQ_ID});
@@ -1243,7 +1245,7 @@ async function relayMailQueue(){
         if(mailQueueData[qid]?.claimedBy!==MQ_ID) continue; // another page won it
         if(typeof emailjs==='undefined') continue;
         if(isWelcome && _welcomed(wkey)){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; } // re-check after the claim settle
-        for(const to of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:to,changes:e.body||''}); trackEmailSent(); }
+        for(const to of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:to,changes:e.body||''}); trackEmailSent(); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); }
         // Mark the welcome log after a confirmed relay send so no other page re-sends it.
         if(isWelcome && wkey){ try{ await setDoc(welcomeLogRef,{sent:{[wkey]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[wkey]=true; }catch(_){} }
         updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
@@ -2318,7 +2320,7 @@ async function sendEmailNotifications(prevSnap,newSnap,actor){
       try{ await setDoc(mailQueueRef,{[qid]:{user,body:bodyText,ts:Date.now()}},{merge:true}); }catch(_){}
       try{
         if(typeof emailjs!=="undefined"){
-          for(const to of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:to,changes:bodyText}); trackEmailSent(); }
+          for(const to of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:to,changes:bodyText}); trackEmailSent(); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); }
           updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
         }
       }catch(_){/* leave queued — admin panel will send it */}
