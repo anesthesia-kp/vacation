@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 142;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 143;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1326,7 +1326,7 @@ onSnapshot(approvalsRef, snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()
 // inside the single emails listener above, mirroring the loginEmails pattern.)
 onSnapshot(phasesRef,   snap=>{ phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{},phaseHistory:{}}; refreshAll(); });
 onSnapshot(deniedRef,   snap=>{ deniedData=normalizeWkArrayMap(snap.exists()?snap.data():{}); refreshAll(); });
-onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); });
+onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); refreshAll(); }); // L-1: bid-phase tag changes must refresh dependent views (pending counts, projections, complete-phase gate)
 onSnapshot(slotsRef,    snap=>{ slotsData=snap.exists()?snap.data():{}; refreshAll(); });
 onSnapshot(mailQueueRef,snap=>{ mailQueueData=snap.exists()?snap.data():{}; updateMailQueueBadge(); scheduleMailQueueSweep(); });
 let changesArchiveData={};
@@ -3126,11 +3126,16 @@ window.runSimulation=async function(){
         await mergeFields(bidTimesRef, dotted);
       }
     }catch(_){/* non-critical */}
-    // Set priority locks (worstBidsRef): the simulated bid becomes each user's floor for that week
+    // Set priority locks (worstBidsRef): the simulated bid becomes each user's floor for that week.
+    // M-5: RATCHET like the user site (saveBestBid only tightens) — never REPLACE a stronger
+    // existing floor with a weaker simulated bid. In top-up mode this runs alongside real user
+    // data; a week whose floor is 1 (from a real removed bid) must not be loosened to, say, 8.
     const priorityLocks={};
     for(const user of Object.keys(newSchedule)){
       priorityLocks[user]={};
       for(const [wk,bid] of Object.entries(newSchedule[user])){
+        const old=(worstBidsData[user]||{})[wk];
+        if(old!==undefined && pScore(old)<=pScore(bid)) continue; // keep the existing (stronger-or-equal) floor
         priorityLocks[user][wk]=bid;
       }
     }
@@ -3162,7 +3167,9 @@ window.runSimulation=async function(){
       // persistScheduleChange on the user site) — simulated bids are real bid activity for
       // every other purpose (Popcornometer, callTotals, etc.) so they must do this too,
       // or the timer stops accurately reflecting "time since the last bid activity."
-      if(timerData.enabled){ const _n=Date.now(); await setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{}); }
+      // M-6: but if the timer is already EXPIRED (phase closed), do NOT reset it — that would
+      // silently reopen a closed phase. Only reset while bidding is genuinely still open.
+      { const _rem=getDurationMs()-(Date.now()-(timerData.lastChange||0)); if(timerData.enabled && _rem>0){ const _n=Date.now(); await setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{}); } }
     }
     // Outbid alerts: simulated bids are real bid activity, so affected users get
     // the same projection-change alerts a real bid triggers. One batched diff of
@@ -4069,7 +4076,7 @@ function snapshotProjection(phN){
 // stored in EVERY completed-phase snapshot plus live approvals of the current
 // phase. Projected/natural winners never count. This is the number shown in
 // every report's week heading, regardless of which phase is being viewed.
-function finalFteForWeek(wk){
+function finalFteForWeek(wk, apPre){ // L-6: accept precomputed approvals to avoid 52 redundant full-engine runs per export
   // LIVE cumulative "consumed" FTE for the current/all views. Counts:
   //   • everyone approved in prior completed phases,
   //   • plus, for the ACTIVE phase, the projected winners (computeApprovals winners —
@@ -4082,7 +4089,7 @@ function finalFteForWeek(wk){
     const arr=cp[phNum]?.approvals?.[wk];
     if(Array.isArray(arr)) arr.forEach(u=>users.add(u));
   }
-  const ap=computeApprovals();
+  const ap=apPre||computeApprovals();
   const win=ap[wk]?.winners;
   if(win && typeof win.forEach==='function') win.forEach(u=>users.add(u));
   const live=approvalsData?.[wk];
@@ -4242,7 +4249,7 @@ function bidsByWeekModel(scope, includeEmpty){
     // excluded here; its effect is already in the cumulative line).
     let wkFte, wkByPhase;
     if(snapMode){ wkFte=phaseFteHeader(lockedPhase,wk).cum; wkByPhase=perPhaseApprovedList(wk,lockedPhase,false); }
-    else { wkFte=finalFteForWeek(wk); wkByPhase=perPhaseApprovedList(wk,Number(phasesData.currentPhase||1)-1,false); }
+    else { wkFte=finalFteForWeek(wk, ap); wkByPhase=perPhaseApprovedList(wk,Number(phasesData.currentPhase||1)-1,false); } // L-6: reuse the ap computed once above
     groups.push({wk,wn,date:`${MS[d.getMonth()]} ${d.getDate()}`,type:weekTypeLabel(wk,d),bids,fte:wkFte,byPhase:wkByPhase});
   });
   return groups;
@@ -5276,6 +5283,7 @@ window.renderEditTable=function(){
   const uf=document.getElementById("editUserFilter")?.value||"";
   const wf=document.getElementById("editWeekFilter")?.value||"";
   const tb=document.getElementById("editBody"); if(!tb)return;
+  if(tb.contains(document.activeElement)) return; // H-7: an open priority <select> or focused row must not be torn down mid-edit by a snapshot
   const cur=Number(phasesData.currentPhase||1);
   const rows=[];
   (uf?[uf]:names).forEach(u=>{
@@ -5849,6 +5857,7 @@ window.currentStageHours=currentStageHours; window.updatePhaseOpen=updatePhaseOp
 function fmtHour12(h){ h=((h%24)+24)%24; const ap=h<12?'AM':'PM'; let hh=h%12; if(hh===0) hh=12; return hh+' '+ap; }
 const TIMER_HOUR_OPTS=[48,24,12,6,3];
 function renderTimerRules(){
+  if(window._trEditing) return; // M-13: a save-confirm dialog is open holding a pending edit — don't rebuild (and revert) the editor from a snapshot
   const el=document.getElementById('timerRulesBody'); if(!el) return;
   const r=getTimerRules();
   const hoursSel=(id,val)=>`<select id="${id}" class="sel" style="width:78px">${TIMER_HOUR_OPTS.map(h=>`<option value="${h}"${h===val?' selected':''}>${h} h</option>`).join('')}</select>`;
@@ -5868,12 +5877,14 @@ function renderTimerRules(){
   el.querySelectorAll('select,input').forEach(f=>{
     f.addEventListener('change',()=>{
       if(typeof openConfirm!=='function'){ saveTimerRules(); return; }
+      const pending=buildTimerRulesFromDOM(); // M-13: capture the edit NOW — once the modal opens, a user's bid snapshot could revert the DOM before Save reads it
+      window._trEditing=true;
       openConfirm({
         title:'⏱ Save timer rule change?',
         body:'Save this change to the timer rules? It applies from now on. Only the starting reset takes effect right away (at the start of each phase); the other reset lengths kick in later — once the auction has been open the number of days you set for each one.',
         okText:'Save change',
-        onConfirm:async()=>{ await saveTimerRules(); },
-        onCancel:()=>{ renderTimerRules(); }, // discard the edit, restore saved values
+        onConfirm:async()=>{ window._trEditing=false; await saveTimerRules(pending); },
+        onCancel:()=>{ window._trEditing=false; renderTimerRules(); }, // discard the edit, restore saved values
       });
     });
   });
@@ -5885,7 +5896,10 @@ window.toggleTimerRules=function(){
   w.style.display=show?'':'none';
   if(c) c.textContent=show?'▾ Hide':'▸ Show';
 };
-window.saveTimerRules=async function(){
+// M-13: read the editor fields into a rules object. Extracted so the change handler can
+// CAPTURE the pending edit before opening the confirm dialog — saveTimerRules then persists
+// that captured value, not whatever the DOM holds after a possible mid-dialog re-render.
+function buildTimerRulesFromDOM(){
   const getH=id=>{ const v=parseInt(document.getElementById(id)?.value,10); return TIMER_HOUR_OPTS.includes(v)?v:null; };
   const getD=id=>{ let v=parseInt(document.getElementById(id)?.value,10); if(isNaN(v)||v<0) v=0; return v; };
   const stages=[{days:0,hours:getH('tr_h0')||48}];
@@ -5893,7 +5907,10 @@ window.saveTimerRules=async function(){
   stages.sort((a,b)=>a.days-b.days);
   let qs=parseInt(document.getElementById('tr_qs')?.value,10); if(isNaN(qs)) qs=21;
   let qe=parseInt(document.getElementById('tr_qe')?.value,10); if(isNaN(qe)) qe=9;
-  const rules={ stages, quietEnabled:document.getElementById('tr_quiet')?.checked!==false, quietWhenHoursLE:getH('tr_qle')||6, quietStart:qs, quietEnd:qe };
+  return { stages, quietEnabled:document.getElementById('tr_quiet')?.checked!==false, quietWhenHoursLE:getH('tr_qle')||6, quietStart:qs, quietEnd:qe };
+}
+window.saveTimerRules=async function(rules){
+  rules=rules||buildTimerRulesFromDOM();
   await setDoc(adminRef,{timerRules:rules},{merge:true}).catch(()=>{});
   toast('⏱ Timer rules saved','ok');
 };
@@ -5995,13 +6012,19 @@ window.onDurSliderChange=function(idx){
     return;
   }
   if(en&&h===curHrs){ syncDurationUI(); return; } // no change
+  // M-6: is the countdown currently EXPIRED (phase closed)? If so, changing the duration
+  // must NOT silently un-expire it — a longer window would otherwise make remaining time
+  // positive again and reopen a closed phase (live countdown mid-decision on both sites).
+  const wasExpired = timerData.enabled===true && !!timerData.lastChange && (getDurationMs()-(Date.now()-timerData.lastChange))<=0;
   openConfirm({
     title:'⏱️ Set Auction Window',
-    body:`<div>Set the auction window to <strong>${h}h</strong>${en?'' :' and turn the timer <strong>on</strong>'}?</div>${en?'<div class="cmodal-info" style="margin-top:8px">The timer is running — this changes the total window. Use Reset Timer afterward to restart the countdown from the new duration.</div>':''}`,
+    body:`<div>Set the auction window to <strong>${h}h</strong>${en?'' :' and turn the timer <strong>on</strong>'}?</div>${wasExpired?'<div class="cmodal-warn" style="margin-top:8px">Bidding is currently <strong>closed</strong> (timer expired). Changing the window keeps it closed — use <strong>Reset Timer</strong> to reopen bidding.</div>':(en?'<div class="cmodal-info" style="margin-top:8px">The timer is running — this changes the total window. Use Reset Timer afterward to restart the countdown from the new duration.</div>':'')}`,
     okText:`Set ${h}h`,
     onConfirm:async()=>{
-      await setDoc(timerRef,{durationHours:h,enabled:true},{merge:true});
-      toast(`⏱️ Auction window set to ${h}h`,"ok");
+      const payload={durationHours:h,enabled:true};
+      if(wasExpired) payload.lastChange=Date.now()-h*3600000-1000; // re-anchor expiry to the new duration so it stays closed
+      await setDoc(timerRef,payload,{merge:true});
+      toast(`⏱️ Auction window set to ${h}h${wasExpired?' — still closed':''}`,"ok");
     }
   });
   setTimeout(snapBack,50);
@@ -6117,6 +6140,7 @@ onSnapshot(userListRef, snap=>{
 
 function renderUsersCombined(){
   const tb=document.getElementById('usersBody'); if(!tb) return;
+  if(tb.contains(document.activeElement)) return; // H-7: don't wipe an in-progress name/FTE/email edit on a snapshot
   const count=document.getElementById('userCount'); if(count) count.textContent=names.length;
   // FTE is locked once the auction is live (Phase 1 has begun) — it can only be changed
   // before Phase 1 starts, so a person's FTE can't shift the capacity math mid-auction.
@@ -6338,6 +6362,7 @@ window.saveFte=async function(u){
 // there is no blank/default concept in the UI.
 function renderSlotsPanel(){
   const tb=document.getElementById("slotsBody"); if(!tb) return;
+  if(tb.contains(document.activeElement)) return; // H-7: don't clobber the admin's in-progress edit when a user's bid fires a snapshot
   const missing=new Set(weeksMissingCapacity());
   tb.innerHTML=mondays.map(d=>{
     const wk=dateKey(d);
