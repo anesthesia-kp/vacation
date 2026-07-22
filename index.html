@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 79;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 81;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1014,6 +1014,11 @@ function currentStageHours(){ const r=getTimerRules(); const st=r.stages; const 
 function fmtElapsed(ms){ if(!(ms>0)) ms=0; const tm=Math.floor(ms/60000); const d=Math.floor(tm/1440), h=Math.floor((tm%1440)/60), mi=tm%60; return d+'d '+h+'h '+mi+'m'; }
 function updatePhaseOpen(){ const el=document.getElementById('phaseOpenFor'); if(!el) return; const cur=Number((phasesData&&phasesData.currentPhase)||1); const began=(phasesData&&phasesData.phaseBeganAt)?phasesData.phaseBeganAt[cur]:null; const open=began&&(phasesData&&(phasesData.phase1Started||cur>1)); el.textContent=open?('Phase '+cur+' has been open for '+fmtElapsed(Date.now()-began)):''; }
 try{ setInterval(function(){ try{ updatePhaseOpen(); }catch(e){} }, 20000); }catch(e){}
+// Periodic outbid-alert relay: freshly-queued alerts are too young to sweep at
+// queue-write time, so without a periodic re-check they would sit until the next
+// queue change or a refresh. Re-check every 15s so any open user page relays aged
+// fallback alerts on its own; the claim protocol prevents double-sends.
+try{ setInterval(function(){ try{ scheduleMailQueueRelay(); }catch(e){} }, 15000); }catch(e){}
 function fmtHour12(h){ h=((h%24)+24)%24; const ap=h<12?'AM':'PM'; let hh=h%12; if(hh===0) hh=12; return hh+' '+ap; }
 window.currentStageHours=currentStageHours; window.updatePhaseOpen=updatePhaseOpen; window.timerResetHours=timerResetHours; window.getTimerRules=getTimerRules; window.renderTimerRulesInfo=renderTimerRulesInfo;
 // Plain-language "Timer Rules" explainer for the staff timer box (updates with settings).
@@ -2687,6 +2692,7 @@ onSnapshot(welcomeLogRef, snap=>{ welcomeLogData=snap.exists()?snap.data():{}; }
 function _wlKey(email){ return String(email||"").trim().toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_|_$/g,""); }
 function _welcomed(key){ return !!(key && welcomeLogData && welcomeLogData.sent && welcomeLogData.sent[key]); }
 async function welcomeOnce(user,email){
+  if(adminSettings.welcomeEmailsEnabled===false) return; // admin welcome-e-mail switch is OFF
   const key=_wlKey(email); if(!key) return;
   if(_welcomed(key) || _welcomeInFlight.has(key)) return;
   _welcomeInFlight.add(key);

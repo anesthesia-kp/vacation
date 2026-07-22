@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 132;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 134;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -238,6 +238,8 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
 .mq-pending{animation:mqFlash 1.1s ease-in-out infinite;border-radius:8px}
 .mq-pending .trow-label{color:var(--red)!important;font-weight:800}
 .mq-badge-pending{color:var(--red)!important;font-weight:800}
+@keyframes mqTitleFlash{0%,100%{color:var(--red)}50%{color:#ff9a9a}}
+.mq-title-pending{animation:mqTitleFlash 1.1s ease-in-out infinite}
 
 @media(max-width:700px){.stats{flex-direction:column}}
 
@@ -505,7 +507,7 @@ thead th{color:var(--t2)}
           </div>
         </div>
         <div class="card big-card">
-          <div class="card-title">Messaging Users</div>
+          <div class="card-title" id="messagingCardTitle">Messaging Users</div>
           <div class="trow" style="align-items:center;margin-top:6px">
             <div><div class="trow-label">Phase results</div><div class="trow-desc">E-mail every user their approved / denied results for the phase</div></div>
             <button class="btn btn-success" style="flex:unset;white-space:nowrap" onclick="sendPhaseResultsEmails()">📮 Send Phase Results</button>
@@ -517,10 +519,6 @@ thead th{color:var(--t2)}
           <div class="trow" id="mqRowTop" style="align-items:center;margin-top:10px;padding-top:12px;border-top:1px solid var(--b1)">
             <div><div class="trow-label">Outbid alerts — <span id="mqCountTop" style="font-family:var(--mono)">0</span> queued</div><div class="trow-desc">Alerts queued when a user is outbid; sent automatically, or flush them now</div></div>
             <button class="btn" style="flex:unset;white-space:nowrap;background:rgba(180,83,9,.1);color:var(--yellow);border:1px solid rgba(180,83,9,.35)" onclick="flushMailQueue()">🔔 Send Pending</button>
-          </div>
-          <div class="trow" style="align-items:center;margin-top:10px;padding-top:12px;border-top:1px solid var(--b1)">
-            <div><div class="trow-label">Clear pending welcome e-mails</div><div class="trow-desc">Deletes any leftover welcome e-mails still in the outbox and marks every current address as already welcomed this cycle — stops stray welcomes without sending anything. Users still get a fresh welcome after the next Reset Auction.</div></div>
-            <button class="btn" style="flex:unset;white-space:nowrap;background:rgba(220,38,38,.1);color:var(--red);border:1px solid rgba(220,38,38,.35)" onclick="clearPendingWelcomes()">🧹 Clear Welcomes</button>
           </div>
         </div>
         <div class="card big-card">
@@ -745,13 +743,20 @@ thead th{color:var(--t2)}
         </div>
       </div>
       <div class="card">
-        <div class="card-title">Email Notifications on Change</div>
+        <div class="card-title">📧 E-mail Sending Controls</div>
         <div class="trow">
           <div>
-            <div class="trow-label">Email Notifications on Change</div>
-            <div class="trow-desc">When ON, users receive emails when their bid outcome changes. When OFF, no emails are sent.</div>
+            <div class="trow-label">Outbid alert e-mails</div>
+            <div class="trow-desc">When ON, users get an e-mail whenever their projected outcome for a week changes (from a real user's bid, an admin bid change, or the simulator). When OFF, no outbid alerts are sent from anywhere. Turn OFF during testing to avoid barraging users and burning EmailJS quota.</div>
           </div>
           <div class="tog" id="emailNotifsToggle" onclick="toggleEmailNotifs()"></div>
+        </div>
+        <div class="trow" style="margin-top:10px;padding-top:12px;border-top:1px solid var(--b1)">
+          <div>
+            <div class="trow-label">Welcome e-mails</div>
+            <div class="trow-desc">When ON, each user gets a one-time welcome/rules e-mail at their first login (and when a KP e-mail is added for an already-logged-in user). When OFF, no welcome e-mails are sent. Turn OFF during testing. Addresses are still tracked, so turning it back on won't re-send to anyone already welcomed this cycle.</div>
+          </div>
+          <div class="tog" id="welcomeEmailsToggle" onclick="toggleWelcomeEmails()"></div>
         </div>
       </div>
       <div class="card">
@@ -1338,9 +1343,15 @@ function updateMailQueueBadge(){
   const pending=n>0;
   ['mqRowTop','mqRow'].forEach(id=>{ const r=document.getElementById(id); if(r) r.classList.toggle('mq-pending',pending); });
   [el,top].forEach(b=>{ if(b) b.classList.toggle('mq-badge-pending',pending); });
+  const title=document.getElementById('messagingCardTitle');
+  if(title) title.classList.toggle('mq-title-pending',pending);
 }
 function _mqEligible(e,now,minAgeMs){
-  return e&&typeof e==='object'&&(now-(e.ts||0))>=minAgeMs&&(!e.claimedAt||(now-e.claimedAt)>90000);
+  // Admin/simulator-originated alerts (origin:'admin') have no bidder browser to
+  // defer to, so they become eligible almost immediately (3s) instead of waiting
+  // the 30s that lets a real bidder's own browser send its alert inline first.
+  const minA=(e&&e.origin==='admin')?3000:minAgeMs;
+  return e&&typeof e==='object'&&(now-(e.ts||0))>=minA&&(!e.claimedAt||(now-e.claimedAt)>90000);
 }
 function scheduleMailQueueSweep(){
   if(_mqTimer||_mqBusy) return;
@@ -1394,30 +1405,6 @@ window.flushMailQueue=async function(){
   const sent=await processMailQueue(5000); // 5s guard against racing an in-flight bidder send
   if(!sent) toast('Nothing old enough to send yet (or another page just took it) — try again shortly','warn');
 };
-// Purge leftover welcome e-mails from the outbox and seal every current address in the
-// welcome log so no stray welcome can fire again this cycle. Deletes ONLY welcome entries
-// (those with a `to` target); outbid/results alerts in the queue are left untouched.
-window.clearPendingWelcomes=async function(){
-  const q=mailQueueData||{};
-  const welcomeQids=Object.keys(q).filter(qid=>{ const e=q[qid]; return e && e.to && String(e.to).includes('@') && String(e.to)!=='__skip__'; });
-  openConfirm({
-    title:'🧹 Clear pending welcome e-mails',
-    body:`<div>Delete <strong>${welcomeQids.length}</strong> leftover welcome e-mail${welcomeQids.length!==1?'s':''} from the outbox and mark every current login &amp; KP address as already welcomed for this cycle?</div>
-          <div class="cmodal-warn" style="margin-top:8px">Nothing is sent. Outbid and results alerts in the queue are not affected. Users still receive a fresh welcome after the next Reset Auction.</div>`,
-    okText:'Clear pending welcomes',
-    onConfirm:async()=>{
-      // 1) Seal every known address in the welcome log FIRST (so even an entry we miss is deduped).
-      const sent={};
-      for(const u of Object.keys(loginEmailsData||{})){ const k=_wlKey(loginEmailsData[u]); if(k) sent[k]=true; }
-      for(const u of Object.keys(emailsData||{})){ const v=emailsData[u]; if(v && v!=='__skip__' && String(v).includes('@')){ const k=_wlKey(v); if(k) sent[k]=true; } }
-      try{ await setDoc(welcomeLogRef,{sent},{merge:true}); if(welcomeLogData){ welcomeLogData.sent=Object.assign({},welcomeLogData.sent||{},sent); } }catch(_){}
-      // 2) Delete the leftover welcome entries from the outbox.
-      if(welcomeQids.length){ const dels={}; welcomeQids.forEach(qid=>{ dels[qid]=deleteField(); }); try{ await updateDoc(mailQueueRef,dels); }catch(_){} }
-      toast(`🧹 Cleared ${welcomeQids.length} pending welcome${welcomeQids.length!==1?'s':''}; ${Object.keys(sent).length} addresses sealed`,'ok');
-    }
-  });
-};
-window._clearPendingWelcomes=clearPendingWelcomes; // testing
 
 // ── Nav ──
 window.toggleNav=function(){
@@ -1717,6 +1704,8 @@ function getOutcome(wk,u,ap){
 function snapshotSchedule(){ try{ return JSON.parse(JSON.stringify(scheduleData||{})); }catch(_){ return {}; } }
 async function queueProjectionAlerts(prevSched, excludeUser, newSchedOverride){
   try{
+    // Respect the admin "Outbid alert e-mails" switch — off means generate none.
+    if(adminSettings.emailNotifsEnabled===false) return 0;
     const liveSched=scheduleData;
     const newSched=newSchedOverride||liveSched;
     let prevAp,newAp;
@@ -1738,8 +1727,12 @@ async function queueProjectionAlerts(prevSched, excludeUser, newSchedOverride){
     for(const [user,changes] of Object.entries(notif)){
       const body=`Hi ${user},\n\nThere was activity on weeks you've bid on:\n\n`+changes.join('\n');
       const qid=`${Date.now()}_${user}_${Math.floor(Math.random()*1e6)}`;
-      try{ await setDoc(mailQueueRef,{[qid]:{user,body,ts:Date.now()}},{merge:true}); queued++; }catch(_){}
+      try{ await setDoc(mailQueueRef,{[qid]:{user,body,ts:Date.now(),origin:'admin'}},{merge:true}); queued++; }catch(_){}
     }
+    // Send promptly from THIS (admin) browser rather than waiting for a queue
+    // event or a page refresh. Fires once these admin-origin entries clear their
+    // 3s eligibility window; the claim protocol still prevents any double-send.
+    if(queued) setTimeout(()=>{ processMailQueue(30000).catch(()=>{}); }, 4000);
     return queued;
   }catch(e){ console.warn('queueProjectionAlerts failed:',e); return 0; }
 }
@@ -2656,6 +2649,8 @@ function syncControls(){
   if(gl) gl.className="tog"+(locksData.globalLock?" on":"");
   const et=document.getElementById("emailNotifsToggle");
   if(et) et.className="tog"+(adminSettings.emailNotifsEnabled!==false?" on":"");
+  const we=document.getElementById("welcomeEmailsToggle");
+  if(we) we.className="tog"+(adminSettings.welcomeEmailsEnabled!==false?" on":"");
   const kp=document.getElementById("kpPromptToggle");
   if(kp) kp.className="tog"+(adminSettings.kpEmailPromptEnabled!==false?" on":"");
   const pl=document.getElementById("prioLockToggle");
@@ -2747,7 +2742,12 @@ window.saveMaxBids=async function(){
 window.toggleEmailNotifs=async function(){
   const cur=adminSettings.emailNotifsEnabled!==false;
   await setDoc(adminRef,{emailNotifsEnabled:!cur},{merge:true});
-  toast(!cur?"✉️ Email notifications enabled":"🔕 Email notifications disabled",!cur?"ok":"warn");
+  toast(!cur?"✉️ Outbid alert e-mails ON":"🔕 Outbid alert e-mails OFF",!cur?"ok":"warn");
+};
+window.toggleWelcomeEmails=async function(){
+  const cur=adminSettings.welcomeEmailsEnabled!==false;
+  await setDoc(adminRef,{welcomeEmailsEnabled:!cur},{merge:true});
+  toast(!cur?"✉️ Welcome e-mails ON":"🔕 Welcome e-mails OFF",!cur?"ok":"warn");
 };
 
 // ── Lock weeks ──
@@ -3743,6 +3743,7 @@ function _welcomed(key){ return !!(key && welcomeLogData && welcomeLogData.sent 
 // One welcome per address per cycle. welcomeLog is the authority: an authoritative read
 // gates the send, and the log is marked only after the send confirms.
 async function welcomeOnce(user,email){
+  if(adminSettings.welcomeEmailsEnabled===false) return; // admin welcome-e-mail switch is OFF
   const key=_wlKey(email); if(!key) return;
   if(_welcomed(key) || _welcomeInFlight.has(key)) return;
   _welcomeInFlight.add(key);
@@ -5771,6 +5772,11 @@ function updatePhaseOpen(){
   if(ri) ri.textContent=(open && timerData && timerData.enabled)?('Each bid now resets the timer to '+currentStageHours()+' hours.'):'';
 }
 try{ setInterval(function(){ try{ updatePhaseOpen(); }catch(e){} }, 20000); }catch(e){}
+// Periodic outbid-alert sweep: without this, freshly-queued alerts (which are
+// too young at queue-write time) would sit until the next queue change or a page
+// refresh. This re-checks every 12s so any open admin page delivers aged alerts
+// on its own; the claim protocol keeps multiple open pages from double-sending.
+try{ setInterval(function(){ try{ scheduleMailQueueSweep(); }catch(e){} }, 12000); }catch(e){}
 window.currentStageHours=currentStageHours; window.updatePhaseOpen=updatePhaseOpen; window.timerResetHours=timerResetHours; window.getTimerRules=getTimerRules;
 function fmtHour12(h){ h=((h%24)+24)%24; const ap=h<12?'AM':'PM'; let hh=h%12; if(hh===0) hh=12; return hh+' '+ap; }
 const TIMER_HOUR_OPTS=[48,24,12,6,3];
