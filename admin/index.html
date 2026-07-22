@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 128;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 129;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -590,6 +590,11 @@ thead th{color:var(--t2)}
       </div>
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
         <button class="btn btn-primary" onclick="saveAllSlots()">💾 Save All Weeks</button>
+        <span style="display:inline-flex;align-items:center;gap:6px;padding-left:14px;border-left:1px solid var(--b1)">
+          <label style="font-size:12px;color:var(--t2);font-weight:600" for="slcGlobal">Global Smart Lock Control:</label>
+          <input type="number" id="slcGlobal" class="inp" style="width:72px;padding:3px 6px" step="0.1" min="-1" max="1" placeholder="0.4" title="One value applied to every week's Smart Lock Control (−1.0 to 1.0)">
+          <button class="btn" style="background:rgba(59,130,246,.12);color:var(--blue);border:1px solid rgba(59,130,246,.3)" onclick="applyGlobalSlc()">🔐 Apply to All Weeks</button>
+        </span>
         <span id="slotsStatus" style="font-size:12px;color:var(--t2)"></span>
       </div>
       <div style="overflow-x:auto;max-height:640px;overflow-y:auto;border:1px solid var(--b1)">
@@ -864,15 +869,15 @@ thead th{color:var(--t2)}
     <div class="panel" id="panel-simulator">
       <div class="page-head">
         <div class="page-title">🎲 Simulation</div>
-        <div class="page-sub">Fill all users with random bids for testing purposes. Only available when no bids exist.</div>
+        <div class="page-sub">Fill all users with random bids for testing purposes. Users who already placed bids are topped up to the target — their existing bids count.</div>
       </div>
       <div id="simStatusBanner" style="display:none;padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:13px;font-weight:600"></div>
       <div class="card" style="margin-bottom:12px">
         <div class="card-title">Run Simulation</div>
         <p style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:14px">
-          Assigns each user random bids at random weeks with random bid levels. High-demand weeks get only high-priority bids. Summer weeks get only bids 1–7.
+          Assigns each user random bids at random weeks with random bid levels. High-demand weeks get only high-priority bids.
           <br><br>
-          <strong style="color:var(--yellow)">⚠️ Can only run when zero bids exist for any user.</strong>
+          <strong style="color:var(--t1)">Existing bids count toward the target.</strong> "Bids per user" includes bids users have already placed this phase: a user with 3 real bids and a target of 3 gets nothing from the simulator; a user with 1 gets topped up with 2 more. Existing bids are never changed, their weeks are never re-bid, and their priority numbers stay consumed.
           <br><br>
           <strong style="color:var(--t1)">Auto-Approve/Deny Results</strong> works in every phase (1–4) whenever the current phase has undecided bids: winners are approved, losers denied, reviews approved, and draws are decided at random — approving as many tied users as fit within the FTE cap plus the configured FTE overage, denying the rest.
         </p>
@@ -2904,12 +2909,9 @@ function renderSimPanel(){
   }
   const lockedCount=locksData?.weeks?Object.keys(locksData.weeks).filter(k=>locksData.weeks[k]).length:0;
   const globalLocked=!!locksData?.globalLock;
-  if(hasBids){
-    btn.disabled=true; btn.style.opacity='0.4'; btn.style.cursor='not-allowed';
-    banner.style.display='block';
-    banner.style.background='rgba(239,68,68,.1)'; banner.style.border='1px solid rgba(239,68,68,.3)'; banner.style.color='#b91c1c';
-    banner.textContent='⛔ Phase '+cur+' bids already exist — remove them before running the simulator.';
-  } else if(globalLocked){
+  // Existing bids no longer block the run — they count toward the per-user target.
+  const topUp=hasBids?' Existing bids count toward the "Bids per user" target — users already at it get none.':'';
+  if(globalLocked){
     btn.disabled=true; btn.style.opacity='0.4'; btn.style.cursor='not-allowed';
     banner.style.display='block';
     banner.style.background='rgba(239,68,68,.1)'; banner.style.border='1px solid rgba(239,68,68,.3)'; banner.style.color='#b91c1c';
@@ -2920,20 +2922,19 @@ function renderSimPanel(){
     banner.style.display='block';
     banner.style.background='rgba(251,191,36,.08)'; banner.style.border='1px solid rgba(251,191,36,.3)'; banner.style.color='#946008';
     const phInfoL=cur>1?' — will also skip weeks users won in prior phases':'';
-    banner.innerHTML='⚠️ Simulator ready for <strong>Phase '+cur+'</strong> — '+lockedCount+' locked week'+(lockedCount!==1?'s':'')+' will be skipped (no bids placed)'+phInfoL;
+    banner.innerHTML='⚠️ Simulator ready for <strong>Phase '+cur+'</strong> — '+lockedCount+' locked week'+(lockedCount!==1?'s':'')+' will be skipped (no bids placed)'+phInfoL+topUp;
   } else {
     btn.disabled=false; btn.style.opacity='1'; btn.style.cursor='pointer';
     banner.style.display='block';
     banner.style.background='rgba(52,211,153,.08)'; banner.style.border='1px solid rgba(52,211,153,.2)'; banner.style.color='#0d7a43';
     const phInfo=cur>1?' — will skip weeks users won in prior phases and priority numbers already consumed':'';
-    banner.innerHTML='✅ Simulator ready for <strong>Phase '+cur+'</strong>'+phInfo;
+    banner.innerHTML='✅ Simulator ready for <strong>Phase '+cur+'</strong>'+phInfo+topUp;
   }
 }
 
 window.runSimulation=async function(){
-  if(simHasBids()){
-    toast('Cannot run simulation — bids already exist in current phase.','warn'); return;
-  }
+  // Existing bids no longer block the run: each user is topped UP to the
+  // "Bids per user" target, counting the bids they already placed this phase.
   // Global lock means every week is locked, so there is nothing to bid on.
   if(locksData?.globalLock){
     toast('Cannot run simulation — global lock is on.','warn'); return;
@@ -2979,8 +2980,24 @@ window.runSimulation=async function(){
     }
 
     const usedPrios=new Set(priorUsedPrios);
-    const weeks=[...allWeeks].filter(wk=>!priorWonWeeks.has(wk)).sort(()=>Math.random()-.5);
-    let bidCount=0;
+    // Existing CURRENT-phase bids: they count toward the per-user target, their
+    // weeks can never be re-bid, and their priority numbers stay consumed.
+    // Denied bids count too (same convention as the user-facing bid limit).
+    const existingWeeks=new Set();
+    const uw=scheduleData[user]||{};
+    for(const wk of Object.keys(uw)){
+      const v=uw[wk];
+      if(v===null||v===undefined) continue;
+      const valid=(v==='NP')||(typeof v==='number')||(Array.isArray(v)&&v.length>0&&v.every(n=>typeof n==='number'));
+      if(!valid) continue;
+      if(getUserBidPhaseAdmin(user,wk)!==cur) continue;
+      existingWeeks.add(wk);
+      if(v==='NP') usedPrios.add('NP');
+      else if(Array.isArray(v)) v.forEach(n=>usedPrios.add(n));
+      else usedPrios.add(v);
+    }
+    const weeks=[...allWeeks].filter(wk=>!priorWonWeeks.has(wk)&&!existingWeeks.has(wk)).sort(()=>Math.random()-.5);
+    let bidCount=existingWeeks.size; // target INCLUDES bids the user already placed
     const userBids={};
     for(const wk of weeks){
       if(bidCount>=SIM_MAX_BIDS) break;
@@ -3002,21 +3019,13 @@ window.runSimulation=async function(){
     }
   }
 
-  // Write all bids atomically. For phase 2+, MERGE with existing schedule so we
-  // preserve prior-phase bids (which are still stored as history for the algorithm).
+  // Write all bids atomically. ALWAYS merge per-field (dotted paths) — users may
+  // already have real bids in ANY phase now that the simulator tops up instead
+  // of requiring an empty board, so a whole-doc overwrite would erase them.
   try {
-    if(cur>1){
-      // Merge — don't overwrite prior-phase data. mergeFields() writes each
-      // week as its own dotted field, so it genuinely preserves prior-phase
-      // weeks; the old setDoc(...,{merge:true}) here silently wiped them
-      // instead, contradicting this very comment.
-      for(const user of Object.keys(newSchedule)){
-        const dotted={}; for(const wk of Object.keys(newSchedule[user])) dotted[user+'.'+wk]=newSchedule[user][wk];
-        await mergeFields(scheduleRef, dotted);
-      }
-    } else {
-      // Phase 1 — safe to overwrite entire schedule
-      await setDoc(scheduleRef, newSchedule);
+    for(const user of Object.keys(newSchedule)){
+      const dotted={}; for(const wk of Object.keys(newSchedule[user])) dotted[user+'.'+wk]=newSchedule[user][wk];
+      await mergeFields(scheduleRef, dotted);
     }
     // Tag every simulated bid with the current phase. If this write fails, the
     // bids will be invisible on the user site — so we surface any error.
@@ -3028,13 +3037,9 @@ window.runSimulation=async function(){
       for(const wk of Object.keys(newSchedule[user])) phaseTag[user][wk]=curNum;
     }
     try {
-      if(cur>1){
-        for(const user of Object.keys(phaseTag)){
-          const dotted={}; for(const wk of Object.keys(phaseTag[user])) dotted[user+'.'+wk]=phaseTag[user][wk];
-          await mergeFields(bidPhaseRef, dotted);
-        }
-      } else {
-        await setDoc(bidPhaseRef, phaseTag);
+      for(const user of Object.keys(phaseTag)){
+        const dotted={}; for(const wk of Object.keys(phaseTag[user])) dotted[user+'.'+wk]=phaseTag[user][wk];
+        await mergeFields(bidPhaseRef, dotted);
       }
     } catch(e) {
       log.innerHTML='<div style="color:#dc2626">bidPhase write failed: '+e.message+' — bids may not appear on user boards until manually retagged.</div>';
@@ -3045,13 +3050,10 @@ window.runSimulation=async function(){
     try{
       const nowTs=Date.now(); const timeTag={};
       for(const user of Object.keys(newSchedule)){ timeTag[user]={}; for(const wk of Object.keys(newSchedule[user])) timeTag[user][wk]=nowTs; }
-      if(cur>1){
-        for(const user of Object.keys(timeTag)){
-          const dotted={}; for(const wk of Object.keys(timeTag[user])) dotted[user+'.'+wk]=timeTag[user][wk];
-          await mergeFields(bidTimesRef, dotted);
-        }
+      for(const user of Object.keys(timeTag)){
+        const dotted={}; for(const wk of Object.keys(timeTag[user])) dotted[user+'.'+wk]=timeTag[user][wk];
+        await mergeFields(bidTimesRef, dotted);
       }
-      else { await setDoc(bidTimesRef, timeTag); }
     }catch(_){/* non-critical */}
     // Set priority locks (worstBidsRef): the simulated bid becomes each user's floor for that week
     const priorityLocks={};
@@ -3061,13 +3063,9 @@ window.runSimulation=async function(){
         priorityLocks[user][wk]=bid;
       }
     }
-    if(cur>1){
-      for(const user of Object.keys(priorityLocks)){
-        const dotted={}; for(const wk of Object.keys(priorityLocks[user])) dotted[user+'.'+wk]=priorityLocks[user][wk];
-        await mergeFields(worstBidsRef, dotted).catch(()=>{});
-      }
-    } else {
-      await setDoc(worstBidsRef, priorityLocks).catch(()=>{});
+    for(const user of Object.keys(priorityLocks)){
+      const dotted={}; for(const wk of Object.keys(priorityLocks[user])) dotted[user+'.'+wk]=priorityLocks[user][wk];
+      await mergeFields(worstBidsRef, dotted).catch(()=>{});
     }
     // Log every assignment in ONE write. Previously this awaited a separate
     // updateDoc per bid — ~110 sequential round-trips, which is why the change
@@ -6248,6 +6246,28 @@ window.saveOneSlot=async function(wk){
   await setDoc(slotsRef,{[wk]:r.value},{merge:true});
   await setDoc(slcRef,{[wk]:c.value},{merge:true});
   toast(`${wLabel(wkDate(wk))}: availability ${r.value}, smart lock control ${c.value}`,"ok");
+};
+
+// Global Smart Lock Control: one value (−1.0 to 1.0) applied to EVERY week at once.
+// Confirms first, saves to slcMap, and updates all visible inputs so what you
+// see matches what was saved.
+window.applyGlobalSlc=async function(){
+  const el=document.getElementById('slcGlobal');
+  const raw=(el?.value||'').trim();
+  const n=parseFloat(raw);
+  if(raw===''||isNaN(n)||n<-1||n>1){ toast('Enter a Smart Lock Control between -1.0 and 1.0','err'); return; }
+  const v=Math.round(n*10)/10;
+  openConfirm({
+    title:'🔐 Set Smart Lock Control for ALL weeks',
+    body:`<div>Set the Smart Lock Control of <strong>all ${mondays.length} weeks</strong> to <strong>${v}</strong>?<br><br>This replaces every week's current control value. It does not lock or unlock anything by itself — locks change the next time Smart Lock runs.</div>`,
+    okText:'Set all to '+v,
+    onConfirm: async ()=>{
+      const updates={}; mondays.forEach(d=>{ updates[dateKey(d)]=v; });
+      await setDoc(slcRef,updates,{merge:true});
+      mondays.forEach(d=>{ const inp=document.getElementById('slc_'+dateKey(d)); if(inp) inp.value=v; });
+      toast(`🔐 Smart Lock Control set to ${v} for all ${mondays.length} weeks`,'ok');
+    }
+  });
 };
 
 window.saveAllSlots=async function(){
