@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 84;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 85;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1788,6 +1788,14 @@ window.openPhaseHistory=function(){
   // in BOTH phases with each phase's own bid — the live tag (which a re-bid
   // overwrites) is deliberately not consulted for history.
   function inEarlierHist(u,wk,val,ph){
+    // M-1: mirror of the admin site's inEarlierSnapshot. A real re-bid in phase `ph` is
+    // JSON-identical to an earlier phase's bid, so classify by `ph`'s OWN decision record —
+    // if the user was denied or newly approved in `ph`, the bid belongs to `ph`, not inherited.
+    const ownAp=Array.isArray(completed[ph]?.approvals?.[wk])?completed[ph].approvals[wk]:[];
+    const ownDen=Array.isArray(completed[ph]?.denials?.[wk])?completed[ph].denials[wk]:[];
+    let prevWin=false;
+    for(const k of keys){ if(Number(k)>=Number(ph)) continue; if((completed[k]?.approvals?.[wk]||[]).includes(u)) prevWin=true; }
+    if((ownAp.includes(u)&&!prevWin)||ownDen.includes(u)) return false;
     for(const k of keys){
       if(Number(k)>=Number(ph)) continue;
       const q=completed[k]?.schedule?.[u]?.[wk];

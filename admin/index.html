@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 141;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 142;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1012,7 +1012,7 @@ thead th{color:var(--t2)}
 
 <script type="module">
 import { initializeApp }    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, getDoc, increment, onSnapshot as _onSnapshot }
+import { getFirestore, doc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, getDoc, increment, writeBatch, onSnapshot as _onSnapshot }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
@@ -2552,13 +2552,15 @@ function renderOverview(){
       const wantPh=Number(phaseFilter.match(/^ph(\d+)$/)[1]);
       if(wantPh<curPhase){
         historicalMode=true;
-        const phSnap=phasesData.completedPhases?.[wantPh]||{};
+        const phSnapRaw=phasesData.completedPhases?.[wantPh]; const phSnap=phSnapRaw||{};
         let phSched=phSnap.schedule||{};
         let phAp=phSnap.approvals||{};
         let phDen=phSnap.denials||{};
-        // Fallback: phase was never formally "Completed" (no snapshot). Rebuild
-        // the view from live bids placed in that phase, plus live approvals.
-        if(Object.keys(phSched).length===0){
+        // Fallback ONLY when the phase was never formally Completed (NO snapshot exists).
+        // M-10: key this on snapshot ABSENCE, not empty schedule — a phase legitimately
+        // completed with zero bids also has an empty schedule, and rebuilding it from LIVE
+        // docs would wrongly show the CURRENT phase's approvals as this locked phase's.
+        if(!phSnapRaw){
           phSched={};
           for(const u in scheduleData){
             if(scheduleData[u]?.[wk]===undefined) continue;
@@ -3516,7 +3518,13 @@ window.completePhase=function(){
       // Auto-lock every week the moment a phase completes — nothing may change
       // between phases. The next Begin Phase runs Smart Lock & Unlock to reopen
       // exactly the weeks that still have availability.
-      await _lockEveryWeek();
+      // M-14: the phase IS completed once the snapshot above is written. If this lock
+      // step then throws (a transient mergeFields fallback), it used to become a silent
+      // unhandled rejection — leaving weeks unlocked between phases with no warning.
+      // Catch it and report so the admin can re-run Smart Lock by hand.
+      let lockOk=true;
+      try{ await _lockEveryWeek(); }
+      catch(e){ lockOk=false; console.error('completePhase lock step failed:',e); }
       // Priority locks (worstBids) only mean anything WITHIN a phase — they
       // stop a user from re-bidding worse than their current attempt on a
       // week they haven't won yet. They must NEVER carry into the next
@@ -3536,7 +3544,10 @@ window.completePhase=function(){
         await setDoc(changesArchiveRef,{[cur]:changesLog},{merge:true}).catch(()=>{});
       }
       await setDoc(changesRef,{log:[],resetAt:Date.now()}).catch(()=>{});
-      toast('✓ Phase '+cur+' completed — all weeks locked, priority locks released','ok');
+      toast(lockOk
+        ? '✓ Phase '+cur+' completed — all weeks locked, priority locks released'
+        : '⚠️ Phase '+cur+' completed, but auto-lock FAILED — click "Smart Lock and Unlock" now to lock all weeks.',
+        lockOk?'ok':'warn');
       // Sending results is now its own deliberate step in the "Next Step" guide
       // (with a Skip option for testing), so we no longer auto-open the e-mail dialog.
     }
@@ -3547,11 +3558,17 @@ async function _commitBeginPhase(next){
   if(next===1){
     await setDoc(phasesRef,{currentPhase:1,phase1Started:true,phaseBeganAt:{...(phasesData.phaseBeganAt||{}),1:Date.now()}},{merge:true});
   } else {
-    await setDoc(phasesRef,{currentPhase:next,phaseBeganAt:{...(phasesData.phaseBeganAt||{}),[next]:Date.now()}},{merge:true});
-    // The finished phase's approvals/denials are preserved in its snapshot.
-    // Clearing the LIVE docs prevents a phase-1 denial from silently
-    // auto-denying a fresh re-bid on the same week in phase 2+.
-    await Promise.all([setDoc(approvalsRef,{}),setDoc(deniedRef,{})]).catch(()=>{});
+    // M-4: advance the phase AND clear the finished phase's live approvals/denials as ONE
+    // atomic batch. The old code advanced the phase first, then cleared in a separate write
+    // whose failure was swallowed — so a crash/close in between left the phase advanced with
+    // stale denials that silently auto-deny a fresh re-bid on the same week next phase. A
+    // batch is all-or-nothing server-side, so a failure leaves the old phase fully intact.
+    const batch=writeBatch(db);
+    batch.set(phasesRef,{currentPhase:next,phaseBeganAt:{...(phasesData.phaseBeganAt||{}),[next]:Date.now()}},{merge:true});
+    batch.set(approvalsRef,{});
+    batch.set(deniedRef,{});
+    try{ await batch.commit(); }
+    catch(e){ toast('Could not begin Phase '+next+' — nothing was changed ('+(e?.message||e)+')','err'); return; }
   }
   // Beginning any phase resets the countdown to a fresh 48-hour window so
   // every phase opens with the full default bidding time.
@@ -3983,6 +4000,17 @@ function weekTypeLabel(wk,d){
 // snapshot of a phase EARLIER than phN — i.e. the entry is inherited history,
 // not a bid placed in phase phN. (Snapshots store the full merged schedule.)
 function inEarlierSnapshot(cp,phN,u,wk,val){
+  // M-1: A genuine re-bid in phase phN is JSON-identical to an earlier phase's bid on the
+  // same week (re-bidding the same value is allowed and common), so a pure value match would
+  // wrongly hide the re-bid as "inherited" and drop it from phN's report. Classify by phN's
+  // OWN decision record: if this user was decided in phN itself — denied, or approved without
+  // an earlier-phase win of this week — the bid is real to phN and is NOT inherited.
+  const own=cp[phN]||{};
+  const ownAp=Array.isArray(own.approvals?.[wk])?own.approvals[wk]:[];
+  const ownDen=Array.isArray(own.denials?.[wk])?own.denials[wk]:[];
+  let prevWin=false;
+  for(const n of Object.keys(cp)){ if(Number(n)>=Number(phN)) continue; if((cp[n]?.approvals?.[wk]||[]).includes(u)) prevWin=true; }
+  if((ownAp.includes(u)&&!prevWin)||ownDen.includes(u)) return false;
   for(const n of Object.keys(cp)){
     if(Number(n)>=Number(phN)) continue;
     const q=cp[n]?.schedule?.[u]?.[wk];
@@ -4561,9 +4589,11 @@ function buildDashboardRows(phaseFilter){
     const m=phaseFilter&&phaseFilter.match(/^ph(\d+)$/);
     if(m&&Number(m[1])<curPhase){
       const wantPh=Number(m[1]);
-      const phSnap=phasesData.completedPhases?.[wantPh]||{};
+      const phSnapRaw=phasesData.completedPhases?.[wantPh]; const phSnap=phSnapRaw||{};
       let phSched=phSnap.schedule||{}, phAp=phSnap.approvals||{};
-      if(Object.keys(phSched).length===0){
+      // M-10: fall back to live docs only when NO snapshot exists (never merely because a
+      // completed phase had zero bids) — otherwise a zero-bid locked phase shows current live approvals.
+      if(!phSnapRaw){
         phSched={};
         for(const u in scheduleData){ if(scheduleData[u]?.[wk]===undefined) continue; if(getUserBidPhaseAdmin(u,wk)!==wantPh) continue; phSched[u]=scheduleData[u]; }
         phAp=approvalsData||{};
@@ -6416,7 +6446,10 @@ window.openConfirm=function({title,body,okText='Confirm',danger=false,onConfirm,
     const cb=cmCallback;
     cmCancelCallback=null; // confirmed: don't also fire the cancel handler
     closeConfirm();
-    if(cb) await cb();
+    // M-14: global safety net — any confirm action that rejects (e.g. a multi-step write
+    // chain like Complete Phase) used to become a silent unhandled rejection with no
+    // feedback. Surface it so the admin knows the action didn't fully succeed.
+    if(cb){ try{ await cb(); }catch(err){ console.error('Confirm action failed:',err); try{ toast('Action failed: '+(err?.message||err),'err'); }catch(_){} } }
   };
   document.getElementById("confirmModal").classList.add("show");
 };
