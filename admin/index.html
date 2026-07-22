@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 124;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 125;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -4180,7 +4180,8 @@ function _autoCols(rows, nCols, mins){
   rows.forEach(row=>{ if(!Array.isArray(row)) return; for(let c=0;c<nCols;c++){ const v=row[c]; const len=(v==null?'':String(v)).length; if(len>w[c]) w[c]=len; } });
   // Snug but complete: longest value + 3 chars of margin, with a modest per-column floor.
   // The long week/user banner is wrapped separately, so columns don't stretch for it.
-  return w.map((x,c)=>({wch: Math.min(50, Math.max((mins&&mins[c])||10, x+3))}));
+  // Cap raised 50 → 80: name-list columns (Winners/Lost) were clipping at 50.
+  return w.map((x,c)=>({wch: Math.min(80, Math.max((mins&&mins[c])||10, x+3))}));
 }
 // Give each merged banner row (the week/user header, which holds long FTE text) enough
 // HEIGHT to show all of its text wrapped across the merged width, so nothing is cut off.
@@ -4499,11 +4500,10 @@ window.exportDashboard=function(format){
   const fname=`vacation-dashboard-${now.toISOString().slice(0,10)}`;
   if(format==='xlsx'){
     if(typeof XLSX!=='undefined'){
-      // Width the "Closed Phase Approvals" column to the widest value so the text is never
-      // cut off (each closed phase adds ~"P#: 0.0" plus the 3-space separator).
-      const _bpMax=Math.max(22, ...dataRows.map(r=>String(r[6]||'').length+2));
+      // Auto-size EVERY column to its longest value (header row included, title row
+      // excluded — it spills across empty cells). Fixes name-list columns being cut off.
       const ws=XLSX.utils.aoa_to_sheet([[`Vacation Auction Dashboard — ${exportLabel} — exported ${stamp}`],header,...dataRows]);
-      ws['!cols']=[{wch:7},{wch:9},{wch:12},{wch:12},{wch:9},{wch:12},{wch:_bpMax},{wch:28},{wch:20},{wch:20},{wch:28}];
+      ws['!cols']=_autoCols([header,...dataRows], header.length, [7,9,9,12,9,12,22,12,9,12,12]);
       const wb=XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb,ws,'Weekly Summary');
       XLSX.writeFile(wb,fname+'.xlsx');
