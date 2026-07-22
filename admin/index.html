@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 139;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 140;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -6643,10 +6643,13 @@ window.confirmRevokeApproval=function(user,wk){
           <div class="cmodal-warn">The user will return to their original Draw or Under Review status based on the algorithm.</div>`,
     okText:'Revoke',
     onConfirm:async()=>{
-      // Atomic array remove — safe even if approvalsData is stale
-      await updateDoc(approvalsRef,{[wk]:arrayRemove(user)}).catch(async()=>{
-        await setDoc(approvalsRef,{[wk]:[]},{merge:true});
-      });
+      // Atomic array remove — removes ONLY this user, never touching other approvals.
+      // The old fallback here wrote {[wk]:[]} on any error, which wiped EVERY user's
+      // approval for the week (setDoc+merge replaces array fields wholesale). That
+      // fallback gave zero benefit — if arrayRemove fails there's nothing to remove,
+      // or the same error blocks the fallback — so it's dropped for the safe no-op catch
+      // used at every other arrayRemove site.
+      await updateDoc(approvalsRef,{[wk]:arrayRemove(user)}).catch(()=>{});
       await adminLog(user,wk,'admin-revoke',scheduleData[user]?.[wk]);
       toast(`↶ Approval revoked for ${user}`,'warn');
     }
