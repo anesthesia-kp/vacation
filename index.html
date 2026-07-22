@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 85;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 86;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -889,6 +889,11 @@ function getPriorPhaseFteWon(wk){
 }
 
 function computeApprovals(src){
+  // L-10: this USER variant takes a SCHEDULE SNAPSHOT (object), defaulting to the live `data`.
+  // The admin site has a same-named twin that instead takes a boolean `ignoreAdmin` and a
+  // different body (it consults deniedData/approvalsData — which this site must NEVER do, per
+  // the mid-phase privacy invariant). Guard so an accidental cross-port fails loudly, not silently.
+  if(typeof src==='boolean') throw new Error('computeApprovals(src): user variant takes a schedule snapshot object, not a boolean');
   src=src||data;
   const a={};
   mondays.forEach(date=>{
@@ -1074,7 +1079,10 @@ function normalizeWkArrayMap(raw){
 }
 onSnapshot(locksRef,  snap=>{ locksData=snap.exists()?snap.data():{globalLock:false,weeks:{}}; if(!locksData.weeks)locksData.weeks={}; scheduleRender(); });
 onSnapshot(changesRef,snap=>{ changesData=snap.exists()?snap.data():{log:[]}; if(!changesData.log)changesData.log=[]; scheduleRender(); });
-onSnapshot(emailsRef, snap=>{ emailsData=snap.exists()?snap.data():{}; _emailsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
+// L-5: no top-level emailsRef listener — this doc is admin/self-only in firestore.rules, so
+// during the anonymous bootstrap it was rejected permission-denied (a dead, error-logging
+// listener that never recovers). The signed-in path (_subscribeSensitiveOnce + a getDoc)
+// covers it after login; _emailsReady already initializes true so sign-in never waits on it.
 onSnapshot(bestBidsRef,snap=>{ bestBidsData=snap.exists()?snap.data():{}; });
 onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); });
 
@@ -1166,7 +1174,7 @@ function renderBidPool(user){
 onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; if(typeof popcornRefresh==='function') popcornRefresh(); scheduleRender(); });
 onSnapshot(passcodesRef,snap=>{ passcodesData=snap.exists()?snap.data():{}; _passcodesReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; _usernamesReady=true; if(typeof refreshLoginUsers==='function') refreshLoginUsers(); });
-onSnapshot(loginEmailsRef,snap=>{ loginEmailsData=snap.exists()?snap.data():{}; });
+// L-5: no top-level loginEmailsRef listener either — same reason; the signed-in path re-subscribes.
 // Read-only: same rule as the user list — the user site never seeds/overwrites
 // admin-owned docs on an empty read (that pattern resurrected deleted data).
 onSnapshot(fteRef,      snap=>{ if(snap.exists()){ fteData=snap.data(); scheduleRender(); } });
@@ -1452,7 +1460,8 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
       }
     }
   }
-  if(saveInProgress) return false; saveInProgress=true;
+  if(saveInProgress){ showCenterAlert("Still saving your previous change — please wait a moment and try again."); return false; } // L-2: was a silent no-op; tell the user instead
+  saveInProgress=true;
   const safety=setTimeout(()=>{saveInProgress=false;},8000);
   try{
     if(bid===null||bid===undefined){
@@ -1619,6 +1628,19 @@ window.confirmPriority=async function(){
   if(locksData.globalLock||locksData.weeks?.[pendingWeek]){ showCenterAlert("This week has been locked by the admin — no changes allowed."); window.closeModal(); return; }
   if(!isVisibleBid(user,pendingWeek)&&bidLimitStatus(user).atLimit){ showBidLimitModal(); window.closeModal(); return; }
   if(val==="NP"&&!npAllowedNow()){ showCenterAlert("NP bids are not enabled for Phase "+Number(phasesData.currentPhase||1)+" — the admin controls which phases allow them."); window.closeModal(); return; }
+  // L-3: re-validate the prior-phase-won guard, high-demand restriction, and priority-lock
+  // FLOOR at confirm time — not just via disabled dropdown options set at modal-open. A
+  // two-tab race (or an option list built from stale state) could otherwise submit a
+  // below-floor or disallowed bid. All checks run BEFORE any write (gates-first contract).
+  if(getPriorPhaseWinners(pendingWeek).has(user)){ showCenterAlert("You already won this week in a previous phase — it's locked in for you."); window.closeModal(); return; }
+  if((weekMeta[pendingWeek]?.highPriorityOnly) && val!=="NP" && !HIGH_PRIORITY_ALLOWED.has(val)){ showCenterAlert("This high-demand week only accepts bids of 1, 2, 3, 4, \"1,2\", or \"1,2,3\"."); window.closeModal(); return; }
+  if(val!=="NP" && adminSettings.priorityLockEnabled!==false){
+    const _floor=(bestBidsData[user]||{})[pendingWeek];
+    if(_floor!==undefined && _floor!=="NP"){
+      const _parsed=val.includes(',')?val.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n)):parseInt(val);
+      if(priorityScore(_parsed)>priorityScore(_floor)){ showCenterAlert("Your bid on this week can only stay the same or get stronger — a previous bid set a floor here."); window.closeModal(); return; }
+    }
+  }
   const _prev=JSON.parse(JSON.stringify(data));
   if(val==="NP"){
     if(!data[user])data[user]={};
@@ -1634,13 +1656,21 @@ window.confirmPriority=async function(){
       if(!bidTimesData[user]) bidTimesData[user]={};
       bidTimesData[user][pendingWeek]=nowTs;
       await setDoc(bidTimesRef,{[user]:{[pendingWeek]:nowTs}},{merge:true});
+    } else {
+      // L-2: write didn't land (save in flight, or a timer/lock re-check) — undo the optimistic
+      // change on THIS key only. Don't restore `data` wholesale: a fresher snapshot may have
+      // arrived during the await.
+      if(_prev[user]?.[pendingWeek]===undefined){ if(data[user]) delete data[user][pendingWeek]; }
+      else { data[user][pendingWeek]=_prev[user][pendingWeek]; }
+      scheduleRender();
     }
     window.closeModal(); return;
   }
   const priorities=val.split(',').map(p=>parseInt(p.trim())).filter(p=>!isNaN(p));
   if(!priorities.length){showError("Invalid bid");return;}
-  // Check not already used elsewhere
-  const usedElsewhere=[];
+  // Check not already used elsewhere. L-3: seed with prior-phase permanently-consumed numbers
+  // (from weeks won in earlier phases) so a race can't re-bid a number that's gone for good.
+  const usedElsewhere=[...getPriorPhaseUsedPriorities(user)];
   for(const w of myCountedWeeks(user)){ if(w===pendingWeek)continue; const p=data[user][w]; if(p==="NP")continue; Array.isArray(p)?usedElsewhere.push(...p):usedElsewhere.push(p); }
   const conflicts=priorities.filter(p=>usedElsewhere.includes(p));
   if(conflicts.length){showError("Bid "+conflicts.join(",")+" already used on another week.");return;}
@@ -1661,6 +1691,11 @@ window.confirmPriority=async function(){
     if(!bidTimesData[user]) bidTimesData[user]={};
     bidTimesData[user][pendingWeek]=nowTs2;
     await setDoc(bidTimesRef,{[user]:{[pendingWeek]:nowTs2}},{merge:true});
+  } else {
+    // L-2: write didn't land — undo the optimistic change on THIS key only (not `data` wholesale).
+    if(_prev[user]?.[pendingWeek]===undefined){ if(data[user]) delete data[user][pendingWeek]; }
+    else { data[user][pendingWeek]=_prev[user][pendingWeek]; }
+    scheduleRender();
   }
   window.closeModal();
 };
@@ -1997,16 +2032,15 @@ function renderNotifications(user,ap){
 }
 
 function renderSelections(user,ap){
-  // Show all current-phase bids for this user, including denied ones — the user
-  // needs to see that their bid was denied. Untagged bids default to the CURRENT
-  // phase (see getUserBidPhase for rationale).
-  const cur=Number(phasesData.currentPhase||1);
+  // Show all current-phase bids for this user, including denied ones — the user needs to
+  // see their own bids as live projections. M-9: classify each bid's phase through
+  // myCountedWeeks/getUserBidPhase (which infers an untagged bid's phase from the earliest
+  // completed snapshot containing it) instead of reading the raw bidPhase tag inline. The
+  // inline version treated an untagged bid as CURRENT unconditionally, so a bid whose phase
+  // tag write failed and was captured in a completed phase would show here as a phantom
+  // "LOSING" bid while being absent from the board, pool, and engine.
   const uw={};
-  for(const wk of Object.keys(data[user]||{})){
-    const bidPh=bidPhaseData[user]?.[wk];
-    const effectivePh=bidPh===undefined?cur:Number(bidPh);
-    if(effectivePh===cur) uw[wk]=data[user][wk];
-  }
+  for(const wk of myCountedWeeks(user)) uw[wk]=data[user][wk];
   if(!Object.keys(uw).length){selectionsEl.innerHTML='<div class="empty-msg">No selections yet — click a week below.</div>';return;}
   const locked=wk=>locksData.globalLock||locksData.weeks?.[wk];
   selectionsEl.innerHTML=Object.entries(uw).sort((a,b)=>new Date(a[0])-new Date(b[0])).map(([wk,p])=>{
@@ -2067,13 +2101,14 @@ function renderCalendar(user,ap){
   const monthEntries=Object.entries(monthMap);
   // For each month, compute its unlocked + view-filtered weeks
   const monthData=monthEntries.map(([monthName,weeks])=>{
-    const viewFiltered=weeks.filter(weekPassesFilter);
-    const unlocked=viewFiltered.filter(d=>{
+    // L-4: collect locked weeks from ALL of this month's weeks, independent of the board
+    // view filter — otherwise, in a month or "my bids" view, locked weeks outside the filter
+    // vanish and the "Locked Weeks" section wrongly reads "No weeks are currently locked."
+    weeks.forEach(d=>{
       const wk=dateKey(d);
-      const isLocked=locksData.globalLock||!!locksData.weeks?.[wk];
-      if(isLocked){ if(!lockedDates.find(x=>x.getTime()===d.getTime())) lockedDates.push(d); }
-      return !isLocked;
+      if(locksData.globalLock||!!locksData.weeks?.[wk]){ if(!lockedDates.find(x=>x.getTime()===d.getTime())) lockedDates.push(d); }
     });
+    const unlocked=weeks.filter(weekPassesFilter).filter(d=>!(locksData.globalLock||!!locksData.weeks?.[dateKey(d)]));
     return {monthName,unlocked};
   });
   // Each month always gets its own full-width row regardless of how many weeks are shown.
