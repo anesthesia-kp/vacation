@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 134;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 135;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -519,6 +519,16 @@ thead th{color:var(--t2)}
           <div class="trow" id="mqRowTop" style="align-items:center;margin-top:10px;padding-top:12px;border-top:1px solid var(--b1)">
             <div><div class="trow-label">Outbid alerts — <span id="mqCountTop" style="font-family:var(--mono)">0</span> queued</div><div class="trow-desc">Alerts queued when a user is outbid; sent automatically, or flush them now</div></div>
             <button class="btn" style="flex:unset;white-space:nowrap;background:rgba(180,83,9,.1);color:var(--yellow);border:1px solid rgba(180,83,9,.35)" onclick="flushMailQueue()">🔔 Send Pending</button>
+          </div>
+          <div class="trow" style="align-items:center;margin-top:10px;padding-top:12px;border-top:1px solid var(--b1)">
+            <div>
+              <div class="trow-label">EmailJS usage</div>
+              <div class="trow-desc" id="mailMeter">Loading e-mail count…</div>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:nowrap">
+              <input type="number" id="mailMeterInput" class="inp" style="width:84px;padding:3px 6px" min="0" max="100000" step="1" placeholder="set #" title="Enter the exact count from your EmailJS dashboard to correct the meter">
+              <button class="btn" style="flex:unset;white-space:nowrap;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="setMailMeter()">✏️ Update</button>
+            </div>
           </div>
         </div>
         <div class="card big-card">
@@ -3621,10 +3631,10 @@ function initAppDenialsFilters(){
 // Every e-mail counts against the EmailJS monthly quota — track it (both sites
 // increment the same per-month counter; the dashboard meter reads it).
 const mailStatsRef = doc(db,"vacations","mailStats");
-// EmailJS's monthly quota resets on the 6th (the account's billing day), NOT
-// on the 1st — count within the same window so the meter matches their site.
+// EmailJS's monthly quota resets on the 22nd (the account's billing day), NOT
+// on the 1st — count within the same window so the meter matches their dashboard.
 function emailCycleKey(){
-  const RESET_DAY=6;
+  const RESET_DAY=22;
   const d=new Date();
   let y=d.getFullYear(),m=d.getMonth();
   if(d.getDate()<RESET_DAY){ m-=1; if(m<0){m=11;y-=1;} }
@@ -3753,31 +3763,24 @@ async function welcomeOnce(user,email){
 window._welcomeOnce=welcomeOnce; // exposed for testing
 let mailStatsData={};
 onSnapshot(mailStatsRef, snap=>{ mailStatsData=snap.exists()?snap.data():{}; renderMailMeter(); });
+const MAIL_QUOTA=2000; // EmailJS paid tier — resets on the 22nd
 function renderMailMeter(){
   const el=document.getElementById('mailMeter'); if(!el) return;
   const n=Number(mailStatsData[emailCycleKey()]||0);
-  const QUOTA=200; // EmailJS free tier
-  const color=n>=190?'var(--red)':n>=150?'var(--yellow)':'var(--t2)';
-  const warn=n>=190?' — quota nearly exhausted!':n>=150?' — getting close to the free limit':'';
-  el.innerHTML=`<span style="color:${color}">📊 E-mails this quota cycle (resets the 6th): <strong>${n}</strong> of ${QUOTA} free (EmailJS)${warn}</span>
-    <button class="btn btn-ghost" style="margin-left:8px;padding:2px 8px;font-size:11px" onclick="syncMailMeter()" title="Enter the exact count shown on your EmailJS dashboard to reconcile">✏️ Sync</button>`;
+  const color=n>=MAIL_QUOTA?'var(--red)':n>=Math.round(MAIL_QUOTA*0.9)?'var(--yellow)':'var(--t2)';
+  const warn=n>=MAIL_QUOTA?' — monthly limit reached!':n>=Math.round(MAIL_QUOTA*0.9)?' — approaching the monthly limit':'';
+  el.innerHTML=`<span style="color:${color}"><strong>${n.toLocaleString()}</strong> of ${MAIL_QUOTA.toLocaleString()} sent this cycle (resets the 22nd)${warn}</span>`;
 }
-// Reconcile with the number EmailJS itself reports (e.g. e-mails sent before
-// this meter existed, or from anywhere outside the site).
-window.syncMailMeter=function(){
-  openConfirm({
-    title:'✏️ Sync E-mail Meter',
-    body:`<div>Enter the usage shown on your EmailJS dashboard (the "X / 200" number):</div>
-          <div style="margin-top:10px;text-align:center"><input type="number" id="mailSyncInput" class="inp" style="width:110px;text-align:center" min="0" max="5000" step="1"></div>
-          <div class="cmodal-info" style="margin-top:10px">The meter will continue counting up from this number for the current cycle.</div>`,
-    okText:'Set Count',
-    onConfirm:async()=>{
-      const v=parseInt(document.getElementById('mailSyncInput')?.value,10);
-      if(isNaN(v)||v<0){ toast('Enter a valid number','warn'); return; }
-      await setDoc(mailStatsRef,{[emailCycleKey()]:v},{merge:true});
-      toast('📊 E-mail meter set to '+v,'ok');
-    }
-  });
+// Correct the meter to match the exact count on the EmailJS dashboard — e.g. after
+// e-mails were sent outside the site, or if the counter ever drifts. The meter then
+// keeps counting up from the number you enter for the rest of this cycle.
+window.setMailMeter=async function(){
+  const inp=document.getElementById('mailMeterInput');
+  const v=parseInt(inp?.value,10);
+  if(isNaN(v)||v<0){ toast('Enter a valid number (0 or higher)','warn'); return; }
+  await setDoc(mailStatsRef,{[emailCycleKey()]:v},{merge:true});
+  if(inp) inp.value='';
+  toast('📊 E-mail count set to '+v.toLocaleString(),'ok');
 };
 
 // Send reminder emails to users who haven't placed any bids in the CURRENT phase.
