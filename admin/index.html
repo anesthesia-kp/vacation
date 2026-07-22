@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 145;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 146;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -685,7 +685,8 @@ thead th{color:var(--t2)}
         <div class="card-title">All Users (<span id="userCount">0</span>)</div>
         <div class="page-sub" style="margin-bottom:12px">One row per user. "Initials" is the account ID admin sets. The <strong>Login e-mail (Google)</strong> is the account each user signs in with; the <strong>KP e-mail</strong> is their Kaiser address, which receives the same alerts as the login e-mail (users can enter their own at login). Delete removes the user and all their data.</div>
         <div id="fteLockNote" style="font-size:12px;color:var(--yellow);font-weight:600;margin-bottom:10px"></div>
-        <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
+          <button class="btn" style="background:rgba(59,130,246,.12);color:var(--blue);border:1px solid rgba(59,130,246,.3)" onclick="syncEmailToUser()" title="Rebuilds the security map that lets each user edit only their OWN bids. Runs automatically when you change login e-mails; use this to force a refresh.">🔑 Sync login map (security)</button>
           <button class="btn btn-danger" style="background:rgba(198,40,40,.22);border-color:rgba(198,40,40,.6)" onclick="deleteAllUsers()">🗑 Delete All Users</button>
         </div>
         <div style="overflow-x:auto;max-height:560px;overflow-y:auto;border:1px solid var(--b1)">
@@ -1041,6 +1042,39 @@ const worstBidsRef = doc(db,"vacations","bestBids");
 const slcRef       = doc(db,"vacations","slcMap"); // per-week Smart Lock Control
 const emailsRef   = doc(db,"vacations","emails"); // SECONDARY e-mail (user → address)
 const loginEmailsRef = doc(db,"vacations","loginEmails"); // PRIMARY / Google login e-mail (user → address)
+// [H-3] Reverse map { google-email-lowercase: [INITIALS, …] }, the INVERSE of loginEmails.
+// The Firestore security rules read this to verify a user only writes their OWN bids
+// (schedule/bidPhase/bestBids/bidTimes). The admin site keeps it in sync automatically
+// whenever loginEmails changes (below), so nothing here needs manual upkeep in normal use.
+const emailToUserRef = doc(db,"vacations","emailToUser");
+let emailToUserData={};
+onSnapshot(emailToUserRef, snap=>{ emailToUserData=snap.exists()?snap.data():{}; });
+function _buildEmailToUser(){
+  const map={};
+  for(const initials of Object.keys(loginEmailsData||{})){
+    const em=String(loginEmailsData[initials]||'').trim().toLowerCase();
+    if(!em||!em.includes('@')) continue;
+    (map[em]=map[em]||[]).push(initials);
+  }
+  return map;
+}
+// Rebuild + write the reverse map only when it actually differs from what's stored, so
+// this can run on every loginEmails change (and page load) without spamming writes.
+async function maybeSyncEmailToUser(){
+  try{
+    const want=_buildEmailToUser();
+    if(JSON.stringify(want)!==JSON.stringify(emailToUserData||{})){
+      await setDoc(emailToUserRef, want);
+      emailToUserData=want;
+    }
+    return true;
+  }catch(e){ console.warn('emailToUser sync failed (need admin sign-in):',e); return false; }
+}
+// Manual trigger for the one-time initial population during deploy (and a safety button).
+window.syncEmailToUser=async function(){
+  const ok=await maybeSyncEmailToUser();
+  toast(ok?'🔑 Login map synced ('+Object.keys(_buildEmailToUser()).length+' addresses)':'Sync failed — make sure you are signed in as admin', ok?'ok':'err');
+};
 const welcomeLogRef = doc(db,"vacations","welcomeLog"); // {sent:{<addrKey>:true}} — addresses already welcomed THIS cycle (cleared by Reset Auction)
 const passwordsRef = doc(db,"vacations","passcodes");
 const userListRef  = doc(db,"vacations","userList");
@@ -1319,7 +1353,7 @@ onSnapshot(worstBidsRef, snap=>{
   if(panel&&panel.classList.contains("on")) renderBestBidsTable();
 });
 onSnapshot(emailsRef,   snap=>{ emailsData=snap.exists()?snap.data():{}; emailsDataAdmin=emailsData; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
-onSnapshot(loginEmailsRef, snap=>{ loginEmailsData=snap.exists()?snap.data():{}; loginEmailsDataAdmin=loginEmailsData; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
+onSnapshot(loginEmailsRef, snap=>{ loginEmailsData=snap.exists()?snap.data():{}; loginEmailsDataAdmin=loginEmailsData; maybeSyncEmailToUser(); const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); }); // [H-3] keep the reverse map current on every login-email change
 onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; if(typeof renderInsights==='function') renderInsights(); });
 onSnapshot(passwordsRef,snap=>{ passwordsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });

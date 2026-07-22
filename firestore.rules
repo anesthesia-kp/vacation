@@ -58,6 +58,19 @@ service cloud.firestore {
       return docId in ['loginEmails', 'emails', 'adminAccess'];
     }
 
+    // ── Admin-READ-only documents (live mid-phase decisions) [H-4] ────────────
+    // approvals / denials hold the admin's LIVE approve/deny decisions for the
+    // current phase. They must never leak before results e-mails go out: the user
+    // site deliberately does not listen to them, but that is only UI hygiene — at
+    // the rules layer they were world-readable, so anyone could read the live
+    // winner/loser list from devtools mid-phase. Reads are now admin-only. NOTE:
+    // `phases` is intentionally NOT here — completedPhases snapshots must stay
+    // world-readable for the user site's phase-history reports (those are the
+    // public channel, released only when a phase is completed).
+    function isAdminReadDoc(docId) {
+      return docId in ['approvals', 'denials'];
+    }
+
     // ── Vacation Auction collection ───────────────────────────────────────────
     // Admin-only documents (the auction's control surface + the shared roster,
     // admin list, and login-email allow-list). loginEmails is admin-only so users
@@ -81,14 +94,18 @@ service cloud.firestore {
     }
 
     match /vacations/{docId} {
-      // Public read for the non-sensitive docs the anonymous login screen needs
-      // (roster, usernames, phases, schedule, …); sensitive docs require sign-in.
-      allow read: if !isSensitiveDoc(docId) || isVerifiedAccount();
+      // Read: live-decision docs (approvals/denials) require admin; sensitive PII
+      // docs require a verified sign-in; everything else (roster, usernames, phases,
+      // schedule, …) stays public for the anonymous login screen.
+      allow read: if isAdminReadDoc(docId) ? isAdmin()
+                   : (isSensitiveDoc(docId) ? isVerifiedAccount() : true);
       // welcomeLog only records which addresses have already been welcomed (no PII, no
-      // control data). Any verified Google sign-in may write it, so the "already
-      // welcomed" mark can never be silently denied and cause duplicate welcome e-mails.
+      // control data). [L-8] Writable by a REGISTERED user or an admin — tightened from
+      // "any verified Google account" so a signed-in outsider who isn't in the auction
+      // can't touch it. The "already welcomed" mark still can't be silently denied for
+      // legitimate users, so duplicate welcome e-mails stay prevented.
       allow write: if (isAdminOnlyDoc(docId) && isAdmin())
-                   || (docId == 'welcomeLog' && isVerifiedAccount())
+                   || (docId == 'welcomeLog' && (isRegisteredUser() || isAdmin()))
                    || (!isAdminOnlyDoc(docId) && (isRegisteredUser() || isAdmin()));
     }
 
@@ -109,8 +126,12 @@ service cloud.firestore {
                  get(/databases/$(database)/documents/dailysched/adminAccess).data.get('emails', []))
             || (!schedAccessDocExists() && isDefaultAdmin()));
     }
+    // [H-5, part 1] 'fteMap' added — the schedule FTE source is only ever read/written
+    // by sched-admin, so locking it to schedule-admins closes a tampering hole with no
+    // functional impact. (The deeper H-5 fix for requests/swaps/auditLog — per-author
+    // validation — needs a subcollection migration and is deferred with the schedule site.)
     function isSchedAdminOnlyDoc(docId) {
-      return docId in ['shiftCatalog', 'eligibility', 'openShifts', 'callTotals', 'callBaseline', 'adminAccess']
+      return docId in ['shiftCatalog', 'eligibility', 'openShifts', 'callTotals', 'callBaseline', 'fteMap', 'adminAccess']
         || docId.matches('sched_.*');
     }
 
