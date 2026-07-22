@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 126;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 127;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -4229,7 +4229,7 @@ window.exportPhaseResults=function(format,scopeOverride){
       const BORDER={top:{style:'thin',color:{rgb:'D7DEE6'}},bottom:{style:'thin',color:{rgb:'D7DEE6'}},left:{style:'thin',color:{rgb:'D7DEE6'}},right:{style:'thin',color:{rgb:'D7DEE6'}}};
       const S_TITLE={font:{bold:true,sz:15,color:{rgb:'0F172A'}}};
       const S_STAMP={font:{sz:10,color:{rgb:'587690'}}};
-      const S_WKHEAD={fill:{fgColor:{rgb:'0F2744'}},font:{bold:true,sz:11,color:{rgb:'FFFFFF'}},alignment:{vertical:'center',wrapText:true}};
+      const S_WKHEAD={fill:{fgColor:{rgb:'0F2744'}},font:{bold:true,sz:11,color:{rgb:'FFFFFF'}},alignment:{vertical:'center'}}; // single line — no wrap
       const S_COLHEAD={fill:{fgColor:{rgb:'F1F5F9'}},font:{bold:true,sz:10,color:{rgb:'334155'}},border:BORDER};
       const S_CELL={font:{sz:10,color:{rgb:'0F172A'}},border:BORDER};
       const S_USER={font:{bold:true,sz:10,color:{rgb:'0F172A'}},border:BORDER};
@@ -4239,6 +4239,7 @@ window.exportPhaseResults=function(format,scopeOverride){
       const cols=showPhaseCol?['User','Bid','Phase','Projected','Result']:['User','Bid','Projected','Result'];
       const nCols=cols.length;
       const aoa=[]; const styles=[]; const merges=[]; const rowHts=[];
+      let maxBanner=0; const colHeadRows=[]; // longest week-banner text; rows holding column headers
       const push=(cells,cellStyles,ht)=>{aoa.push(cells);styles.push(cellStyles||[]);rowHts.push(ht||null);};
       const S_PHASE={fill:{fgColor:{rgb:'1D4ED8'}},font:{bold:true,sz:13,color:{rgb:'FFFFFF'}},alignment:{horizontal:'center',vertical:'center'}};
       push([`Vacation Auction — Bids by Week`],[S_TITLE],22);
@@ -4253,11 +4254,14 @@ window.exportPhaseResults=function(format,scopeOverride){
         const r=aoa.length;
         const headTxt=`Week ${g.wn} · ${g.date}${g.type?' — '+g.type:''}`;
         const fteTxt=`Cumulative — approved ${g.fte.approved} · available ${g.fte.available} of ${g.fte.cap}`+((g.byPhase&&g.byPhase.length)?`   ·   Closed phase approvals — ${g.byPhase.map(x=>`P${x.phase}: ${x.approved}`).join('   -   ')}`:'');
-        // Week header: one merged cell — FTE status sits right next to the week/date.
+        // Week header: one merged cell on ONE LINE at normal row height — FTE status
+        // sits right next to the week/date. Width comes from padding columns (below).
         const headCells=Array(nCols).fill(''); headCells[0]=`${headTxt}   ·   ${fteTxt}`;
+        if(headCells[0].length>maxBanner) maxBanner=headCells[0].length;
         const headStyles=Array(nCols).fill(S_WKHEAD);
-        push(headCells,headStyles,18);
+        push(headCells,headStyles);
         merges.push({s:{r,c:0},e:{r,c:nCols-1}});
+        colHeadRows.push(aoa.length);
         push(cols,cols.map(()=>S_COLHEAD));
         if(!g.bids.length){
           const nr=Array(nCols).fill(''); nr[0]='(no bids)'; push(nr,[S_DASH]);
@@ -4283,11 +4287,19 @@ window.exportPhaseResults=function(format,scopeOverride){
       }));
       ws['!merges']=merges;
       { const _mr=new Set(); merges.forEach(m=>{ if(m.e.c>m.s.c) for(let r=m.s.r;r<=m.e.r;r++) _mr.add(r); });
-        // Generous floors: short values (names, bids) get roomy columns anyway, which
-        // both spaces the table out and gives the merged week banner more width to wrap in.
-        const _mins=showPhaseCol?[20,10,9,14,16]:[20,10,14,16];
-        ws['!cols']=_autoCols(aoa.filter((_,r)=>!_mr.has(r)), nCols, _mins);
-        _bannerHeights(aoa, _mr, ws['!cols'], rowHts); }
+        const _mins=showPhaseCol?[14,9,8,12,14]:[14,9,12,14];
+        const dataCols=_autoCols(aoa.filter((_,r)=>!_mr.has(r)), nCols, _mins);
+        // ONE-LINE week banners at normal row height: instead of wrapping the long
+        // banner into a tall row, append merge-only padding columns and widen every
+        // full-width band (title / phase / stamp / week headers) across them.
+        const dataW=dataCols.reduce((a,c)=>a+c.wch,0);
+        const EXTRA_W=10, need=Math.ceil(maxBanner*1.12)+2; // bold text runs ~12% wider than its character count
+        const nExtra=Math.max(0, Math.ceil((need-dataW)/EXTRA_W));
+        ws['!cols']=dataCols.concat(Array.from({length:nExtra},()=>({wch:EXTRA_W})));
+        merges.forEach(m=>{ if(m.e.c===nCols-1) m.e.c=nCols+nExtra-1; });
+        // Carry the gray column-header band across the padding columns so each week block looks continuous.
+        colHeadRows.forEach(r=>{ for(let c=nCols;c<nCols+nExtra;c++){ ws[XLSX.utils.encode_cell({r,c})]={t:'s',v:'',s:S_COLHEAD}; } });
+        if(nExtra>0){ const rg=XLSX.utils.decode_range(ws['!ref']); rg.e.c=nCols+nExtra-1; ws['!ref']=XLSX.utils.encode_range(rg); } }
       ws['!rows']=rowHts.map(h=>h?{hpt:h}:{});
       const wb=XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb,ws,'Bids by Week');
