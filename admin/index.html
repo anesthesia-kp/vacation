@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 125;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 126;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -4187,7 +4187,11 @@ function _autoCols(rows, nCols, mins){
 // HEIGHT to show all of its text wrapped across the merged width, so nothing is cut off.
 function _bannerHeights(aoa, mergedRowSet, cols, rowHts){
   const totalW=Math.max(20, cols.reduce((a,c)=>a+(c.wch||0),0)-2);
-  mergedRowSet.forEach(r=>{ const txt=String((aoa[r]&&aoa[r][0])||''); const lines=Math.max(1,Math.ceil(txt.length/totalW)); rowHts[r]=Math.max(rowHts[r]||0, lines*15); });
+  // Excel wraps bold text at word boundaries, so fewer characters fit per line than the
+  // raw column-width count suggests (~85%). 16pt per line + 8pt padding so no line is
+  // ever clipped and the banner has breathing room.
+  const perLine=Math.max(12, totalW*0.85);
+  mergedRowSet.forEach(r=>{ const txt=String((aoa[r]&&aoa[r][0])||''); const lines=Math.max(1,Math.ceil(txt.length/perLine)); rowHts[r]=Math.max(rowHts[r]||0, lines*16+8); });
 }
 function openReportTab(title,phaseLabel,subtitle,bodyHtml,autoPrint){
   const w=window.open('','_blank');
@@ -4279,7 +4283,9 @@ window.exportPhaseResults=function(format,scopeOverride){
       }));
       ws['!merges']=merges;
       { const _mr=new Set(); merges.forEach(m=>{ if(m.e.c>m.s.c) for(let r=m.s.r;r<=m.e.r;r++) _mr.add(r); });
-        const _mins=showPhaseCol?[12,9,7,11,14]:[12,9,11,14];
+        // Generous floors: short values (names, bids) get roomy columns anyway, which
+        // both spaces the table out and gives the merged week banner more width to wrap in.
+        const _mins=showPhaseCol?[20,10,9,14,16]:[20,10,14,16];
         ws['!cols']=_autoCols(aoa.filter((_,r)=>!_mr.has(r)), nCols, _mins);
         _bannerHeights(aoa, _mr, ws['!cols'], rowHts); }
       ws['!rows']=rowHts.map(h=>h?{hpt:h}:{});
