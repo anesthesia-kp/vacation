@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 89;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 90;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -514,7 +514,8 @@ body{zoom:1.15}
         <li>Vacation selections are now called "bids" — the process works like an auction, where bids compete for limited slots based on priority</li>
         <li>Enter your bids early, it benefits everyone</li>
         <li>Sniping is not possible, do not try it</li>
-        <li id="ruleMaxBids">There is a running limit on how many weeks you can win across the auction, and it grows each phase — only weeks you win count against it. Only bid for the number of weeks your accrued vacation and ATO will allow for</li>
+        <li id="ruleMaxBids">Running cap on total weeks you can win across the auction — only weeks you win count</li>
+        <li>Only bid for the number of weeks your accrued vacation and ATO will allow for</li>
         <li>Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better</li>
         <li>On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used</li>
         <li>NP bids may only be used during the phases for which admin has turned them on</li>
@@ -1122,16 +1123,16 @@ function priorApprovedCount(user){
   }
   return c;
 }
-// Simple-language description of the cumulative caps — shared wording with the welcome e-mail.
+// Short description of the cumulative caps — shared wording with the welcome e-mail.
 function cumulativeCapDescription(){
   const caps=[1,2,3,4].map(getCumulativeCap);
-  if(caps.every(c=>c===null)) return 'There is no limit on how many weeks you can bid on — you are limited only by the bid numbers you have available';
-  const parts=[1,2,3,4].map(p=>{ const c=caps[p-1]; const label=(p===1?'Phase 1':('Through Phase '+p)); return label+': '+(c===null?'no limit':('up to '+c+' week'+(c!==1?'s':''))); });
-  return 'There is a running limit on how many weeks you can WIN across the whole auction, and it grows each phase. Only weeks you WIN count against it — weeks you do not win free up again for the next phase, and NP counts like any other bid. The running totals are — '+parts.join(' · ')+'. For example: if the cap through Phase 2 is 6 and you won 1 week in Phase 1, you can place up to 5 more bids in Phase 2';
+  if(caps.every(c=>c===null)) return 'No cap on how many weeks you can bid on — you are limited only by the bid numbers you have available';
+  const parts=[1,2,3,4].map(p=>{ const c=caps[p-1]; const label=(p===1?'Phase 1':('Through Phase '+p)); return label+': '+(c===null?'no limit':c); });
+  return 'Running cap on total weeks you can win across the auction (only weeks you win count) — '+parts.join(' · ');
 }
 function updateBidLimitRule(){
   const el=document.getElementById('ruleMaxBids'); if(!el) return;
-  el.textContent=cumulativeCapDescription()+'. Only bid for the number of weeks your accrued vacation and ATO will allow for';
+  el.textContent=cumulativeCapDescription();
   if(typeof renderBidPool==='function'){ const u=getCurrentUser?.(); if(u) renderBidPool(u); }
 }
 
@@ -2705,7 +2706,7 @@ function timerRulesEmailText(){
   return `Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}`;
 }
 function buildWelcomeEmailBody(user){
-  const limLine=cumulativeCapDescription()+'. Only bid for the number of weeks your accrued vacation and ATO will allow for';
+  const limLine=cumulativeCapDescription();
   const B=_emBold;
   // No hard wrapping — each bullet is one line that soft-wraps to the full
   // width of the reader's mail client. Blank lines only between paragraphs.
@@ -2727,6 +2728,7 @@ ${bullets([
   `Enter your bids early, it benefits everyone`,
   `Sniping is not possible, do not try it`,
   limLine,
+  `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
   `Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better`,
   `On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used`,
   `NP bids may only be used during the phases for which they are enabled by the admin`,
