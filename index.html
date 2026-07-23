@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 92;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 93;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -518,7 +518,7 @@ body{zoom:1.15}
         <li>Only bid for the number of weeks your accrued vacation and ATO will allow for</li>
         <li>Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better</li>
         <li>On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used</li>
-        <li>NP bids may only be used during the phases for which admin has turned them on</li>
+        <li id="ruleNpPhases">NP bids may only be used during the phases for which admin has turned them on</li>
         <li>To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week</li>
       </ul>
       <div style="margin-top:12px;color:#2c4257;font-weight:600">⏱ Timer Rules</div>
@@ -1047,7 +1047,7 @@ function renderTimerRulesInfo(){
   let items='';
   st.forEach((s,i)=>{ items+= i===0 ? li('At the start of the round', s.hours) : li('After '+s.days+' days', s.hours); });
   let quiet='';
-  if(r.quietEnabled){ quiet=`<p style="margin:8px 0 0">Once the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between <strong>${fmtHour12(r.quietStart)}</strong> and <strong>${fmtHour12(r.quietEnd)}</strong> Pacific time, it's pushed to ${fmtHour12(r.quietEnd)} so nothing closes while you're asleep.</p>`; }
+  if(r.quietEnabled){ quiet=`<p style="margin:8px 0 0">Once the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between <strong>${fmtHour12(r.quietStart)}</strong> and <strong>${fmtHour12(r.quietEnd)}</strong> Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.</p>`; }
   let owHtml='';
   if(r.openingWindow){ owHtml=`<p style="margin:0 0 6px"><strong>Phase 1 opens with a ${r.openingWindow.days}-day window:</strong> the timer counts down continuously (bids do NOT reset it) until <strong>${(st[0]||{}).hours||48} hours</strong> remain — then the reset rules below take over.</p>`; }
   el.innerHTML=owHtml+`<p style="margin:0 0 6px">Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:</p><ul style="margin:0 0 0 18px;padding:0">${items}</ul>${quiet}`;
@@ -1144,9 +1144,23 @@ function cumulativeCapDescription(){
   const parts=[1,2,3,4].map(p=>{ const c=caps[p-1]; const label=(p===1?'Phase 1':('Through Phase '+p)); return label+': '+(c===null?'no limit':c); });
   return 'Running cap on total weeks you can win across the auction (only weeks you win count) — '+parts.join(' · ');
 }
+// NP allowed for a specific phase — same defaults/overrides as npAllowedNow.
+function npAllowedForPhase(ph){
+  const m=adminSettings?.npAllowedPhases||{};
+  const v=m[ph];
+  return v===undefined?(Number(ph)>=3):v!==false;
+}
+// Exact NP availability from the admin's settings — shared wording with the welcome e-mail.
+function npPhasesDescription(){
+  const on=[1,2,3,4].filter(p=>npAllowedForPhase(p));
+  if(on.length===4) return 'NP bids may be used during any phase';
+  if(!on.length) return 'NP bids are not allowed in any phase';
+  return 'NP bids may only be used during phase'+(on.length!==1?'s':'')+' '+(on.length===1?String(on[0]):on.slice(0,-1).join(', ')+' and '+on[on.length-1]);
+}
 function updateBidLimitRule(){
   const el=document.getElementById('ruleMaxBids'); if(!el) return;
   el.textContent=cumulativeCapDescription();
+  const np=document.getElementById('ruleNpPhases'); if(np) np.textContent=npPhasesDescription();
   if(typeof renderBidPool==='function'){ const u=getCurrentUser?.(); if(u) renderBidPool(u); }
 }
 
@@ -2733,7 +2747,7 @@ function timerRulesEmailText(){
   const r=getTimerRules(), st=r.stages;
   const lines=st.map((s,i)=> i===0 ? `At the start of the round: resets to ${s.hours} hours` : `After ${s.days} days: resets to ${s.hours} hours`);
   let quiet='';
-  if(r.quietEnabled){ quiet=`\n\nOnce the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between ${fmtHour12(r.quietStart)} and ${fmtHour12(r.quietEnd)} Pacific time, it's pushed to ${fmtHour12(r.quietEnd)} so nothing closes while you're asleep.`; }
+  if(r.quietEnabled){ quiet=`\n\nOnce the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between ${fmtHour12(r.quietStart)} and ${fmtHour12(r.quietEnd)} Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.`; }
   let owTxt='';
   if(r.openingWindow){ owTxt=`\n\nPhase 1 opens with a ${r.openingWindow.days}-day window: the timer counts down continuously (bids do NOT reset it) until ${(st[0]||{}).hours||48} hours remain — then the reset rules above take over.`; }
   return `Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}${owTxt}`;
@@ -2764,7 +2778,7 @@ ${bullets([
   `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
   `Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better`,
   `On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used`,
-  `NP bids may only be used during the phases for which they are enabled by the admin`,
+  npPhasesDescription(),
   `To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`
 ])}
 
