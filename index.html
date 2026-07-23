@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 87;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 88;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1653,12 +1653,16 @@ window.confirmPriority=async function(){
   // two-tab race (or an option list built from stale state) could otherwise submit a
   // below-floor or disallowed bid. All checks run BEFORE any write (gates-first contract).
   if(getPriorPhaseWinners(pendingWeek).has(user)){ showCenterAlert("You already won this week in a previous phase — it's locked in for you."); window.closeModal(); return; }
-  if((weekMeta[pendingWeek]?.highPriorityOnly) && val!=="NP" && !HIGH_PRIORITY_ALLOWED.has(val)){ showCenterAlert("This high-demand week only accepts bids of 1, 2, 3, 4, \"1,2\", or \"1,2,3\"."); window.closeModal(); return; }
-  if(val!=="NP" && adminSettings.priorityLockEnabled!==false){
+  // High-demand weeks accept only the allowed numeric set — NP is NOT allowed either.
+  // (NP previously slipped past this re-check via a val!=="NP" guard.)
+  if((weekMeta[pendingWeek]?.highPriorityOnly) && (val==="NP" || !HIGH_PRIORITY_ALLOWED.has(val))){ showCenterAlert("This high-demand week only accepts bids of 1, 2, 3, 4, \"1,2\", or \"1,2,3\"."); window.closeModal(); return; }
+  // Priority-lock FLOOR re-check now also covers NP: NP (score 99) is weaker than any
+  // numbered floor, so submitting NP under a numeric floor is a below-floor bid and is blocked.
+  if(adminSettings.priorityLockEnabled!==false){
     const _floor=(bestBidsData[user]||{})[pendingWeek];
-    if(_floor!==undefined && _floor!=="NP"){
-      const _parsed=val.includes(',')?val.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n)):parseInt(val);
-      if(priorityScore(_parsed)>priorityScore(_floor)){ showCenterAlert("Your bid on this week can only stay the same or get stronger — a previous bid set a floor here."); window.closeModal(); return; }
+    if(_floor!==undefined){
+      const _parsed=val==="NP"?"NP":(val.includes(',')?val.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n)):parseInt(val));
+      if(priorityScore(_parsed)>priorityScore(_floor)){ showCenterAlert("Your bid on this week can only stay the same or get stronger — a previous bid set a floor here."+(val==="NP"?" NP is weaker than your existing bid.":"")); window.closeModal(); return; }
     }
   }
   const _prev=JSON.parse(JSON.stringify(data));

@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 150;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 151;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -898,6 +898,15 @@ thead th{color:var(--t2)}
         <div class="page-sub">Fill all users with random bids for testing purposes. Users who already placed bids are topped up to the target — their existing bids count.</div>
       </div>
       <div id="simStatusBanner" style="display:none;padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:13px;font-weight:600"></div>
+      <!-- Simulator master switch. Default OFF. Must be ON to run the simulator, and turning
+           it ON during a live auction throws an aggressive confirm (toggleSimulator). -->
+      <div id="simArmedBanner" style="display:none;padding:12px 16px;border-radius:10px;margin-bottom:14px;background:rgba(220,38,38,.12);border:2px solid var(--red);color:var(--red);font-weight:800;font-size:14px;line-height:1.4">🎲 SIMULATOR IS ARMED — this is a TESTING tool. Turn it OFF before real clinicians bid: while armed it can e-mail real users about fake bids and reset the live countdown.</div>
+      <div class="card" style="margin-bottom:12px">
+        <div class="trow" style="align-items:center;margin-bottom:6px">
+          <div><div class="trow-label">Simulator Mode</div><div class="trow-desc">Master switch — must be ON to run the simulator below. Keep it <strong>OFF during a live auction</strong>.</div></div>
+          <div class="tog" id="simulatorToggle" onclick="toggleSimulator()"></div>
+        </div>
+      </div>
       <div class="card" style="margin-bottom:12px">
         <div class="card-title">Run Simulation</div>
         <p style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:14px">
@@ -1018,7 +1027,7 @@ thead th{color:var(--t2)}
 
 <script type="module">
 import { initializeApp }    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, getDoc, increment, writeBatch, onSnapshot as _onSnapshot }
+import { getFirestore, doc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, getDoc, increment, writeBatch, runTransaction, onSnapshot as _onSnapshot }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
@@ -2723,6 +2732,16 @@ function syncControls(){
   if(kp) kp.className="tog"+(adminSettings.kpEmailPromptEnabled!==false?" on":"");
   const pl=document.getElementById("prioLockToggle");
   if(pl) pl.className="tog"+(adminSettings.priorityLockEnabled!==false?" on":"");
+  // Simulator master switch: red-when-armed toggle, armed banner, and run buttons disabled while OFF.
+  const simOn=adminSettings.simulatorEnabled===true;
+  const sm=document.getElementById("simulatorToggle");
+  if(sm) sm.className="tog"+(simOn?" on-red":"");
+  const sab=document.getElementById("simArmedBanner");
+  if(sab) sab.style.display=simOn?"block":"none";
+  const _rsb=document.getElementById("runSimBtn");
+  if(_rsb){ _rsb.disabled=!simOn; _rsb.style.opacity=simOn?"1":".45"; _rsb.style.cursor=simOn?"":"not-allowed"; _rsb.title=simOn?"":"Turn on Simulator Mode first"; }
+  const _rsab=document.getElementById("runSimApprovalsBtn");
+  if(_rsab){ _rsab.disabled=!simOn; _rsab.style.opacity=simOn?"1":".45"; _rsab.style.cursor=simOn?"":"not-allowed"; _rsab.title=simOn?"":"Turn on Simulator Mode first"; }
   // Review threshold slider/textbox
   const rSl=document.getElementById("reviewThresholdSlider");
   const rTx=document.getElementById("reviewThresholdText");
@@ -2836,6 +2855,34 @@ window.toggleWelcomeEmails=async function(){
   const cur=adminSettings.welcomeEmailsEnabled!==false;
   await setDoc(adminRef,{welcomeEmailsEnabled:!cur},{merge:true});
   toast(!cur?"✉️ Welcome e-mails ON":"🔕 Welcome e-mails OFF",!cur?"ok":"warn");
+};
+// Simulator master switch. Default OFF. Arming it during a LIVE auction (Phase 1 begun)
+// throws an aggressive double confirm, because running the sim on live data e-mails real
+// clinicians about fake bids, resets the live countdown, and can overwrite real bids.
+window.toggleSimulator=async function(){
+  const cur=adminSettings.simulatorEnabled===true;
+  if(!cur){
+    if(phase1Started()){
+      const w1=confirm('⚠️  DANGER — THE AUCTION IS LIVE  ⚠️\n\n'
+        +'Turning the SIMULATOR on during a live auction can:\n'
+        +'  •  e-mail REAL clinicians about FAKE competitor bids\n'
+        +'  •  reset the live bidding countdown, extending the deadline for everyone\n'
+        +"  •  overwrite real users' bids\n"
+        +'  •  burn your monthly e-mail quota (which then blocks real results e-mails)\n\n'
+        +'The simulator is a TESTING tool for a NON-live auction ONLY.\n\n'
+        +'Are you absolutely sure you want to ARM it right now?');
+      if(!w1) return;
+      const w2=confirm('LAST CHANCE.\n\nThe simulator will be ARMED on a LIVE auction with real users. Only continue if you are deliberately testing and fully understand the consequences above.\n\nClick OK only if you truly mean to arm it now.');
+      if(!w2) return;
+    }
+    await setDoc(adminRef,{simulatorEnabled:true},{merge:true});
+    toast(phase1Started()
+      ? '🎲 Simulator ARMED on a LIVE auction — turn it OFF as soon as you are done'
+      : '🎲 Simulator ON (testing) — remember to turn it OFF before going live','warn');
+  } else {
+    await setDoc(adminRef,{simulatorEnabled:false},{merge:true});
+    toast('🔒 Simulator OFF','ok');
+  }
 };
 
 // ── Lock weeks ──
@@ -3070,6 +3117,7 @@ function renderSimPanel(){
 }
 
 window.runSimulation=async function(){
+  if(adminSettings.simulatorEnabled!==true){ alert('The simulator is OFF.\n\nTurn on "Simulator Mode" at the top of the Simulator panel first. It is a testing tool — never use it on a live auction.'); return; }
   // Existing bids no longer block the run: each user is topped UP to the
   // "Bids per user" target, counting the bids they already placed this phase.
   // Global lock means every week is locked, so there is nothing to bid on.
@@ -3667,13 +3715,37 @@ async function _commitBeginPhase(next){
     catch(e){ toast('Could not begin Phase '+next+' — nothing was changed ('+(e?.message||e)+')','err'); return; }
   }
   // Beginning any phase resets the countdown to a fresh 48-hour window so
-  // every phase opens with the full default bidding time.
-  { const _n=Date.now(); await setDoc(timerRef,{enabled:true,durationHours:timerResetHours(_n,_n),lastChange:_n},{merge:true}).catch(()=>{}); }
-  toast('▶ Phase '+next+' begun — bidding is open (timer reset to 48h)','ok');
+  // every phase opens with the full default bidding time. [begin-phase timer fix]
+  // Do NOT swallow a failure here: if the timer write fails, the user site can show
+  // the auction as CLOSED (prior expired state) while the admin thinks it is open.
+  let _timerOk=true;
+  { const _n=Date.now(); try{ await setDoc(timerRef,{enabled:true,durationHours:timerResetHours(_n,_n),lastChange:_n},{merge:true}); }
+    catch(e){ _timerOk=false; console.error('begin-phase timer reset failed:',e); } }
+  toast(_timerOk
+    ? '▶ Phase '+next+' begun — bidding is open (timer reset to 48h)'
+    : '⚠️ Phase '+next+' begun, but the TIMER reset FAILED — users may see the auction as CLOSED. Open the Timer card and reset it now.',
+    _timerOk?'ok':'warn');
 }
 // Begin Phase 1: opens bidding for the first time. Runs the same lock decision
 // (Smart Lock & Unlock) as every other phase start.
 window.beginPhase1=function(){
+  // If the simulator is ARMED when opening the auction to real users, block with an
+  // aggressive warning and offer to turn it off in one click.
+  if(adminSettings.simulatorEnabled===true){
+    openConfirm({
+      title:'🛑 The SIMULATOR is ON',
+      body:`<div class="cmodal-danger" style="font-size:14px;font-weight:800">The simulator is currently ARMED — and you are about to open the auction to REAL clinicians.</div>
+            <div style="margin-top:8px">If the simulator is left on and run, it will e-mail real users about FAKE bids, reset their live countdown, and can overwrite their real bids.</div>
+            <div class="cmodal-warn" style="margin-top:8px"><strong>Turn the simulator OFF now, then begin Phase 1.</strong></div>
+            <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="_beginPhase1SimOverride()">Begin Phase 1 with the simulator STILL ON (not recommended)</button>`,
+      okText:'🔒 Turn OFF simulator & continue', danger:true,
+      onConfirm:async()=>{ await setDoc(adminRef,{simulatorEnabled:false},{merge:true}); toast('🔒 Simulator OFF','ok'); _beginPhase1Confirm(); }
+    });
+    return;
+  }
+  _beginPhase1Confirm();
+};
+function _beginPhase1Confirm(){
   openConfirm({
     title:'▶ Begin Phase 1',
     body:`<div>Open bidding and begin <strong>Phase 1</strong>?</div>
@@ -3681,7 +3753,8 @@ window.beginPhase1=function(){
     okText:'Continue',
     onConfirm:()=>_beginPhaseLockDecision(1)
   });
-};
+}
+window._beginPhase1SimOverride=function(){ closeConfirm(); _beginPhase1Confirm(); };
 // Override path: begin the phase WITHOUT applying lock fixes (admin's explicit choice).
 window._beginPhaseOverride=function(next){
   closeConfirm();
@@ -3697,6 +3770,24 @@ window._beginPhaseOverride=function(next){
 // Forced pre-phase lock decision: the phase does NOT start until the admin picks
 // Fix All & Begin, or explicitly overrides. Cancel aborts entirely.
 function _beginPhaseLockDecision(next){
+  // [global-lock fix] A forgotten GLOBAL lock freezes EVERY week regardless of per-week
+  // locks, so a phase can open fully unbiddable while the board shows it as open. Surface it
+  // with a one-click clear before the per-week lock decision.
+  if(locksData?.globalLock){
+    openConfirm({
+      title:'🔒 Global Lock is ON',
+      body:`<div class="cmodal-danger" style="font-weight:800">A GLOBAL LOCK is currently active.</div>
+            <div style="margin-top:8px">If you begin Phase ${next} with the global lock on, <strong>no user can place any bid</strong> — every week is frozen — even though the board will show the phase as open.</div>
+            <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="_beginPhaseKeepGlobalLock(${next})">Begin Phase ${next} WITH the global lock still on</button>`,
+      okText:'🔓 Turn OFF global lock & continue', danger:true,
+      onConfirm:async()=>{ await setDoc(locksRef,{globalLock:false},{merge:true}).catch(()=>{}); toast('🔓 Global lock cleared','ok'); _beginPhaseLockDecisionInner(next); }
+    });
+    return;
+  }
+  _beginPhaseLockDecisionInner(next);
+}
+window._beginPhaseKeepGlobalLock=function(next){ closeConfirm(); _beginPhaseLockDecisionInner(next); };
+function _beginPhaseLockDecisionInner(next){
   const need=weeksNeedingLock(true).list;                 // should be locked
   const wrongLocked=lockedWeeksWithAvailability().list;    // should be unlocked
   if(!need.length&&!wrongLocked.length){ _commitBeginPhase(next); return; }
@@ -4024,6 +4115,24 @@ window.sendPhaseResultsEmails=function(){
     okText:'Send Results',
     onConfirm:async()=>{
       let ok=0, fail=0, skipped=0, alreadyDone=0;
+      // [cross-session guard] Stop two admin sessions/tabs from both sending the whole roster
+      // at once. Atomically CLAIM the send on the phases doc; abort if another session claimed
+      // it in the last 2 minutes. Combined with the per-address dedup below, this closes the
+      // simultaneous-double-send window. A transient claim-write error falls through to send
+      // (the per-address dedup is the backstop) rather than blocking a legitimate send.
+      const _sendId=Date.now()+'_'+Math.floor(Math.random()*1e9);
+      let _claimed=false;
+      try{
+        await runTransaction(db, async (tx)=>{
+          const snap=await tx.get(phasesRef);
+          const d=snap.exists()?snap.data():{};
+          const claim=d.resultsSendClaim?.[cur];
+          if(claim && claim.by && claim.by!==_sendId && (Date.now()-(claim.at||0))<120000){ _claimed=false; return; }
+          tx.set(phasesRef,{resultsSendClaim:{...(d.resultsSendClaim||{}),[cur]:{by:_sendId,at:Date.now()}}},{merge:true});
+          _claimed=true;
+        });
+      }catch(e){ _claimed=true; console.warn('results send claim failed (proceeding):',e); }
+      if(!_claimed){ toast('Another admin session is sending Phase '+cur+' results right now — not sending again.','warn'); return; }
       // Per-ADDRESS idempotency: every e-mail address already delivered to for THIS phase is
       // recorded in resultsSentTo[cur]. On a retry (after a partial failure) or an accidental
       // second click, those addresses are skipped inside adminSendEmail — so no address ever
@@ -4063,6 +4172,8 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
       } else {
         toast(`⚠️ Phase ${cur} results: ${ok} sent, ${fail} FAILED — NOT marked complete. Click Send again to retry just the ones still owed.`,'warn');
       }
+      // Release the claim so a legitimate retry (this admin or another) isn't blocked for 2 min.
+      await setDoc(phasesRef,{resultsSendClaim:{...(phasesData.resultsSendClaim||{}),[cur]:{by:null,at:0}}},{merge:true}).catch(()=>{});
     }
   });
 };
@@ -5293,6 +5404,7 @@ window.lockFullWeeks=function(){
 
 // Confirmation wrapper — auto-approve is a bulk decision, so admin must confirm it.
 window.runSimulationApprovals=function(){
+  if(adminSettings.simulatorEnabled!==true){ alert('The simulator is OFF.\n\nTurn on "Simulator Mode" at the top of the Simulator panel first. It is a testing tool — never use it on a live auction.'); return; }
   const cur=Number(phasesData.currentPhase||1);
   openConfirm({
     title:'✅ Auto-Approve/Deny Results',
@@ -5429,6 +5541,24 @@ window.renderEditTable=function(){
   });
   tb.innerHTML=rows.length?rows.join(''):`<tr><td colspan="6" style="text-align:center;color:var(--t2);padding:20px">No bids match filter.</td></tr>`;
 };
+// [stale-denial fix] After a manual bid edit/cancel/remove re-opens capacity on a week, a
+// DIFFERENT user who was denied because the edited user was winning may now project to WIN.
+// Clear such stale denials so they return to undecided (pending) for the admin to re-decide,
+// instead of staying frozen at LOSE — which would snapshot as a permanent loss and even
+// e-mail them a contradictory "you now win" alert. Only clears denials that are no longer
+// natural losses; users who still project to lose keep their denial.
+async function _reconcileStaleDenials(wk){
+  try{
+    const denied=Array.isArray(deniedData?.[wk])?[...deniedData[wk]]:[];
+    if(!denied.length) return;
+    const nat=computeApprovals(true); // natural projection (ignores all admin decisions)
+    for(const u of denied){
+      if(getOutcome(wk,u,nat)!=='lose'){
+        await updateDoc(deniedRef,{[wk]:arrayRemove(u)}).catch(()=>{});
+      }
+    }
+  }catch(e){ console.warn('reconcile stale denials failed',e); }
+}
 window.adminChangePriority=async function(u,wk,val){
   // Direct dropdown change in Edit Selections — real per-field writes via
   // mergeFields() (updateDoc-based); plain setDoc+merge on a nested object
@@ -5443,6 +5573,7 @@ window.adminChangePriority=async function(u,wk,val){
   // user, so a stale denial must not silently freeze them at LOSE.
   await updateDoc(approvalsRef,{[wk]:arrayRemove(u)}).catch(()=>{});
   await updateDoc(deniedRef,{[wk]:arrayRemove(u)}).catch(()=>{});
+  await _reconcileStaleDenials(wk); // un-freeze other users whose slot just re-opened
   await adminLog(u,wk,'admin-edit',scheduleData[u][wk]); toast(`✏️ ${u} ${wk} updated · lock cleared`,"ok");
   queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
 };
@@ -5466,6 +5597,7 @@ window.adminRemove=function(u,wk){
       await updateDoc(worstBidsRef,{[`${u}.${wk}`]:deleteField()}).catch(()=>{});
       await updateDoc(approvalsRef,{[wk]:arrayRemove(u)}).catch(()=>{});
       await updateDoc(deniedRef,{[wk]:arrayRemove(u)}).catch(()=>{});
+      await _reconcileStaleDenials(wk); // un-freeze other users whose slot just re-opened
       await adminLog(u,wk,'admin-remove',oldBid); toast(`🗑 Removed · lock cleared`,"warn");
       queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
     }
@@ -6906,6 +7038,7 @@ window.confirmAdminEdit=function(user,wk){
       // this user, so a stale denial must not silently freeze them at LOSE.
       await updateDoc(approvalsRef,{[wk]:arrayRemove(user)}).catch(()=>{});
       await updateDoc(deniedRef,{[wk]:arrayRemove(user)}).catch(()=>{});
+      await _reconcileStaleDenials(wk); // un-freeze other users whose slot just re-opened
       await adminLog(user,wk,'admin-edit',scheduleData[user][wk]);
       toast(`✏️ ${user} ${wk} edited; lock cleared`,'ok');
       queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
@@ -6932,6 +7065,7 @@ window.confirmAdminCancel=function(user,wk){
       await updateDoc(worstBidsRef,{[`${user}.${wk}`]:deleteField()}).catch(()=>{});
       await updateDoc(approvalsRef,{[wk]:arrayRemove(user)}).catch(()=>{});
       await updateDoc(deniedRef,{[wk]:arrayRemove(user)}).catch(()=>{});
+      await _reconcileStaleDenials(wk); // un-freeze other users whose slot just re-opened
       await adminLog(user,wk,'admin-remove',oldBid);
       toast(`✕ ${user} ${wk} cancelled; lock cleared`,'warn');
       queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
