@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 90;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 91;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1003,11 +1003,23 @@ function biddingOpen(){
 // ── Dynamic bidding-timer rules (admin-configurable via adminSettings.timerRules) ──
 // The reset window shrinks as a phase ages; when short it won't let bidding CLOSE
 // overnight (quiet hours, Pacific time). Identical logic runs on the staff & admin sites.
-const DEFAULT_TIMER_RULES={stages:[{days:0,hours:48},{days:7,hours:24},{days:10,hours:12},{days:12,hours:6},{days:14,hours:3}],quietEnabled:true,quietStart:21,quietEnd:9,quietWhenHoursLE:6};
+const DEFAULT_TIMER_RULES={stages:[{days:0,hours:48},{days:7,hours:24},{days:10,hours:12},{days:12,hours:6},{days:14,hours:3}],quietEnabled:true,quietStart:21,quietEnd:9,quietWhenHoursLE:6,openingWindow:null};
+function _owNorm(ow){ return (ow&&ow.enabled===true&&Number(ow.days)>0)?{enabled:true,days:Math.min(60,Math.max(1,Math.round(Number(ow.days))))}:null; }
 function getTimerRules(){
   const r=(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.timerRules)?adminSettings.timerRules:null;
   if(!r||!Array.isArray(r.stages)||!r.stages.length) return DEFAULT_TIMER_RULES;
-  return {stages:r.stages.slice().filter(s=>s&&typeof s.hours==='number').sort((a,b)=>(a.days||0)-(b.days||0)),quietEnabled:r.quietEnabled!==false,quietStart:(typeof r.quietStart==='number')?r.quietStart:21,quietEnd:(typeof r.quietEnd==='number')?r.quietEnd:9,quietWhenHoursLE:(typeof r.quietWhenHoursLE==='number')?r.quietWhenHoursLE:6};
+  return {stages:r.stages.slice().filter(s=>s&&typeof s.hours==='number').sort((a,b)=>(a.days||0)-(b.days||0)),quietEnabled:r.quietEnabled!==false,quietStart:(typeof r.quietStart==='number')?r.quietStart:21,quietEnd:(typeof r.quietEnd==='number')?r.quietEnd:9,quietWhenHoursLE:(typeof r.quietWhenHoursLE==='number')?r.quietWhenHoursLE:6,openingWindow:_owNorm(r.openingWindow)};
+}
+function stage0Hours(){ const st=getTimerRules().stages; return (st.length?st[0].hours:48)||48; }
+// Phase-1 opening window is ACTIVE while: rule on · phase 1 · timer running · remaining
+// time still above the normal starting reset. While active, bids do NOT reset the
+// countdown and it displays in days + hours; at the starting-reset mark the normal
+// admin timer rules take over. IDENTICAL logic runs on the admin site.
+function openingWindowActive(){
+  const ow=getTimerRules().openingWindow; if(!ow) return false;
+  if(Number((typeof phasesData!=='undefined'&&phasesData&&phasesData.currentPhase)||1)!==1) return false;
+  if(!timerData||!timerData.enabled||!timerData.lastChange) return false;
+  return (((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)) > stage0Hours()*3600000;
 }
 function _laParts(ms){ const p=new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}).formatToParts(new Date(ms)).reduce((a,x)=>{a[x.type]=x.value;return a;},{}); let h=+p.hour; if(h===24) h=0; return {year:+p.year,month:+p.month,day:+p.day,hour:h,minute:+p.minute}; }
 function _laWallToMs(y,mo,d,h,mi){ const guess=Date.UTC(y,mo-1,d,h,mi); const p=_laParts(guess); const back=Date.UTC(p.year,p.month-1,p.day,p.hour,p.minute); return guess+(guess-back); }
@@ -1036,7 +1048,9 @@ function renderTimerRulesInfo(){
   st.forEach((s,i)=>{ items+= i===0 ? li('At the start of the round', s.hours) : li('After '+s.days+' days', s.hours); });
   let quiet='';
   if(r.quietEnabled){ quiet=`<p style="margin:8px 0 0">Once the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between <strong>${fmtHour12(r.quietStart)}</strong> and <strong>${fmtHour12(r.quietEnd)}</strong> Pacific time, it's pushed to ${fmtHour12(r.quietEnd)} so nothing closes while you're asleep.</p>`; }
-  el.innerHTML=`<p style="margin:0 0 6px">Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:</p><ul style="margin:0 0 0 18px;padding:0">${items}</ul>${quiet}`;
+  let owHtml='';
+  if(r.openingWindow){ owHtml=`<p style="margin:0 0 6px"><strong>Phase 1 opens with a ${r.openingWindow.days}-day window:</strong> the timer counts down continuously (bids do NOT reset it) until <strong>${(st[0]||{}).hours||48} hours</strong> remain — then the reset rules below take over.</p>`; }
+  el.innerHTML=owHtml+`<p style="margin:0 0 6px">Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:</p><ul style="margin:0 0 0 18px;padding:0">${items}</ul>${quiet}`;
 }
 function isAuctionClosed(){
   if(!timerData.enabled||!timerData.lastChange) return false;
@@ -1401,6 +1415,18 @@ function renderCountdown(){
   const pad=n=>String(n).padStart(2,"0");
   const lastStr=new Date(timerData.lastChange).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
   const dur=(timerData.durationHours||48)*3600000;
+  if(openingWindowActive()){
+    // Opening window: continuous countdown in days + hours; bids don't reset it.
+    const d=Math.floor(ts/86400), wh=Math.floor((ts%86400)/3600);
+    descEl.textContent=`Opening window — the timer counts down continuously and bids do NOT reset it until ${stage0Hours()} hours remain.`;
+    timeEl.innerHTML=`
+    <div class="time-block"><span class="time-value">${d}</span><span class="time-unit">days</span></div>
+    <span class="time-sep">:</span>
+    <div class="time-block"><span class="time-value">${pad(wh)}</span><span class="time-unit">hours</span></div>
+    <span class="time-sep">:</span>
+    <div class="time-block"><span class="time-value">${pad(m)}</span><span class="time-unit">mins</span></div>`;
+    return;
+  }
   if(remaining<2*3600000){
     // Under 2 hours left: a plain heads-up in the box's normal text colour — no
     // colour change on the banner (no amber "warning" / red "urgent" escalation).
@@ -1506,7 +1532,12 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
       if(!bidPhaseData[user]) bidPhaseData[user]={};
       bidPhaseData[user][wk]=_ph;
     }
-    if(timerData.enabled){ const _n=Date.now(); setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{}); }
+    // Timer reset on bid activity — EXCEPT: (a) re-saving the same bid value (no
+    // substantive change → no reset), and (b) inside the Phase-1 opening window
+    // (the countdown runs continuously until the starting-reset mark).
+    const _prevVal=prevSnapshot?.[user]?.[wk];
+    const _sameVal=bid!==null&&bid!==undefined&&_prevVal!==undefined&&JSON.stringify(bid)===JSON.stringify(_prevVal);
+    if(timerData.enabled&&!_sameVal&&!openingWindowActive()){ const _n=Date.now(); setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{}); }
     if(prevSnapshot&&adminSettings.emailNotifsEnabled!==false){
       // Build the authoritative AFTER snapshot from prevSnapshot + THIS exact change,
       // rather than reading the live `data`. On the REMOVE path `data` still holds the
@@ -2703,7 +2734,9 @@ function timerRulesEmailText(){
   const lines=st.map((s,i)=> i===0 ? `At the start of the round: resets to ${s.hours} hours` : `After ${s.days} days: resets to ${s.hours} hours`);
   let quiet='';
   if(r.quietEnabled){ quiet=`\n\nOnce the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between ${fmtHour12(r.quietStart)} and ${fmtHour12(r.quietEnd)} Pacific time, it's pushed to ${fmtHour12(r.quietEnd)} so nothing closes while you're asleep.`; }
-  return `Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}`;
+  let owTxt='';
+  if(r.openingWindow){ owTxt=`\n\nPhase 1 opens with a ${r.openingWindow.days}-day window: the timer counts down continuously (bids do NOT reset it) until ${(st[0]||{}).hours||48} hours remain — then the reset rules above take over.`; }
+  return `Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}${owTxt}`;
 }
 function buildWelcomeEmailBody(user){
   const limLine=cumulativeCapDescription();

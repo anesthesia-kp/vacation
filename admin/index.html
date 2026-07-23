@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 155;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 156;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -2163,85 +2163,114 @@ window.setInsightsView=function(view){
   if(isGraph) renderBidChart(); // canvas draws at 0-size while hidden — redraw now that it's visible
 };
 // ── Bad Behavior screen ──
-// Flags CURRENT-PHASE bidding patterns that slow the auction or push other
-// users into higher bids than they needed — intentionally or not. Heuristics
-// from the change log (which clears at each phase close, so this is always
-// per-phase):
-//  • win-cancel  — placed a STRONG bid (1-3 or any combo), later removed it.
-//                  Others may have overbid to beat a bid that then vanished.
-//  • last-second — bid arrived after ≥85% of the countdown had run since the
-//                  previous activity (each change restarts the timer, so
-//                  last-second bids stretch the whole auction out).
-//  • timer-reset — "edited" a bid to the SAME value: no substantive change,
-//                  but it restarts everyone's countdown.
-//  • churn       — 4+ changes on one week in this phase: bid noise that fires
-//                  outbid e-mails and clouds projections.
-//  • slow-start  — no bids yet though the phase has been open 24+ hours.
+// ── Fair Play Monitor ──
+// Signals: (1) canceling a bid that was in a WINNING position — recorded with the exact
+// bid dropped and whether other users raised their bids on that week while it was live;
+// (2) placing / changing / canceling a bid with less than 10% of the timer remaining;
+// (3) slow starters (current phase only). Covers every phase since the last auction
+// reset: completed phases come from the change-log archive, the current one is live.
+function _fpEventFilter(list,fence){ return (list||[]).filter(e=>e&&typeof e.ts==='number'&&e.actor!=='admin'&&!isDecisionEntry(e)&&e.ts>=(fence||0)).sort((a,b)=>a.ts-b.ts); }
+function _fpPhases(){
+  const out=[]; const cur=Number(phasesData.currentPhase||1);
+  const keys=Object.keys(changesArchiveData||{}).map(Number).filter(n=>!isNaN(n)).sort((a,b)=>a-b);
+  for(const p of keys) out.push({phase:p,closed:true,events:_fpEventFilter(changesArchiveData[p])});
+  const liveEvents=_fpEventFilter(changesLog,changesResetAt);
+  if(liveEvents.length||!keys.includes(cur)) out.push({phase:cur,closed:false,events:liveEvents});
+  return out;
+}
+// Was `val` a winning bid for `u` on `wk`, given the other live bids reconstructed at
+// that moment? Winning = the FTE of everyone bidding STRICTLY stronger, plus this user,
+// still fits in the week's slots (ties/draws don't count as winning). Uses current
+// slots/FTE values — a heuristic, like everything on this screen.
+function _fpWasWinning(wkMap,u,wk,val){
+  const my=pScore(val); if(my>=99) return false; // NP is never a winning position
+  let used=0;
+  for(const uu in wkMap){ if(uu===u) continue; const o=wkMap[uu]; if(!o||o.val===undefined||o.val==='NP') continue; if(pScore(o.val)<my) used+=getUserFTE(uu); }
+  return used+getUserFTE(u)<=getSlots(wk)+0.001;
+}
+function _fpAnalyzePhase(phase,events,isCurrent){
+  const flags={};
+  const bump=(u,k,wk,ts,detail)=>{ const f=(flags[u]=flags[u]||{winCancel:0,lateTimer:0,slowStart:0,incidents:[]}); f[k]++; f.incidents.push({type:k,wk:wk||null,ts:ts||null,detail:detail||''}); };
+  const began=(phasesData.phaseBeganAt||{})[phase]||((events[0]||{}).ts||0);
+  const ow=getTimerRules().openingWindow;
+  const s0ms=stage0Hours()*3600000;
+  const owEnd=(phase===1&&ow)?(began+ow.days*86400000-s0ms):-Infinity; // opening window suppresses resets until here
+  const timerOn=!(isCurrent&&timerData?.enabled===false); // archived phases: assume the timer ran
+  const live={};                 // wk -> user -> {val, placedTs} — bids live at this point in the replay
+  let lastReset=Math.max(began,owEnd);
+  for(const e of events){
+    const u=e.user,wk=e.weekKey; if(!u||!wk) continue;
+    const wkMap=(live[wk]=live[wk]||{});
+    const prev=wkMap[u];
+    const sameVal=e.action==='edited'&&prev&&e.bidValue!==undefined&&JSON.stringify(e.bidValue)===JSON.stringify(prev.val);
+    // Late-timer check — evaluated BEFORE this event's own reset takes effect.
+    if(timerOn&&e.ts>=owEnd&&e.ts>lastReset){
+      const durMs=timerResetHours(began,lastReset)*3600000;
+      const remMs=durMs-(e.ts-lastReset);
+      if(remMs>0&&remMs<0.10*durMs){
+        const verb=e.action==='removed'?'canceled':(e.action==='added'?'placed':'changed');
+        bump(u,'lateTimer',wk,e.ts,verb+' a bid with '+Math.max(1,Math.round(remMs/durMs*100))+'% of the timer left (~'+Math.floor(remMs/3600000)+'h '+Math.floor((remMs%3600000)/60000)+'m remaining)');
+      }
+    }
+    // Every bid event restarts the countdown — except same-value edits (never reset)
+    // and anything inside the opening window (no resets until the window ends).
+    if(timerOn&&e.ts>=owEnd&&!sameVal) lastReset=e.ts;
+    if(e.action==='removed'){
+      const v=e.bidValue!==undefined?e.bidValue:(prev?prev.val:undefined);
+      if(v!==undefined&&v!=='NP'&&_fpWasWinning(wkMap,u,wk,v)){
+        let raised=0;
+        if(prev&&prev.placedTs){ const seen=new Set(); for(const e2 of events){ if(e2.ts<=prev.placedTs) continue; if(e2.ts>=e.ts) break; if(e2.weekKey===wk&&e2.user!==u&&(e2.action==='added'||e2.action==='edited')) seen.add(e2.user); } raised=seen.size; }
+        bump(u,'winCancel',wk,e.ts,'canceled a bid in a WINNING position ('+bidLblAdmin(v)+')'+(raised?' — while it was live, '+raised+' other user'+(raised!==1?'s':'')+' raised bids on this week':''));
+      }
+      delete wkMap[u];
+    } else if(e.bidValue!==undefined){
+      wkMap[u]={val:e.bidValue,placedTs:prev?prev.placedTs:e.ts};
+    }
+  }
+  return flags;
+}
 function computeBadBehavior(){
   const cur=Number(phasesData.currentPhase||1);
-  const events=(changesLog||[]).filter(e=>e&&typeof e.ts==='number'&&e.actor!=='admin'&&!isDecisionEntry(e)&&e.ts>=(changesResetAt||0)).sort((a,b)=>a.ts-b.ts);
-  const strong=v=>{ if(v===undefined||v===null||v==='NP') return false; if(Array.isArray(v)) return true; const n=Number(v); return !isNaN(n)&&n<=3; };
-  const flags={}; // user → {counts..., incidents:[{type,wk,ts,detail}]}
-  const bump=(u,k,wk,ts,detail)=>{
-    const f=(flags[u]=flags[u]||{winCancel:0,lastSecond:0,timerReset:0,churn:0,slowStart:0,incidents:[]});
-    f[k]++; f.incidents.push({type:k,wk:wk||null,ts:ts||null,detail:detail||''});
-  };
-  // sequential per-user/week value tracking for win-cancel + timer-reset
-  const lastVal={};
-  const perWeekCount={};
-  let prevTs=null;
-  const durMs=getDurationMs();
-  for(const e of events){
-    const key=(e.user||'')+'|'+(e.weekKey||'');
-    perWeekCount[key]=(perWeekCount[key]||0)+1;
-    if(perWeekCount[key]===4) bump(e.user,'churn',e.weekKey,e.ts,'4+ changes on this week this phase');
-    if(e.action==='removed'){
-      const v=e.bidValue!==undefined?e.bidValue:lastVal[key];
-      if(strong(v)) bump(e.user,'winCancel',e.weekKey,e.ts,'removed a strong bid ('+bidLblAdmin(v)+')');
-      delete lastVal[key];
-    } else {
-      if(e.action==='edited'&&e.bidValue!==undefined&&lastVal[key]!==undefined
-         &&JSON.stringify(e.bidValue)===JSON.stringify(lastVal[key])) bump(e.user,'timerReset',e.weekKey,e.ts,'re-saved the same bid ('+bidLblAdmin(e.bidValue)+') — timer restarted, nothing changed');
-      if(e.bidValue!==undefined) lastVal[key]=e.bidValue;
+  const sections=[];
+  for(const ph of _fpPhases()){
+    const flags=_fpAnalyzePhase(ph.phase,ph.events,!ph.closed);
+    if(!ph.closed){
+      // Slow starters — current phase only: open 24h+ and still no current-phase bids.
+      const began=phasesData.phaseBeganAt?.[cur];
+      if(began&&phase1Started()&&!phasesData.completedPhases?.[cur]&&(Date.now()-began)>=24*3600000){
+        for(const u of names){
+          let has=false;
+          for(const wk in (scheduleData[u]||{})){ if(scheduleData[u][wk]!==undefined&&isCurrentPhaseBidAdmin(u,wk)){has=true;break;} }
+          if(!has){ const f=(flags[u]=flags[u]||{winCancel:0,lateTimer:0,slowStart:0,incidents:[]}); f.slowStart++; f.incidents.push({type:'slowStart',wk:null,ts:null,detail:'no bids '+Math.floor((Date.now()-began)/3600000)+'h after the phase opened'}); }
+        }
+      }
     }
-    if(prevTs!==null&&timerData?.enabled&&durMs>0){
-      const gap=e.ts-prevTs;
-      if(gap>=0.85*durMs&&gap<durMs) bump(e.user,'lastSecond',e.weekKey,e.ts,'arrived after '+Math.round(gap/durMs*100)+'% of the countdown had run');
-    }
-    prevTs=e.ts;
+    const rows=Object.entries(flags).map(([user,f])=>({user,...f,total:f.winCancel+f.lateTimer+f.slowStart}))
+      .filter(r=>r.total>0).sort((a,b)=>b.total-a.total||a.user.localeCompare(b.user));
+    sections.push({phase:ph.phase,closed:ph.closed,rows});
   }
-  // slow starters: phase open 24h+ and still no current-phase bids
-  const began=phasesData.phaseBeganAt?.[cur];
-  if(began&&phase1Started()&&!phasesData.completedPhases?.[cur]&&(Date.now()-began)>=24*3600000){
-    for(const u of names){
-      let has=false;
-      for(const wk in (scheduleData[u]||{})){ if(scheduleData[u][wk]!==undefined&&isCurrentPhaseBidAdmin(u,wk)){has=true;break;} }
-      if(!has) bump(u,'slowStart',null,null,'no bids '+Math.floor((Date.now()-began)/3600000)+'h after the phase opened');
-    }
-  }
-  return Object.entries(flags).map(([user,f])=>({user,...f,total:f.winCancel+f.lastSecond+f.timerReset+f.churn+f.slowStart}))
-    .filter(r=>r.total>0).sort((a,b)=>b.total-a.total||a.user.localeCompare(b.user));
+  return sections;
 }
 function renderBadBehavior(){
   const el=document.getElementById('badBehaviorBox'); if(!el) return;
-  const head=`<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">🚩 <strong style="color:var(--t1)">Bad Behavior</strong><span style="color:var(--t2)">— patterns that slow the auction or push others to overbid</span></div>`;
+  const head=`<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">⚖️ <strong style="color:var(--t1)">Fair Play Monitor</strong><span style="color:var(--t2)">— winning-bid cancels, late-timer moves, slow starts</span></div>`;
   if(!phase1Started()){ el.innerHTML=head+'<div style="font-size:12px;color:var(--t3)">Screening begins when bidding opens.</div>'; return; }
-  const list=computeBadBehavior();
-  if(!list.length){ el.innerHTML=head+'<div style="font-size:12px;color:var(--green)">✅ No users flagged this phase.</div>'; return; }
-  const n=list.length, inc=list.reduce((s,r)=>s+r.total,0);
+  const sections=computeBadBehavior();
+  const allRows=sections.flatMap(s=>s.rows);
+  if(!allRows.length){ el.innerHTML=head+'<div style="font-size:12px;color:var(--green)">✅ No users flagged this auction.</div>'; return; }
+  const users=new Set(allRows.map(r=>r.user)).size, inc=allRows.reduce((s,r)=>s+r.total,0);
   el.innerHTML=head+`<div style="display:flex;align-items:center;gap:12px;font-size:12.5px">
-    <span style="color:${list.some(r=>r.total>=3)?'var(--red)':'var(--yellow)'}">⚠️ <strong>${n}</strong> user${n!==1?'s':''} flagged (${inc} incident${inc!==1?'s':''} this phase)</span>
+    <span style="color:${allRows.some(r=>r.total>=3)?'var(--red)':'var(--yellow)'}">⚠️ <strong>${users}</strong> user${users!==1?'s':''} flagged (${inc} incident${inc!==1?'s':''} this auction)</span>
     <button class="btn btn-ghost" style="padding:3px 10px;font-size:11px" onclick="openBadBehaviorReport()">👁 View Report</button>
   </div>`;
 }
 // Full report in a new tab — same style as the other summary reports.
 window.openBadBehaviorReport=function(){
-  const cur=Number(phasesData.currentPhase||1);
   const stamp=new Date().toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
-  const list=computeBadBehavior();
-  const TYPE_LABEL={winCancel:'Strong-bid cancel',lastSecond:'Last-second bid',timerReset:'No-change timer reset',churn:'High-churn week',slowStart:'Slow start'};
-  const TYPE_COLOR={winCancel:'#dc2626',lastSecond:'#d97706',timerReset:'#7c3aed',churn:'#1d4ed8',slowStart:'#64748b'};
-  const body=list.length?list.map(r=>{
+  const sections=computeBadBehavior();
+  const TYPE_LABEL={winCancel:'Winning-bid cancel',lateTimer:'Late-timer move',slowStart:'Slow start'};
+  const TYPE_COLOR={winCancel:'#dc2626',lateTimer:'#d97706',slowStart:'#64748b'};
+  const userBlock=r=>{
     const rows=r.incidents.map(i=>`<tr>
       <td><span class="chip" style="background:${TYPE_COLOR[i.type]||'#64748b'}">${TYPE_LABEL[i.type]||i.type}</span></td>
       <td>${i.wk?('W'+(_wkNumByISO[i.wk]||'?')+' · '+fmtWk(i.wk)):'—'}</td>
@@ -2249,11 +2278,15 @@ window.openBadBehaviorReport=function(){
       <td>${esc(i.detail)}</td></tr>`).join('');
     return `<div class="wk"><div class="wk-head">${esc(r.user)}<span class="fte">${r.total} incident${r.total!==1?'s':''}</span></div>
       <table><thead><tr><th>Type</th><th>Week</th><th>When</th><th>Detail</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-  }).join(''):'<p>✅ No users flagged this phase.</p>';
-  const ok=openReportTab('Vacation Auction — Bad Behavior Report',`Phase ${cur} (current)`,
-    `Snapshot ${stamp} · Heuristic screen — verify in the Change Log before acting. "Strong-bid cancel" = a 1–3 or combo bid later removed; the screen cannot know for certain the user was winning at the time.`,
+  };
+  const body=sections.map(s=>{
+    const inner=s.rows.length?s.rows.map(userBlock).join(''):'<p style="margin:4px 0 0;color:#4a7a54">✅ No users flagged in this phase.</p>';
+    return `<div style="margin:22px 0 8px;padding:8px 12px;background:#eef2f7;border-left:4px solid #006ba6;font-weight:800;font-size:15px">Phase ${s.phase} ${s.closed?'(completed)':'(current)'}</div>${inner}`;
+  }).join('')||'<p>✅ No activity yet this auction.</p>';
+  const ok=openReportTab('Vacation Auction — Fair Play Report','All phases since last auction reset',
+    `Snapshot ${stamp} · Heuristic screen reconstructed from the change log — verify in the Change Log before acting. "Winning-bid cancel" = the bid fit the week's slots against all live bids at the moment it was dropped.`,
     body,false);
-  if(ok) toast('👁 Bad Behavior report opened in a new tab','ok');
+  if(ok) toast('👁 Fair Play report opened in a new tab','ok');
 };
 window.computeBadBehavior=computeBadBehavior;
 // ── Struggling-user flag ──
@@ -3335,7 +3368,7 @@ window.runSimulation=async function(){
       // or the timer stops accurately reflecting "time since the last bid activity."
       // M-6: but if the timer is already EXPIRED (phase closed), do NOT reset it — that would
       // silently reopen a closed phase. Only reset while bidding is genuinely still open.
-      { const _rem=getDurationMs()-(Date.now()-(timerData.lastChange||0)); if(timerData.enabled && _rem>0){ const _n=Date.now(); await setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{}); } }
+      { const _rem=getDurationMs()-(Date.now()-(timerData.lastChange||0)); if(timerData.enabled && _rem>0 && !openingWindowActive()){ const _n=Date.now(); await setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{}); } }
     }
     // Outbid alerts: simulated bids are real bid activity, so affected users get
     // the same projection-change alerts a real bid triggers. One batched diff of
@@ -3406,6 +3439,9 @@ window.clearEverything=function(){
               // Change log + resetAt fence → Popcornometer and the "changes in
               // last 24h" counters read 0 on BOTH sites after a full reset.
               setDoc(changesRef,{log:[],resetAt:Date.now()}),
+              // New auction → drop the per-phase archive so the Fair Play report
+              // starts empty (it covers everything since the last auction reset).
+              setDoc(changesArchiveRef,{}),
               // New auction cycle → clear the welcome-e-mail log so each user can
               // receive their one welcome per account again next cycle.
               setDoc(doc(db,"vacations","welcomeLog"),{sent:{}}),
@@ -3762,10 +3798,15 @@ async function _commitBeginPhase(next){
   // Do NOT swallow a failure here: if the timer write fails, the user site can show
   // the auction as CLOSED (prior expired state) while the admin thinks it is open.
   let _timerOk=true;
-  { const _n=Date.now(); try{ await setDoc(timerRef,{enabled:true,durationHours:timerResetHours(_n,_n),lastChange:_n},{merge:true}); }
+  // Phase 1 with the opening window ON starts the countdown at N days (continuous, no
+  // resets until the starting-reset mark); otherwise every phase opens with the normal
+  // starting reset from the timer rules.
+  const _ow=(next===1)?getTimerRules().openingWindow:null;
+  { const _n=Date.now(); try{ await setDoc(timerRef,{enabled:true,durationHours:_ow?_ow.days*24:timerResetHours(_n,_n),lastChange:_n},{merge:true}); }
     catch(e){ _timerOk=false; console.error('begin-phase timer reset failed:',e); } }
   toast(_timerOk
-    ? '▶ Phase '+next+' begun — bidding is open (timer reset to 48h)'
+    ? (_ow ? '▶ Phase 1 begun — bidding is open (opening window: '+_ow.days+' days, no timer resets until '+stage0Hours()+'h remain)'
+           : '▶ Phase '+next+' begun — bidding is open (timer reset to '+stage0Hours()+'h)')
     : '⚠️ Phase '+next+' begun, but the TIMER reset FAILED — users may see the auction as CLOSED. Open the Timer card and reset it now.',
     _timerOk?'ok':'warn');
 }
@@ -3957,7 +3998,9 @@ function timerRulesEmailText(){
   const lines=st.map((s,i)=> i===0 ? `At the start of the round: resets to ${s.hours} hours` : `After ${s.days} days: resets to ${s.hours} hours`);
   let quiet='';
   if(r.quietEnabled){ quiet=`\n\nOnce the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between ${fmtHour12(r.quietStart)} and ${fmtHour12(r.quietEnd)} Pacific time, it's pushed to ${fmtHour12(r.quietEnd)} so nothing closes while you're asleep.`; }
-  return `Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}`;
+  let owTxt='';
+  if(r.openingWindow){ owTxt=`\n\nPhase 1 opens with a ${r.openingWindow.days}-day window: the timer counts down continuously (bids do NOT reset it) until ${(st[0]||{}).hours||48} hours remain — then the reset rules above take over.`; }
+  return `Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}${owTxt}`;
 }
 function _cumCap(phase){
   const m=adminSettings?.maxBidsCumulative;
@@ -6122,11 +6165,23 @@ window.clearChangelog=function(){
 // ── Dynamic bidding-timer rules (admin-configurable via adminSettings.timerRules) ──
 // The reset window shrinks as a phase ages; when short it won't let bidding CLOSE
 // overnight (quiet hours, Pacific time). Identical logic runs on the staff & admin sites.
-const DEFAULT_TIMER_RULES={stages:[{days:0,hours:48},{days:7,hours:24},{days:10,hours:12},{days:12,hours:6},{days:14,hours:3}],quietEnabled:true,quietStart:21,quietEnd:9,quietWhenHoursLE:6};
+const DEFAULT_TIMER_RULES={stages:[{days:0,hours:48},{days:7,hours:24},{days:10,hours:12},{days:12,hours:6},{days:14,hours:3}],quietEnabled:true,quietStart:21,quietEnd:9,quietWhenHoursLE:6,openingWindow:null};
+function _owNorm(ow){ return (ow&&ow.enabled===true&&Number(ow.days)>0)?{enabled:true,days:Math.min(60,Math.max(1,Math.round(Number(ow.days))))}:null; }
 function getTimerRules(){
   const r=(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.timerRules)?adminSettings.timerRules:null;
   if(!r||!Array.isArray(r.stages)||!r.stages.length) return DEFAULT_TIMER_RULES;
-  return {stages:r.stages.slice().filter(s=>s&&typeof s.hours==='number').sort((a,b)=>(a.days||0)-(b.days||0)),quietEnabled:r.quietEnabled!==false,quietStart:(typeof r.quietStart==='number')?r.quietStart:21,quietEnd:(typeof r.quietEnd==='number')?r.quietEnd:9,quietWhenHoursLE:(typeof r.quietWhenHoursLE==='number')?r.quietWhenHoursLE:6};
+  return {stages:r.stages.slice().filter(s=>s&&typeof s.hours==='number').sort((a,b)=>(a.days||0)-(b.days||0)),quietEnabled:r.quietEnabled!==false,quietStart:(typeof r.quietStart==='number')?r.quietStart:21,quietEnd:(typeof r.quietEnd==='number')?r.quietEnd:9,quietWhenHoursLE:(typeof r.quietWhenHoursLE==='number')?r.quietWhenHoursLE:6,openingWindow:_owNorm(r.openingWindow)};
+}
+function stage0Hours(){ const st=getTimerRules().stages; return (st.length?st[0].hours:48)||48; }
+// Phase-1 opening window is ACTIVE while: rule on · phase 1 · timer running · remaining
+// time still above the normal starting reset. While active, bids do NOT reset the
+// countdown and it displays in days + hours; at the starting-reset mark the normal
+// admin timer rules take over.
+function openingWindowActive(){
+  const ow=getTimerRules().openingWindow; if(!ow) return false;
+  if(Number((typeof phasesData!=='undefined'&&phasesData&&phasesData.currentPhase)||1)!==1) return false;
+  if(!timerData||!timerData.enabled||!timerData.lastChange) return false;
+  return (((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)) > stage0Hours()*3600000;
 }
 function _laParts(ms){ const p=new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}).formatToParts(new Date(ms)).reduce((a,x)=>{a[x.type]=x.value;return a;},{}); let h=+p.hour; if(h===24) h=0; return {year:+p.year,month:+p.month,day:+p.day,hour:h,minute:+p.minute}; }
 function _laWallToMs(y,mo,d,h,mi){ const guess=Date.UTC(y,mo-1,d,h,mi); const p=_laParts(guess); const back=Date.UTC(p.year,p.month-1,p.day,p.hour,p.minute); return guess+(guess-back); }
@@ -6144,7 +6199,7 @@ function updatePhaseOpen(){
   const el=document.getElementById('phaseOpenFor');
   if(el) el.textContent=open?('Phase '+cur+' has been open for '+fmtElapsed(Date.now()-began)):'';
   const ri=document.getElementById('timerResetInfo');
-  if(ri) ri.textContent=(open && timerData && timerData.enabled)?('Each bid now resets the timer to '+currentStageHours()+' hours.'):'';
+  if(ri) ri.textContent=(open && timerData && timerData.enabled)?(openingWindowActive()?('Opening window — bids do not reset the timer until '+stage0Hours()+' hours remain.'):('Each bid now resets the timer to '+currentStageHours()+' hours.')):'';
 }
 try{ setInterval(function(){ try{ updatePhaseOpen(); }catch(e){} }, 20000); }catch(e){}
 // Periodic outbid-alert sweep: without this, freshly-queued alerts (which are
@@ -6152,7 +6207,7 @@ try{ setInterval(function(){ try{ updatePhaseOpen(); }catch(e){} }, 20000); }cat
 // refresh. This re-checks every 12s so any open admin page delivers aged alerts
 // on its own; the claim protocol keeps multiple open pages from double-sending.
 try{ setInterval(function(){ try{ scheduleMailQueueSweep(); }catch(e){} }, 12000); }catch(e){}
-window.currentStageHours=currentStageHours; window.updatePhaseOpen=updatePhaseOpen; window.timerResetHours=timerResetHours; window.getTimerRules=getTimerRules;
+window.currentStageHours=currentStageHours; window.updatePhaseOpen=updatePhaseOpen; window.timerResetHours=timerResetHours; window.getTimerRules=getTimerRules; window.openingWindowActive=openingWindowActive; window.stage0Hours=stage0Hours;
 function fmtHour12(h){ h=((h%24)+24)%24; const ap=h<12?'AM':'PM'; let hh=h%12; if(hh===0) hh=12; return hh+' '+ap; }
 const TIMER_HOUR_OPTS=[48,24,12,6,3];
 function renderTimerRules(){
@@ -6166,11 +6221,16 @@ function renderTimerRules(){
   const row=(inner)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;font-size:13px;color:var(--t1)">${inner}</div>`;
   let rows=row(`<span style="color:var(--t2);min-width:150px">At the start of a round</span><span>reset to</span> ${hoursSel('tr_h0',(st[0]||{}).hours||48)}`);
   for(let i=1;i<=4;i++){ const s=st[i]||{days:[7,10,12,14][i-1],hours:[24,12,6,3][i-1]}; rows+=row(`<span style="color:var(--t2)">After</span> ${dayInp('tr_d'+i,s.days)} <span style="color:var(--t2)">days,</span><span>reset to</span> ${hoursSel('tr_h'+i,s.hours)}`); }
+  const ow=r.openingWindow;
+  const owRow=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t1);font-weight:600;cursor:pointer"><input type="checkbox" id="tr_ow" ${ow?'checked':''}> Phase 1 opening window</label>
+    <div style="font-size:12.5px;color:var(--t2);margin-top:8px;line-height:1.7"><span>Start Phase 1 with a timer of</span> ${dayInp('tr_owd',ow?ow.days:7)} <span>days. It counts down in days + hours, continuously — bids do <strong>not</strong> reset it — until <strong>${(st[0]||{}).hours||48} hours</strong> remain. From then on it shows hours only and every bid change resets it per the rules above. Applies when Phase 1 is begun.</span></div>
+  </div>`;
   const quiet=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
     <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t1);font-weight:600;cursor:pointer"><input type="checkbox" id="tr_quiet" ${r.quietEnabled?'checked':''}> Don't let bidding close overnight</label>
     <div style="font-size:12.5px;color:var(--t2);margin-top:8px;line-height:1.7">When the reset is ${hoursSel('tr_qle',r.quietWhenHoursLE)} <span>or less, bidding won't close between</span> ${hourSel('tr_qs',r.quietStart)} <span>and</span> ${hourSel('tr_qe',r.quietEnd)} <strong>Pacific time</strong>. If it would, the countdown is extended to the ${fmtHour12(r.quietEnd)} instead.</div>
   </div>`;
-  el.innerHTML=rows+quiet;
+  el.innerHTML=rows+owRow+quiet;
   // Every change asks for confirmation and, on OK, saves immediately. On Cancel
   // we re-render from the saved rules, which reverts the field the admin touched.
   el.querySelectorAll('select,input').forEach(f=>{
@@ -6206,7 +6266,9 @@ function buildTimerRulesFromDOM(){
   stages.sort((a,b)=>a.days-b.days);
   let qs=parseInt(document.getElementById('tr_qs')?.value,10); if(isNaN(qs)) qs=21;
   let qe=parseInt(document.getElementById('tr_qe')?.value,10); if(isNaN(qe)) qe=9;
-  return { stages, quietEnabled:document.getElementById('tr_quiet')?.checked!==false, quietWhenHoursLE:getH('tr_qle')||6, quietStart:qs, quietEnd:qe };
+  let owDays=parseInt(document.getElementById('tr_owd')?.value,10); if(isNaN(owDays)||owDays<1) owDays=7; if(owDays>60) owDays=60;
+  const openingWindow=document.getElementById('tr_ow')?.checked===true?{enabled:true,days:owDays}:null;
+  return { stages, quietEnabled:document.getElementById('tr_quiet')?.checked!==false, quietWhenHoursLE:getH('tr_qle')||6, quietStart:qs, quietEnd:qe, openingWindow };
 }
 window.saveTimerRules=async function(rules){
   rules=rules||buildTimerRulesFromDOM();
@@ -6243,6 +6305,13 @@ function renderTimerDigs(){
   }
   const ts=Math.floor(rem/1000), h=Math.floor(ts/3600), m=Math.floor((ts%3600)/60), s=ts%60;
   const p=n=>String(n).padStart(2,"0");
+  if(openingWindowActive()){
+    // Opening window: continuous countdown shown in days + hours until the
+    // starting-reset mark, when the normal hh:mm:ss display takes over.
+    const d=Math.floor(ts/86400), wh=Math.floor((ts%86400)/3600);
+    el.innerHTML=`<div class="timer-digs"><div class="tdig"><span class="tdig-val">${d}</span><span class="tdig-unit">days</span></div><span class="tdig-sep">:</span><div class="tdig"><span class="tdig-val">${p(wh)}</span><span class="tdig-unit">hrs</span></div><span class="tdig-sep">:</span><div class="tdig"><span class="tdig-val">${p(m)}</span><span class="tdig-unit">min</span></div></div>`;
+    return;
+  }
   el.innerHTML=`<div class="timer-digs"><div class="tdig"><span class="tdig-val">${p(h)}</span><span class="tdig-unit">hrs</span></div><span class="tdig-sep">:</span><div class="tdig"><span class="tdig-val">${p(m)}</span><span class="tdig-unit">min</span></div><span class="tdig-sep">:</span><div class="tdig"><span class="tdig-val">${p(s)}</span><span class="tdig-unit">sec</span></div></div>`;
 }
 // Auto-close on timer expiry: when the countdown hits 0, an open admin page performs
@@ -6355,7 +6424,20 @@ window.toggleTimerEnabled=function(){
       : `<div>Turn the countdown timer <strong>off</strong>? Users will no longer see a countdown.</div>`,
     okText:nv?'Enable Timer':'Disable Timer', danger:!nv,
     onConfirm:async()=>{
-      await setDoc(timerRef,{enabled:nv,lastChange:nv?timerData.lastChange:null},{merge:true});
+      // Re-enabling mid-Phase-1 with the opening window ON and time still inside the
+      // window: arm the continuous countdown retroactively from the Phase-1 start, so
+      // the window isn't silently skipped. Never arm an already-elapsed window (that
+      // would create an instantly-expired timer and close the auction).
+      let payload={enabled:nv,lastChange:nv?timerData.lastChange:null};
+      if(nv&&!timerData.lastChange){
+        const owr=getTimerRules().openingWindow;
+        const began=(phasesData.phaseBeganAt||{})[1];
+        if(owr&&Number(phasesData.currentPhase||1)===1&&began
+           &&(owr.days*86400000-(Date.now()-began))>stage0Hours()*3600000){
+          payload={enabled:true,lastChange:began,durationHours:owr.days*24};
+        }
+      }
+      await setDoc(timerRef,payload,{merge:true});
       toast(nv?"⏱️ Timer enabled":"🔕 Timer disabled",nv?"ok":"warn");
     }
   });
@@ -6609,6 +6691,7 @@ window.deleteAllUsers=function(){
               setDoc(scheduleRef,{}), setDoc(passwordsRef,{}), setDoc(emailsRef,{}),
               setDoc(worstBidsRef,{}), setDoc(bidTimesRef,{}), setDoc(fteRef,{}),
               setDoc(bidPhaseRef,{}), setDoc(approvalsRef,{}), setDoc(deniedRef,{}),
+              setDoc(changesArchiveRef,{}),
               // Also wipe the shared Google-login map and custom display names, so a
               // later roster rebuilt with the SAME initials can't let a removed person
               // still sign in as (or show the old name of) a brand-new user.
