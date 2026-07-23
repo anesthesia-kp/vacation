@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 153;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 154;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -797,13 +797,13 @@ thead th{color:var(--t2)}
         <div class="trow" style="align-items:flex-start;flex-direction:column;gap:10px">
           <div>
             <div class="trow-label">Maximum weeks a user may WIN, cumulatively, through each phase</div>
-            <div class="trow-desc">Each cap is a <strong>running total</strong> through that phase (current phase + all prior phases). Only weeks a user <strong>wins</strong> count against it — denied/lost bids never count. In the current phase it counts the user's <strong>prior-phase wins + their live bids this phase</strong>. Leave a phase blank for <strong>no limit</strong>. A later phase can only be the same or higher than the one before it — later values fill in automatically and can only be raised. Changing a value asks you to confirm before it saves.</div>
+            <div class="trow-desc">Each cap is a <strong>running total</strong> through that phase (current phase + all prior phases). Only weeks a user <strong>wins</strong> count against it — denied/lost bids never count. In the current phase it counts the user's <strong>prior-phase wins + their live bids this phase</strong>. Check <strong>No limit</strong> for a phase with no cap. A phase that has a number can only be the same or higher than an earlier numbered phase — later values fill in automatically and can only be raised. Changing a value asks you to confirm before it saves.</div>
           </div>
-          <div style="display:grid;grid-template-columns:auto 84px;gap:8px 14px;align-items:center">
-            <label style="font-size:12px;color:var(--t2);font-weight:600">Phase 1</label><input type="number" id="cap1" class="inp" style="width:78px" min="1" max="52" step="1" placeholder="none" oninput="_syncCaps()" onchange="_capsChanged()">
-            <label style="font-size:12px;color:var(--t2);font-weight:600">Through Phase 2</label><input type="number" id="cap2" class="inp" style="width:78px" min="1" max="52" step="1" placeholder="none" oninput="_syncCaps()" onchange="_capsChanged()">
-            <label style="font-size:12px;color:var(--t2);font-weight:600">Through Phase 3</label><input type="number" id="cap3" class="inp" style="width:78px" min="1" max="52" step="1" placeholder="none" oninput="_syncCaps()" onchange="_capsChanged()">
-            <label style="font-size:12px;color:var(--t2);font-weight:600">Through Phase 4</label><input type="number" id="cap4" class="inp" style="width:78px" min="1" max="52" step="1" placeholder="none" oninput="_syncCaps()" onchange="_capsChanged()">
+          <div style="display:grid;grid-template-columns:auto 84px auto;gap:8px 14px;align-items:center">
+            <label style="font-size:12px;color:var(--t2);font-weight:600">Phase 1</label><input type="number" id="cap1" class="inp" style="width:78px" min="1" max="52" step="1" placeholder="none" oninput="_syncCaps()" onchange="_capsChanged()"><label style="font-size:12px;color:var(--t2);display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="nolim1" onchange="_capNoLimitToggle(1)"> No limit</label>
+            <label style="font-size:12px;color:var(--t2);font-weight:600">Through Phase 2</label><input type="number" id="cap2" class="inp" style="width:78px" min="1" max="52" step="1" placeholder="none" oninput="_syncCaps()" onchange="_capsChanged()"><label style="font-size:12px;color:var(--t2);display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="nolim2" onchange="_capNoLimitToggle(2)"> No limit</label>
+            <label style="font-size:12px;color:var(--t2);font-weight:600">Through Phase 3</label><input type="number" id="cap3" class="inp" style="width:78px" min="1" max="52" step="1" placeholder="none" oninput="_syncCaps()" onchange="_capsChanged()"><label style="font-size:12px;color:var(--t2);display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="nolim3" onchange="_capNoLimitToggle(3)"> No limit</label>
+            <label style="font-size:12px;color:var(--t2);font-weight:600">Through Phase 4</label><input type="number" id="cap4" class="inp" style="width:78px" min="1" max="52" step="1" placeholder="none" oninput="_syncCaps()" onchange="_capsChanged()"><label style="font-size:12px;color:var(--t2);display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="nolim4" onchange="_capNoLimitToggle(4)"> No limit</label>
           </div>
           <div id="capsMsg" style="font-size:11px;color:var(--t2)"></div>
         </div>
@@ -2710,16 +2710,8 @@ function syncControls(){
   // Rebuild the Timer Rules editor from saved settings, but not while the admin is
   // mid-edit in one of its fields (ids start with "tr_").
   if(typeof renderTimerRules==='function' && !(document.activeElement && /^tr_/.test(document.activeElement.id||''))) renderTimerRules();
-  // Cumulative bid caps (Phase 1 · through P2 · through P3 · through P4). Blank = no limit.
-  (function(){
-    const m=adminSettings?.maxBidsCumulative||{};
-    for(let p=1;p<=4;p++){
-      const inp=document.getElementById('cap'+p); if(!inp) continue;
-      if(document.activeElement===inp) continue; // don't clobber mid-typing
-      const raw=m[p]!==undefined?m[p]:m[String(p)];
-      inp.value=(raw===undefined||raw===null||raw===''||raw==='none')?'':raw;
-    }
-  })();
+  // Cumulative bid caps (Phase 1 · through P2 · through P3 · through P4). Null/blank = no limit.
+  if(typeof _populateCapsFromSaved==='function') _populateCapsFromSaved();
   renderNpToggles();
   const gl=document.getElementById("globalLockToggle");
   if(gl) gl.className="tog"+(locksData.globalLock?" on":"");
@@ -2836,28 +2828,52 @@ window.toggleGlobalLock=async function(){
   toast(v?"🔒 Globally locked":"🔓 Lock removed",v?"warn":"ok");
 };
 
-// Read the four cap inputs as [p1,p2,p3,p4] (null = blank), clamping numerics to 1..52.
-function _capsRaw(){ return [1,2,3,4].map(p=>{ const v=(document.getElementById('cap'+p)?.value||'').trim(); return v===''?null:(/^\d+$/.test(v)?Math.max(1,Math.min(52,Number(v))):null); }); }
-// Monotonic auto-fill: leading blanks stay blank; once a numeric cap appears every later
-// phase inherits at least that value and can only be raised (never set below the phase before).
-// Rewrites all inputs EXCEPT the one currently being typed in.
+// Resolve the four phases to [p1,p2,p3,p4] where each is a number or null (= no limit).
+// A phase whose "No limit" box is checked is null. Otherwise a blank inherits the greatest
+// earlier NUMBER (or is null/no-limit if no earlier number), and a typed number can only be
+// raised to that running max — never set below an earlier numbered phase.
 function _syncCaps(){
-  const raw=_capsRaw(); const out=raw.slice(); let rm=0;
+  const nolim=[1,2,3,4].map(p=>!!document.getElementById('nolim'+p)?.checked);
+  const rawNums=[1,2,3,4].map(p=>{ const v=(document.getElementById('cap'+p)?.value||'').trim(); return v===''?null:(/^\d+$/.test(v)?Math.max(1,Math.min(52,Number(v))):null); });
+  const out=[]; let runMax=0;
   for(let i=0;i<4;i++){
-    if(out[i]===null){ if(rm>0) out[i]=rm; }
-    else { if(out[i]<rm) out[i]=rm; rm=Math.max(rm,out[i]); }
+    if(nolim[i]){ out[i]=null; continue; }                 // explicit no limit — imposes no floor
+    if(rawNums[i]===null){ out[i]=runMax>0?runMax:null; }   // blank: inherit running max, else leading no-limit
+    else { out[i]=Math.max(rawNums[i],runMax); }            // typed: snap up to running max
+    if(out[i]!==null) runMax=Math.max(runMax,out[i]);
   }
-  for(let p=1;p<=4;p++){ const el=document.getElementById('cap'+p); if(el && document.activeElement!==el) el.value=(out[p-1]===null?'':out[p-1]); }
-  return out;
+  // Rewrite number inputs (skip no-limit and the field being typed in). Checkboxes are user-owned.
+  for(let p=1;p<=4;p++){
+    const el=document.getElementById('cap'+p); if(!el||document.activeElement===el) continue;
+    if(nolim[p-1]){ el.value=''; el.disabled=true; el.style.opacity='.45'; }
+    else { el.disabled=false; el.style.opacity=''; el.value=(out[p-1]===null?'':out[p-1]); }
+  }
+  return out; // null = no limit
 }
 function _savedCaps(){ const m=adminSettings?.maxBidsCumulative||{}; return [1,2,3,4].map(p=>{ const raw=m[p]!==undefined?m[p]:m[String(p)]; return (raw===undefined||raw===null||raw===''||raw==='none')?null:Number(raw); }); }
-function _populateCapsFromSaved(){ const s=_savedCaps(); for(let p=1;p<=4;p++){ const el=document.getElementById('cap'+p); if(el) el.value=(s[p-1]===null?'':s[p-1]); } }
-// On commit (blur/Enter): normalize, and if changed from saved, confirm before saving.
+// Reflect the saved caps onto both the number inputs and the No-limit checkboxes (used on
+// initial load, on the live snapshot, and to revert a cancelled change). Skips focused fields.
+function _populateCapsFromSaved(){
+  const s=_savedCaps();
+  for(let p=1;p<=4;p++){
+    const inp=document.getElementById('cap'+p), cb=document.getElementById('nolim'+p); if(!inp||!cb) continue;
+    const isNL=s[p-1]===null;
+    if(document.activeElement!==cb) cb.checked=isNL;
+    if(document.activeElement!==inp) inp.value=isNL?'':s[p-1];
+    inp.disabled=isNL; inp.style.opacity=isNL?'.45':'';
+  }
+}
+// Toggling a "No limit" box is a discrete commit — disable/enable its number field, then confirm.
+window._capNoLimitToggle=function(p){
+  const cb=document.getElementById('nolim'+p), inp=document.getElementById('cap'+p);
+  if(cb&&inp){ inp.disabled=cb.checked; inp.style.opacity=cb.checked?'.45':''; if(cb.checked) inp.value=''; }
+  _capsChanged();
+};
+// On commit (blur/Enter/checkbox): normalize, and if changed from saved, confirm before saving.
 window._capsChanged=function(){
   const out=_syncCaps();
-  // Commit action (blur/Enter): force every field to the normalized value so the display
-  // always matches what will be saved, even if a field kept focus after Enter.
-  for(let p=1;p<=4;p++){ const el=document.getElementById('cap'+p); if(el) el.value=(out[p-1]===null?'':out[p-1]); }
+  // Force display to the normalized values so what's shown matches what will be saved.
+  for(let p=1;p<=4;p++){ const el=document.getElementById('cap'+p), cb=document.getElementById('nolim'+p); if(!el) continue; const nl=!!cb?.checked; el.disabled=nl; el.style.opacity=nl?'.45':''; el.value=(nl||out[p-1]===null)?'':out[p-1]; }
   if(JSON.stringify(out)===JSON.stringify(_savedCaps())) return; // nothing changed
   const summary=[1,2,3,4].map(p=>{ const label=(p===1?'Phase 1':('Through Phase '+p)); return label+': '+(out[p-1]===null?'no limit':(out[p-1]+' week'+(out[p-1]!==1?'s':''))); }).join('<br>');
   openConfirm({
