@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 88;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 89;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -514,7 +514,7 @@ body{zoom:1.15}
         <li>Vacation selections are now called "bids" — the process works like an auction, where bids compete for limited slots based on priority</li>
         <li>Enter your bids early, it benefits everyone</li>
         <li>Sniping is not possible, do not try it</li>
-        <li id="ruleMaxBids">Only 3 bids (including NP bids) may be used per phase — only bid for the number of weeks your accrued vacation and ATO will allow for</li>
+        <li id="ruleMaxBids">There is a running limit on how many weeks you can win across the auction, and it grows each phase — only weeks you win count against it. Only bid for the number of weeks your accrued vacation and ATO will allow for</li>
         <li>Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better</li>
         <li>On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used</li>
         <li>NP bids may only be used during the phases for which admin has turned them on</li>
@@ -1095,39 +1095,62 @@ function npAllowedNow(){
   const v=m[ph];
   return v===undefined?(ph>=3):v!==false;
 }
-function getMaxBidsPerPhase(){
-  // ONLY what admin entered counts — no built-in default (removed 16 Jul 2026).
-  // Nothing saved (or 'none') means no per-phase limit.
-  const raw=adminSettings?.maxBidsPerPhase;
+// CUMULATIVE bid caps. adminSettings.maxBidsCumulative = {1:n,2:n,3:n,4:n}. The cap for a
+// phase is the running total allowed through THAT phase (current + all prior). Blank = no
+// limit that phase. What counts toward it: weeks WON in prior phases (approved) + all bids
+// placed live in the current phase. Denied/lost bids never count; current-phase projections
+// are irrelevant.
+function getCumulativeCap(phase){
+  const m=adminSettings?.maxBidsCumulative;
+  if(!m||typeof m!=='object') return null;
+  const raw=m[phase]!==undefined?m[phase]:m[String(phase)];
   if(raw===undefined||raw===null||raw===''||raw==='none') return null;
   const n=parseInt(raw,10);
-  if(isNaN(n)||n<1||n>10) return null;
+  if(isNaN(n)||n<1) return null;
   return n;
+}
+// The cap that applies in the CURRENT phase.
+function getMaxBidsPerPhase(){ return getCumulativeCap(Number(phasesData.currentPhase||1)); }
+// Number of weeks this user WON (was approved for) across all completed phases. Only wins
+// count toward the cumulative cap — denied/lost bids do not.
+function priorApprovedCount(user){
+  let c=0; const cp=phasesData.completedPhases||{}; const cur=Number(phasesData.currentPhase||1);
+  for(const ph of Object.keys(cp)){
+    if(Number(ph)>=cur) continue;
+    const ap=cp[ph]?.approvals||{};
+    for(const wk of Object.keys(ap)){ if(Array.isArray(ap[wk])&&ap[wk].includes(user)) c++; }
+  }
+  return c;
+}
+// Simple-language description of the cumulative caps — shared wording with the welcome e-mail.
+function cumulativeCapDescription(){
+  const caps=[1,2,3,4].map(getCumulativeCap);
+  if(caps.every(c=>c===null)) return 'There is no limit on how many weeks you can bid on — you are limited only by the bid numbers you have available';
+  const parts=[1,2,3,4].map(p=>{ const c=caps[p-1]; const label=(p===1?'Phase 1':('Through Phase '+p)); return label+': '+(c===null?'no limit':('up to '+c+' week'+(c!==1?'s':''))); });
+  return 'There is a running limit on how many weeks you can WIN across the whole auction, and it grows each phase. Only weeks you WIN count against it — weeks you do not win free up again for the next phase, and NP counts like any other bid. The running totals are — '+parts.join(' · ')+'. For example: if the cap through Phase 2 is 6 and you won 1 week in Phase 1, you can place up to 5 more bids in Phase 2';
 }
 function updateBidLimitRule(){
   const el=document.getElementById('ruleMaxBids'); if(!el) return;
-  const lim=getMaxBidsPerPhase();
-  // The ATO/accrued-vacation reminder must ALWAYS appear, regardless of the limit.
-  const atoNote=' — only bid for the number of weeks your accrued vacation and ATO will allow for';
-  el.textContent=(lim===null
-    ? 'There is no per-phase bid limit — you are limited only by the bid numbers you have available'
-    : 'Only '+lim+' bid'+(lim!==1?'s':'')+' (including NP bids) may be used per phase')+atoNote;
+  el.textContent=cumulativeCapDescription()+'. Only bid for the number of weeks your accrued vacation and ATO will allow for';
   if(typeof renderBidPool==='function'){ const u=getCurrentUser?.(); if(u) renderBidPool(u); }
 }
 
-// ── Per-phase bid-limit status ──
-// Every current-phase bid counts — including DENIED ones (a denied bid was still
-// placed; the slot/number only comes back next phase). lim=null → no limit.
+// ── Cumulative bid-limit status ──
+// used = weeks WON in prior phases (approved) + live bids placed this phase. cap = the
+// cumulative cap for the current phase. lim/cap = null → no limit this phase.
 function bidLimitStatus(user){
-  const lim=getMaxBidsPerPhase();
-  const count=myCountedWeeks(user).length;
-  return {lim, count, atLimit: lim!==null && count>=lim, remaining: lim===null?null:Math.max(0,lim-count)};
+  const cap=getMaxBidsPerPhase();
+  const prior=priorApprovedCount(user);
+  const live=myCountedWeeks(user).length;
+  const used=prior+live;
+  return {lim:cap, cap, prior, live, count:used, used, atLimit: cap!==null && used>=cap, remaining: cap===null?null:Math.max(0,cap-used)};
 }
 // Show the "bid limit reached" modal with text that matches the current admin limit.
 function showBidLimitModal(){
-  const lim=getMaxBidsPerPhase();
+  const cur=Number(phasesData.currentPhase||1);
+  const u=getCurrentUser?.(); const st=u?bidLimitStatus(u):{lim:getMaxBidsPerPhase(),prior:0};
   const msg=document.getElementById('bidLimitModalMsg');
-  if(msg) msg.innerHTML='<strong style="color:#7a4e00">Only '+lim+' bid'+(lim!==1?'s':'')+' allowed per phase.</strong>';
+  if(msg) msg.innerHTML='<strong style="color:#7a4e00">You have reached your bid cap of '+st.lim+' week'+(st.lim!==1?'s':'')+' through Phase '+cur+'.</strong><br><span style="font-weight:400;color:#2c4257">This total counts the '+st.prior+' week'+(st.prior!==1?'s':'')+" you've already won plus your live bids this phase. Weeks you don't win free up again next phase.</span>";
   document.getElementById('bidLimitModal').classList.add('show');
 }
 // ── Bid-number pool ──
@@ -1155,9 +1178,10 @@ function renderBidPool(user){
   const chip=(n,kind)=>`<span style="display:inline-block;font-weight:700;font-size:.78rem;padding:2px 9px;border-radius:7px;margin:2px;${kind==='used'?'background:rgba(239,68,68,.12);color:#b91c1c;border:1px solid rgba(239,68,68,.3)':'background:rgba(0,117,58,.1);color:#00713a;border:1px solid rgba(0,117,58,.3)'}">${n}</span>`;
   const usedHtml=pool.used.length?pool.used.map(n=>chip(n,'used')).join(''):'<span style="color:#48607a;font-size:.8rem">None yet</span>';
   const remHtml=(pool.remaining.length?pool.remaining.map(n=>chip(n,'rem')).join(''):'<span style="color:#48607a;font-size:.8rem">None</span>')+chip('NP','rem');
+  const _cur=Number(phasesData.currentPhase||1);
   const phaseLine=st.lim===null
-    ? `<div style="font-size:.76rem;color:#48607a;margin-bottom:10px">No per-phase bid limit is set — you're limited only by the bid numbers you have available.</div>`
-    : `<div style="font-size:.8rem;color:#2c4257;margin-bottom:10px">You've placed <strong>${st.count}</strong> of <strong>${st.lim}</strong> allowed bid${st.lim!==1?'s':''} this phase${st.remaining>0?` — <strong style="color:#00713a">${st.remaining} remaining</strong>`:` — <strong style="color:#b91c1c">limit reached</strong>`}.</div>`;
+    ? `<div style="font-size:.76rem;color:#48607a;margin-bottom:10px">No bid limit is set for this phase — you're limited only by the bid numbers you have available.</div>`
+    : `<div style="font-size:.8rem;color:#2c4257;margin-bottom:10px">Bid cap through Phase ${_cur}: <strong>${st.lim}</strong> week${st.lim!==1?'s':''} total (weeks you've won + your live bids). You've won <strong>${st.prior}</strong> and have <strong>${st.live}</strong> live bid${st.live!==1?'s':''} this phase${st.remaining>0?` — <strong style="color:#00713a">${st.remaining} left</strong>`:` — <strong style="color:#b91c1c">limit reached</strong>`}.</div>`;
   box.innerHTML=`${phaseLine}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
       <div>
@@ -2681,10 +2705,7 @@ function timerRulesEmailText(){
   return `Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}`;
 }
 function buildWelcomeEmailBody(user){
-  const lim=getMaxBidsPerPhase();
-  const limLine=lim===null
-    ? `There is no per-phase bid limit — you are limited only by the bid numbers you have available; only bid for the number of weeks your accrued vacation and ATO will allow for`
-    : `Only ${lim} bid${lim!==1?'s':''} (including NP bids) may be used per phase — only bid for the number of weeks your accrued vacation and ATO will allow for`;
+  const limLine=cumulativeCapDescription()+'. Only bid for the number of weeks your accrued vacation and ATO will allow for';
   const B=_emBold;
   // No hard wrapping — each bullet is one line that soft-wraps to the full
   // width of the reader's mail client. Blank lines only between paragraphs.

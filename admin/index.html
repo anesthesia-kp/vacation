@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 151;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 152;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -793,19 +793,20 @@ thead th{color:var(--t2)}
       </div>
 
       <div class="card">
-        <div class="card-title">Max Bids for Current Phase</div>
-        <div class="trow" style="align-items:flex-start;flex-direction:column;gap:8px">
+        <div class="card-title">Cumulative Bid Caps (max weeks per user)</div>
+        <div class="trow" style="align-items:flex-start;flex-direction:column;gap:10px">
           <div>
-            <div class="trow-label">Bids allowed per user, for the current phase</div>
-            <div class="trow-desc"><strong>Applies to the current phase only</strong> — each user may place up to this many new bids in the phase now underway. Bids from completed phases don't count against the limit (they're locked and can't be changed anyway). Whole numbers 1–10, or tick "No limit" — with no limit, users are bounded only by the bid numbers they have available (1,2,3 · 1,2 · 1–10 · NP). Editing or removing an existing bid is always allowed.</div>
+            <div class="trow-label">Maximum weeks a user may WIN, cumulatively, through each phase</div>
+            <div class="trow-desc">Each cap is a <strong>running total</strong> through that phase (current phase + all prior phases). Only weeks a user <strong>wins</strong> (gets approved for) count against it — denied/lost bids never count and their numbers return. In the current phase, the cap counts the user's <strong>prior-phase wins + their live bids this phase</strong> (projected outcomes are ignored). Leave a phase blank for <strong>no limit</strong>.<br><br><em>Example:</em> Phase 1 = 3 and Through Phase 2 = 6 means a user who won 1 week in Phase 1 can place up to 5 more bids in Phase 2. Each cap should be ≥ the one before it.</div>
           </div>
-          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-            <input type="number" id="maxBidsInput" class="inp" style="width:80px" min="1" max="10" step="1" value="3">
-            <label style="font-size:12px;color:var(--t2);display:flex;align-items:center;gap:6px;cursor:pointer">
-              <input type="checkbox" id="maxBidsNoLimit" onchange="document.getElementById('maxBidsInput').disabled=this.checked"> No limit
-            </label>
-            <button class="btn btn-primary" onclick="saveMaxBids()">Save</button>
+          <div style="display:grid;grid-template-columns:auto 84px;gap:8px 14px;align-items:center">
+            <label style="font-size:12px;color:var(--t2);font-weight:600">Phase 1</label><input type="number" id="cap1" class="inp" style="width:78px" min="1" max="52" step="1" placeholder="none">
+            <label style="font-size:12px;color:var(--t2);font-weight:600">Through Phase 2</label><input type="number" id="cap2" class="inp" style="width:78px" min="1" max="52" step="1" placeholder="none">
+            <label style="font-size:12px;color:var(--t2);font-weight:600">Through Phase 3</label><input type="number" id="cap3" class="inp" style="width:78px" min="1" max="52" step="1" placeholder="none">
+            <label style="font-size:12px;color:var(--t2);font-weight:600">Through Phase 4</label><input type="number" id="cap4" class="inp" style="width:78px" min="1" max="52" step="1" placeholder="none">
           </div>
+          <button class="btn btn-primary" onclick="saveMaxBids()">Save Caps</button>
+          <div id="capsMsg" style="font-size:11px;color:var(--t2)"></div>
         </div>
       </div>
       <div class="card">
@@ -2711,15 +2712,15 @@ function syncControls(){
   // Rebuild the Timer Rules editor from saved settings, but not while the admin is
   // mid-edit in one of its fields (ids start with "tr_").
   if(typeof renderTimerRules==='function' && !(document.activeElement && /^tr_/.test(document.activeElement.id||''))) renderTimerRules();
-  // Maximum bids per phase control (starts at 3; 'none' = no limit)
+  // Cumulative bid caps (Phase 1 · through P2 · through P3 · through P4). Blank = no limit.
   (function(){
-    const inp=document.getElementById('maxBidsInput'); const cb=document.getElementById('maxBidsNoLimit');
-    if(!inp||!cb) return;
-    if(document.activeElement===inp) return; // don't clobber mid-typing
-    const raw=adminSettings?.maxBidsPerPhase;
-    // ONLY what admin entered (no default). Unset = no limit.
-    if(raw==='none'||raw===undefined||raw===null||raw===''){ cb.checked=true; inp.disabled=true; inp.value=''; }
-    else { cb.checked=false; inp.disabled=false; inp.value=raw; }
+    const m=adminSettings?.maxBidsCumulative||{};
+    for(let p=1;p<=4;p++){
+      const inp=document.getElementById('cap'+p); if(!inp) continue;
+      if(document.activeElement===inp) continue; // don't clobber mid-typing
+      const raw=m[p]!==undefined?m[p]:m[String(p)];
+      inp.value=(raw===undefined||raw===null||raw===''||raw==='none')?'':raw;
+    }
   })();
   renderNpToggles();
   const gl=document.getElementById("globalLockToggle");
@@ -2834,16 +2835,23 @@ window.toggleGlobalLock=async function(){
 };
 
 window.saveMaxBids=async function(){
-  const noLim=document.getElementById('maxBidsNoLimit')?.checked;
-  if(noLim){
-    await setDoc(adminRef,{maxBidsPerPhase:'none'},{merge:true});
-    toast('Bid limit: no limit — users bounded only by their available bid numbers','ok');
-    return;
+  const msgEl=document.getElementById('capsMsg');
+  const vals=[null,null,null,null]; // index 0..3 → phase 1..4
+  for(let p=1;p<=4;p++){
+    const raw=(document.getElementById('cap'+p)?.value||'').trim();
+    if(raw==='') { vals[p-1]=null; continue; }
+    if(!/^\d+$/.test(raw)||Number(raw)<1||Number(raw)>52){ toast('Phase '+p+' cap must be a whole number 1–52, or blank for no limit','err'); return; }
+    vals[p-1]=Number(raw);
   }
-  const raw=(document.getElementById('maxBidsInput')?.value||'').trim();
-  if(!/^([1-9]|10)$/.test(raw)){ toast('Enter a whole number from 1 to 10','err'); return; }
-  await setDoc(adminRef,{maxBidsPerPhase:Number(raw)},{merge:true});
-  toast('Bid limit set to '+raw+' per phase','ok');
+  // Warn (but allow) if a later cap is LOWER than an earlier one — that can strand users.
+  let prev=null, warn=false;
+  for(const n of vals){ if(n!==null){ if(prev!==null && n<prev) warn=true; prev=n; } }
+  // Store all four keys (null = no limit) so blanking a previously-set cap actually clears it.
+  const store={1:vals[0],2:vals[1],3:vals[2],4:vals[3]};
+  await setDoc(adminRef,{maxBidsCumulative:store},{merge:true});
+  const summary=[1,2,3,4].map(p=>'P'+p+':'+(vals[p-1]===null?'none':vals[p-1])).join(' · ');
+  if(msgEl){ msgEl.style.color=warn?'var(--yellow)':'var(--green)'; msgEl.textContent=(warn?'⚠️ Saved, but a later cap is LOWER than an earlier one — users past it get 0 bids that phase. ':'✓ Saved. ')+summary; }
+  toast(warn?'Caps saved (with a warning — see the panel)':'Bid caps saved','ok');
 };
 
 window.toggleEmailNotifs=async function(){
@@ -3916,11 +3924,23 @@ function timerRulesEmailText(){
   if(r.quietEnabled){ quiet=`\n\nOnce the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between ${fmtHour12(r.quietStart)} and ${fmtHour12(r.quietEnd)} Pacific time, it's pushed to ${fmtHour12(r.quietEnd)} so nothing closes while you're asleep.`; }
   return `Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}`;
 }
+function _cumCap(phase){
+  const m=adminSettings?.maxBidsCumulative;
+  if(!m||typeof m!=='object') return null;
+  const raw=m[phase]!==undefined?m[phase]:m[String(phase)];
+  if(raw===undefined||raw===null||raw===''||raw==='none') return null;
+  const n=parseInt(raw,10);
+  return (isNaN(n)||n<1)?null:n;
+}
+// Simple-language description of the cumulative bid caps for the welcome e-mail.
+function cumulativeCapEmailText(){
+  const caps=[1,2,3,4].map(_cumCap);
+  if(caps.every(c=>c===null)) return 'There is no limit on how many weeks you can bid on — you are limited only by the bid numbers you have available; only bid for the number of weeks your accrued vacation and ATO will allow for';
+  const parts=[1,2,3,4].map(p=>{ const c=caps[p-1]; const label=(p===1?'Phase 1':('Through Phase '+p)); return label+': '+(c===null?'no limit':('up to '+c+' week'+(c!==1?'s':''))); });
+  return 'There is a running limit on how many weeks you can WIN across the whole auction, and it grows each phase. Only weeks you WIN count against it — weeks you do not win free up again for the next phase, and NP counts like any other bid. The running totals are — '+parts.join(' · ')+'. For example: if the cap through Phase 2 is 6 and you won 1 week in Phase 1, you can place up to 5 more bids in Phase 2. Only bid for the number of weeks your accrued vacation and ATO will allow for';
+}
 function buildWelcomeEmailBody(user){
-  const lim=_amMaxBids();
-  const limLine=lim===null
-    ? `There is no per-phase bid limit — you are limited only by the bid numbers you have available; only bid for the number of weeks your accrued vacation and ATO will allow for`
-    : `Only ${lim} bid${lim!==1?'s':''} (including NP bids) may be used per phase — only bid for the number of weeks your accrued vacation and ATO will allow for`;
+  const limLine=cumulativeCapEmailText();
   const B=_emBold;
   const bullets=arr=>arr.map(t=>'• '+t).join('\n');
   return `Hi ${user},
