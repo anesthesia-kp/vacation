@@ -2194,7 +2194,7 @@ function _fpAnalyzePhase(phase,events,isCurrent){
   const began=(phasesData.phaseBeganAt||{})[phase]||((events[0]||{}).ts||0);
   const ow=getTimerRules().openingWindow;
   const s0ms=stage0Hours()*3600000;
-  const owEnd=(phase===1&&ow)?(began+ow.days*86400000-s0ms):-Infinity; // opening window suppresses resets until here
+  const owEnd=ow?(began+ow.days*86400000-s0ms):-Infinity; // opening window (every phase) suppresses resets until here
   const timerOn=!(isCurrent&&timerData?.enabled===false); // archived phases: assume the timer ran
   const live={};                 // wk -> user -> {val, placedTs} — bids live at this point in the replay
   let lastReset=Math.max(began,owEnd);
@@ -3806,14 +3806,14 @@ async function _commitBeginPhase(next){
   // Do NOT swallow a failure here: if the timer write fails, the user site can show
   // the auction as CLOSED (prior expired state) while the admin thinks it is open.
   let _timerOk=true;
-  // Phase 1 with the opening window ON starts the countdown at N days (continuous, no
-  // resets until the starting-reset mark); otherwise every phase opens with the normal
+  // With the opening window ON, EVERY phase starts its countdown at N days (continuous,
+  // no resets until the starting-reset mark); otherwise phases open with the normal
   // starting reset from the timer rules.
-  const _ow=(next===1)?getTimerRules().openingWindow:null;
+  const _ow=getTimerRules().openingWindow;
   { const _n=Date.now(); try{ await setDoc(timerRef,{enabled:true,durationHours:_ow?_ow.days*24:timerResetHours(_n,_n),lastChange:_n},{merge:true}); }
     catch(e){ _timerOk=false; console.error('begin-phase timer reset failed:',e); } }
   toast(_timerOk
-    ? (_ow ? '▶ Phase 1 begun — bidding is open (opening window: '+_ow.days+' days, no timer resets until '+stage0Hours()+'h remain)'
+    ? (_ow ? '▶ Phase '+next+' begun — bidding is open (opening window: '+_ow.days+' days, no timer resets until '+stage0Hours()+'h remain)'
            : '▶ Phase '+next+' begun — bidding is open (timer reset to '+stage0Hours()+'h)')
     : '⚠️ Phase '+next+' begun, but the TIMER reset FAILED — users may see the auction as CLOSED. Open the Timer card and reset it now.',
     _timerOk?'ok':'warn');
@@ -4007,7 +4007,7 @@ function timerRulesEmailText(){
   let quiet='';
   if(r.quietEnabled){ quiet=`\n\nOnce the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between ${fmtHour12(r.quietStart)} and ${fmtHour12(r.quietEnd)} Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.`; }
   let owTxt='';
-  if(r.openingWindow){ owTxt=`\n\nPhase 1 opens with a ${r.openingWindow.days}-day window: the timer counts down continuously (bids do NOT reset it) until ${(st[0]||{}).hours||48} hours remain — then the reset rules above take over.`; }
+  if(r.openingWindow){ owTxt=`\n\nEach phase opens with a ${r.openingWindow.days}-day window: the timer counts down continuously (bids do NOT reset it) until ${(st[0]||{}).hours||48} hours remain — then the reset rules above take over.`; }
   return `Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}${owTxt}`;
 }
 function _cumCap(phase){
@@ -6181,13 +6181,12 @@ function getTimerRules(){
   return {stages:r.stages.slice().filter(s=>s&&typeof s.hours==='number').sort((a,b)=>(a.days||0)-(b.days||0)),quietEnabled:r.quietEnabled!==false,quietStart:(typeof r.quietStart==='number')?r.quietStart:21,quietEnd:(typeof r.quietEnd==='number')?r.quietEnd:9,quietWhenHoursLE:(typeof r.quietWhenHoursLE==='number')?r.quietWhenHoursLE:6,openingWindow:_owNorm(r.openingWindow)};
 }
 function stage0Hours(){ const st=getTimerRules().stages; return (st.length?st[0].hours:48)||48; }
-// Phase-1 opening window is ACTIVE while: rule on · phase 1 · timer running · remaining
+// The opening window is ACTIVE while: rule on · timer running · remaining
 // time still above the normal starting reset. While active, bids do NOT reset the
 // countdown and it displays in days + hours; at the starting-reset mark the normal
 // admin timer rules take over.
 function openingWindowActive(){
   const ow=getTimerRules().openingWindow; if(!ow) return false;
-  if(Number((typeof phasesData!=='undefined'&&phasesData&&phasesData.currentPhase)||1)!==1) return false;
   if(!timerData||!timerData.enabled||!timerData.lastChange) return false;
   return (((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)) > stage0Hours()*3600000;
 }
@@ -6203,7 +6202,9 @@ function currentStageHours(){ const r=getTimerRules(); const st=r.stages; const 
 function updatePhaseOpen(){
   const cur=Number((phasesData&&phasesData.currentPhase)||1);
   const began=(phasesData&&phasesData.phaseBeganAt)?phasesData.phaseBeganAt[cur]:null;
-  const open=began&&(phasesData&&(phasesData.phase1Started||cur>1));
+  const completed=!!(phasesData&&phasesData.completedPhases&&phasesData.completedPhases[cur]);
+  const expired=!!(timerData&&timerData.enabled&&timerData.lastChange&&(getDurationMs()-(Date.now()-timerData.lastChange))<=0);
+  const open=began&&(phasesData&&(phasesData.phase1Started||cur>1))&&!completed&&!expired;
   const el=document.getElementById('phaseOpenFor');
   if(el) el.textContent=open?('Phase '+cur+' has been open for '+fmtElapsed(Date.now()-began)):'';
   const ri=document.getElementById('timerResetInfo');
@@ -6231,8 +6232,8 @@ function renderTimerRules(){
   for(let i=1;i<=4;i++){ const s=st[i]||{days:[7,10,12,14][i-1],hours:[24,12,6,3][i-1]}; rows+=row(`<span style="color:var(--t2)">After</span> ${dayInp('tr_d'+i,s.days)} <span style="color:var(--t2)">days,</span><span>reset to</span> ${hoursSel('tr_h'+i,s.hours)}`); }
   const ow=r.openingWindow;
   const owRow=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
-    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t1);font-weight:600;cursor:pointer"><input type="checkbox" id="tr_ow" ${ow?'checked':''}> Phase 1 opening window</label>
-    <div style="font-size:12.5px;color:var(--t2);margin-top:8px;line-height:1.7"><span>Start Phase 1 with a timer of</span> ${dayInp('tr_owd',ow?ow.days:7)} <span>days. It counts down in days + hours, continuously — bids do <strong>not</strong> reset it — until <strong>${(st[0]||{}).hours||48} hours</strong> remain. From then on it shows hours only and every bid change resets it per the rules above. Applies when Phase 1 is begun.</span></div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t1);font-weight:600;cursor:pointer"><input type="checkbox" id="tr_ow" ${ow?'checked':''}> Opening window (every phase)</label>
+    <div style="font-size:12.5px;color:var(--t2);margin-top:8px;line-height:1.7"><span>Start each phase with a timer of</span> ${dayInp('tr_owd',ow?ow.days:7)} <span>days. It counts down in days + hours, continuously — bids do <strong>not</strong> reset it — until <strong>${(st[0]||{}).hours||48} hours</strong> remain. From then on it shows hours only and every bid change resets it per the rules above. Applies whenever a phase is begun.</span></div>
   </div>`;
   const quiet=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
     <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t1);font-weight:600;cursor:pointer"><input type="checkbox" id="tr_quiet" ${r.quietEnabled?'checked':''}> Don't let bidding close overnight</label>
@@ -6432,15 +6433,15 @@ window.toggleTimerEnabled=function(){
       : `<div>Turn the countdown timer <strong>off</strong>? Users will no longer see a countdown.</div>`,
     okText:nv?'Enable Timer':'Disable Timer', danger:!nv,
     onConfirm:async()=>{
-      // Re-enabling mid-Phase-1 with the opening window ON and time still inside the
-      // window: arm the continuous countdown retroactively from the Phase-1 start, so
+      // Re-enabling mid-phase with the opening window ON and time still inside the
+      // window: arm the continuous countdown retroactively from the phase start, so
       // the window isn't silently skipped. Never arm an already-elapsed window (that
       // would create an instantly-expired timer and close the auction).
       let payload={enabled:nv,lastChange:nv?timerData.lastChange:null};
       if(nv&&!timerData.lastChange){
         const owr=getTimerRules().openingWindow;
-        const began=(phasesData.phaseBeganAt||{})[1];
-        if(owr&&Number(phasesData.currentPhase||1)===1&&began
+        const began=(phasesData.phaseBeganAt||{})[Number(phasesData.currentPhase||1)];
+        if(owr&&began
            &&(owr.days*86400000-(Date.now()-began))>stage0Hours()*3600000){
           payload={enabled:true,lastChange:began,durationHours:owr.days*24};
         }
