@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 161;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 162;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1788,6 +1788,10 @@ async function queueProjectionAlerts(prevSched, excludeUser, newSchedOverride){
       const pu=(prevSched&&prevSched[user]&&typeof prevSched[user]==='object')?prevSched[user]:{};
       const nu=(newSched[user]&&typeof newSched[user]==='object')?newSched[user]:{};
       for(const wk of new Set([...Object.keys(pu),...Object.keys(nu)])){
+        // No prior bid on this week → the user had NO projection to change. Without this
+        // guard, getOutcome scores "no bid" as LOSE, so any freshly-created bid (simulator
+        // seed, admin-added bid) e-mailed its own owner a bogus "LOSE to WIN".
+        if(pu[wk]===undefined) continue;
         const po=getOutcome(wk,user,prevAp), no=getOutcome(wk,user,newAp);
         if(po!==no) (notif[user]=notif[user]||[]).push(`Your projection for ${wLabel(wkDate(wk))} changed from ${po.toUpperCase()} to ${no.toUpperCase()}`);
       }
