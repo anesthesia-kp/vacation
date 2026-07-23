@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 149;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 150;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -420,7 +420,6 @@ thead th{color:var(--t2)}
         <div class="page-sub" style="margin:0">Vacation auction — 2027</div>
         <!-- Signed-in admin + sign-out, then the nuclear reset (same double-confirm as the Simulator) -->
         <span id="adminWhoami" style="margin-left:auto;font-size:11px;color:var(--t3)"></span>
-        <button class="btn btn-ghost" style="padding:5px 9px;font-size:12px" onclick="syncEmailToUser()" title="Security · Sync login map — rebuilds the map that lets each user edit only their OWN bids. Updates automatically when you change login e-mails; only use this to force a refresh if a user says they can't place a bid.">🔑</button>
         <button class="btn btn-ghost" style="padding:5px 10px;font-size:12px" onclick="adminSignOut()">Sign out</button>
         <button class="btn btn-danger" style="padding:5px 12px;font-size:12px" onclick="clearEverything()">💣 Reset Auction</button>
       </div>
@@ -508,7 +507,10 @@ thead th{color:var(--t2)}
           </div>
         </div>
         <div class="card big-card">
-          <div class="card-title" id="messagingCardTitle">Messaging Users</div>
+          <div class="card-title" id="messagingCardTitle" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+            <span>Messaging Users</span>
+            <button class="btn btn-ghost" style="padding:3px 8px;font-size:12px;line-height:1" onclick="syncEmailToUser()" title="Security · Sync login map — rebuilds the map that lets each user edit only their OWN bids. Updates automatically when you change login e-mails; only use this to force a refresh if a user says they can't place a bid.">🔑</button>
+          </div>
           <div class="trow" style="align-items:center;margin-top:6px">
             <div><div class="trow-label">Phase results</div><div class="trow-desc">E-mail every user their approved / denied results for the phase</div></div>
             <button class="btn btn-success" style="flex:unset;white-space:nowrap" onclick="sendPhaseResultsEmails()">📮 Send Phase Results</button>
@@ -2761,9 +2763,14 @@ function anyBidsExist(){
   return false;
 }
 // L-7: bids in the CURRENT phase only. The overage threshold locks only while the current
-// phase is actively taking bids — it stays editable BETWEEN phases. Safe because completed
-// phases store FROZEN projections/FTE headers, so changing the threshold never alters a past
-// phase's reports; it only affects the live math of the current and future phases.
+// phase is actively taking bids — it stays editable BETWEEN phases. Completed phases from the
+// current build store FROZEN projections/FTE headers, so changing the threshold does not alter
+// those reports; it only affects the live math of the current and future phases. CAVEAT: a
+// LEGACY completed-phase snapshot saved before the freeze feature has no stored projections and
+// still falls back to the live threshold/slots/FTE, so its historical projection can drift if
+// the threshold or capacity is later edited. New completions are unaffected. (A one-time backfill
+// of projections/fteHead onto any legacy snapshot would close that gap entirely — see L-7 in the
+// audit report.)
 function anyCurrentPhaseBidsExist(){
   const cur=Number(phasesData.currentPhase||1);
   for(const u in scheduleData){
@@ -3132,10 +3139,18 @@ window.runSimulation=async function(){
     const userBids={};
     for(const wk of weeks){
       if(bidCount>=SIM_MAX_BIDS) break;
+      const _floor=(worstBidsData[user]||{})[wk]; // [M-5] existing priority-lock floor, if any
       const allowed=simGetAllowedBids(wk).filter(b=>{
-        if(b==='NP') return !usedPrios.has('NP');
-        const nums=b.split(',').map(Number);
-        return !nums.some(n=>usedPrios.has(n));
+        if(b==='NP'){ if(usedPrios.has('NP')) return false; }
+        else { const nums=b.split(',').map(Number); if(nums.some(n=>usedPrios.has(n))) return false; }
+        // [M-5] Respect the floor when CHOOSING: never let the sim pick a bid WEAKER than a
+        // week's locked floor (mirrors the user site's equal-or-better rule). Higher pScore =
+        // weaker, so exclude any option weaker than the floor.
+        if(_floor!==undefined){
+          const parsed=b==='NP'?'NP':(b.includes(',')?b.split(',').map(Number):parseInt(b));
+          if(pScore(parsed)>pScore(_floor)) return false;
+        }
+        return true;
       });
       if(!allowed.length) continue;
       const bid=simRandItem(allowed);
@@ -3602,19 +3617,33 @@ window.completePhase=function(){
       // This is the same clear the admin can trigger by hand via "Clear ALL
       // Priority Locks" — now it also happens automatically every time a
       // phase closes, so nobody has to remember to click it.
-      await setDoc(worstBidsRef,{}).catch(()=>{});
+      // [M-14] These post-snapshot resets used to swallow their errors with .catch(()=>{}),
+      // so a failed priority-lock clear (locks wrongly carrying into the next phase) or a
+      // failed counter reset went unreported. Track them like the lock step and reflect any
+      // failure in the toast so the admin can fix it by hand.
+      let lockClearOk=true;
+      try{ await setDoc(worstBidsRef,{}); }
+      catch(e){ lockClearOk=false; console.error('completePhase priority-lock clear failed:',e); }
       // Archive this phase's change log and reset ALL 24h activity counters —
       // the Popcornometer and "changes in last 24h" must read 0 on both sites
       // after a phase closes. resetAt also fences off bidTimes stamps from the
       // closed phase, which would otherwise keep feeding the counters.
+      let resetOk=true;
       if(changesLog.length){
-        await setDoc(changesArchiveRef,{[cur]:changesLog},{merge:true}).catch(()=>{});
+        try{ await setDoc(changesArchiveRef,{[cur]:changesLog},{merge:true}); }
+        catch(e){ resetOk=false; console.error('completePhase change-archive failed:',e); }
       }
-      await setDoc(changesRef,{log:[],resetAt:Date.now()}).catch(()=>{});
-      toast(lockOk
-        ? '✓ Phase '+cur+' completed — all weeks locked, priority locks released'
-        : '⚠️ Phase '+cur+' completed, but auto-lock FAILED — click "Smart Lock and Unlock" now to lock all weeks.',
-        lockOk?'ok':'warn');
+      try{ await setDoc(changesRef,{log:[],resetAt:Date.now()}); }
+      catch(e){ resetOk=false; console.error('completePhase change-reset failed:',e); }
+      if(lockOk && lockClearOk && resetOk){
+        toast('✓ Phase '+cur+' completed — all weeks locked, priority locks released','ok');
+      } else if(!lockOk){
+        toast('⚠️ Phase '+cur+' completed, but auto-lock FAILED — click "Smart Lock and Unlock" now to lock all weeks.','warn');
+      } else if(!lockClearOk){
+        toast('⚠️ Phase '+cur+' completed, but clearing priority locks FAILED — open "Clear ALL Priority Locks" and run it, or users may be floored on weeks they lost.','warn');
+      } else {
+        toast('⚠️ Phase '+cur+' completed, but resetting the activity counters FAILED — refresh; if the change log still shows old entries, clear it by hand.','warn');
+      }
       // Sending results is now its own deliberate step in the "Next Step" guide
       // (with a Skip option for testing), so we no longer auto-open the e-mail dialog.
     }
