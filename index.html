@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 86;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 87;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1468,13 +1468,33 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
       // Atomic field delete — only removes this one nested key
       await updateDoc(scheduleRef, {[`${user}.${wk}`]: deleteField()});
       updateDoc(bidPhaseRef, {[`${user}.${wk}`]: deleteField()}).catch(()=>{});
+      if(bidPhaseData[user]) delete bidPhaseData[user][wk]; // keep the local phase tag in sync too
     } else {
       // Merge write — only sets this one nested key, never touches other users' data
       await setDoc(scheduleRef, {[user]: {[wk]: bid}}, {merge:true});
-      setDoc(bidPhaseRef, {[user]: {[wk]: Number(phasesData.currentPhase||1)}}, {merge:true}).catch(()=>{});
+      const _ph=Number(phasesData.currentPhase||1);
+      setDoc(bidPhaseRef, {[user]: {[wk]: _ph}}, {merge:true}).catch(()=>{});
+      // Optimistically tag the local phase too. Without this, a re-bid on a week the user
+      // lost in a COMPLETED phase has no local tag, so getUserBidPhase falls back to the
+      // completed-phase snapshot and the fresh bid is hidden as "prior phase" until the
+      // bidPhase snapshot round-trips. Setting it here shows the re-bid immediately.
+      if(!bidPhaseData[user]) bidPhaseData[user]={};
+      bidPhaseData[user][wk]=_ph;
     }
     if(timerData.enabled){ const _n=Date.now(); setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{}); }
-    if(prevSnapshot&&adminSettings.emailNotifsEnabled!==false) sendEmailNotifications(prevSnapshot,data,user).catch(()=>{});
+    if(prevSnapshot&&adminSettings.emailNotifsEnabled!==false){
+      // Build the authoritative AFTER snapshot from prevSnapshot + THIS exact change,
+      // rather than reading the live `data`. On the REMOVE path `data` still holds the
+      // bid at this point (it's deleted only after persist returns), so comparing against
+      // it made a cancel look like "no change" and never told the competitors who just
+      // moved to winning. Deriving the after-state here makes every path correct: any
+      // change to another user's outcome — lose/draw/review -> win as well as win -> lose
+      // -> draw -> review — is now detected and notified.
+      const afterSnap=JSON.parse(JSON.stringify(prevSnapshot));
+      if(bid===null||bid===undefined){ if(afterSnap[user]) delete afterSnap[user][wk]; }
+      else { (afterSnap[user]=afterSnap[user]||{})[wk]=bid; }
+      sendEmailNotifications(prevSnapshot,afterSnap,user).catch(()=>{});
+    }
     return true;
   }catch(e){
     showError("Save failed: "+e.message);

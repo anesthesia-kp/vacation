@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 148;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 149;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -3127,7 +3127,7 @@ window.runSimulation=async function(){
       else if(Array.isArray(v)) v.forEach(n=>usedPrios.add(n));
       else usedPrios.add(v);
     }
-    const weeks=[...allWeeks].filter(wk=>!priorWonWeeks.has(wk)&&!existingWeeks.has(wk)).sort(()=>Math.random()-.5);
+    const weeks=fyShuffle([...allWeeks].filter(wk=>!priorWonWeeks.has(wk)&&!existingWeeks.has(wk)));
     let bidCount=existingWeeks.size; // target INCLUDES bids the user already placed
     const userBids={};
     for(const wk of weeks){
@@ -3752,15 +3752,16 @@ function trackEmailSent(){
 // caught, the meter counts only real sends, and callers learn the true ok/fail counts.
 // The old version fired emailjs.send() without await, so failures were uncatchable and
 // every attempt counted — letting "results sent: N" show while zero e-mails went out.
-async function adminSendEmail(user,subject,body){
-  const recips=recipientsFor(user); let ok=0,fail=0;
+async function adminSendEmail(user,subject,body,skip){
+  const recips=recipientsFor(user); let ok=0,fail=0; const sent=[];
   for(const email of recips){
+    if(skip && skip.has(email)) continue; // already delivered on a prior run — never re-send to it
     try{
       await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body});
-      trackEmailSent(); ok++;
+      trackEmailSent(); ok++; sent.push(email);
     }catch(e){ console.warn('Email failed:',e); fail++; }
   }
-  return {ok,fail};
+  return {ok,fail,sent};
 }
 
 // ── Welcome e-mail (admin side) ───────────────────────────────────────────────
@@ -3993,9 +3994,17 @@ window.sendPhaseResultsEmails=function(){
           <div class="cmodal-info">Each user gets a single e-mail listing every approved and denied week. Users without an e-mail address on file are skipped.</div>`,
     okText:'Send Results',
     onConfirm:async()=>{
-      let ok=0, fail=0, skipped=0;
+      let ok=0, fail=0, skipped=0, alreadyDone=0;
+      // Per-ADDRESS idempotency: every e-mail address already delivered to for THIS phase is
+      // recorded in resultsSentTo[cur]. On a retry (after a partial failure) or an accidental
+      // second click, those addresses are skipped inside adminSendEmail — so no address ever
+      // gets a duplicate results e-mail, even when a user has two addresses and only one
+      // failed the first time (the succeeded one is not re-sent).
+      const sentAddrs=new Set((phasesData.resultsSentTo?.[cur])||[]);
       for(const u of usersWithResults){
-        if(!recipientsFor(u).length){ skipped++; continue; }
+        const recips=recipientsFor(u);
+        if(!recips.length){ skipped++; continue; }
+        if(recips.every(a=>sentAddrs.has(a))){ alreadyDone++; continue; } // every address already got it
         const {approved,denied}=summary[u];
         approved.sort(); denied.sort();
         const appLines=approved.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
@@ -4007,17 +4016,23 @@ Phase ${cur} of the Vacation Auction is complete.
 Here are your Phase ${cur} results:
 
 ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.length?`DENIED (${denied.length}):\n${denLines}\n\nDenied bid numbers become available again for you to use in the next phase.`:''}`.trimEnd();
-        const r=await adminSendEmail(u,`Vacation Auction — Phase ${cur} Results`,bodyText);
+        const r=await adminSendEmail(u,`Vacation Auction — Phase ${cur} Results`,bodyText,sentAddrs);
         ok+=r.ok; fail+=r.fail;
+        for(const a of r.sent) sentAddrs.add(a); // record each address actually delivered to
       }
-      // H-8: only mark results as SENT if every e-mail actually went out. If any failed
-      // (EmailJS down/over quota), leave resultsSent UNSET so the admin can retry — and
-      // say so — instead of silently recording "sent" while users learned nothing.
-      if(fail===0){
+      // Persist which addresses have now been e-mailed, so a later retry can't double-send.
+      await setDoc(phasesRef,{resultsSentTo:{...(phasesData.resultsSentTo||{}),[cur]:[...sentAddrs]}},{merge:true}).catch(()=>{});
+      // H-8: mark the phase results SENT only when every address on file has received theirs.
+      // If any failed (EmailJS down/over quota), leave resultsSent UNSET so the admin can
+      // retry — the retry only hits the addresses still owed.
+      const allDelivered=usersWithResults.every(u=>{ const r=recipientsFor(u); return !r.length || r.every(a=>sentAddrs.has(a)); });
+      if(fail===0 && allDelivered){
         await setDoc(phasesRef,{resultsSent:{...(phasesData.resultsSent||{}),[cur]:Date.now()}},{merge:true}).catch(()=>{});
-        toast(`📮 Phase ${cur} results: ${ok} e-mail${ok!==1?'s':''} sent${skipped?` (${skipped} had no e-mail)`:''}`,'ok');
+        toast(`📮 Phase ${cur} results: ${ok} e-mail${ok!==1?'s':''} sent${alreadyDone?`, ${alreadyDone} already sent`:''}${skipped?` (${skipped} had no e-mail)`:''}`,'ok');
+      } else if(fail===0 && ok===0 && alreadyDone){
+        toast(`📮 Phase ${cur} results were already sent to all ${alreadyDone} user${alreadyDone!==1?'s':''} — nothing new to send.`,'ok');
       } else {
-        toast(`⚠️ Phase ${cur} results: ${ok} sent, ${fail} FAILED — NOT marked complete. Check EmailJS and click Send again to retry.`,'warn');
+        toast(`⚠️ Phase ${cur} results: ${ok} sent, ${fail} FAILED — NOT marked complete. Click Send again to retry just the ones still owed.`,'warn');
       }
     }
   });
@@ -4026,6 +4041,10 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
 // Escape user-controlled strings before ANY innerHTML interpolation — a
 // username or e-mail chosen on the user site must never execute as HTML here.
 function esc(v){ return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+// Unbiased in-place Fisher-Yates shuffle. Array.sort(()=>Math.random()-.5) is NOT
+// uniform — some orderings are far likelier than others — so it must never decide a
+// draw (tied users would not get equal odds). Use this for any fairness-critical shuffle.
+function fyShuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); const t=a[i]; a[i]=a[j]; a[j]=t; } return a; }
 function bidLblAdmin(p){ if(p===undefined||p===null) return '—'; if(p==='NP') return 'NP'; if(Array.isArray(p)) return p.join(','); return String(p); }
 
 // ── Canonical phase-aware "Bids by Week" model (FTE-free) ──
@@ -4851,8 +4870,8 @@ window.renderAppDenials=function(){
     const needsDecision=!isHistorical&&!e.approved&&!e.denied;
     return `<tr class="dr-row" id="drrow_${e.wk}_${e.user}"${needsDecision?' data-undecided="1"':''}>
       ${wkHtml}
-      <td class="dr-user">${phaseBadge}${e.user}</td>
-      <td class="dr-bid">${lbl} · FTE ${getUserFTE(e.user)}</td>
+      <td class="dr-user">${phaseBadge}${esc(e.user)}</td>
+      <td class="dr-bid">${esc(lbl)} · FTE ${getUserFTE(e.user)}</td>
       <td><div class="dr-status">${
         // Undecided bids: the dashed projection pill alone (the solid chip would
         // just repeat it). The solid ✓ APPROVED / ✕ DENIED chip is ADDED once
@@ -5297,8 +5316,8 @@ async function _execSimulationApprovals(){
       const drawArr=[...a.draws];
       const cap=getSlots(wk); let fteUsed=a.fteWon;
       const T=getReviewThreshold();
-      // Shuffle draws
-      drawArr.sort(()=>Math.random()-.5);
+      // Shuffle draws with an UNBIASED shuffle so tied users get equal odds. [fairness]
+      fyShuffle(drawArr);
       for(const u of drawArr){
         const ufte=getUserFTE(u);
         if(Math.round((fteUsed+ufte-cap)*10)/10<=T){ // float-safe: match computeApprovals' rounded-difference test (not cap+T, which mis-rounds)
@@ -5566,9 +5585,9 @@ function renderBestBidsTable(){
         const pl=Array.isArray(p)?p.join(","):p;
         const lbl=p==='NP'?'NP':pl;
         return `<div class="lw-row">
-          <div class="lw-user">${user}</div>
+          <div class="lw-user">${esc(user)}</div>
           <div class="lw-bid">FTE ${getUserFTE(user)}</div>
-          <span class="pill p-blue">${lbl}</span>
+          <span class="pill p-blue">${esc(lbl)}</span>
           <div class="lw-actions">
             <button class="btn btn-danger" style="padding:3px 9px;font-size:11px" onclick="clearBestBid('${user}','${wk}')">Clear Lock</button>
           </div>
@@ -5593,7 +5612,7 @@ function renderBestBidsTable(){
     const pl=Array.isArray(p)?p.join(","):p;
     const lbl=p==='NP'?'NP':pl;
     const wn=_wkNumByISO[wk]||'?';
-    return `<tr><td class="mono"><strong>${user}</strong></td><td class="mono">${wn}</td><td class="mono">${fmtWk(wk)}</td><td><span class="pill p-blue">${lbl}</span></td><td><button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="clearBestBid('${user}','${wk}')">Clear</button></td></tr>`;
+    return `<tr><td class="mono"><strong>${esc(user)}</strong></td><td class="mono">${wn}</td><td class="mono">${fmtWk(wk)}</td><td><span class="pill p-blue">${esc(lbl)}</span></td><td><button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="clearBestBid('${user}','${wk}')">Clear</button></td></tr>`;
   });
   tb.innerHTML=rows.length?rows.join(''):`<tr><td colspan="5" style="text-align:center;color:var(--t2);padding:20px">${filter?`No locks stored for ${filter}.`:'No locks stored.'}</td></tr>`;
 }
@@ -5819,7 +5838,7 @@ function renderChangelog(){
       revoked:  {label:'REVOKED',  bg:'rgba(251,191,36,.18)', color:'#946008'}
     };
     const m=map[a]||{label:a.toUpperCase(), bg:'rgba(148,163,184,.15)', color:'#38566e'};
-    return `<span class="cl-pill" style="background:${m.bg};color:${m.color}">${m.label}</span>`;
+    return `<span class="cl-pill" style="background:${m.bg};color:${m.color}">${esc(m.label)}</span>`;
   };
   const actorPill = (e) => {
     if(e.actor==='admin'){
@@ -5831,15 +5850,15 @@ function renderChangelog(){
     if(v===undefined||v===null) return '';
     if(v==='NP') return ' · <span class="mono" style="color:var(--t2)">NP</span>';
     const txt = Array.isArray(v) ? v.join(',') : v;
-    return ` · <span class="mono" style="color:var(--t2)">${txt}</span>`;
+    return ` · <span class="mono" style="color:var(--t2)">${esc(txt)}</span>`;
   };
 
   host.innerHTML = groups.map(g=>{
     const items = g.entries.map(e=>{
       const wkStr = e.weekKey ? (()=>{try{return wLabel(wkDate(e.weekKey));}catch(_){return e.weekKey;}})() : '—';
       const actionText = e.actor==='admin'
-        ? `Admin ${e.action} ${e.action==='approved'||e.action==='denied'||e.action==='revoked'?'':'bid for '}<strong>${e.user}</strong>`
-        : `<strong>${e.user}</strong> ${e.action} their bid`;
+        ? `Admin ${esc(e.action)} ${e.action==='approved'||e.action==='denied'||e.action==='revoked'?'':'bid for '}<strong>${esc(e.user)}</strong>`
+        : `<strong>${esc(e.user)}</strong> ${esc(e.action)} their bid`;
       return `<div class="cl-row">
         <div class="cl-time" title="${fmtAbsTime(e.ts)}">${fmtRelative(e.ts)}</div>
         <div class="cl-pills">${actorPill(e)} ${actionPill(e.action)}</div>
@@ -6671,8 +6690,8 @@ window.renderDrawsReviews=function(){
     const weekCol=showWeekLabel?`<td class="dr-weeklabel">${wLabel(m)}</td>`:'';
     return `<tr class="dr-row">
       ${weekCol}
-      <td class="dr-user">${e.user}</td>
-      <td class="dr-bid">${lbl} · FTE ${getUserFTE(e.user)}</td>
+      <td class="dr-user">${esc(e.user)}</td>
+      <td class="dr-bid">${esc(lbl)} · FTE ${getUserFTE(e.user)}</td>
       <td><div class="dr-status">${tag}</div></td>
       <td><div class="dr-actions">${actions}</div></td>
       <td>${priorPhaseInlineHtml(e.user)}</td>
@@ -6728,8 +6747,8 @@ window.renderDrawsReviews=function(){
         const bgcolor=o==='win'?'rgba(52,211,153,.12)':'rgba(148,163,184,.08)';
         const lbl=Array.isArray(b.priority)?b.priority.join(','):b.priority;
         contextRows.push(`<tr class="dr-row" style="background:${bgcolor};opacity:.8">
-          <td class="dr-user">${b.user}</td>
-          <td class="dr-bid">${lbl} · FTE ${getUserFTE(b.user)}</td>
+          <td class="dr-user">${esc(b.user)}</td>
+          <td class="dr-bid">${esc(lbl)} · FTE ${getUserFTE(b.user)}</td>
           <td><div class="dr-status"><span class="pill ${color}" style="${o==='win'?'':'background:rgba(148,163,184,.2);color:var(--t2)'}">${label}</span></div></td>
           <td><span style="color:var(--t3);font-size:11px;font-style:italic">context only</span></td>
           <td>${priorPhaseInlineHtml(b.user)}</td>
@@ -6817,6 +6836,9 @@ window.confirmApprove=function(user,wk,type){
       await updateDoc(approvalsRef,{[wk]:arrayUnion(user)}).catch(async()=>{
         await setDoc(approvalsRef,{[wk]:[user]},{merge:true});
       });
+      // Clear any pre-existing denial for this user/week, matching adApprove — otherwise
+      // a stale/raced denial leaves the user both approved AND denied. [stale-denial]
+      await updateDoc(deniedRef,{[wk]:arrayRemove(user)}).catch(()=>{});
       await adminLog(user,wk,'admin-approve',scheduleData[user]?.[wk]);
       toast(`✓ ${user} approved for ${wLabel(m)}`,'ok');
     }
