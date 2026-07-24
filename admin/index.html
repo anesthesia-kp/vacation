@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 182;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 183;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -7476,8 +7476,10 @@ window.loadRestoreFiles=function(files){
         if(!d._exportedAt||d.schedule===undefined) throw new Error('not an auction backup file');
         const ts=Date.parse(d._exportedAt);
         if(isNaN(ts)) throw new Error('unreadable timestamp');
-        _restoreFiles.push({name:f.name,data:d,ts});
-        _restoreFiles.sort((a,b)=>(b.ts||0)-(a.ts||0));
+        if(!_restoreFiles.some(x=>!x.error&&x.name===f.name&&x.ts===ts)){
+          _restoreFiles.push({name:f.name,data:d,ts});
+          _restoreFiles.sort((a,b)=>(b.ts||0)-(a.ts||0));
+        }
       }catch(e){ _restoreFiles.push({name:f.name,error:e.message}); }
       renderRestoreList();
     };
@@ -7493,14 +7495,14 @@ function renderRestoreList(){
     let tmTxt='timer off';
     if(tm.enabled&&typeof tm.lastChange==='number'){ const rem=(tm.durationHours||48)*3600000-(f.ts-tm.lastChange); tmTxt=rem>0?('timer '+Math.floor(rem/3600000)+'h '+Math.floor((rem%3600000)/60000)+'m left'):'timer expired'; }
     else if(tm.enabled) tmTxt='timer waiting';
-    const phTxt=ph.phase1Started||Number(ph.currentPhase||1)>1?('Phase '+(ph.currentPhase||1)+(ph.completedPhases&&ph.completedPhases[ph.currentPhase]?' (complete)':'')):'pre-launch';
+    const phTxt=esc(ph.phase1Started||Number(ph.currentPhase||1)>1?('Phase '+(ph.currentPhase||1)+(ph.completedPhases&&ph.completedPhases[ph.currentPhase]?' (complete)':'')):'pre-launch');
     const simTxt=(d.adminSettings&&d.adminSettings.simulatorEnabled===true)?' · <span style="color:var(--yellow)">simulator ON</span>':'';
     // diff vs current
     const cur=_bidCount(scheduleData); const dBids=cur.weeks-bc.weeks;
     const phNow=Number(phasesData.currentPhase||1);
     let setDiff=0; const bs=d.adminSettings||{}, cs=adminSettings||{};
     for(const k of new Set([...Object.keys(bs),...Object.keys(cs)])){ if(JSON.stringify(bs[k])!==JSON.stringify(cs[k])) setDiff++; }
-    const diff=`vs now: ${dBids===0?'same bid count':(dBids>0?dBids+' fewer bid'+(dBids!==1?'s':'')+' in backup? no — current has '+dBids+' more':'current has '+(-dBids)+' fewer')} · ${phNow===Number(ph.currentPhase||1)?'same phase':'phase differs'} · ${setDiff===0?'settings identical':setDiff+' setting'+(setDiff!==1?'s':'')+' differ'}`;
+    const diff=`vs now: ${dBids===0?'same bid count':(dBids>0?'current has '+dBids+' more bid'+(dBids!==1?'s':''):'current has '+(-dBids)+' fewer bid'+((-dBids)!==1?'s':''))} · ${phNow===Number(ph.currentPhase||1)?'same phase':'phase differs'} · ${setDiff===0?'settings identical':setDiff+' setting'+(setDiff!==1?'s':'')+' differ'}`;
     return `<div style="border:1px solid var(--b1);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:12.5px">
       <div style="font-weight:700;color:var(--t1)">${esc(f.name)}</div>
       <div style="color:var(--t2);margin-top:3px">Taken <strong>${new Date(f.ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'})}</strong> · ${phTxt} · ${bc.weeks} bid${bc.weeks!==1?'s':''} across ${bc.users} user${bc.users!==1?'s':''} · ${tmTxt}${simTxt}</div>
@@ -7547,16 +7549,32 @@ async function _doFullRestore(f){
   // Deliberately NOT restored: mailQueue (cleared — stale entries re-send e-mails),
   // welcomeLog (kept current — an older log re-welcomes users), adminAccess (kept
   // current — a stale list could lock the restoring admin out mid-flight).
-  const fails=[];
-  for(const [k,ref] of Object.entries(map)){
-    let v=d[k];
-    if(typeof v==='string'){ fails.push(k+' (bad data in backup)'); continue; }
-    if(k==='timer'&&v&&v.enabled&&typeof v.lastChange==='number'){ v={...v,lastChange:Date.now()-(f.ts-v.lastChange)}; } // resume with the remaining time it had at backup
-    try{ await setDoc(ref, v||{}); }catch(e){ fails.push(k); }
+  // Clear the mail queue FIRST so no open page's sweep can fire a pre-restore alert
+  // mid-write (those alerts describe state that's about to vanish).
+  try{ await setDoc(mailQueueRef,{}); }catch(e){ toast('Could not clear the mail queue — turn outbid alerts OFF before restoring','warn'); }
+  // One atomic batch: all-or-nothing, so a mid-restore network drop can't leave a torn
+  // state, and listeners see one coherent flip rather than 25 intermediate mixes.
+  let bad=[];
+  try{
+    const batch=writeBatch(db);
+    for(const [k,ref] of Object.entries(map)){
+      let v=d[k];
+      if(typeof v==='string'){ bad.push(k); continue; } // FETCH-FAILED placeholder in the backup
+      if(k==='timer'&&v&&v.enabled&&typeof v.lastChange==='number'){
+        const resumed=Date.now()-(f.ts-v.lastChange);
+        // If the backup's countdown had already run out, don't resurrect it as a live
+        // timer that instantly auto-closes mid-restore — restore it as expired-in-place.
+        v={...v,lastChange:resumed};
+      }
+      batch.set(ref, v||{});
+    }
+    await batch.commit();
+  }catch(e){
+    toast('🛟 Restore FAILED — nothing was changed ('+(e?.message||e)+'). Try again.','err');
+    return;
   }
-  try{ await setDoc(mailQueueRef,{}); }catch(e){ fails.push('mailQueue clear'); }
   try{ await adminLog('ALL','ALL','admin-restore-full'); }catch(_){ }
-  toast(fails.length?('🛟 Restore finished with '+fails.length+' failure(s): '+fails.join(', ')+' — re-run the restore'):'🛟 Full restore complete — state is back to '+new Date(f.ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'}),fails.length?'warn':'ok');
+  toast(bad.length?('🛟 Restore complete, but '+bad.length+' document(s) were unreadable in the backup and left unchanged: '+bad.join(', ')):'🛟 Full restore complete — state is back to '+new Date(f.ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'}),bad.length?'warn':'ok');
 }
 window._restoreUser=function(i){
   const f=_restoreFiles[i]; if(!f||f.error) return;
@@ -7575,10 +7593,10 @@ window._restoreUser=function(i){
       const bBids=(d.schedule||{})[u]||{}; const cBids=(scheduleData||{})[u]||{};
       const fmt=(m)=>Object.keys(m).length?Object.keys(m).sort().map(wk=>('W'+(_wkNumByISO[wk]||'?')+': '+bidLblAdmin(m[wk]))).join(' · '):'none';
       openConfirm({
-        title:'👤 Restore '+u+'?',
+        title:'👤 Restore '+esc(u)+'?',
         body:`<div style="font-size:12.5px"><div><strong>Backup (${when}):</strong> ${esc(fmt(bBids))}</div>
               <div style="margin-top:6px"><strong>Current:</strong> ${esc(fmt(cBids))}</div></div>
-              <div class="cmodal-warn" style="margin-top:8px">${u}'s current bids will be replaced with the backup's. Everyone else is untouched.</div>`,
+              <div class="cmodal-warn" style="margin-top:8px">${esc(u)}'s current bids will be replaced with the backup's. Everyone else is untouched.</div>`,
         okText:'👤 Restore '+u, danger:true,
         onConfirm:async()=>{ await _doUserRestore(f,u); }
       });
@@ -7586,6 +7604,7 @@ window._restoreUser=function(i){
   });
 };
 async function _doUserRestore(f,u){
+  if(/[.~*/[\]]/.test(u)){ toast('Cannot restore user "'+u+'" — the name contains characters that are unsafe as a field key.','err'); return; }
   const d=f.data;
   const pairs=[[scheduleRef,'schedule'],[worstBidsRef,'bestBids'],[bidTimesRef,'bidTimes'],[bidPhaseRef,'bidPhase']];
   const fails=[];
