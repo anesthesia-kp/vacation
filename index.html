@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 96;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 97;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -514,6 +514,7 @@ body{zoom:1.15}
         <li>Vacation selections are now called "bids" — the process works like an auction, where user bids compete for limited slots</li>
         <li>Enter your bids early, it benefits everyone</li>
         <li>Sniping is not possible, do not try it</li>
+        <li>Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly</li>
         <li id="ruleMaxBids">Running cap on total weeks you can win across the auction — only weeks you win count</li>
         <li>Only bid for the number of weeks your accrued vacation and ATO will allow for</li>
         <li>Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better</li>
@@ -1309,7 +1310,8 @@ async function relayMailQueue(){
       try{
         await updateDoc(mailQueueRef,{[qid+'.claimedAt']:Date.now(),[qid+'.claimedBy']:MQ_ID});
         await new Promise(r=>setTimeout(r,2500));
-        if(mailQueueData[qid]?.claimedBy!==MQ_ID) continue; // another page won it
+        if(mailQueueData[qid]?.claimedBy!==MQ_ID) continue; // another page won it (local view)
+        try{ const _fresh=await getDoc(mailQueueRef); if(((_fresh.exists()?_fresh.data():{})[qid]||{}).claimedBy!==MQ_ID) continue; }catch(_){ continue; } // authoritative re-check — closes the slow-connection double-send window
         if(typeof emailjs==='undefined') continue;
         if(isWelcome && _welcomed(wkey)){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; } // re-check after the claim settle
         for(const to of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:to,changes:e.body||''}); trackEmailSent(); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); }
@@ -1562,7 +1564,8 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
     // (the countdown runs continuously until the starting-reset mark).
     const _prevVal=prevSnapshot?.[user]?.[wk];
     const _sameVal=bid!==null&&bid!==undefined&&_prevVal!==undefined&&JSON.stringify(bid)===JSON.stringify(_prevVal);
-    if(timerData.enabled&&!_sameVal&&!openingWindowActive()){ const _n=Date.now(); setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{}); }
+    const _remBefore=timerData.lastChange?(((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)):1;
+    if(timerData.enabled&&_remBefore>0&&!_sameVal&&!openingWindowActive()){ const _n=Date.now(); setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{}); }
     if(prevSnapshot&&adminSettings.emailNotifsEnabled!==false){
       // Build the authoritative AFTER snapshot from prevSnapshot + THIS exact change,
       // rather than reading the live `data`. On the REMOVE path `data` still holds the
@@ -2570,6 +2573,7 @@ onAuthStateChanged(auth, async u => {
     _userJustSignedIn=false;
     const w=document.getElementById('signinWelcome'), p=document.getElementById('signinPicker');
     if(w) w.style.display='none'; if(p) p.style.display='block';
+    try{ setDoc(doc(db,"vacations","signInMisses"),{[String(u.email||'').trim().toLowerCase()]:Date.now()},{merge:true}); }catch(_){ } // surface on the admin Users page
     showSigninError("This Google account ("+u.email+") isn't registered for the auction. Please contact your admin.");
     return;
   }
@@ -2785,6 +2789,7 @@ ${bullets([
   `Vacation selections are called "bids" — the process works like an auction, where user bids compete for limited slots`,
   `Enter your bids early, it benefits everyone`,
   `Sniping is not possible, do not try it`,
+  `Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly`,
   limLine,
   `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
   `Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better`,
@@ -2854,7 +2859,8 @@ window.saveEmail=async function(){
   const val=document.getElementById("emailInput").value.trim();
   if(!val||!val.includes("@")){showError("Please enter a valid email.");return;}
   const user=getCurrentUser();
-  await setDoc(emailsRef,{[user]:val},{merge:true});
+  try{ await setDoc(emailsRef,{[user]:val},{merge:true}); }
+  catch(e){ showError("Could not save your e-mail ("+(e.code||'error')+") — please try again or tell your admin."); return; } // modal stays open
   document.getElementById("emailModal").classList.remove("show");
   // Welcome goes out only the FIRST time this KP address is saved in a cycle —
   // re-entry or edits of the same address will not trigger another welcome.
@@ -2866,7 +2872,8 @@ window.remindLater=function(){ document.getElementById("emailModal").classList.r
 // welcomes that address once). No welcome is sent for declining.
 window.declineEmail=async function(){
   const user=getCurrentUser();
-  try{ await setDoc(emailsRef,{[user]:"__skip__"},{merge:true}); }catch(_){}
+  try{ await setDoc(emailsRef,{[user]:"__skip__"},{merge:true}); }
+  catch(e){ showError("Could not save your choice — please try again."); return; } // else they'd be re-prompted forever believing they declined
   document.getElementById("emailModal").classList.remove("show");
 };
 

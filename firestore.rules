@@ -55,7 +55,7 @@ service cloud.firestore {
     // staff sites via an authenticated fetch, the admin sites only once an admin
     // has signed in), so nothing in the anonymous login bootstrap depends on them.
     function isSensitiveDoc(docId) {
-      return docId in ['loginEmails', 'emails', 'adminAccess'];
+      return docId in ['loginEmails', 'emails', 'adminAccess', 'emailToUser', 'signInMisses'];
     }
 
     // ── Admin-READ-only documents (live mid-phase decisions) [H-4] ────────────
@@ -89,8 +89,40 @@ service cloud.firestore {
         'adminAccess',
         'loginEmails',
         'changesArchive',
-        'meta'
+        'meta',
+        'emailToUser'
       ];
+    }
+
+    // ── Bid documents: per-user confinement + server-clock expiry [H-3 / H-13] ─
+    // These four docs hold the users' own bids. A registered user may only touch
+    // the top-level key(s) that belong to THEM (looked up in vacations/emailToUser,
+    // which only admins can write), and only while the countdown timer has not
+    // expired BY THE SERVER'S CLOCK — so a device with a skewed clock (or devtools)
+    // can neither bid after expiry nor resurrect a closed phase. Admins bypass both.
+    function isBidDoc(docId) {
+      return docId in ['schedule', 'bestBids', 'bidTimes', 'bidPhase'];
+    }
+    function myInitials() {
+      return get(/databases/$(database)/documents/vacations/emailToUser).data
+             .get(request.auth.token.email.lower(), []);
+    }
+    function writesOnlyOwnKeys() {
+      // Bootstrap fallback: if the emailToUser map doesn't exist yet, skip
+      // confinement (matches the original H-3 design). Once it exists, an
+      // unmapped e-mail can write nothing — the admin sites keep it synced.
+      return !exists(/databases/$(database)/documents/vacations/emailToUser)
+        || (resource == null
+             ? request.resource.data.keys().hasOnly(myInitials())
+             : request.resource.data.diff(resource.data).affectedKeys().hasOnly(myInitials()));
+    }
+    function timerNotExpired() {
+      // Uses request.time (Google's clock), never the client's. Timer off or not
+      // yet started means no restriction.
+      let t = get(/databases/$(database)/documents/vacations/timer).data;
+      return !(t.get('enabled', false) == true)
+          || t.get('lastChange', null) == null
+          || request.time.toMillis() < t.get('lastChange', 0) + int(t.get('durationHours', 48) * 3600000);
     }
 
     match /vacations/{docId} {
@@ -106,7 +138,18 @@ service cloud.firestore {
       // legitimate users, so duplicate welcome e-mails stay prevented.
       allow write: if (isAdminOnlyDoc(docId) && isAdmin())
                    || (docId == 'welcomeLog' && (isRegisteredUser() || isAdmin()))
-                   || (!isAdminOnlyDoc(docId) && (isRegisteredUser() || isAdmin()));
+                   // Bid docs: own keys only, and never after server-clock expiry.
+                   || (isBidDoc(docId) && (isAdmin()
+                        || (isRegisteredUser() && writesOnlyOwnKeys() && timerNotExpired())))
+                   // The timer itself: users may reset it via bids, but not once it
+                   // has truly expired (a skewed clock could otherwise reopen bidding).
+                   || (docId == 'timer' && (isAdmin() || (isRegisteredUser() && timerNotExpired())))
+                   // Sign-in miss log: any VERIFIED Google account may record its own
+                   // failed roster match (these users are by definition not registered).
+                   || (docId == 'signInMisses' && (request.auth != null && request.auth.token.email_verified == true))
+                   || (!isAdminOnlyDoc(docId) && !isBidDoc(docId)
+                        && docId != 'timer' && docId != 'signInMisses'
+                        && (isRegisteredUser() || isAdmin()));
     }
 
     // ── Daily Schedule collection ─────────────────────────────────────────────

@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 165;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 166;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -488,6 +488,7 @@ thead th{color:var(--t2)}
           <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
             <label style="font-size:11px;color:var(--t2)">Phase:</label>
             <select id="repPhaseFilter" class="sel"></select>
+            <button class="btn" style="margin-left:auto;background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportBackup()" title="Download every auction document as one JSON file — do this before every phase transition">💾 Backup All Data</button>
           </div>
           <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
             <div style="font-size:13px;font-weight:700;color:var(--t1);margin-bottom:8px">Weekly summary</div>
@@ -699,6 +700,7 @@ thead th{color:var(--t2)}
           <div class="tog" id="fteEditToggle" onclick="toggleFteEdit()"></div>
         </div>
         <div id="fteLockNote" style="font-size:12px;color:var(--yellow);font-weight:600;margin-bottom:10px"></div>
+        <div id="signInMissBox" style="display:none;background:rgba(198,40,40,.08);border:1px solid rgba(198,40,40,.3);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:12.5px"></div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px;flex-wrap:wrap">
           <button class="btn btn-danger" style="background:rgba(198,40,40,.22);border-color:rgba(198,40,40,.6)" onclick="deleteAllUsers()">🗑 Delete All Users</button>
         </div>
@@ -1068,7 +1070,9 @@ const loginEmailsRef = doc(db,"vacations","loginEmails"); // PRIMARY / Google lo
 // (schedule/bidPhase/bestBids/bidTimes). The admin site keeps it in sync automatically
 // whenever loginEmails changes (below), so nothing here needs manual upkeep in normal use.
 const emailToUserRef = doc(db,"vacations","emailToUser");
+const signInMissesRef = doc(db,"vacations","signInMisses"); // {email: lastAttemptTs} — Google sign-ins that matched no roster login e-mail
 let emailToUserData={};
+let signInMissesData={};
 // IMPORTANT: the onSnapshot(emailToUserRef) listener is attached LATER, in the main listener
 // block, because the onSnapshot wrapper references `authReady` — which is defined further down.
 // Calling onSnapshot up here (before authReady exists) throws and freezes the page at
@@ -1360,6 +1364,7 @@ document.getElementById("load").classList.add("hidden");
 
 onSnapshot(scheduleRef, snap=>{ scheduleData=normalizeUserWkMap(snap.exists()?snap.data():{}); refreshAll(); });
 onSnapshot(emailToUserRef, snap=>{ emailToUserData=snap.exists()?snap.data():{}; }); // [H-3] attached here (after authReady is defined)
+onSnapshot(signInMissesRef, snap=>{ signInMissesData=snap.exists()?snap.data():{}; if(typeof renderSignInMisses==='function') renderSignInMisses(); });
 onSnapshot(locksRef,    snap=>{ locksData=snap.exists()?snap.data():{globalLock:false,weeks:{}}; if(!locksData.weeks)locksData.weeks={}; syncTimer(); refreshAll(); });
 onSnapshot(metaRef,     snap=>{ const d=snap.exists()?snap.data():{};  metaData=d; refreshAll(); });
 onSnapshot(changesRef,  snap=>{
@@ -1463,7 +1468,10 @@ async function processMailQueue(minAgeMs){
         // Claim, let the claim settle, verify we still own it, then send.
         await updateDoc(mailQueueRef,{[qid+'.claimedAt']:Date.now(),[qid+'.claimedBy']:MQ_ID});
         await new Promise(r=>setTimeout(r,2500));
-        if(mailQueueData[qid]?.claimedBy!==MQ_ID) continue; // another page won this one
+        if(mailQueueData[qid]?.claimedBy!==MQ_ID) continue; // another page won this one (local view)
+        // Authoritative re-check: the local cache can show our own claim before a rival's
+        // overwrite arrives on a slow connection — that window caused double-sends.
+        try{ const _fresh=await getDoc(mailQueueRef); if(((_fresh.exists()?_fresh.data():{})[qid]||{}).claimedBy!==MQ_ID) continue; }catch(_){ continue; }
         if(isWelcome && _welcomed(wkey)){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; } // re-check after claim
         for(const email of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:e.body||''}); trackEmailSent(); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(email)}).catch(()=>{}); }
         if(isWelcome && wkey){ try{ await setDoc(welcomeLogRef,{sent:{[wkey]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[wkey]=true; }catch(_){} }
@@ -2216,7 +2224,7 @@ function _fpWasWinning(wkMap,u,wk,val){
 }
 function _fpAnalyzePhase(phase,events,isCurrent){
   const flags={};
-  const bump=(u,k,wk,ts,detail)=>{ const f=(flags[u]=flags[u]||{winCancel:0,lateTimer:0,slowStart:0,incidents:[]}); f[k]++; f.incidents.push({type:k,wk:wk||null,ts:ts||null,detail:detail||''}); };
+  const bump=(u,k,wk,ts,detail)=>{ const f=(flags[u]=flags[u]||{winCancel:0,lateTimer:0,timerStall:0,slowStart:0,incidents:[]}); f[k]++; f.incidents.push({type:k,wk:wk||null,ts:ts||null,detail:detail||''}); };
   const began=(phasesData.phaseBeganAt||{})[phase]||((events[0]||{}).ts||0);
   const ow=getTimerRules().openingWindow;
   const s0ms=stage0Hours()*3600000;
@@ -2242,6 +2250,13 @@ function _fpAnalyzePhase(phase,events,isCurrent){
     // and anything inside the opening window (no resets until the window ends).
     if(timerOn&&e.ts>=owEnd&&!sameVal) lastReset=e.ts;
     if(e.action==='removed'){
+      // Timer stalling: a bid placed then canceled again within 12h is a net-nothing
+      // round trip whose only lasting effect was restarting everyone's countdown
+      // (twice). NP bids count too — they're the cheapest stall vector.
+      if(timerOn&&prev&&prev.placedTs>=owEnd&&(e.ts-prev.placedTs)<=12*3600000){
+        const hrs=Math.round((e.ts-prev.placedTs)/360000)/10;
+        bump(u,'timerStall',wk,e.ts,'placed a bid ('+bidLblAdmin(prev.val)+'), then canceled it '+hrs+'h later — a no-net-change round trip that reset the countdown (possible timer stalling)');
+      }
       const v=e.bidValue!==undefined?e.bidValue:(prev?prev.val:undefined);
       if(v!==undefined&&v!=='NP'&&_fpWasWinning(wkMap,u,wk,v)){
         let raised=0;
@@ -2267,11 +2282,11 @@ function computeBadBehavior(){
         for(const u of names){
           let has=false;
           for(const wk in (scheduleData[u]||{})){ if(scheduleData[u][wk]!==undefined&&isCurrentPhaseBidAdmin(u,wk)){has=true;break;} }
-          if(!has){ const f=(flags[u]=flags[u]||{winCancel:0,lateTimer:0,slowStart:0,incidents:[]}); f.slowStart++; f.incidents.push({type:'slowStart',wk:null,ts:null,detail:'no bids '+Math.floor((Date.now()-began)/3600000)+'h after the phase opened'}); }
+          if(!has){ const f=(flags[u]=flags[u]||{winCancel:0,lateTimer:0,timerStall:0,slowStart:0,incidents:[]}); f.slowStart++; f.incidents.push({type:'slowStart',wk:null,ts:null,detail:'no bids '+Math.floor((Date.now()-began)/3600000)+'h after the phase opened'}); }
         }
       }
     }
-    const rows=Object.entries(flags).map(([user,f])=>({user,...f,total:f.winCancel+f.lateTimer+f.slowStart}))
+    const rows=Object.entries(flags).map(([user,f])=>({user,...f,total:f.winCancel+f.lateTimer+(f.timerStall||0)+f.slowStart}))
       .filter(r=>r.total>0).sort((a,b)=>b.total-a.total||a.user.localeCompare(b.user));
     sections.push({phase:ph.phase,closed:ph.closed,rows});
   }
@@ -2279,7 +2294,7 @@ function computeBadBehavior(){
 }
 function renderBadBehavior(){
   const el=document.getElementById('badBehaviorBox'); if(!el) return;
-  const head=`<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">⚖️ <strong style="color:var(--t1)">Fair Play Monitor</strong><span style="color:var(--t2)">— winning-bid cancels, late-timer moves, slow starts</span></div>`;
+  const head=`<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">⚖️ <strong style="color:var(--t1)">Fair Play Monitor</strong><span style="color:var(--t2)">— winning-bid cancels, late-timer moves, timer stalling, slow starts</span></div>`;
   if(!phase1Started()){ el.innerHTML=head+'<div style="font-size:12px;color:var(--t3)">Screening begins when bidding opens.</div>'; return; }
   const sections=computeBadBehavior();
   const allRows=sections.flatMap(s=>s.rows);
@@ -2294,8 +2309,8 @@ function renderBadBehavior(){
 window.openBadBehaviorReport=function(){
   const stamp=new Date().toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
   const sections=computeBadBehavior();
-  const TYPE_LABEL={winCancel:'Winning-bid cancel',lateTimer:'Late-timer move',slowStart:'Slow start'};
-  const TYPE_COLOR={winCancel:'#dc2626',lateTimer:'#d97706',slowStart:'#64748b'};
+  const TYPE_LABEL={winCancel:'Winning-bid cancel',lateTimer:'Late-timer move',timerStall:'Timer stalling',slowStart:'Slow start'};
+  const TYPE_COLOR={winCancel:'#dc2626',lateTimer:'#d97706',timerStall:'#0e7490',slowStart:'#64748b'};
   const userBlock=r=>{
     const rows=r.incidents.map(i=>`<tr>
       <td><span class="chip" style="background:${TYPE_COLOR[i.type]||'#64748b'}">${TYPE_LABEL[i.type]||i.type}</span></td>
@@ -3849,10 +3864,12 @@ async function _commitBeginPhase(next){
     // whose failure was swallowed — so a crash/close in between left the phase advanced with
     // stale denials that silently auto-deny a fresh re-bid on the same week next phase. A
     // batch is all-or-nothing server-side, so a failure leaves the old phase fully intact.
+    if(Object.keys(worstBidsData||{}).length) toast('⚠️ Priority locks were still set from the last phase — clearing them as part of beginning Phase '+next,'warn');
     const batch=writeBatch(db);
     batch.set(phasesRef,{currentPhase:next,phaseBeganAt:{...(phasesData.phaseBeganAt||{}),[next]:Date.now()}},{merge:true});
     batch.set(approvalsRef,{});
     batch.set(deniedRef,{});
+    batch.set(worstBidsRef,{}); // locks only mean anything within a phase — belt-and-suspenders if completePhase's clear failed
     try{ await batch.commit(); }
     catch(e){ toast('Could not begin Phase '+next+' — nothing was changed ('+(e?.message||e)+')','err'); return; }
   }
@@ -4105,6 +4122,7 @@ ${bullets([
   `Vacation selections are called "bids" — the process works like an auction, where user bids compete for limited slots`,
   `Enter your bids early, it benefits everyone`,
   `Sniping is not possible, do not try it`,
+  `Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly`,
   limLine,
   `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
   `Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better`,
@@ -5845,7 +5863,9 @@ window.adminSaveLoginEmail=async function(u){
   // against these values with a case-sensitive check, so normalize on save.
   const val=(document.getElementById(`lem_${u}`)?.value||"").trim().toLowerCase();
   if(!val||!val.includes("@")){toast("Invalid email","err");return;}
-  await setDoc(loginEmailsRef,{[u]:val},{merge:true}); toast(`🔑 Login e-mail saved for ${u}`,"ok");
+  await setDoc(loginEmailsRef,{[u]:val},{merge:true});
+  await maybeSyncEmailToUser(); // don't rely on the snapshot listener — sync NOW so the user's very next bid write is permitted
+  toast(`🔑 Login e-mail saved for ${u}`,"ok");
 };
 window.adminClearLoginEmail=function(u){
   openConfirm({
@@ -5854,6 +5874,7 @@ window.adminClearLoginEmail=function(u){
     okText:'Clear', danger:true,
     onConfirm:async()=>{
       await updateDoc(loginEmailsRef,{[u]:deleteField()}).catch(()=>{});
+      await maybeSyncEmailToUser();
       toast(`🗑 Cleared login e-mail for ${u}`,"warn");
     }
   });
@@ -6582,9 +6603,10 @@ let userListData=null;
 onSnapshot(userListRef, snap=>{
   if(snap.exists()&&snap.data().users){
     userListData=snap.data().users;
-    // Update names array
+    // Update names array (sorted on read — the doc is unordered now that adds use arrayUnion)
     names.length=0;
     userListData.forEach(n=>names.push(n));
+    names.sort();
     refreshAll();
   }
   renderUserPanel();
@@ -6627,6 +6649,19 @@ window.renderUsersCombined=renderUsersCombined;
 // Save (or clear, if blanked) a user's Full Name. Stored in the shared usernames doc,
 // so it shows on BOTH the Vacation Auction and Daily Schedule admin sites. Blank + Save
 // removes it (the person then shows as their initials).
+// Unmatched sign-ins: Google accounts that authenticated but matched no roster login
+// e-mail (typo, gmail dots, alias). The user site logs each attempt; surfacing them here
+// turns "I can't log in" phone calls into a 5-second diagnosis.
+function renderSignInMisses(){
+  const el=document.getElementById('signInMissBox'); if(!el) return;
+  const entries=Object.entries(signInMissesData||{}).filter(([k,v])=>typeof v==='number').sort((a,b)=>b[1]-a[1]).slice(0,8);
+  if(!entries.length){ el.style.display='none'; return; }
+  el.style.display='';
+  el.innerHTML='<strong style="color:var(--red)">⚠️ Unmatched sign-in attempts</strong> — these Google accounts signed in but are not on the roster (typo in a login e-mail?):<br>'
+    +entries.map(([em,ts])=>`<span class="mono">${esc(em)}</span> <span style="color:var(--t3)">(${new Date(ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})})</span>`).join('<br>')
+    +`<br><button class="btn btn-ghost" style="margin-top:6px;padding:2px 8px;font-size:11px" onclick="clearSignInMisses()">Clear list</button>`;
+}
+window.clearSignInMisses=async function(){ await setDoc(signInMissesRef,{}); toast('Cleared unmatched sign-in list','ok'); };
 window.adminSaveFullName=async function(u){
   const el=document.getElementById('ufn_'+u); if(!el) return;
   const v=(el.value||'').trim();
@@ -6661,12 +6696,12 @@ window.addUser=async function(){
     if(isNaN(parsed)||parsed<0||parsed>1){toast("FTE must be between 0 and 1","err");return;}
     fte=Math.round(parsed*10)/10;
   }
-  const updated=[...names,val].sort();
-  await setDoc(userListRef,{users:updated});
+  try{ await updateDoc(userListRef,{users:arrayUnion(val)}); }
+  catch(e){ await setDoc(userListRef,{users:[val]},{merge:true}); } // doc doesn't exist yet
   await setDoc(fteRef,{[val]:fte},{merge:true}).catch(()=>{}); // FTE is this site's own (not shared)
   // Shared with the Daily Schedule (port to the other site): full name, login e-mail, secondary e-mail.
   if(fullName) await setDoc(usernamesRef,{[val]:fullName},{merge:true}).catch(()=>{});
-  if(loginEmail) await setDoc(loginEmailsRef,{[val]:loginEmail},{merge:true}).catch(()=>{});
+  if(loginEmail){ await setDoc(loginEmailsRef,{[val]:loginEmail},{merge:true}).catch(()=>{}); await maybeSyncEmailToUser(); }
   if(email2 && email2.includes('@')) await setDoc(emailsRef,{[val]:email2},{merge:true}).catch(()=>{});
   ['newUserInput','newUserFullName','newUserLoginEmail','newUserEmail2'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
   if(fteEl) fteEl.value="1.0";
@@ -6694,9 +6729,8 @@ window.removeUser=function(u){
     okText:'Remove User & All Data', danger:true,
     onConfirm:async()=>{
       try {
-        // Remove from user list
-        const updated=names.filter(n=>n!==u);
-        await setDoc(userListRef,{users:updated});
+        // Remove from user list — arrayRemove, so a concurrent add on either admin site is never lost
+        await updateDoc(userListRef,{users:arrayRemove(u)});
         // Atomically delete this user's field from each collection
         await Promise.all([
           updateDoc(scheduleRef,{[u]:deleteField()}).catch(()=>{}),
@@ -7304,6 +7338,24 @@ window.confirmAdminCancel=function(user,wk){
   });
 };
 
+// ── Full-data backup ──
+// Downloads every auction document as one JSON file. There is no server-side undo —
+// this file is the recovery path. Run it before every Close/Complete/Begin Phase.
+window.exportBackup=async function(){
+  const docs={schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fte:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,welcomeLog:welcomeLogRef,mailQueue:mailQueueRef,mailStats:mailStatsRef,slcMap:slcRef};
+  const out={_exportedAt:new Date().toISOString(),_build:BUILD};
+  let fails=0;
+  for(const [name,ref] of Object.entries(docs)){
+    try{ const s=await getDoc(ref); out[name]=s.exists()?s.data():null; }
+    catch(e){ out[name]='FETCH-FAILED: '+(e.code||e.message); fails++; }
+  }
+  const blob=new Blob([JSON.stringify(out,null,1)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='vacation-auction-backup-'+new Date().toISOString().replace(/[:.]/g,'-').slice(0,19)+'.json';
+  a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+  toast(fails?('💾 Backup saved — but '+fails+' document(s) failed to fetch, re-run it'):'💾 Backup downloaded — keep this file safe',fails?'warn':'ok');
+};
 // ── Toast ──
 let toastT;
 window.toast=function(msg,type="ok"){
