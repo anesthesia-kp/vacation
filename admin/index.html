@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 178;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 179;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -157,6 +157,8 @@ tbody tr:hover td{background:rgba(255,255,255,.02)}
 .sel option{background:#ffffff;color:#0e3a5c}
 .sel:focus,.inp:focus{outline:none;border-color:var(--b3)}
 
+/* Collapsible-panel chevrons — uniform Show/Hide text everywhere */
+.chev{font-size:12px;font-weight:600;color:var(--t2);white-space:nowrap}
 /* Priority Locks sort toggle */
 .bb-sort-group{display:inline-flex;border:1px solid var(--b2);border-radius:4px;overflow:hidden}
 .bb-sort-btn{background:var(--s2);color:var(--t2);border:none;padding:5px 12px;font-family:'Geist Mono',monospace;font-size:12px;cursor:pointer;font-weight:600;border-right:1px solid var(--b2)}
@@ -750,7 +752,7 @@ thead th{color:var(--t2)}
         </div>
       </div>
       <div class="card">
-        <div class="card-title" onclick="toggleRestorePanel()" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none"><span>🛟 Restore from Backup</span><span id="restoreChevron" style="font-weight:400;color:var(--t2)">▸ Show</span></div>
+        <div class="card-title" onclick="toggleRestorePanel()" style="cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none"><span>🛟 Restore from Backup</span><span id="restoreChevron" class="chev">▸ Show</span></div>
         <div id="restoreWrap" style="display:none">
           <div class="page-sub" style="margin-bottom:10px">Pick one or more backup files (e.g. from Downloads → Auction Backups). Each file is read locally in your browser and summarized below — <strong>nothing changes until you explicitly restore</strong>. Tip: turn the global lock ON before a mid-auction restore so nobody is bidding while state changes.</div>
           <div id="restoreDrop" ondragover="event.preventDefault()" ondrop="event.preventDefault();loadRestoreFiles(event.dataTransfer.files)" style="border:2px dashed var(--b2);border-radius:10px;padding:14px;text-align:center;color:var(--t2);font-size:12.5px;margin-bottom:10px">Drag backup files here, or <label style="color:var(--blue);cursor:pointer;text-decoration:underline">choose files<input type="file" accept=".json,application/json" multiple style="display:none" onchange="loadRestoreFiles(this.files);this.value=''"></label></div>
@@ -758,9 +760,9 @@ thead th{color:var(--t2)}
         </div>
       </div>
       <div class="card">
-        <div class="card-title" id="timerRulesHead" onclick="toggleTimerRules()" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
+        <div class="card-title" id="timerRulesHead" onclick="toggleTimerRules()" style="cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none">
           <span>⏱ Timer Rules</span>
-          <span id="trChevron" style="font-size:13px;color:var(--t2);font-weight:600">▸ Show</span>
+          <span id="trChevron" class="chev">▸ Show</span>
         </div>
         <div id="timerRulesWrap" style="display:none">
           <div class="page-sub" style="margin:10px 0">The bidding countdown resets every time someone bids. It starts long and gets shorter as the round goes on. When the reset gets short, bidding won't close overnight. Adjust the days, the reset lengths, and the overnight window below — <strong>each change asks you to confirm and saves right away</strong>.</div>
@@ -7421,6 +7423,27 @@ window.confirmAdminCancel=function(user,wk){
   });
 };
 
+// ── Collapsible Controls cards ──────────────────────────────────────────────
+// Every card on the Controls page collapses like Timer Rules / Restore: the
+// Show/Hide chevron sits right next to the section header, uniform font (.chev).
+function initControlsCollapsibles(){
+  const panel=document.getElementById('panel-controls'); if(!panel) return;
+  panel.querySelectorAll('.card').forEach(card=>{
+    const title=card.querySelector('.card-title'); if(!title||title.dataset.collapsible) return;
+    title.dataset.collapsible='1';
+    if(card.querySelector('#timerRulesWrap')||card.querySelector('#restoreWrap')) return; // these two already collapse
+    const wrap=document.createElement('div');
+    while(title.nextSibling) wrap.appendChild(title.nextSibling);
+    card.appendChild(wrap);
+    wrap.style.display='none';
+    const chev=document.createElement('span'); chev.className='chev'; chev.textContent='▸ Show';
+    title.appendChild(chev);
+    title.style.cursor='pointer'; title.style.userSelect='none';
+    title.style.display='flex'; title.style.alignItems='center'; title.style.gap='8px';
+    title.addEventListener('click',()=>{ const show=wrap.style.display==='none'; wrap.style.display=show?'':'none'; chev.textContent=show?'▾ Hide':'▸ Show'; });
+  });
+}
+try{ initControlsCollapsibles(); }catch(e){ console.warn('collapsibles init failed:',e); }
 // ── Restore console ────────────────────────────────────────────────────────
 // Reads backup JSON files locally (never uploaded), summarizes each, and offers
 // two modes: FULL restore (everything back to that moment — break-glass) and
