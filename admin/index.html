@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 177;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 178;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -747,6 +747,14 @@ thead th{color:var(--t2)}
         <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
           <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportBackup()" title="Download every auction document as one JSON file — the auction's only undo">💾 Backup All Data</button>
           <button class="btn btn-danger" style="background:rgba(220,38,38,.25);border-color:rgba(220,38,38,.6)" onclick="clearEverything()">💣 Reset Auction</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title" onclick="toggleRestorePanel()" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none"><span>🛟 Restore from Backup</span><span id="restoreChevron" style="font-weight:400;color:var(--t2)">▸ Show</span></div>
+        <div id="restoreWrap" style="display:none">
+          <div class="page-sub" style="margin-bottom:10px">Pick one or more backup files (e.g. from Downloads → Auction Backups). Each file is read locally in your browser and summarized below — <strong>nothing changes until you explicitly restore</strong>. Tip: turn the global lock ON before a mid-auction restore so nobody is bidding while state changes.</div>
+          <div id="restoreDrop" ondragover="event.preventDefault()" ondrop="event.preventDefault();loadRestoreFiles(event.dataTransfer.files)" style="border:2px dashed var(--b2);border-radius:10px;padding:14px;text-align:center;color:var(--t2);font-size:12.5px;margin-bottom:10px">Drag backup files here, or <label style="color:var(--blue);cursor:pointer;text-decoration:underline">choose files<input type="file" accept=".json,application/json" multiple style="display:none" onchange="loadRestoreFiles(this.files);this.value=''"></label></div>
+          <div id="restoreList"></div>
         </div>
       </div>
       <div class="card">
@@ -7412,6 +7420,150 @@ window.confirmAdminCancel=function(user,wk){
     }
   });
 };
+
+// ── Restore console ────────────────────────────────────────────────────────
+// Reads backup JSON files locally (never uploaded), summarizes each, and offers
+// two modes: FULL restore (everything back to that moment — break-glass) and
+// SINGLE-USER restore (one person's bids/locks/times/phase tags — the everyday
+// fix that leaves everyone else's newer activity untouched).
+let _restoreFiles=[];
+window.toggleRestorePanel=function(){ const w=document.getElementById('restoreWrap'),c=document.getElementById('restoreChevron'); if(!w)return; const show=w.style.display==='none'; w.style.display=show?'':'none'; if(c)c.textContent=show?'▾ Hide':'▸ Show'; };
+function _bidCount(sch){ let users=0,weeks=0; for(const u in (sch||{})){ const n=Object.keys(sch[u]||{}).length; if(n>0){users++;weeks+=n;} } return {users,weeks}; }
+window.loadRestoreFiles=function(files){
+  [...files].forEach(f=>{
+    const r=new FileReader();
+    r.onload=()=>{
+      try{
+        const d=JSON.parse(r.result);
+        if(!d._exportedAt||d.schedule===undefined) throw new Error('not an auction backup file');
+        const ts=Date.parse(d._exportedAt);
+        if(isNaN(ts)) throw new Error('unreadable timestamp');
+        _restoreFiles.push({name:f.name,data:d,ts});
+        _restoreFiles.sort((a,b)=>(b.ts||0)-(a.ts||0));
+      }catch(e){ _restoreFiles.push({name:f.name,error:e.message}); }
+      renderRestoreList();
+    };
+    r.readAsText(f);
+  });
+};
+window._restoreRemove=function(i){ _restoreFiles.splice(i,1); renderRestoreList(); };
+function renderRestoreList(){
+  const el=document.getElementById('restoreList'); if(!el) return;
+  el.innerHTML=_restoreFiles.map((f,i)=>{
+    if(f.error) return `<div style="border:1px solid rgba(220,38,38,.4);border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:12px;color:var(--red)">⚠️ ${esc(f.name)} — ${esc(f.error)} <button class="btn btn-ghost" style="padding:1px 8px;font-size:11px;margin-left:8px" onclick="_restoreRemove(${i})">✕</button></div>`;
+    const d=f.data, ph=d.phases||{}, bc=_bidCount(d.schedule), tm=d.timer||{};
+    let tmTxt='timer off';
+    if(tm.enabled&&typeof tm.lastChange==='number'){ const rem=(tm.durationHours||48)*3600000-(f.ts-tm.lastChange); tmTxt=rem>0?('timer '+Math.floor(rem/3600000)+'h '+Math.floor((rem%3600000)/60000)+'m left'):'timer expired'; }
+    else if(tm.enabled) tmTxt='timer waiting';
+    const phTxt=ph.phase1Started||Number(ph.currentPhase||1)>1?('Phase '+(ph.currentPhase||1)+(ph.completedPhases&&ph.completedPhases[ph.currentPhase]?' (complete)':'')):'pre-launch';
+    const simTxt=(d.adminSettings&&d.adminSettings.simulatorEnabled===true)?' · <span style="color:var(--yellow)">simulator ON</span>':'';
+    // diff vs current
+    const cur=_bidCount(scheduleData); const dBids=cur.weeks-bc.weeks;
+    const phNow=Number(phasesData.currentPhase||1);
+    let setDiff=0; const bs=d.adminSettings||{}, cs=adminSettings||{};
+    for(const k of new Set([...Object.keys(bs),...Object.keys(cs)])){ if(JSON.stringify(bs[k])!==JSON.stringify(cs[k])) setDiff++; }
+    const diff=`vs now: ${dBids===0?'same bid count':(dBids>0?dBids+' fewer bid'+(dBids!==1?'s':'')+' in backup? no — current has '+dBids+' more':'current has '+(-dBids)+' fewer')} · ${phNow===Number(ph.currentPhase||1)?'same phase':'phase differs'} · ${setDiff===0?'settings identical':setDiff+' setting'+(setDiff!==1?'s':'')+' differ'}`;
+    return `<div style="border:1px solid var(--b1);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:12.5px">
+      <div style="font-weight:700;color:var(--t1)">${esc(f.name)}</div>
+      <div style="color:var(--t2);margin-top:3px">Taken <strong>${new Date(f.ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'})}</strong> · ${phTxt} · ${bc.weeks} bid${bc.weeks!==1?'s':''} across ${bc.users} user${bc.users!==1?'s':''} · ${tmTxt}${simTxt}</div>
+      <div style="color:var(--t3);margin-top:2px;font-size:11.5px">${diff}</div>
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" style="padding:3px 10px;font-size:11px;background:rgba(59,130,246,.12);color:var(--blue);border:1px solid rgba(59,130,246,.3)" onclick="_restoreUser(${i})">👤 Restore One User…</button>
+        <button class="btn btn-danger" style="padding:3px 10px;font-size:11px" onclick="_restoreFull(${i})">🛟 Full Restore…</button>
+        <button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;margin-left:auto" onclick="_restoreRemove(${i})">✕ Remove from list</button>
+      </div>
+    </div>`;
+  }).join('')||'';
+}
+window._restoreFull=function(i){
+  const f=_restoreFiles[i]; if(!f||f.error) return;
+  const when=new Date(f.ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
+  openConfirm({
+    title:'🛟 Full Restore — are you sure?',
+    body:`<div>Restore <strong>everything</strong> to the state captured <strong>${when}</strong>?</div>
+          <div class="cmodal-danger" style="margin-top:8px">Every bid, approval, lock and setting change made by ANY user since that moment will be <strong>erased</strong>. E-mails already sent cannot be unsent.</div>
+          <ul style="margin:8px 0 0 18px;font-size:12px;color:var(--t2);line-height:1.6">
+            <li>Countdown timer resumes with the remaining time it had at backup</li>
+            <li>Mail queue is CLEARED (stale entries would re-send e-mails)</li>
+            <li>Welcome log and Admin Access list are KEPT as they are now</li>
+          </ul>`,
+    okText:'Continue', danger:true,
+    onConfirm:()=>{
+      openConfirm({
+        title:'🚨 Final Confirmation',
+        body:`<div style="text-align:center;font-weight:700;color:var(--red)">Type RESTORE to confirm the full restore from ${when}:</div>
+              <div style="text-align:center;margin-top:10px"><input type="text" id="restoreTypeInput" class="inp" style="width:140px;text-align:center;text-transform:uppercase" autocomplete="off"></div>`,
+        okText:'🛟 RESTORE NOW', danger:true,
+        onConfirm:async()=>{
+          const typed=(document.getElementById('restoreTypeInput')?.value||'').trim().toUpperCase();
+          if(typed!=='RESTORE'){ toast('Not restored — you must type RESTORE to confirm','warn'); return; }
+          await _doFullRestore(f);
+        }
+      });
+    }
+  });
+};
+async function _doFullRestore(f){
+  const d=f.data;
+  const map={schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,mailStats:mailStatsRef,slcMap:slcRef,signInMisses:signInMissesRef,slots:doc(db,'vacations','slots'),passcodes:doc(db,'vacations','passcodes')};
+  // Deliberately NOT restored: mailQueue (cleared — stale entries re-send e-mails),
+  // welcomeLog (kept current — an older log re-welcomes users), adminAccess (kept
+  // current — a stale list could lock the restoring admin out mid-flight).
+  const fails=[];
+  for(const [k,ref] of Object.entries(map)){
+    let v=d[k];
+    if(typeof v==='string'){ fails.push(k+' (bad data in backup)'); continue; }
+    if(k==='timer'&&v&&v.enabled&&typeof v.lastChange==='number'){ v={...v,lastChange:Date.now()-(f.ts-v.lastChange)}; } // resume with the remaining time it had at backup
+    try{ await setDoc(ref, v||{}); }catch(e){ fails.push(k); }
+  }
+  try{ await setDoc(mailQueueRef,{}); }catch(e){ fails.push('mailQueue clear'); }
+  try{ await adminLog('ALL','ALL','admin-restore-full'); }catch(_){ }
+  toast(fails.length?('🛟 Restore finished with '+fails.length+' failure(s): '+fails.join(', ')+' — re-run the restore'):'🛟 Full restore complete — state is back to '+new Date(f.ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'}),fails.length?'warn':'ok');
+}
+window._restoreUser=function(i){
+  const f=_restoreFiles[i]; if(!f||f.error) return;
+  const d=f.data;
+  const roster=[...new Set([...((d.userList||{}).users||[]),...Object.keys(d.schedule||{}),...names])].sort();
+  const when=new Date(f.ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
+  openConfirm({
+    title:'👤 Restore One User',
+    body:`<div>Restore a single user's bids, priority locks, bid times and phase tags to the state from <strong>${when}</strong> — no other user is touched.</div>
+          <div style="margin-top:10px"><label style="font-size:12px;color:var(--t2)">User: </label>
+            <select id="restoreUserSel" class="sel" style="margin-left:6px">${roster.map(u=>`<option>${esc(u)}</option>`).join('')}</select></div>
+          <div class="cmodal-info" style="margin-top:8px">Approve/deny decisions are NOT changed — review that user's decisions afterwards if the phase is in approvals.</div>`,
+    okText:'Preview restore',
+    onConfirm:()=>{
+      const u=document.getElementById('restoreUserSel')?.value; if(!u) return;
+      const bBids=(d.schedule||{})[u]||{}; const cBids=(scheduleData||{})[u]||{};
+      const fmt=(m)=>Object.keys(m).length?Object.keys(m).sort().map(wk=>('W'+(_wkNumByISO[wk]||'?')+': '+bidLblAdmin(m[wk]))).join(' · '):'none';
+      openConfirm({
+        title:'👤 Restore '+u+'?',
+        body:`<div style="font-size:12.5px"><div><strong>Backup (${when}):</strong> ${esc(fmt(bBids))}</div>
+              <div style="margin-top:6px"><strong>Current:</strong> ${esc(fmt(cBids))}</div></div>
+              <div class="cmodal-warn" style="margin-top:8px">${u}'s current bids will be replaced with the backup's. Everyone else is untouched.</div>`,
+        okText:'👤 Restore '+u, danger:true,
+        onConfirm:async()=>{ await _doUserRestore(f,u); }
+      });
+    }
+  });
+};
+async function _doUserRestore(f,u){
+  const d=f.data;
+  const pairs=[[scheduleRef,'schedule'],[worstBidsRef,'bestBids'],[bidTimesRef,'bidTimes'],[bidPhaseRef,'bidPhase']];
+  const fails=[];
+  for(const [ref,k] of pairs){
+    const val=(d[k]||{})[u];
+    try{
+      if(val===undefined){ await updateDoc(ref,{[u]:deleteField()}); }
+      else { await updateDoc(ref,{[u]:val}); }
+    }catch(e){
+      if(val!==undefined){ try{ await setDoc(ref,{[u]:val},{merge:true}); }catch(e2){ fails.push(k); } }
+      else if(e&&e.code!=='not-found'){ fails.push(k); }
+    }
+  }
+  try{ await adminLog(u,'ALL','admin-restore-user'); }catch(_){ }
+  toast(fails.length?('⚠️ Restore for '+u+' had failures: '+fails.join(', ')):'👤 '+u+' restored to '+new Date(f.ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'}),fails.length?'warn':'ok');
+}
 
 // ── Backup-first prompt for consequential transitions ──
 // Every workflow step that changes auction state irreversibly offers a one-click
