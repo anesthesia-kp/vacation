@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 164;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 165;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -533,6 +533,10 @@ thead th{color:var(--t2)}
               <button class="btn" style="flex:unset;white-space:nowrap;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="setMailMeter()">✏️ Update</button>
             </div>
           </div>
+          <div class="trow" style="align-items:center;margin-top:8px">
+            <div><div class="trow-desc">Quota reset day (EmailJS billing day)</div></div>
+            <input type="number" id="emailCycleDayInp" class="inp" autocomplete="off" style="width:64px;padding:3px 6px" min="1" max="28" step="1" onchange="saveEmailCycleDay()">
+          </div>
         </div>
         <div class="card big-card">
           <div class="card-title">📈 Auction Insights</div>
@@ -777,13 +781,6 @@ thead th{color:var(--t2)}
             <div class="trow-desc">When ON, each user gets a one-time welcome/rules e-mail at their first login (and when a KP e-mail is added for an already-logged-in user). When OFF, no welcome e-mails are sent. Turn OFF during testing. Addresses are still tracked, so turning it back on won't re-send to anyone already welcomed this cycle.</div>
           </div>
           <div class="tog" id="welcomeEmailsToggle" onclick="toggleWelcomeEmails()"></div>
-        </div>
-        <div class="trow" style="margin-top:10px;padding-top:12px;border-top:1px solid var(--b1)">
-          <div>
-            <div class="trow-label">E-mail quota cycle day</div>
-            <div class="trow-desc">Day of the month the EmailJS quota resets (the account's billing day). The quota meter counts sends between one cycle day and the next. Change this only if the EmailJS billing day changes.</div>
-          </div>
-          <div style="display:flex;align-items:center;gap:6px"><input type="number" id="emailCycleDayInp" class="inp" autocomplete="off" style="width:64px" min="1" max="28" step="1" onchange="saveEmailCycleDay()"></div>
         </div>
       </div>
       <div class="card">
@@ -2781,6 +2778,7 @@ function syncControls(){
   if(et) et.className="tog"+(adminSettings.emailNotifsEnabled!==false?" on":"");
   const ecd=document.getElementById("emailCycleDayInp");
   if(ecd&&document.activeElement!==ecd){ const d=parseInt(adminSettings?.emailCycleResetDay,10); ecd.value=(!isNaN(d)&&d>=1&&d<=28)?d:22; }
+  if(typeof renderMailMeter==='function') renderMailMeter(); // keep "resets the Nth" in sync
   const we=document.getElementById("welcomeEmailsToggle");
   if(we) we.className="tog"+(adminSettings.welcomeEmailsEnabled!==false?" on":"");
   const kp=document.getElementById("kpPromptToggle");
@@ -4168,7 +4166,9 @@ function renderMailMeter(){
   const n=Number(mailStatsData[emailCycleKey()]||0);
   const color=n>=MAIL_QUOTA?'var(--red)':n>=Math.round(MAIL_QUOTA*0.9)?'var(--yellow)':'var(--t2)';
   const warn=n>=MAIL_QUOTA?' — monthly limit reached!':n>=Math.round(MAIL_QUOTA*0.9)?' — approaching the monthly limit':'';
-  el.innerHTML=`<span style="color:${color}"><strong>${n.toLocaleString()}</strong> of ${MAIL_QUOTA.toLocaleString()} sent this cycle (resets the 22nd)${warn}</span>`;
+  const _d=(()=>{ const d=parseInt(adminSettings?.emailCycleResetDay,10); return (!isNaN(d)&&d>=1&&d<=28)?d:22; })();
+  const _ord=n=>{const s=["th","st","nd","rd"],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0]);};
+  el.innerHTML=`<span style="color:${color}"><strong>${n.toLocaleString()}</strong> of ${MAIL_QUOTA.toLocaleString()} sent this cycle (resets the ${_ord(_d)})${warn}</span>`;
 }
 // Correct the meter to match the exact count on the EmailJS dashboard — e.g. after
 // e-mails were sent outside the site, or if the counter ever drifts. The meter then
