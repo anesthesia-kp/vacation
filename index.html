@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 98;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 99;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -729,6 +729,7 @@ function outcomeIcon(o,cls){ const k=(o==='win'||o==='draw'||o==='review'||o==='
 function outcomeText(o){ return o==='approved'?'Approved':o==='win'?'Winning':o==='draw'?'Draw':o==='review'?'Under Review':'Losing'; }
 
 let timerData={enabled:false,lastChange:null};
+let _recipMapsLoaded=false; // true only after the signed-in loginEmails+emails reads SUCCEED — gates the mail relay
 let pendingWeek=null, saveInProgress=false;
 let countdownInterval=null;
 let renderScheduled=false;
@@ -1286,9 +1287,11 @@ function recipientsFor(user){
 }
 window._recipientsFor=recipientsFor; // exposed for testing
 async function relayMailQueue(){
-  // Signed-out tabs have empty loginEmails/emails maps: they would resolve every alert
-  // to "no recipients" and delete it unsent. Never relay before sign-in.
-  if(typeof getCurrentUser!=='function'||!getCurrentUser()) return;
+  // A tab may only relay once its recipient maps have GENUINELY loaded after sign-in.
+  // (getCurrentUser() was the old guard, but the roster dropdown auto-selects a name
+  // even when signed out, so it read truthy — and a tab with failed/empty maps would
+  // resolve alerts to "no recipients" and delete them unsent.)
+  if(!_recipMapsLoaded) return;
   if(_mqBusy) return; _mqBusy=true;
   try{
     for(const qid of Object.keys(mailQueueData||{})){
@@ -2564,8 +2567,10 @@ onAuthStateChanged(auth, async u => {
   // OUR OWN credentials. This is what lets the security rules forbid ANONYMOUS reads
   // of loginEmails/emails (the PII) while sign-in still works: we no longer depend on
   // those docs having been pre-loaded during the anonymous bootstrap.
-  try{ const s=await getDoc(loginEmailsRef); loginEmailsData=s.exists()?s.data():{}; }catch(_){}
-  try{ const s=await getDoc(emailsRef); emailsData=s.exists()?s.data():{}; _emailsReady=true; }catch(_){}
+  let _lemOk=false,_emOk=false;
+  try{ const s=await getDoc(loginEmailsRef); loginEmailsData=s.exists()?s.data():{}; _lemOk=true; }catch(_){}
+  try{ const s=await getDoc(emailsRef); emailsData=s.exists()?s.data():{}; _emailsReady=true; _emOk=true; }catch(_){}
+  _recipMapsLoaded=_lemOk&&_emOk; // relay may only resolve recipients once BOTH maps genuinely loaded
   // Roster-load race guard: resolveByEmail() scans `names`, so if the userList
   // snapshot hasn't arrived yet (cold start) fetch it now — otherwise a valid user
   // is wrongly told "not registered".

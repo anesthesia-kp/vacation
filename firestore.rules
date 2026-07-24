@@ -90,7 +90,8 @@ service cloud.firestore {
         'loginEmails',
         'changesArchive',
         'meta',
-        'emailToUser'
+        'emailToUser',
+        'usernames'
       ];
     }
 
@@ -117,12 +118,29 @@ service cloud.firestore {
              : request.resource.data.diff(resource.data).affectedKeys().hasOnly(myInitials()));
     }
     function timerNotExpired() {
-      // Uses request.time (Google's clock), never the client's. Timer off or not
-      // yet started means no restriction.
-      let t = get(/databases/$(database)/documents/vacations/timer).data;
-      return !(t.get('enabled', false) == true)
-          || t.get('lastChange', null) == null
-          || request.time.toMillis() < t.get('lastChange', 0) + int(t.get('durationHours', 48) * 3600000);
+      // Uses request.time (Google's clock), never the client's. Timer off, not yet
+      // started, or the doc not existing at all means no restriction — the exists()
+      // guard matters: get() on a missing doc ERRORS (evaluating to deny), which
+      // would silently block every bid on a fresh database.
+      return !exists(/databases/$(database)/documents/vacations/timer)
+        || !(get(/databases/$(database)/documents/vacations/timer).data.get('enabled', false) == true)
+        || get(/databases/$(database)/documents/vacations/timer).data.get('lastChange', null) == null
+        || request.time.toMillis() < get(/databases/$(database)/documents/vacations/timer).data.get('lastChange', 0)
+             + int(get(/databases/$(database)/documents/vacations/timer).data.get('durationHours', 48) * 3600000);
+    }
+    // User timer writes may only touch lastChange/durationHours with sane values:
+    // lastChange within 10 minutes of the server clock (no forced expiry via
+    // lastChange:0, no future-dated stalls) and a duration of at most 90 days.
+    function timerWriteSane() {
+      return (resource == null
+                ? request.resource.data.keys().hasOnly(['lastChange', 'durationHours'])
+                : request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastChange', 'durationHours']))
+        && request.resource.data.get('lastChange', 0) is number
+        && request.resource.data.get('lastChange', 0) > request.time.toMillis() - 600000
+        && request.resource.data.get('lastChange', 0) < request.time.toMillis() + 600000
+        && request.resource.data.get('durationHours', 48) is number
+        && request.resource.data.get('durationHours', 48) > 0
+        && request.resource.data.get('durationHours', 48) <= 2160;
     }
 
     match /vacations/{docId} {
@@ -141,14 +159,19 @@ service cloud.firestore {
                    // Bid docs: own keys only, and never after server-clock expiry.
                    || (isBidDoc(docId) && (isAdmin()
                         || (isRegisteredUser() && writesOnlyOwnKeys() && timerNotExpired())))
-                   // The timer itself: users may reset it via bids, but not once it
-                   // has truly expired (a skewed clock could otherwise reopen bidding).
-                   || (docId == 'timer' && (isAdmin() || (isRegisteredUser() && timerNotExpired())))
+                   // The timer itself: users may reset it via bids — but not once it has
+                   // truly expired (a skewed clock could otherwise reopen bidding), and only
+                   // with a fresh, sane lastChange/duration (no forced-expiry or stalling
+                   // writes from devtools).
+                   || (docId == 'timer' && (isAdmin() || (isRegisteredUser() && timerNotExpired() && timerWriteSane())))
+                   // KP-address book: each user may edit only their OWN entry (an insider
+                   // could otherwise silently redirect a competitor's outbid alerts).
+                   || (docId == 'emails' && (isAdmin() || (isRegisteredUser() && writesOnlyOwnKeys())))
                    // Sign-in miss log: any VERIFIED Google account may record its own
                    // failed roster match (these users are by definition not registered).
                    || (docId == 'signInMisses' && (request.auth != null && request.auth.token.email_verified == true))
                    || (!isAdminOnlyDoc(docId) && !isBidDoc(docId)
-                        && docId != 'timer' && docId != 'signInMisses'
+                        && docId != 'timer' && docId != 'signInMisses' && docId != 'emails'
                         && (isRegisteredUser() || isAdmin()));
     }
 
