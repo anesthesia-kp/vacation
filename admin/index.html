@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 166;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 168;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -4079,12 +4079,16 @@ function _emBold(s){
 // Plain-text Timer Rules for the welcome e-mail — generated from the SAME getTimerRules
 // source the site uses, so the e-mail always reflects the live timer settings.
 function timerRulesEmailText(){
+  if(typeof timerData!=='undefined'&&timerData&&timerData.enabled!==true){
+    return 'The bidding countdown timer is currently OFF — there is no countdown, and bidding stays open until the admin closes the phase.';
+  }
   const r=getTimerRules(), st=r.stages;
   const lines=st.map((s,i)=> i===0 ? `At the start of the round: resets to ${s.hours} hours` : `After ${s.days} days: resets to ${s.hours} hours`);
   let quiet='';
   if(r.quietEnabled){ quiet=`\n\nOnce the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between ${fmtHour12(r.quietStart)} and ${fmtHour12(r.quietEnd)} Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.`; }
   let owTxt='';
   if(r.openingWindow){ owTxt=`\n\nEach phase opens with a ${r.openingWindow.days}-day window: the timer counts down continuously (bids do NOT reset it) until ${(st[0]||{}).hours||48} hours remain — then the reset rules above take over.`; }
+  if(st.length<=1){ return `Every time anyone places or changes a bid, the countdown resets to ${(st[0]||{}).hours||48} hours.${quiet}${owTxt}`; }
   return `Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}${owTxt}`;
 }
 function _cumCap(phase){
@@ -6261,7 +6265,7 @@ function _owNorm(ow){ return (ow&&ow.enabled===true&&Number(ow.days)>0)?{enabled
 function getTimerRules(){
   const r=(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.timerRules)?adminSettings.timerRules:null;
   if(!r||!Array.isArray(r.stages)||!r.stages.length) return DEFAULT_TIMER_RULES;
-  return {stages:r.stages.slice().filter(s=>s&&typeof s.hours==='number').sort((a,b)=>(a.days||0)-(b.days||0)),quietEnabled:r.quietEnabled!==false,quietStart:(typeof r.quietStart==='number')?r.quietStart:21,quietEnd:(typeof r.quietEnd==='number')?r.quietEnd:9,quietWhenHoursLE:(typeof r.quietWhenHoursLE==='number')?r.quietWhenHoursLE:6,openingWindow:_owNorm(r.openingWindow)};
+  return {stages:r.stages.slice().filter(s=>s&&typeof s.hours==='number'&&s.enabled!==false).sort((a,b)=>(a.days||0)-(b.days||0)),quietEnabled:r.quietEnabled!==false,quietStart:(typeof r.quietStart==='number')?r.quietStart:21,quietEnd:(typeof r.quietEnd==='number')?r.quietEnd:9,quietWhenHoursLE:(typeof r.quietWhenHoursLE==='number')?r.quietWhenHoursLE:6,openingWindow:_owNorm(r.openingWindow)};
 }
 function stage0Hours(){ const st=getTimerRules().stages; return (st.length?st[0].hours:48)||48; }
 // The opening window is ACTIVE while: rule on · timer running · remaining
@@ -6309,10 +6313,24 @@ function renderTimerRules(){
   const hoursSel=(id,val)=>`<select id="${id}" class="sel" style="width:78px">${TIMER_HOUR_OPTS.map(h=>`<option value="${h}"${h===val?' selected':''}>${h} h</option>`).join('')}</select>`;
   const dayInp=(id,val)=>`<input type="number" id="${id}" class="inp" style="width:60px" min="0" max="90" value="${val}">`;
   const hourSel=(id,val)=>`<select id="${id}" class="sel" style="width:88px">${Array.from({length:24},(_,h)=>`<option value="${h}"${h===val?' selected':''}>${fmtHour12(h)}</option>`).join('')}</select>`;
-  const st=r.stages;
+  // Editor rows render from the RAW saved stages (including switched-off ones) so a
+  // disabled step keeps its values and can be re-enabled; the engine (getTimerRules)
+  // only ever sees the enabled steps.
+  const rawR=(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.timerRules&&Array.isArray(adminSettings.timerRules.stages)&&adminSettings.timerRules.stages.length)
+    ? adminSettings.timerRules.stages.slice().filter(s=>s&&typeof s.hours==='number').sort((a,b)=>(a.days||0)-(b.days||0))
+    : DEFAULT_TIMER_RULES.stages;
+  const st=rawR;
   const row=(inner)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;font-size:13px;color:var(--t1)">${inner}</div>`;
-  let rows=row(`<span style="color:var(--t2);min-width:150px">At the start of a round</span><span>reset to</span> ${hoursSel('tr_h0',(st[0]||{}).hours||48)}`);
-  for(let i=1;i<=4;i++){ const s=st[i]||{days:[7,10,12,14][i-1],hours:[24,12,6,3][i-1]}; rows+=row(`<span style="color:var(--t2)">After</span> ${dayInp('tr_d'+i,s.days)} <span style="color:var(--t2)">days,</span><span>reset to</span> ${hoursSel('tr_h'+i,s.hours)}`); }
+  const masterOn=!!(timerData&&timerData.enabled);
+  let rows=`<div class="trow" style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--b1)">
+    <div>
+      <div class="trow-label">Bidding countdown timer</div>
+      <div class="trow-desc">Master switch (same as the dashboard Timer card). OFF = no countdown runs at all — no resets, no expiry — and bidding stays open until you close the phase manually. The rules below only apply while this is ON.</div>
+    </div>
+    <div class="tog${masterOn?' on-blue':''}" id="trMasterTog" onclick="toggleTimerEnabled()"></div>
+  </div>`;
+  rows+=row(`<span style="color:var(--t2);min-width:150px">At the start of a round</span><span>reset to</span> ${hoursSel('tr_h0',(st[0]||{}).hours||48)}`);
+  for(let i=1;i<=4;i++){ const s=st[i]||{days:[7,10,12,14][i-1],hours:[24,12,6,3][i-1]}; const on=s.enabled!==false; rows+=row(`<label style="display:flex;align-items:center;gap:5px;cursor:pointer;color:var(--t2)" title="Untick to skip this step — the countdown then keeps the previous step's reset length"><input type="checkbox" id="tr_e${i}" ${on?'checked':''}></label><span style="color:var(--t2)${on?'':';opacity:.5'}">After</span> ${dayInp('tr_d'+i,s.days)} <span style="color:var(--t2)${on?'':';opacity:.5'}">days,</span><span${on?'':' style="opacity:.5"'}>reset to</span> ${hoursSel('tr_h'+i,s.hours)}${on?'':' <span style="font-size:11px;color:var(--t3)">(off)</span>'}`); }
   const ow=r.openingWindow;
   const owRow=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
     <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t1);font-weight:600;cursor:pointer"><input type="checkbox" id="tr_ow" ${ow?'checked':''}> Opening window (every phase)</label>
@@ -6354,7 +6372,7 @@ function buildTimerRulesFromDOM(){
   const getH=id=>{ const v=parseInt(document.getElementById(id)?.value,10); return TIMER_HOUR_OPTS.includes(v)?v:null; };
   const getD=id=>{ let v=parseInt(document.getElementById(id)?.value,10); if(isNaN(v)||v<0) v=0; return v; };
   const stages=[{days:0,hours:getH('tr_h0')||48}];
-  for(let i=1;i<=4;i++){ const h=getH('tr_h'+i); if(h!=null) stages.push({days:getD('tr_d'+i),hours:h}); }
+  for(let i=1;i<=4;i++){ const h=getH('tr_h'+i); if(h!=null) stages.push({days:getD('tr_d'+i),hours:h,enabled:document.getElementById('tr_e'+i)?.checked!==false}); }
   stages.sort((a,b)=>a.days-b.days);
   let qs=parseInt(document.getElementById('tr_qs')?.value,10); if(isNaN(qs)) qs=21;
   let qe=parseInt(document.getElementById('tr_qe')?.value,10); if(isNaN(qe)) qe=9;
@@ -6375,6 +6393,7 @@ function syncTimer(){
   // lock is on (bidding frozen), so the state is obvious at a glance.
   const gLocked=!!locksData?.globalLock;
   const tog=document.getElementById("timerToggle"); if(tog)tog.className="tog"+(en?(gLocked?" on-red":" on-blue"):"");
+  const trm=document.getElementById("trMasterTog"); if(trm)trm.className="tog"+(en?" on-blue":"");
   const rb=document.getElementById("resetTimerBtn");
   if(rb){ rb.disabled=!en; rb.className="btn "+(gLocked?"btn-redlock":"btn-blue"); }
   const bl=document.getElementById("timerBlock"); const lb=document.getElementById("timerLabel"); const mt=document.getElementById("timerMeta");
@@ -6655,8 +6674,13 @@ window.renderUsersCombined=renderUsersCombined;
 function renderSignInMisses(){
   const el=document.getElementById('signInMissBox'); if(!el) return;
   const entries=Object.entries(signInMissesData||{}).filter(([k,v])=>typeof v==='number').sort((a,b)=>b[1]-a[1]).slice(0,8);
-  if(!entries.length){ el.style.display='none'; return; }
   el.style.display='';
+  if(!entries.length){
+    el.style.background='rgba(52,211,153,.08)'; el.style.borderColor='rgba(52,211,153,.3)';
+    el.innerHTML='<strong style="color:var(--green)">✓ Unmatched sign-ins: none</strong> <span style="color:var(--t2)">— if someone signs in with a Google account that isn\'t on the roster (typo, wrong account), the attempted address will show here.</span>';
+    return;
+  }
+  el.style.background='rgba(198,40,40,.08)'; el.style.borderColor='rgba(198,40,40,.3)';
   el.innerHTML='<strong style="color:var(--red)">⚠️ Unmatched sign-in attempts</strong> — these Google accounts signed in but are not on the roster (typo in a login e-mail?):<br>'
     +entries.map(([em,ts])=>`<span class="mono">${esc(em)}</span> <span style="color:var(--t3)">(${new Date(ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})})</span>`).join('<br>')
     +`<br><button class="btn btn-ghost" style="margin-top:6px;padding:2px 8px;font-size:11px" onclick="clearSignInMisses()">Clear list</button>`;
