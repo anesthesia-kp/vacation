@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 95;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 96;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1237,7 +1237,9 @@ const mailStatsRef = doc(db,"vacations","mailStats");
 // EmailJS's monthly quota resets on the 6th (the account's billing day), NOT
 // on the 1st — count within the same window so the meter matches their site.
 function emailCycleKey(){
-  const RESET_DAY=22;
+  // EmailJS quota cycles on the account's billing day (admin-editable on the admin site;
+  // default 22 — an older comment said the 6th, which was out of date).
+  const RESET_DAY=(()=>{ const d=parseInt(adminSettings?.emailCycleResetDay,10); return (!isNaN(d)&&d>=1&&d<=28)?d:22; })();
   const d=new Date();
   let y=d.getFullYear(),m=d.getMonth();
   if(d.getDate()<RESET_DAY){ m-=1; if(m<0){m=11;y-=1;} }
@@ -1278,6 +1280,9 @@ function recipientsFor(user){
 }
 window._recipientsFor=recipientsFor; // exposed for testing
 async function relayMailQueue(){
+  // Signed-out tabs have empty loginEmails/emails maps: they would resolve every alert
+  // to "no recipients" and delete it unsent. Never relay before sign-in.
+  if(typeof getCurrentUser!=='function'||!getCurrentUser()) return;
   if(_mqBusy) return; _mqBusy=true;
   try{
     for(const qid of Object.keys(mailQueueData||{})){
@@ -1293,7 +1298,14 @@ async function relayMailQueue(){
       let recips=isWelcome ? [String(e.to).trim().toLowerCase()] : recipientsFor(e.user);
       // M-7: skip addresses this entry already reached, so a partial failure never re-sends.
       { const done=Array.isArray(e.sentTo)?e.sentTo:[]; recips=recips.filter(to=>!done.includes(to)); }
-      if(!recips.length){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
+      if(!recips.length){
+        // Only a fully-delivered or welcome entry may be discarded here. An ALERT entry
+        // with no resolvable recipients is left alone — this tab's maps may simply not
+        // have loaded; the admin page (full maps) is the janitor for address-less users.
+        const done=Array.isArray(e.sentTo)?e.sentTo:[];
+        if(isWelcome||done.length){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); }
+        continue;
+      }
       try{
         await updateDoc(mailQueueRef,{[qid+'.claimedAt']:Date.now(),[qid+'.claimedBy']:MQ_ID});
         await new Promise(r=>setTimeout(r,2500));
@@ -1303,7 +1315,10 @@ async function relayMailQueue(){
         for(const to of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:to,changes:e.body||''}); trackEmailSent(); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); }
         // Mark the welcome log after a confirmed relay send so no other page re-sends it.
         if(isWelcome && wkey){ try{ await setDoc(welcomeLogRef,{sent:{[wkey]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[wkey]=true; }catch(_){} }
-        updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
+        // Terminal delete with one retry — a lost delete after a successful send would
+        // re-e-mail every recipient once the claim expires.
+        try{ await updateDoc(mailQueueRef,{[qid]:deleteField()}); }
+        catch(_){ await new Promise(r=>setTimeout(r,1500)); await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); }
       }catch(_){/* claim expires in 90s; someone retries */}
     }
   } finally { _mqBusy=false; scheduleMailQueueRelay(); }
@@ -1509,7 +1524,9 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
     const lim=getMaxBidsPerPhase();
     if(lim!==null){
       const cur=Number(phasesData.currentPhase||1);
-      let count=0; const uw=prevSnapshot[user]||{};
+      // prior-phase WINS count toward the cumulative cap (mirrors bidLimitStatus) — the
+      // old live-bids-only count let a user exceed the cap in a page-load race.
+      let count=priorApprovedCount(user); const uw=prevSnapshot[user]||{};
       for(const w in uw){ if(getUserBidPhase(user,w)===cur) count++; } // denied bids still count — placed this phase
       if(count>=lim){
         if(data[user]&&prevSnapshot[user]?.[wk]===undefined) delete data[user][wk]; // undo optimistic add

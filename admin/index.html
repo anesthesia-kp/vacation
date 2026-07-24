@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 163;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 164;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -687,6 +687,13 @@ thead th{color:var(--t2)}
       <div class="card">
         <div class="card-title">All Users (<span id="userCount">0</span>)</div>
         <div class="page-sub" style="margin-bottom:12px">One row per user. "Initials" is the account ID admin sets. The <strong>Login e-mail (Google)</strong> is the account each user signs in with; the <strong>KP e-mail</strong> is their Kaiser address, which receives the same alerts as the login e-mail (users can enter their own at login). Delete removes the user and all their data.</div>
+        <div class="trow" style="margin-bottom:10px">
+          <div>
+            <div class="trow-label">FTE editing</div>
+            <div class="trow-desc">OFF locks every FTE field below to prevent accidental changes. Not recommended ON during a live auction — FTE shifts the capacity math. Switches OFF automatically when Phase 1 begins and on auction reset.</div>
+          </div>
+          <div class="tog" id="fteEditToggle" onclick="toggleFteEdit()"></div>
+        </div>
         <div id="fteLockNote" style="font-size:12px;color:var(--yellow);font-weight:600;margin-bottom:10px"></div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px;flex-wrap:wrap">
           <button class="btn btn-danger" style="background:rgba(198,40,40,.22);border-color:rgba(198,40,40,.6)" onclick="deleteAllUsers()">🗑 Delete All Users</button>
@@ -770,6 +777,13 @@ thead th{color:var(--t2)}
             <div class="trow-desc">When ON, each user gets a one-time welcome/rules e-mail at their first login (and when a KP e-mail is added for an already-logged-in user). When OFF, no welcome e-mails are sent. Turn OFF during testing. Addresses are still tracked, so turning it back on won't re-send to anyone already welcomed this cycle.</div>
           </div>
           <div class="tog" id="welcomeEmailsToggle" onclick="toggleWelcomeEmails()"></div>
+        </div>
+        <div class="trow" style="margin-top:10px;padding-top:12px;border-top:1px solid var(--b1)">
+          <div>
+            <div class="trow-label">E-mail quota cycle day</div>
+            <div class="trow-desc">Day of the month the EmailJS quota resets (the account's billing day). The quota meter counts sends between one cycle day and the next. Change this only if the EmailJS billing day changes.</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px"><input type="number" id="emailCycleDayInp" class="inp" autocomplete="off" style="width:64px" min="1" max="28" step="1" onchange="saveEmailCycleDay()"></div>
         </div>
       </div>
       <div class="card">
@@ -1456,7 +1470,11 @@ async function processMailQueue(minAgeMs){
         if(isWelcome && _welcomed(wkey)){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; } // re-check after claim
         for(const email of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:e.body||''}); trackEmailSent(); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(email)}).catch(()=>{}); }
         if(isWelcome && wkey){ try{ await setDoc(welcomeLogRef,{sent:{[wkey]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[wkey]=true; }catch(_){} }
-        await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
+        // Terminal delete with one retry: if this write is lost after a successful send,
+        // the entry becomes re-eligible after claim expiry and every recipient gets the
+        // e-mail again. One spaced retry closes the common transient-blip case.
+        try{ await updateDoc(mailQueueRef,{[qid]:deleteField()}); }
+        catch(_){ await new Promise(r=>setTimeout(r,1500)); await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); }
         sent++;
       }catch(err){ console.warn('Queue send failed for',e.user,err); }
     }
@@ -2761,6 +2779,8 @@ function syncControls(){
   if(gl) gl.className="tog"+(locksData.globalLock?" on":"");
   const et=document.getElementById("emailNotifsToggle");
   if(et) et.className="tog"+(adminSettings.emailNotifsEnabled!==false?" on":"");
+  const ecd=document.getElementById("emailCycleDayInp");
+  if(ecd&&document.activeElement!==ecd){ const d=parseInt(adminSettings?.emailCycleResetDay,10); ecd.value=(!isNaN(d)&&d>=1&&d<=28)?d:22; }
   const we=document.getElementById("welcomeEmailsToggle");
   if(we) we.className="tog"+(adminSettings.welcomeEmailsEnabled!==false?" on":"");
   const kp=document.getElementById("kpPromptToggle");
@@ -2937,6 +2957,20 @@ window.toggleEmailNotifs=async function(){
   const cur=adminSettings.emailNotifsEnabled!==false;
   await setDoc(adminRef,{emailNotifsEnabled:!cur},{merge:true});
   toast(!cur?"✉️ Outbid alert e-mails ON":"🔕 Outbid alert e-mails OFF",!cur?"ok":"warn");
+};
+window.saveEmailCycleDay=function(){
+  const el=document.getElementById('emailCycleDayInp'); if(!el) return;
+  const cur=(()=>{ const d=parseInt(adminSettings?.emailCycleResetDay,10); return (!isNaN(d)&&d>=1&&d<=28)?d:22; })();
+  let v=parseInt(el.value,10);
+  if(isNaN(v)||v<1||v>28){ toast('Cycle day must be 1–28','err'); el.value=cur; return; }
+  if(v===cur) return;
+  openConfirm({
+    title:'📧 Change e-mail quota cycle day?',
+    body:`<div>Count e-mail quota from day <strong>${v}</strong> of each month (currently ${cur})?</div><div class="cmodal-info">Only change this if the EmailJS billing day has actually changed — the quota meter re-anchors to the new cycle immediately.</div>`,
+    okText:'Save cycle day',
+    onConfirm:async()=>{ await setDoc(adminRef,{emailCycleResetDay:v},{merge:true}); toast('📧 Quota cycle day set to '+v,'ok'); },
+    onCancel:()=>{ el.value=cur; }
+  });
 };
 window.toggleWelcomeEmails=async function(){
   const cur=adminSettings.welcomeEmailsEnabled!==false;
@@ -3203,8 +3237,18 @@ function renderSimPanel(){
   }
 }
 
-window.runSimulation=async function(){
+window.runSimulation=function(){
   if(adminSettings.simulatorEnabled!==true){ alert('The simulator is OFF.\n\nTurn on "Simulator Mode" at the top of the Simulator panel first. It is a testing tool — never use it on a live auction.'); return; }
+  openConfirm({
+    title:'🎲 Run Simulation?',
+    body:`<div>Run the simulator now?</div>
+          <div class="cmodal-danger">This writes FAKE bids into the live schedule, resets the countdown, and can e-mail real users about fake outcome changes. Testing tool only — never run this during a live auction.</div>`,
+    okText:'Run Simulation', danger:true,
+    onConfirm:()=>_runSimulationNow()
+  });
+};
+window._runSimulationNow=async function(){
+  if(adminSettings.simulatorEnabled!==true) return;
   // Existing bids no longer block the run: each user is topped UP to the
   // "Bids per user" target, counting the bids they already placed this phase.
   // Global lock means every week is locked, so there is nothing to bid on.
@@ -3453,6 +3497,8 @@ window.clearEverything=function(){
               // New auction → drop the per-phase archive so the Fair Play report
               // starts empty (it covers everything since the last auction reset).
               setDoc(changesArchiveRef,{}),
+              // FTE editing re-locks on every reset (accidental-change guard).
+              setDoc(adminRef,{fteEditEnabled:false},{merge:true}),
               // New auction cycle → clear the welcome-e-mail log so each user can
               // receive their one welcome per account again next cycle.
               setDoc(doc(db,"vacations","welcomeLog"),{sent:{}}),
@@ -3816,6 +3862,9 @@ async function _commitBeginPhase(next){
   // every phase opens with the full default bidding time. [begin-phase timer fix]
   // Do NOT swallow a failure here: if the timer write fails, the user site can show
   // the auction as CLOSED (prior expired state) while the admin thinks it is open.
+  // Beginning Phase 1 always locks FTE editing — any mid-auction change must be a
+  // deliberate, confirmed re-unlock by the admin.
+  if(next===1) await setDoc(adminRef,{fteEditEnabled:false},{merge:true}).catch(()=>{});
   let _timerOk=true;
   // With the opening window ON, EVERY phase starts its countdown at N days (continuous,
   // no resets until the starting-reset mark); otherwise phases open with the normal
@@ -3961,7 +4010,9 @@ const mailStatsRef = doc(db,"vacations","mailStats");
 // EmailJS's monthly quota resets on the 22nd (the account's billing day), NOT
 // on the 1st — count within the same window so the meter matches their dashboard.
 function emailCycleKey(){
-  const RESET_DAY=22;
+  // EmailJS quota cycles on the account's billing day — admin-editable (Controls →
+  // E-mail Sending Controls) because the billing day has changed before. Default 22.
+  const RESET_DAY=(()=>{ const d=parseInt(adminSettings?.emailCycleResetDay,10); return (!isNaN(d)&&d>=1&&d<=28)?d:22; })();
   const d=new Date();
   let y=d.getFullYear(),m=d.getMonth();
   if(d.getDate()<RESET_DAY){ m-=1; if(m<0){m=11;y-=1;} }
@@ -6543,11 +6594,16 @@ function renderUsersCombined(){
   const tb=document.getElementById('usersBody'); if(!tb) return;
   if(tb.contains(document.activeElement)) return; // H-7: don't wipe an in-progress name/FTE/email edit on a snapshot
   const count=document.getElementById('userCount'); if(count) count.textContent=names.length;
-  // FTE is locked once the auction is live (Phase 1 has begun) — it can only be changed
-  // before Phase 1 starts, so a person's FTE can't shift the capacity math mid-auction.
-  const fteLocked=phase1Started();
+  // FTE fields are locked unless the admin has deliberately switched "FTE editing" ON
+  // (adminSettings.fteEditEnabled). Editing auto-switches OFF when Phase 1 begins and on
+  // auction reset, so mid-auction FTE changes require an explicit, confirmed unlock.
+  const fteLocked=adminSettings.fteEditEnabled!==true;
   const note=document.getElementById('fteLockNote');
-  if(note) note.innerHTML=fteLocked?'🔒 FTE is locked while the auction is live — it can only be changed before Phase 1 begins.':'';
+  if(note) note.innerHTML=fteLocked
+    ?'🔒 FTE editing is OFF — flip the toggle above to make changes.'
+    :(phase1Started()?'⚠️ FTE editing is ON during a live auction — change what you must, then switch it back OFF.':'✏️ FTE editing is ON — remember to switch it OFF when done.');
+  const ftog=document.getElementById('fteEditToggle');
+  if(ftog) ftog.className='tog'+(fteLocked?'':' on');
   tb.innerHTML=names.map(n=>{
     const fte=getUserFTE(n);
     const em=emailsData[n]||''; const skip=em==='__skip__';
@@ -6555,8 +6611,8 @@ function renderUsersCombined(){
       <td class="mono" style="white-space:nowrap"><strong>${n}</strong></td>
       <td style="white-space:nowrap"><input type="text" id="ufn_${n}" class="inp" autocomplete="off" style="width:160px" value="${esc(usernamesData[n]||'')}" placeholder="Full name">
         <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveFullName('${n}')">Save</button></td>
-      <td style="white-space:nowrap"><input type="number" id="fte_${n}" class="inp" autocomplete="off" style="width:70px" value="${fte}" step="0.1" min="0" max="1"${fteLocked?' disabled title="FTE is locked while the auction is live"':''}>
-        ${fteLocked?'<span title="FTE can only be changed before Phase 1 begins" style="font-size:13px;color:var(--t3)">🔒</span>':`<button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveFte('${n}')">Save</button>`}</td>
+      <td style="white-space:nowrap"><input type="number" id="fte_${n}" class="inp" autocomplete="off" style="width:70px" value="${fte}" step="0.1" min="0" max="1"${fteLocked?' disabled title="FTE editing is off — use the FTE editing toggle above"':''}>
+        ${fteLocked?'<span title="FTE editing is off — use the FTE editing toggle above" style="font-size:13px;color:var(--t3)">🔒</span>':`<button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveFte('${n}')">Save</button>`}</td>
       <td style="white-space:nowrap"><input type="email" id="lem_${n}" class="inp" autocomplete="off" style="width:200px" value="${esc(loginEmailsData[n]||'')}" placeholder="their-google@gmail.com">
         <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveLoginEmail('${n}')">Save</button>
         <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearLoginEmail('${n}')">Clear</button></td>
@@ -6747,11 +6803,23 @@ function renderFtePanel(){
   }).join('');
 }
 
+window.toggleFteEdit=function(){
+  const turningOn=adminSettings.fteEditEnabled!==true;
+  const liveWarn=turningOn&&phase1Started()
+    ?'<div class="cmodal-danger">⚠️ The auction is LIVE. Changing an FTE now shifts the week-capacity math for everyone mid-auction. Only proceed for a genuine correction, and switch editing back OFF immediately after.</div>':'';
+  openConfirm({
+    title:turningOn?'✏️ Enable FTE editing?':'🔒 Lock FTE editing?',
+    body:turningOn
+      ?`<div>Unlock the FTE fields for editing?</div>${liveWarn}`
+      :`<div>Lock the FTE fields again to prevent accidental changes?</div>`,
+    okText:turningOn?'Enable editing':'Lock editing', danger:turningOn&&phase1Started(),
+    onConfirm:async()=>{ await setDoc(adminRef,{fteEditEnabled:turningOn},{merge:true}); toast(turningOn?'✏️ FTE editing ON':'🔒 FTE editing OFF',turningOn?'warn':'ok'); }
+  });
+};
 window.saveFte=async function(u){
-  // Hard guard: FTE can only change BEFORE Phase 1 begins. Once the auction is live it
-  // is frozen, so nobody's FTE can shift the week-capacity math mid-auction. (Backs up
-  // the disabled input — this blocks the write no matter how it's triggered.)
-  if(phase1Started()){ toast('FTE is locked while the auction is live — it can only be changed before Phase 1 begins.','warn'); return; }
+  // Hard guard: writes blocked unless the admin has deliberately enabled FTE editing.
+  // (Backs up the disabled input — this blocks the write no matter how it's triggered.)
+  if(adminSettings.fteEditEnabled!==true){ toast('FTE editing is OFF — flip the FTE editing toggle on the Users page first.','warn'); return; }
   const val=parseFloat(document.getElementById(`fte_${u}`)?.value);
   if(isNaN(val)||val<0||val>1){toast("FTE must be between 0 and 1","err");return;}
   await setDoc(fteRef,{[u]:val},{merge:true});
@@ -7225,6 +7293,7 @@ window.confirmAdminCancel=function(user,wk){
       // Atomic deletes — only touch this one user/week, never overwrite other data
       await updateDoc(scheduleRef,{[`${user}.${wk}`]:deleteField()}).catch(()=>{});
       await updateDoc(worstBidsRef,{[`${user}.${wk}`]:deleteField()}).catch(()=>{});
+      await updateDoc(bidPhaseRef,{[`${user}.${wk}`]:deleteField()}).catch(()=>{}); // clear the phase tag too (parity with adminRemove)
       await updateDoc(approvalsRef,{[wk]:arrayRemove(user)}).catch(()=>{});
       await updateDoc(deniedRef,{[wk]:arrayRemove(user)}).catch(()=>{});
       await _reconcileStaleDenials(wk); // un-freeze other users whose slot just re-opened
