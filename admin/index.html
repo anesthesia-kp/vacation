@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 173;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 174;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -422,7 +422,6 @@ thead th{color:var(--t2)}
         <!-- Signed-in admin + sign-out, then the nuclear reset (same double-confirm as the Simulator) -->
         <span id="adminWhoami" style="margin-left:auto;font-size:11px;color:var(--t3)"></span>
         <button class="btn btn-ghost" style="padding:5px 10px;font-size:12px" onclick="adminSignOut()">Sign out</button>
-        <button class="btn btn-danger" style="padding:5px 12px;font-size:12px" onclick="clearEverything()">💣 Reset Auction</button>
       </div>
 
       <div class="dash-cols">
@@ -489,7 +488,6 @@ thead th{color:var(--t2)}
           <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
             <label style="font-size:11px;color:var(--t2)">Phase:</label>
             <select id="repPhaseFilter" class="sel"></select>
-            <button class="btn" style="margin-left:auto;background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportBackup()" title="Download every auction document as one JSON file — do this before every phase transition">💾 Backup All Data</button>
           </div>
           <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
             <div style="font-size:13px;font-weight:700;color:var(--t1);margin-bottom:8px">Weekly summary</div>
@@ -744,7 +742,13 @@ thead th{color:var(--t2)}
 
     <!-- CONTROLS -->
     <div class="panel" id="panel-controls">
-      <div class="page-head"><div class="page-title">Controls</div><div class="page-sub">Global schedule settings.</div></div>
+      <div class="page-head" style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
+        <div><div class="page-title">Controls</div><div class="page-sub">Global schedule settings.</div></div>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportBackup()" title="Download every auction document as one JSON file — the auction's only undo">💾 Backup All Data</button>
+          <button class="btn btn-danger" style="background:rgba(220,38,38,.25);border-color:rgba(220,38,38,.6)" onclick="clearEverything()">💣 Reset Auction</button>
+        </div>
+      </div>
       <div class="card">
         <div class="card-title" id="timerRulesHead" onclick="toggleTimerRules()" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
           <span>⏱ Timer Rules</span>
@@ -940,12 +944,7 @@ thead th{color:var(--t2)}
         </div>
         <div id="simLog" style="margin-top:4px;display:none;max-height:280px;overflow-y:auto;background:rgba(0,0,0,.04);border:1px solid var(--b1);border-radius:8px;padding:12px;font-family:var(--mono);font-size:11px;color:var(--t2);line-height:1.7"></div>
       </div>
-      <div class="card">
-        <div class="card-title">Reset</div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <button class="btn btn-danger" style="background:rgba(220,38,38,.25);border-color:rgba(220,38,38,.6)" onclick="clearEverything()">💣 Reset Auction</button>
-        </div>
-      </div>
+
     </div>
 
   </div><!-- /content -->
@@ -1520,7 +1519,7 @@ window.nav = function(id, el) {
 };
 
 // ── Helpers ──
-// Fixed local-time getMondays — matches index.html/mobile.html exactly.
+// Fixed local-time getSundays — matches index.html/mobile.html exactly. Week keys are SUNDAYS.
 // The prior version used Date.UTC(), which in negative-UTC browsers produced
 // Sunday keys when dateKey (which uses local time methods) converted them back.
 // Every downstream lookup then missed, showing all weeks as "no bidders / lose."
@@ -2580,7 +2579,25 @@ window.lockNoAvailabilityWeeks=function(){
   });
 };
 // Smart Lock and Unlock: lock all no-availability weeks AND unlock all with-availability weeks.
+window._slP1Ack=false;
 window.smartLockUnlock=function(){
+  // Phase 1 is high-demand only: warn (once per click-through) if this would unlock
+  // standard weeks that are supposed to stay locked until Phase 2. The action itself
+  // is unchanged — this is a notification gate, per the admin's spec.
+  const _p1Live=Number(phasesData.currentPhase||1)===1&&phase1Started()&&!phasesData.completedPhases?.[1];
+  if(_p1Live&&!window._slP1Ack){
+    const stdUnlock=lockedWeeksWithAvailability().list.filter(w=>!HIGH_DEMAND_WEEKS.has(w.wk)).length;
+    if(stdUnlock>0){
+      openConfirm({
+        title:'⚠️ Phase 1 is high-demand only',
+        body:`<div>Phase 1 keeps every standard week LOCKED. Smart Lock &amp; Unlock would <strong>unlock ${stdUnlock} standard week${stdUnlock!==1?'s':''}</strong> that are supposed to stay locked until Phase 2.</div>
+              <div class="cmodal-danger">Only continue if you deliberately want standard weeks biddable during Phase 1.</div>`,
+        okText:'Continue anyway', danger:true,
+        onConfirm:()=>{ window._slP1Ack=true; try{ window.smartLockUnlock(); } finally { window._slP1Ack=false; } }
+      });
+      return;
+    }
+  }
   const toLock=weeksNeedingLock(true).list;            // unlocked + no availability → lock
   const toUnlock=lockedWeeksWithAvailability().list;   // locked + has availability → unlock
   if(!toLock.length&&!toUnlock.length){
@@ -3121,9 +3138,12 @@ window.unlockAllWeeks=function(){
 
 // High-demand week keys (kept open when locking all except high demand)
 const HIGH_DEMAND_WEEKS=new Set(["2027-02-14","2027-03-28","2027-04-04","2027-11-21","2027-12-19","2027-12-26"]);
+// Display labels for the six high-demand weeks. Week keys are SUNDAYS (the old
+// Monday dates shown here previously were a leftover from before the timezone fix).
+const HD_WEEK_LABELS=["Wk 7 · Sun Feb 14 (⛷️ Ski)","Wk 13 · Sun Mar 28 (🌸 Spring)","Wk 14 · Sun Apr 4 (🌸 Spring)","Wk 47 · Sun Nov 21 (🦃 Thanksgiving)","Wk 51 · Sun Dec 19 (🎄 Christmas)","Wk 52 · Sun Dec 26 (🎆 NYE)"];
 
 window.lockAllExceptHighDemand=function(){
-  const hdList=["Wk 7 · Feb 15 (⛷️ Ski)","Wk 13 · Mar 29 (🌸 Spring)","Wk 14 · Apr 5 (🌸 Spring)","Wk 47 · Nov 22 (🦃 Thanksgiving)","Wk 51 · Dec 20 (🎄 Christmas)","Wk 52 · Dec 27 (🎆 NYE)"];
+  const hdList=HD_WEEK_LABELS;
   openConfirm({
     title:'🔒 Lock All Except High Demand',
     body:`<div style="font-size:13px;line-height:1.5">Lock all 52 weeks <strong>except</strong> the 6 high-demand weeks, which will remain open for bidding:</div>
@@ -3463,6 +3483,7 @@ window._runSimulationNow=async function(){
 
 
 window.clearEverything=function(){
+  if(!_bkBypass){ _backupThen('resetting the auction',function(){ _bkBypass=true; try{ window.clearEverything(); } finally { _bkBypass=false; } }); return; }
   openConfirm({
     title:'⚠️ Warning: Remove ALL Data',
     body:`<div style="color:var(--red);font-weight:700;font-size:15px">This will permanently delete EVERYTHING:</div>
@@ -3564,6 +3585,7 @@ window.gotoAppDenials=function(){ nav('appdenials',document.querySelector('[oncl
 // Every state-changing step in the workflow guide confirms first. Closing
 // bidding expires the timer AND locks all 52 weeks — never silently.
 window.closePhaseBidding=function(cur){
+  if(!_bkBypass){ _backupThen('closing Phase '+cur+' bidding',function(){ _bkBypass=true; try{ window.closePhaseBidding(cur); } finally { _bkBypass=false; } }); return; }
   openConfirm({
     title:'⏱ Close Phase '+cur+' bidding',
     body:`<div>End bidding for Phase <strong>${cur}</strong> now?</div>
@@ -3700,6 +3722,7 @@ function renderPhasePanel(){
 }
 
 window.completePhase=function(){
+  if(!_bkBypass){ _backupThen('completing Phase '+Number(phasesData.currentPhase||1),function(){ _bkBypass=true; try{ window.completePhase(); } finally { _bkBypass=false; } }); return; }
   const cur=Number(phasesData.currentPhase||1);
   // FAIL-SAFE: a phase can NEVER be completed while bidding is still live. Bidding must
   // be closed first (timer expired AND all weeks locked). This backs up the guided flow
@@ -3917,8 +3940,10 @@ function _beginPhase1Confirm(){
   openConfirm({
     title:'▶ Begin Phase 1',
     body:`<div>Open bidding and begin <strong>Phase 1</strong>?</div>
-          <div class="cmodal-info" style="margin-top:10px">Users cannot place any bids until Phase 1 is begun.</div>`,
-    okText:'Continue',
+          <div class="cmodal-warn" style="margin-top:10px"><strong>Phase 1 covers ONLY the 6 high-demand weeks.</strong> All 46 other weeks will be LOCKED — users can bid only on:</div>
+          <ul style="margin:8px 0 8px 18px;font-size:12px;color:var(--t2);line-height:1.7">${HD_WEEK_LABELS.map(w=>`<li>${w}</li>`).join('')}</ul>
+          <div class="cmodal-info">The remaining weeks open starting in Phase 2 (Smart Lock &amp; Unlock runs at each later phase start as usual).</div>`,
+    okText:'🔒 Lock standard weeks & Begin Phase 1',
     onConfirm:()=>_beginPhaseLockDecision(1)
   });
 }
@@ -3956,6 +3981,19 @@ function _beginPhaseLockDecision(next){
 }
 window._beginPhaseKeepGlobalLock=function(next){ closeConfirm(); _beginPhaseLockDecisionInner(next); };
 function _beginPhaseLockDecisionInner(next){
+  // Phase 1 is HIGH-DEMAND ONLY: deterministically lock every standard week and open
+  // the six high-demand weeks — no Smart-Lock decision applies. (The admin already
+  // confirmed this in the Begin Phase 1 dialog, which lists the exact weeks.)
+  if(next===1){
+    (async()=>{
+      const dotted={}; let lockedCount=0;
+      mondays.forEach(d=>{ const wk=dateKey(d); if(HIGH_DEMAND_WEEKS.has(wk)){ dotted['weeks.'+wk]=false; } else { dotted['weeks.'+wk]=true; lockedCount++; } });
+      await mergeFields(locksRef,dotted);
+      await _commitBeginPhase(1);
+      toast('🔒 Phase 1: '+lockedCount+' standard weeks locked — only the 6 high-demand weeks are open','warn');
+    })();
+    return;
+  }
   const need=weeksNeedingLock(true).list;                 // should be locked
   const wrongLocked=lockedWeeksWithAvailability().list;    // should be unlocked
   if(!need.length&&!wrongLocked.length){ _commitBeginPhase(next); return; }
@@ -3981,6 +4019,7 @@ function _beginPhaseLockDecisionInner(next){
   });
 }
 window.beginNextPhase=function(){
+  if(!_bkBypass){ _backupThen('beginning Phase '+(Number(phasesData.currentPhase||1)+1),function(){ _bkBypass=true; try{ window.beginNextPhase(); } finally { _bkBypass=false; } }); return; }
   const cur=Number(phasesData.currentPhase||1);
   const next=cur+1;
   if(next>4){toast('Phase 4 is the final phase.','warn');return;}
@@ -4131,7 +4170,9 @@ ${bullets([
   `Enter your bids early, it benefits everyone`,
   `Sniping is not possible, do not try it`,
   `The auction has 4 phases — similar to the rounds in previous years`,
+  `Phase 1 includes only the high-demand weeks; all remaining weeks open starting in Phase 2`,
   limLine,
+  `A combined bid like 1,2,3 uses bids 1, 2, and 3. Numbers from weeks you won in earlier phases stay used; NP never uses up a number`,
   `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
   `Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better`,
   `On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used`,
@@ -7367,6 +7408,21 @@ window.confirmAdminCancel=function(user,wk){
   });
 };
 
+// ── Backup-first prompt for consequential transitions ──
+// Every workflow step that changes auction state irreversibly offers a one-click
+// backup first. "Skip backup (testing)" proceeds without one.
+let _bkBypass=false;
+window._bkProceed=null;
+function _backupThen(label,fn){
+  window._bkProceed=fn;
+  openConfirm({
+    title:'💾 Back up before '+label+'?',
+    body:`<div>Download a full data backup first? It takes two seconds and is the auction's only undo.</div>
+          <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="closeConfirm();window._bkProceed()">⏭ Skip backup (testing)</button>`,
+    okText:'💾 Backup & Continue',
+    onConfirm:async()=>{ await exportBackup(); window._bkProceed(); }
+  });
+}
 // ── Full-data backup ──
 // Downloads every auction document as one JSON file. There is no server-side undo —
 // this file is the recovery path. Run it before every Close/Complete/Begin Phase.

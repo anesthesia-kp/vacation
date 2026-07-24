@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 101;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 102;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -515,7 +515,9 @@ body{zoom:1.15}
         <li>Enter your bids early, it benefits everyone</li>
         <li>Sniping is not possible, do not try it</li>
         <li>The auction has 4 phases — similar to the rounds in previous years</li>
+        <li>Phase 1 includes only the high-demand weeks; all remaining weeks open starting in Phase 2</li>
         <li id="ruleMaxBids">Running cap on total weeks you can win across the auction — only weeks you win count</li>
+        <li>A combined bid like 1,2,3 uses bids 1, 2, and 3. Numbers from weeks you won in earlier phases stay used; NP never uses up a number</li>
         <li>Only bid for the number of weeks your accrued vacation and ATO will allow for</li>
         <li>Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better</li>
         <li>On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used</li>
@@ -1075,7 +1077,7 @@ function scheduleRender(){
 }
 
 // ── Firestore listeners ──
-// Normalize per-user weekKey maps (bidPhase-shaped docs) to Monday keys on read
+// Normalize per-user weekKey maps (bidPhase-shaped docs) to SUNDAY keys on read
 function normalizeUserWkMap(raw){
   if(!raw||typeof raw!=='object') return {};
   const out={};
@@ -1227,7 +1229,7 @@ function renderBidPool(user){
         <div>${usedHtml}</div>
       </div>
     </div>
-    <div style="font-size:.68rem;color:#8595a6;margin-top:8px">A combined bid like 1,2,3 uses bids 1, 2, and 3. Numbers from weeks you won in earlier phases stay used; NP never uses up a number.</div>`;
+`;
 }
 onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; if(typeof popcornRefresh==='function') popcornRefresh(); scheduleRender(); });
 onSnapshot(passcodesRef,snap=>{ passcodesData=snap.exists()?snap.data():{}; _passcodesReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
@@ -1484,10 +1486,9 @@ function startListening(){
   if(unsubSchedule) unsubSchedule();
   unsubSchedule=onSnapshot(scheduleRef,snap=>{
     const rawData=snap.exists()?snap.data():{};
-    // Normalize any legacy off-day weekKeys to their Monday. Bids written before
-    // the timezone fix could have keys like "2027-01-24" (Sunday). The algorithm
-    // and rendering both expect Monday keys. Snap them here on read so all
-    // downstream code just works. Later-written (correct) keys always win.
+    // Normalize any legacy off-day weekKeys to their SUNDAY (all week keys are
+    // Sundays; old Monday-anchored keys from before the timezone fix get snapped
+    // back). Later-written (correct) keys always win.
     const newData={};
     for(const u in rawData){
       const uw=rawData[u]; if(!uw||typeof uw!=='object'){newData[u]=uw; continue;}
@@ -2169,7 +2170,7 @@ function renderSelections(user,ap){
     const o=getOutcome(wk,user,ap);
     const label=outcomeText(o);
     const meta=weekMeta[wk];
-    // Format: "Week 12 · Mar 22" — week number + short date of that Monday
+    // Format: "Week 12 · Mar 21" — week number + short date of that SUNDAY
     const wkLabel=`Week ${meta?.weekNum||''} · ${formatShort(wk)}`;
     return `<div class="selection-item" onclick="scrollToWeek('${wk}')" title="Show this week on the bidding board" style="cursor:pointer">
       <span class="selection-date">${wkLabel}</span>
@@ -2810,7 +2811,9 @@ ${bullets([
   `Enter your bids early, it benefits everyone`,
   `Sniping is not possible, do not try it`,
   `The auction has 4 phases — similar to the rounds in previous years`,
+  `Phase 1 includes only the high-demand weeks; all remaining weeks open starting in Phase 2`,
   limLine,
+  `A combined bid like 1,2,3 uses bids 1, 2, and 3. Numbers from weeks you won in earlier phases stay used; NP never uses up a number`,
   `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
   `Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better`,
   `On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used`,
