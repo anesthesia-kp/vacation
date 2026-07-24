@@ -167,9 +167,13 @@ service cloud.firestore {
                    // KP-address book: each user may edit only their OWN entry (an insider
                    // could otherwise silently redirect a competitor's outbid alerts).
                    || (docId == 'emails' && (isAdmin() || (isRegisteredUser() && writesOnlyOwnKeys())))
-                   // Sign-in miss log: any VERIFIED Google account may record its own
-                   // failed roster match (these users are by definition not registered).
-                   || (docId == 'signInMisses' && (request.auth != null && request.auth.token.email_verified == true))
+                   // Sign-in miss log: a verified Google account may record ONLY its own
+                   // failed-match key (admins may also clear/write the whole doc). Confining
+                   // to the caller's own e-mail stops an outsider wiping or flooding the log.
+                   || (docId == 'signInMisses' && (isAdmin()
+                        || (isVerifiedAccount() && (resource == null
+                             ? request.resource.data.keys().hasOnly([request.auth.token.email.lower()])
+                             : request.resource.data.diff(resource.data).affectedKeys().hasOnly([request.auth.token.email.lower()])))))
                    || (!isAdminOnlyDoc(docId) && !isBidDoc(docId)
                         && docId != 'timer' && docId != 'signInMisses' && docId != 'emails'
                         && (isRegisteredUser() || isAdmin()));

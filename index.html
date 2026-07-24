@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 104;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 105;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1034,7 +1034,7 @@ function timerPhaseStartMs(){ try{ const cur=Number((typeof phasesData!=='undefi
 // Current BASE reset length (one of 48/24/12/6/3) for right now, from the stages + elapsed.
 function currentStageHours(){ const r=getTimerRules(); const st=r.stages; const elapsedDays=(Date.now()-timerPhaseStartMs())/86400000; let base=st.length?st[0].hours:48; for(const s of st){ if(elapsedDays>=(s.days||0)) base=s.hours; } return base; }
 function fmtElapsed(ms){ if(!(ms>0)) ms=0; const tm=Math.floor(ms/60000); const d=Math.floor(tm/1440), h=Math.floor((tm%1440)/60), mi=tm%60; return d+'d '+h+'h '+mi+'m'; }
-function updatePhaseOpen(){ const el=document.getElementById('phaseOpenFor'); if(!el) return; const cur=Number((phasesData&&phasesData.currentPhase)||1); const began=(phasesData&&phasesData.phaseBeganAt)?phasesData.phaseBeganAt[cur]:null; const open=began&&(phasesData&&(phasesData.phase1Started||cur>1)); el.textContent=open?('Phase '+cur+' has been open for '+fmtElapsed(Date.now()-began)):''; }
+function updatePhaseOpen(){ const el=document.getElementById('phaseOpenFor'); if(!el) return; const cur=Number((phasesData&&phasesData.currentPhase)||1); const began=(phasesData&&phasesData.phaseBeganAt)?phasesData.phaseBeganAt[cur]:null; const completed=!!(phasesData&&phasesData.completedPhases&&phasesData.completedPhases[cur]); const expired=(typeof isAuctionClosed==='function')&&isAuctionClosed(); const open=began&&(phasesData&&(phasesData.phase1Started||cur>1))&&!completed&&!expired; el.textContent=open?('Phase '+cur+' has been open for '+fmtElapsed(Date.now()-began)):''; }
 try{ setInterval(function(){ try{ updatePhaseOpen(); }catch(e){} }, 20000); }catch(e){}
 // Periodic outbid-alert relay: freshly-queued alerts are too young to sweep at
 // queue-write time, so without a periodic re-check they would sit until the next
@@ -1537,7 +1537,10 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
   if(isAuctionClosed()){ showCenterAlert("The auction has closed — no more changes allowed."); return false; }
   if(locksData.globalLock||locksData.weeks?.[wk]){ showCenterAlert("This week has been locked by the admin — no changes allowed."); return false; }
   // Enforce the admin-set per-phase bid limit — NEW bids only (edits/removals always allowed).
-  if(bid!==null&&bid!==undefined&&prevSnapshot&&(prevSnapshot[user]===undefined||prevSnapshot[user][wk]===undefined)){
+  // "NEW bid" = not currently a VISIBLE current-phase bid (phase-aware), matching the
+  // modal gates. Keying off raw schedule presence let a re-bid on a week LOST in a prior
+  // phase (still lingering in the schedule doc) skip the cap backstop in a tab race.
+  if(bid!==null&&bid!==undefined&&!isVisibleBid(user,wk)){
     const lim=getMaxBidsPerPhase();
     if(lim!==null){
       const cur=Number(phasesData.currentPhase||1);
@@ -2585,11 +2588,16 @@ onAuthStateChanged(auth, async u => {
   const justNow=_userJustSignedIn;
   const initials=resolveByEmail(u.email);
   if(!initials){
-    // Not on the allow-list → surface a clear error, keep the app gated, and make
-    // sure the Google button (picker) is visible so a different account can be used.
     _userJustSignedIn=false;
     const w=document.getElementById('signinWelcome'), p=document.getElementById('signinPicker');
     if(w) w.style.display='none'; if(p) p.style.display='block';
+    // If the login-map read itself FAILED (offline blip, quota), this is a temporary
+    // problem, NOT an unregistered account — don't gate them as "not registered" and
+    // don't poison the admin's unmatched-sign-in list with a valid address.
+    if(!_lemOk){
+      showSigninError("Couldn't verify your sign-in just now (temporary connection problem). Please try again in a moment.");
+      return;
+    }
     try{ setDoc(doc(db,"vacations","signInMisses"),{[String(u.email||'').trim().toLowerCase()]:Date.now()},{merge:true}); }catch(_){ } // surface on the admin Users page
     showSigninError("This Google account ("+u.email+") isn't registered for the auction. Please contact your admin.");
     return;
@@ -2832,7 +2840,7 @@ ${bullets([
   `Draw (D): you are tied with one or more people and combined FTE exceeds availability; a spin-off or admin approval will resolve the tie`,
   `Under Review (R): your bid is slightly over the cap; admin may still approve under certain circumstances`,
   `Losing (L): your bid is projected not to be approved for this week`,
-  `If you are in a Draw or Under Review for a week and do not win after it is resolved, you get the bid back for the next phase`,
+  `If you are in a Draw or Under Review for a week and do not win after it is resolved, you will get the bid back for the next phase`,
   `These are projections, not final results — outcomes can shift as others place bids or as unexpected staffing needs change`
 ])}
 

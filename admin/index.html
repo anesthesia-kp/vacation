@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 183;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 184;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1161,6 +1161,7 @@ let bidPhaseData={}; // {user:{wk:phaseNum}} — which phase each live bid was p
 let slotsData={};    // {wk: number} — admin-entered per-week FTE availability overrides
 let emailsDataAdmin={}; // user → SECONDARY email
 let loginEmailsDataAdmin={}, loginEmailsData={}; // user → PRIMARY (Google login) email
+let _adminMapsReady=false; // true once the loginEmails snapshot has delivered — gates queue deletes
 // Recipients for any alert to a user: the primary (Google login) e-mail always,
 // plus the secondary e-mail when one is set. "__skip__" on the secondary means
 // "no secondary" — the primary still receives alerts. De-duped, lower-cased.
@@ -1394,7 +1395,7 @@ onSnapshot(worstBidsRef, snap=>{
   if(panel&&panel.classList.contains("on")) renderBestBidsTable();
 });
 onSnapshot(emailsRef,   snap=>{ emailsData=snap.exists()?snap.data():{}; emailsDataAdmin=emailsData; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
-onSnapshot(loginEmailsRef, snap=>{ loginEmailsData=snap.exists()?snap.data():{}; loginEmailsDataAdmin=loginEmailsData; maybeSyncEmailToUser(); const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); }); // [H-3] keep the reverse map current on every login-email change
+onSnapshot(loginEmailsRef, snap=>{ loginEmailsData=snap.exists()?snap.data():{}; loginEmailsDataAdmin=loginEmailsData; _adminMapsReady=true; maybeSyncEmailToUser(); const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); }); // [H-3] keep the reverse map current on every login-email change
 onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; if(typeof renderInsights==='function') renderInsights(); });
 onSnapshot(passwordsRef,snap=>{ passwordsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
@@ -1470,7 +1471,13 @@ async function processMailQueue(minAgeMs){
         recips=recipientsFor(e.user);
         if(!recips.length && e.email && e.email!=='__skip__' && String(e.email).includes('@')) recips=[e.email];
       }
-      if(!recips.length){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
+      if(!recips.length){
+        // Only discard a no-recipient entry once we KNOW the maps loaded (a fresh admin
+        // page mid-sweep would otherwise permanently delete real alerts unsent). Welcome
+        // entries carry their own address, so they're safe to drop regardless.
+        if(isWelcome||_adminMapsReady){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); }
+        continue;
+      }
       // M-7: don't re-send to an address this entry already reached — a 2nd-recipient
       // failure must never re-deliver the 1st on a later retry. sentTo grows per success.
       { const done=Array.isArray(e.sentTo)?e.sentTo:[]; recips=recips.filter(to=>!done.includes(to)); }
@@ -2524,12 +2531,12 @@ window.openSummaryTab=function(kind){
           }</tbody></table>`
         : `<div style="border:1px solid #e2e8f0;border-top:none;padding:8px 10px;font-size:12px;color:#94a3b8">No bids for this selection.</div>`;
       const won=rows.filter(({b})=>b.outcome==='approved').length;
-      return `<div class="wk"><div class="wk-head">${u}<span class="fte">FTE ${getUserFTE(u)} · ${rows.length} bid${rows.length!==1?'s':''} · ${won} approved</span></div>${inner}</div>`;
+      return `<div class="wk"><div class="wk-head">${esc(u)}<span class="fte">FTE ${getUserFTE(u)} · ${rows.length} bid${rows.length!==1?'s':''} · ${won} approved</span></div>${inner}</div>`;
     }).join('');
   } else {
     // One section per week + final FTE status. Solid chips = real admin
     // decisions; outlined chips = projected status (no decision yet).
-    const userList=users=>users.map(u=>`<strong>${u}</strong> <span style="color:#587690;font-size:11px">(${getUserFTE(u)})</span>`).join(', ');
+    const userList=users=>users.map(u=>`<strong>${esc(u)}</strong> <span style="color:#587690;font-size:11px">(${getUserFTE(u)})</span>`).join(', ');
     const catRow=(chip,users)=>users.length?`<tr><td style="width:150px">${chip}</td><td>${userList(users)}</td></tr>`:'';
     body=groups.map(g=>{
       const cats={approved:[],winning:[],draw:[],review:[],losing:[],denied:[]};
@@ -3907,7 +3914,7 @@ async function _commitBeginPhase(next){
     batch.set(deniedRef,{});
     batch.set(worstBidsRef,{}); // locks only mean anything within a phase — belt-and-suspenders if completePhase's clear failed
     try{ await batch.commit(); }
-    catch(e){ toast('Could not begin Phase '+next+' — nothing was changed ('+(e?.message||e)+')','err'); return; }
+    catch(e){ toast('Could not begin Phase '+next+' — nothing was changed ('+(e?.message||e)+')','err'); return false; }
   }
   // Beginning any phase resets the countdown to a fresh 48-hour window so
   // every phase opens with the full default bidding time. [begin-phase timer fix]
@@ -3928,6 +3935,7 @@ async function _commitBeginPhase(next){
            : '▶ Phase '+next+' begun — bidding is open (timer reset to '+stage0Hours()+'h)')
     : '⚠️ Phase '+next+' begun, but the TIMER reset FAILED — users may see the auction as CLOSED. Open the Timer card and reset it now.',
     _timerOk?'ok':'warn');
+  return true;
 }
 // Begin Phase 1: opens bidding for the first time. Runs the same lock decision
 // (Smart Lock & Unlock) as every other phase start.
@@ -3985,7 +3993,7 @@ function _beginPhaseLockDecision(next){
             <div style="margin-top:8px">If you begin Phase ${next} with the global lock on, <strong>no user can place any bid</strong> — every week is frozen — even though the board will show the phase as open.</div>
             <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="_beginPhaseKeepGlobalLock(${next})">Begin Phase ${next} WITH the global lock still on</button>`,
       okText:'🔓 Turn OFF global lock & continue', danger:true,
-      onConfirm:async()=>{ await setDoc(locksRef,{globalLock:false},{merge:true}).catch(()=>{}); toast('🔓 Global lock cleared','ok'); _beginPhaseLockDecisionInner(next); }
+      onConfirm:async()=>{ try{ await setDoc(locksRef,{globalLock:false},{merge:true}); }catch(e){ toast('Could not clear the global lock — try again ('+(e?.message||e)+'). Phase not started.','err'); return; } toast('🔓 Global lock cleared','ok'); _beginPhaseLockDecisionInner(next); }
     });
     return;
   }
@@ -4027,9 +4035,10 @@ function _beginPhaseLockDecisionInner(next){
       const dotted={};
       need.forEach(w=>dotted['weeks.'+w.wk]=true);
       wrongLocked.forEach(w=>dotted['weeks.'+w.wk]=false);
-      await mergeFields(locksRef,dotted);
-      await _commitBeginPhase(next);
-      toast('🔧 Fixed '+(need.length+wrongLocked.length)+' week'+((need.length+wrongLocked.length)!==1?'s':''),'ok');
+      try{ await mergeFields(locksRef,dotted); }
+      catch(e){ toast('Could not apply the lock fixes — '+(e?.message||e)+'. Nothing was changed.','err'); return; }
+      const ok=await _commitBeginPhase(next);
+      if(ok) toast('🔧 Fixed '+(need.length+wrongLocked.length)+' week'+((need.length+wrongLocked.length)!==1?'s':''),'ok');
     }
   });
 }
@@ -4205,7 +4214,7 @@ ${bullets([
   `Draw (D): you are tied with one or more people and combined FTE exceeds availability; a spin-off or admin approval will resolve the tie`,
   `Under Review (R): your bid is slightly over the cap; admin may still approve under certain circumstances`,
   `Losing (L): your bid is projected not to be approved for this week`,
-  `If you are in a Draw or Under Review for a week and do not win after it is resolved, you get the bid back for the next phase`,
+  `If you are in a Draw or Under Review for a week and do not win after it is resolved, you will get the bid back for the next phase`,
   `These are projections, not final results — outcomes can shift as others place bids or as unexpected staffing needs change`
 ])}
 
@@ -6617,11 +6626,14 @@ window.toggleTimerEnabled=function(){
 };
 window.adminResetTimer=function(){
   if(!timerData.enabled)return;
+  const owr=getTimerRules().openingWindow, owActive=openingWindowActive();
+  const newDurH=(owActive&&owr)?owr.days*24:timerResetHours(timerPhaseStartMs(),Date.now());
   openConfirm({
     title:'↺ Reset Timer',
-    body:`<div>Reset timer to <strong>${fmtDuration(getDurationHrs())}</strong> from this moment?</div>`,
+    body:`<div>Reset timer to <strong>${fmtDuration(Math.round(newDurH*10)/10)}</strong> from this moment?</div>`
+      +((owActive&&owr)?`<div class="cmodal-info" style="margin-top:6px">The opening window is active — this restarts the full ${owr.days}-day window.</div>`:''),
     okText:'Reset',
-    onConfirm:async()=>{ const _n=Date.now(); await setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}); toast("↺ Timer reset","ok"); }
+    onConfirm:async()=>{ const _n=Date.now(); await setDoc(timerRef,{lastChange:_n,durationHours:(owActive&&owr)?owr.days*24:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}); toast("↺ Timer reset","ok"); }
   });
 };
 // (Clear Timer removed — the slider's 0 position and the enable toggle cover it.)
@@ -7101,7 +7113,7 @@ function drawWheel(){
     const large=(a2-a1)>Math.PI?1:0;
     parts+=`<path d="M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${large} 1 ${x2},${y2} Z" fill="${palette[i%palette.length]}" stroke="#ffffff" stroke-width="1.5"/>`;
     const am=(a1+a2)/2, tx=cx+(r*0.62)*Math.cos(am), ty=cy+(r*0.62)*Math.sin(am);
-    parts+=`<text x="${tx}" y="${ty}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="14" font-weight="700" font-family="ui-monospace,monospace">${wheelUsers[i]}</text>`;
+    parts+=`<text x="${tx}" y="${ty}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="14" font-weight="700" font-family="ui-monospace,monospace">${esc(wheelUsers[i])}</text>`;
   }
   parts+=`<circle cx="${cx}" cy="${cy}" r="7" fill="#ffffff" stroke="#b5cede" stroke-width="2"/>`;
   svg.innerHTML=parts;
@@ -7122,7 +7134,7 @@ window.spinWheel=function(){
   svg.style.transition='transform 6s cubic-bezier(.17,.67,.21,1)';
   svg.style.transform=`rotate(${finalRot}deg)`;
   setTimeout(()=>{
-    document.getElementById("wheelWinner").innerHTML=`🎉 ${wheelUsers[winnerIdx]} <span style="font-size:12px;color:var(--t2);font-weight:400">— random selection complete. Take action manually as needed.</span>`;
+    document.getElementById("wheelWinner").innerHTML=`🎉 ${esc(wheelUsers[winnerIdx])} <span style="font-size:12px;color:var(--t2);font-weight:400">— random selection complete. Take action manually as needed.</span>`;
     document.getElementById("wheelSpinBtn").textContent='Spin again';
     document.getElementById("wheelSpinBtn").disabled=false;
     wheelSpinning=false;
