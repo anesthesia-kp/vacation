@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 184;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 185;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -6406,6 +6406,7 @@ function renderTimerRules(){
   const owRow=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
     <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t1);font-weight:600;cursor:pointer"><input type="checkbox" id="tr_ow" ${ow?'checked':''}> Opening window (every phase)</label>
     <div style="font-size:12.5px;color:var(--t2);margin-top:8px;line-height:1.7"><span>Start each phase with a timer of</span> ${dayInp('tr_owd',ow?ow.days:7)} <span>days. It counts down in days + hours, continuously — bids do <strong>not</strong> reset it — until <strong>${(st[0]||{}).hours||48} hours</strong> remain. From then on it shows hours only and every bid change resets it per the rules above. Applies whenever a phase is begun.</span></div>
+    ${(ow&&ow.days*24<=((st[0]||{}).hours||48))?`<div style="margin-top:6px;font-size:12px;color:var(--red)">⚠️ This window (${ow.days} day${ow.days!==1?'s':''} = ${ow.days*24}h) is not longer than the ${(st[0]||{}).hours||48}h starting reset, so it has no effect — bids reset the timer from the start. Set more days than ${Math.ceil(((st[0]||{}).hours||48)/24)} to use it.</div>`:''}
   </div>`;
   const quiet=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
     <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t1);font-weight:600;cursor:pointer"><input type="checkbox" id="tr_quiet" ${r.quietEnabled?'checked':''}> Don't let bidding close overnight</label>
@@ -6566,15 +6567,23 @@ window.onDurSliderChange=function(idx){
   // must NOT silently un-expire it — a longer window would otherwise make remaining time
   // positive again and reopen a closed phase (live countdown mid-decision on both sites).
   const wasExpired = timerData.enabled===true && !!timerData.lastChange && (getDurationMs()-(Date.now()-timerData.lastChange))<=0;
+  // Would this SHORTER window put the countdown already past zero? If so, confirming it
+  // closes bidding for everyone immediately — warn explicitly and lock the weeks
+  // deterministically (don't rely on an auto-close tab being open).
+  const willExpireNow = en && !wasExpired && !!timerData.lastChange && (h*3600000-(Date.now()-timerData.lastChange))<=0;
   openConfirm({
     title:'⏱️ Set Auction Window',
-    body:`<div>Set the auction window to <strong>${h}h</strong>${en?'' :' and turn the timer <strong>on</strong>'}?</div>${wasExpired?'<div class="cmodal-warn" style="margin-top:8px">Bidding is currently <strong>closed</strong> (timer expired). Changing the window keeps it closed — use <strong>Reset Timer</strong> to reopen bidding.</div>':(en?'<div class="cmodal-info" style="margin-top:8px">The timer is running — this changes the total window. Use Reset Timer afterward to restart the countdown from the new duration.</div>':'')}`,
-    okText:`Set ${h}h`,
+    body:`<div>Set the auction window to <strong>${h}h</strong>${en?'' :' and turn the timer <strong>on</strong>'}?</div>${
+      willExpireNow?'<div class="cmodal-danger" style="margin-top:8px">⚠️ This window is <strong>shorter than the time already elapsed</strong> in this phase — confirming will <strong>close bidding immediately</strong> for everyone and lock all 52 weeks. Use <strong>Reset Timer</strong> instead if you meant "'+h+'h from now."</div>'
+      :(wasExpired?'<div class="cmodal-warn" style="margin-top:8px">Bidding is currently <strong>closed</strong> (timer expired). Changing the window keeps it closed — use <strong>Reset Timer</strong> to reopen bidding.</div>'
+      :(en?'<div class="cmodal-info" style="margin-top:8px">The timer is running — this changes the total window. Use Reset Timer afterward to restart the countdown from the new duration.</div>':''))}`,
+    okText:willExpireNow?'Set '+h+'h & close bidding now':`Set ${h}h`, danger:willExpireNow,
     onConfirm:async()=>{
       const payload={durationHours:h,enabled:true};
       if(wasExpired) payload.lastChange=Date.now()-h*3600000-1000; // re-anchor expiry to the new duration so it stays closed
       await setDoc(timerRef,payload,{merge:true});
-      toast(`⏱️ Auction window set to ${h}h${wasExpired?' — still closed':''}`,"ok");
+      if(willExpireNow) await _lockEveryWeek();
+      toast(willExpireNow?`⏱️ Window ${h}h — bidding closed, all weeks locked`:`⏱️ Auction window set to ${h}h${wasExpired?' — still closed':''}`,willExpireNow?'warn':'ok');
     }
   });
   setTimeout(snapBack,50);
