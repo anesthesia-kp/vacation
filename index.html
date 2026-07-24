@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 102;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 103;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -422,8 +422,8 @@ body{zoom:1.15}
       <label class="modal-label">Bid Level</label>
       <select id="prioritySelect" class="priority-input">
         <option value="">-- Select bid --</option>
-        <option value="1,2,3">1,2,3</option>
-        <option value="1,2">1,2</option>
+        <option value="1,2,3">1/2/3</option>
+        <option value="1,2">1/2</option>
         <option value="1">1</option><option value="2">2</option><option value="3">3</option>
         <option value="4">4</option><option value="5">5</option><option value="6">6</option>
         <option value="7">7</option><option value="8">8</option><option value="9">9</option>
@@ -517,11 +517,11 @@ body{zoom:1.15}
         <li>The auction has 4 phases — similar to the rounds in previous years</li>
         <li>Phase 1 includes only the high-demand weeks; all remaining weeks open starting in Phase 2</li>
         <li id="ruleMaxBids">Running cap on total weeks you can win across the auction — only weeks you win count</li>
-        <li>A combined bid like 1,2,3 uses bids 1, 2, and 3. Numbers from weeks you won in earlier phases stay used; NP never uses up a number</li>
-        <li>Only bid for the number of weeks your accrued vacation and ATO will allow for</li>
-        <li>Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better</li>
-        <li>On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used</li>
+        <li>A combined bid like 1/2/3 uses bids 1, 2, and 3 at once. Each number can only be used on one week — and numbers from weeks you won in earlier phases are unavailable to be used again</li>
         <li id="ruleNpPhases">NP bids may only be used during the phases for which admin has turned them on</li>
+        <li>Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better</li>
+        <li>On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1/2, or 1/2/3 may be used</li>
+        <li>Only bid for the number of weeks your accrued vacation and ATO will allow for</li>
         <li>To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week</li>
         <li>Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly</li>
       </ul>
@@ -867,7 +867,7 @@ function priorityScore(p){
 }
 // Escape user-controlled strings before innerHTML interpolation.
 function escH(v){ return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
-function bidLbl(p){ return p==="NP"?"NP":""+(Array.isArray(p)?p.join(','):p); }
+function bidLbl(p){ return p==="NP"?"NP":""+(Array.isArray(p)?p.join('/'):p); }
 
 // ── Approvals (single implementation) ──
 // Returns the set of users who have a locked-in prior-phase win on `wk`.
@@ -1165,9 +1165,10 @@ function npAllowedForPhase(ph){
 // Exact NP availability from the admin's settings — shared wording with the welcome e-mail.
 function npPhasesDescription(){
   const on=[1,2,3,4].filter(p=>npAllowedForPhase(p));
-  if(on.length===4) return 'NP bids may be used during any phase';
+  const tail=' — and there is no limit on how many NP bids you can place, beyond the running cap above';
+  if(on.length===4) return 'NP bids can be used during any phase'+tail;
   if(!on.length) return 'NP bids are not allowed in any phase';
-  return 'NP bids may only be used during phase'+(on.length!==1?'s':'')+' '+(on.length===1?String(on[0]):on.slice(0,-1).join(', ')+' and '+on[on.length-1]);
+  return 'NP bids can be used during phase'+(on.length!==1?'s':'')+' '+(on.length===1?String(on[0]):on.slice(0,-1).join(', ')+' and '+on[on.length-1])+' only'+tail;
 }
 function updateBidLimitRule(){
   const el=document.getElementById('ruleMaxBids'); if(!el) return;
@@ -1721,7 +1722,7 @@ window.reviewBid=function(){
     const usedElsewhere=[];
     for(const w of myCountedWeeks(user)){ if(w===pendingWeek)continue; const p=data[user][w]; if(p==="NP")continue; Array.isArray(p)?usedElsewhere.push(...p):usedElsewhere.push(p); }
     const conflicts=priorities.filter(p=>usedElsewhere.includes(p));
-    if(conflicts.length){showError("Bid "+conflicts.join(",")+" already used on another week.");return;}
+    if(conflicts.length){showError("Bid "+conflicts.join("/")+" already used on another week.");return;}
     const isNew=!isVisibleBid(user,pendingWeek);
     if(isNew&&bidLimitStatus(user).atLimit){showBidLimitModal();return;}
   }
@@ -1795,7 +1796,7 @@ window.confirmPriority=async function(){
   const usedElsewhere=[...getPriorPhaseUsedPriorities(user)];
   for(const w of myCountedWeeks(user)){ if(w===pendingWeek)continue; const p=data[user][w]; if(p==="NP")continue; Array.isArray(p)?usedElsewhere.push(...p):usedElsewhere.push(p); }
   const conflicts=priorities.filter(p=>usedElsewhere.includes(p));
-  if(conflicts.length){showError("Bid "+conflicts.join(",")+" already used on another week.");return;}
+  if(conflicts.length){showError("Bid "+conflicts.join("/")+" already used on another week.");return;}
   const isNew=!isVisibleBid(user,pendingWeek);
   if(isNew&&bidLimitStatus(user).atLimit){showBidLimitModal();window.closeModal();return;}
   if(!data[user])data[user]={};
@@ -2807,17 +2808,17 @@ ${bullets([
 
 ${B('RULES AND REMINDERS OF THE AUCTION')}
 ${bullets([
-  `Vacation selections are called "bids" — the process works like an auction, where user bids compete for limited slots`,
+  `Vacation selections are now called "bids" — the process works like an auction, where user bids compete for limited slots`,
   `Enter your bids early, it benefits everyone`,
   `Sniping is not possible, do not try it`,
   `The auction has 4 phases — similar to the rounds in previous years`,
   `Phase 1 includes only the high-demand weeks; all remaining weeks open starting in Phase 2`,
   limLine,
-  `A combined bid like 1,2,3 uses bids 1, 2, and 3. Numbers from weeks you won in earlier phases stay used; NP never uses up a number`,
-  `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
-  `Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better`,
-  `On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used`,
+  `A combined bid like 1/2/3 uses bids 1, 2, and 3 at once. Each number can only be used on one week — and numbers from weeks you won in earlier phases are unavailable to be used again`,
   npPhasesDescription(),
+  `Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better`,
+  `On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1/2, or 1/2/3 may be used`,
+  `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
   `To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
   `Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly`
 ])}

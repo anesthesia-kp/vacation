@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 174;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 175;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -3374,7 +3374,7 @@ window._runSimulationNow=async function(){
     }
     if(Object.keys(userBids).length>0){
       newSchedule[user]=userBids;
-      lines.push(`${user}: ${Object.entries(userBids).map(([wk,b])=>{const n=_wkNumByISO[wk]||'?';const lb=Array.isArray(b)?b.join(','):b;return `Wk${n}→${lb}`;}).join(', ')}`);
+      lines.push(`${user}: ${Object.entries(userBids).map(([wk,b])=>{const n=_wkNumByISO[wk]||'?';const lb=Array.isArray(b)?b.join('/'):b;return `Wk${n}→${lb}`;}).join(', ')}`);
     }
   }
 
@@ -3611,9 +3611,10 @@ window.npAllowedForPhase=npAllowedForPhase;
 // Exact NP availability from the admin's settings — shared wording with the user site.
 function npPhasesDescription(){
   const on=[1,2,3,4].filter(p=>npAllowedForPhase(p));
-  if(on.length===4) return 'NP bids may be used during any phase';
+  const tail=' — and there is no limit on how many NP bids you can place, beyond the running cap above';
+  if(on.length===4) return 'NP bids can be used during any phase'+tail;
   if(!on.length) return 'NP bids are not allowed in any phase';
-  return 'NP bids may only be used during phase'+(on.length!==1?'s':'')+' '+(on.length===1?String(on[0]):on.slice(0,-1).join(', ')+' and '+on[on.length-1]);
+  return 'NP bids can be used during phase'+(on.length!==1?'s':'')+' '+(on.length===1?String(on[0]):on.slice(0,-1).join(', ')+' and '+on[on.length-1])+' only'+tail;
 }
 window.npPhasesDescription=npPhasesDescription;
 function renderNpToggles(){
@@ -4166,17 +4167,17 @@ ${bullets([
 
 ${B('RULES AND REMINDERS OF THE AUCTION')}
 ${bullets([
-  `Vacation selections are called "bids" — the process works like an auction, where user bids compete for limited slots`,
+  `Vacation selections are now called "bids" — the process works like an auction, where user bids compete for limited slots`,
   `Enter your bids early, it benefits everyone`,
   `Sniping is not possible, do not try it`,
   `The auction has 4 phases — similar to the rounds in previous years`,
   `Phase 1 includes only the high-demand weeks; all remaining weeks open starting in Phase 2`,
   limLine,
-  `A combined bid like 1,2,3 uses bids 1, 2, and 3. Numbers from weeks you won in earlier phases stay used; NP never uses up a number`,
-  `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
-  `Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better`,
-  `On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used`,
+  `A combined bid like 1/2/3 uses bids 1, 2, and 3 at once. Each number can only be used on one week — and numbers from weeks you won in earlier phases are unavailable to be used again`,
   npPhasesDescription(),
+  `Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better`,
+  `On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1/2, or 1/2/3 may be used`,
+  `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
   `To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
   `Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly`
 ])}
@@ -4422,7 +4423,7 @@ function esc(v){ return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
 // uniform — some orderings are far likelier than others — so it must never decide a
 // draw (tied users would not get equal odds). Use this for any fairness-critical shuffle.
 function fyShuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); const t=a[i]; a[i]=a[j]; a[j]=t; } return a; }
-function bidLblAdmin(p){ if(p===undefined||p===null) return '—'; if(p==='NP') return 'NP'; if(Array.isArray(p)) return p.join(','); return String(p); }
+function bidLblAdmin(p){ if(p===undefined||p===null) return '—'; if(p==='NP') return 'NP'; if(Array.isArray(p)) return p.join('/'); return String(p); }
 
 // ── Canonical phase-aware "Bids by Week" model (FTE-free) ──
 // Powers the on-site Bids by Week grid AND the PDF/Excel exports so they always agree.
@@ -5225,7 +5226,7 @@ window.renderAppDenials=function(){
   };
 
   const renderEntry=(e,showWeek)=>{
-    const lbl=e.priority==='NP'?'NP':(Array.isArray(e.priority)?e.priority.join(','):e.priority);
+    const lbl=e.priority==='NP'?'NP':(Array.isArray(e.priority)?e.priority.join('/'):e.priority);
     const m=wkDate(e.wk);
     const wkHtml=showWeek?`<td class="dr-weeklabel">${wLabel(m)}</td>`:'';
     const phaseBadge=phaseFilter==='all'?`<span style="background:rgba(96,165,250,.15);color:var(--blue);font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;margin-right:4px">P${e.phase}</span>`:'';
@@ -5748,7 +5749,7 @@ window.renderEditTable=function(){
     const weeks=wf?(uw[wf]!==undefined?[wf]:[]):Object.keys(uw);
     weeks.sort().forEach(wk=>{
       if(!bidMatchesPhaseFilter(u,wk,phaseFilter)) return;
-      const p=uw[wk]; const pl=Array.isArray(p)?p.join(","):p;
+      const p=uw[wk]; const pl=Array.isArray(p)?p.join("/"):p;
       const m=wkDate(wk);
       const bidPh=getUserBidPhaseAdmin(u,wk);
       // Historical bids get outcome from that phase's snapshot
@@ -5816,7 +5817,7 @@ window.adminChangePriority=async function(u,wk,val){
 };
 window.adminRemove=function(u,wk){
   const m=wkDate(wk);
-  const cur=scheduleData[u]?.[wk]; const curLbl=Array.isArray(cur)?cur.join(','):cur;
+  const cur=scheduleData[u]?.[wk]; const curLbl=Array.isArray(cur)?cur.join('/'):cur;
   openConfirm({
     title:'🗑 Remove Bid',
     body:`<div>Remove <strong>${u}</strong>'s bid (<strong style="font-family:var(--mono)">${curLbl}</strong>) on week of <strong>${wLabel(m)}</strong>?</div>
@@ -5983,7 +5984,7 @@ function renderBestBidsTable(){
       const list=byWk[wk].slice().sort((a,b)=>a.user.localeCompare(b.user));
       const m=wkDate(wk);
       const rows=list.map(({user,p})=>{
-        const pl=Array.isArray(p)?p.join(","):p;
+        const pl=Array.isArray(p)?p.join("/"):p;
         const lbl=p==='NP'?'NP':pl;
         return `<div class="lw-row">
           <div class="lw-user">${esc(user)}</div>
@@ -6010,7 +6011,7 @@ function renderBestBidsTable(){
   if(tableWrap) tableWrap.style.display='block';
   all.sort((a,b)=>a.user.localeCompare(b.user)||a.wk.localeCompare(b.wk));
   const rows=all.map(({user,wk,p})=>{
-    const pl=Array.isArray(p)?p.join(","):p;
+    const pl=Array.isArray(p)?p.join("/"):p;
     const lbl=p==='NP'?'NP':pl;
     const wn=_wkNumByISO[wk]||'?';
     return `<tr><td class="mono"><strong>${esc(user)}</strong></td><td class="mono">${wn}</td><td class="mono">${fmtWk(wk)}</td><td><span class="pill p-blue">${esc(lbl)}</span></td><td><button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="clearBestBid('${user}','${wk}')">Clear</button></td></tr>`;
@@ -6253,7 +6254,7 @@ function renderChangelog(){
   const bidLabel = v => {
     if(v===undefined||v===null) return '';
     if(v==='NP') return ' · <span class="mono" style="color:var(--t2)">NP</span>';
-    const txt = Array.isArray(v) ? v.join(',') : v;
+    const txt = Array.isArray(v) ? v.join('/') : v;
     return ` · <span class="mono" style="color:var(--t2)">${esc(txt)}</span>`;
   };
 
@@ -7155,7 +7156,7 @@ window.renderDrawsReviews=function(){
   }
   if(!entries.length){ body.innerHTML=`<div style="text-align:center;color:var(--t2);padding:30px;background:var(--card);border:1px solid var(--b1);border-radius:10px">🎉 No draws, under-review, or pending approvals right now.</div>`; return; }
   const renderRow=(e,showWeekLabel)=>{
-    const p=scheduleData[e.user]?.[e.wk]; const pl=Array.isArray(p)?p.join(','):p;
+    const p=scheduleData[e.user]?.[e.wk]; const pl=Array.isArray(p)?p.join('/'):p;
     const lbl=p==='NP'?'NP':pl;
     // Same convention as the Approvals/Denials section: projections always wear
     // the dashed pill; the solid ✓ APPROVED / ✕ DENIED chip is ADDED only once
@@ -7240,7 +7241,7 @@ window.renderDrawsReviews=function(){
         const label=o==='win'?'✓ WIN':'✗ LOSE';
         const color=o==='win'?'p-green':'';
         const bgcolor=o==='win'?'rgba(52,211,153,.12)':'rgba(148,163,184,.08)';
-        const lbl=Array.isArray(b.priority)?b.priority.join(','):b.priority;
+        const lbl=Array.isArray(b.priority)?b.priority.join('/'):b.priority;
         contextRows.push(`<tr class="dr-row" style="background:${bgcolor};opacity:.8">
           <td class="dr-user">${esc(b.user)}</td>
           <td class="dr-bid">${esc(lbl)} · FTE ${getUserFTE(b.user)}</td>
@@ -7343,7 +7344,7 @@ window.confirmApprove=function(user,wk,type){
 // ── Admin edit bid (clears priority lock) ──
 window.confirmAdminEdit=function(user,wk){
   const m=wkDate(wk);
-  const cur=scheduleData[user]?.[wk]; const curLbl=Array.isArray(cur)?cur.join(','):cur;
+  const cur=scheduleData[user]?.[wk]; const curLbl=Array.isArray(cur)?cur.join('/'):cur;
   openConfirm({
     title:'✏️ Edit Bid',
     body:`<div>Set a new bid for <strong>${user}</strong> on week of <strong>${wLabel(m)}</strong> (${wRange(m)})</div>
@@ -7383,7 +7384,7 @@ window.confirmAdminEdit=function(user,wk){
 // ── Admin cancel bid (clears priority lock) ──
 window.confirmAdminCancel=function(user,wk){
   const m=wkDate(wk);
-  const cur=scheduleData[user]?.[wk]; const curLbl=Array.isArray(cur)?cur.join(','):cur;
+  const cur=scheduleData[user]?.[wk]; const curLbl=Array.isArray(cur)?cur.join('/'):cur;
   openConfirm({
     title:'✕ Cancel Bid',
     body:`<div>Cancel <strong>${user}</strong>'s bid (<strong style="font-family:var(--mono)">${curLbl}</strong>) on week of <strong>${wLabel(m)}</strong> (${wRange(m)})?</div>
