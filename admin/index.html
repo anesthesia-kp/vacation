@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 171;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 173;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -7371,7 +7371,9 @@ window.confirmAdminCancel=function(user,wk){
 // Downloads every auction document as one JSON file. There is no server-side undo —
 // this file is the recovery path. Run it before every Close/Complete/Begin Phase.
 window.exportBackup=async function(){
-  const docs={schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fte:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,welcomeLog:welcomeLogRef,mailQueue:mailQueueRef,mailStats:mailStatsRef,slcMap:slcRef};
+  // ALL 27 documents either site ever touches (verified by enumeration) — this file
+  // IS the complete auction state at the moment of the click.
+  const docs={schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,welcomeLog:welcomeLogRef,mailQueue:mailQueueRef,mailStats:mailStatsRef,slcMap:slcRef,adminAccess:adminAccessRef,passcodes:doc(db,'vacations','passcodes'),signInMisses:signInMissesRef,slots:doc(db,'vacations','slots')};
   const out={_exportedAt:new Date().toISOString(),_build:(typeof window.BUILD!=='undefined'?window.BUILD:'?')};
   let fails=0;
   for(const [name,ref] of Object.entries(docs)){
@@ -7381,7 +7383,9 @@ window.exportBackup=async function(){
   const blob=new Blob([JSON.stringify(out,null,1)],{type:'application/json'});
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);
-  a.download='vacation-auction-backup-'+new Date().toISOString().replace(/[:.]/g,'-').slice(0,19)+'.json';
+  // Filename in LOCAL time (the ISO/UTC stamp confused the admin — 17:58Z is 10:58 PDT)
+  const _d=new Date(), _p=n=>String(n).padStart(2,'0');
+  a.download='vacation-auction-backup-'+_d.getFullYear()+'-'+_p(_d.getMonth()+1)+'-'+_p(_d.getDate())+'_'+_p(_d.getHours())+'-'+_p(_d.getMinutes())+'-'+_p(_d.getSeconds())+'.json';
   a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),5000);
   toast(fails?('💾 Backup saved — but '+fails+' document(s) failed to fetch, re-run it'):'💾 Backup downloaded — keep this file safe',fails?'warn':'ok');
 };
