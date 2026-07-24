@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 100;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 101;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -514,13 +514,14 @@ body{zoom:1.15}
         <li>Vacation selections are now called "bids" — the process works like an auction, where user bids compete for limited slots</li>
         <li>Enter your bids early, it benefits everyone</li>
         <li>Sniping is not possible, do not try it</li>
-        <li>Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly</li>
+        <li>The auction has 4 phases — similar to the rounds in previous years</li>
         <li id="ruleMaxBids">Running cap on total weeks you can win across the auction — only weeks you win count</li>
         <li>Only bid for the number of weeks your accrued vacation and ATO will allow for</li>
         <li>Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better</li>
         <li>On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used</li>
         <li id="ruleNpPhases">NP bids may only be used during the phases for which admin has turned them on</li>
         <li>To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week</li>
+        <li>Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly</li>
       </ul>
       <div style="margin-top:12px;color:#2c4257;font-weight:600">⏱ Timer Rules</div>
       <div id="timerRulesInfoBody" style="font-size:.82rem;color:#3b566d;line-height:1.65;margin-top:4px"></div>
@@ -1057,8 +1058,9 @@ function renderTimerRulesInfo(){
   if(r.quietEnabled){ quiet=`<p style="margin:8px 0 0">Once the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between <strong>${fmtHour12(r.quietStart)}</strong> and <strong>${fmtHour12(r.quietEnd)}</strong> Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.</p>`; }
   let owHtml='';
   if(r.openingWindow){ owHtml=`<p style="margin:0 0 6px"><strong>Each phase opens with a ${r.openingWindow.days}-day window:</strong> the timer counts down continuously (bids do NOT reset it) until <strong>${(st[0]||{}).hours||48} hours</strong> remain — then the reset rules below take over.</p>`; }
-  if(st.length<=1){ el.innerHTML=owHtml+`<p style="margin:0 0 6px">Every time anyone places or changes a bid, the countdown resets to <strong>${(st[0]||{}).hours||48} hours</strong>.</p>${quiet}`; return; }
-  el.innerHTML=owHtml+`<p style="margin:0 0 6px">Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:</p><ul style="margin:0 0 0 18px;padding:0">${items}</ul>${quiet}`;
+  const endLine=`<p style="margin:0 0 6px"><strong>Each phase ends when the countdown timer gets to 0.</strong></p>`;
+  if(st.length<=1){ el.innerHTML=endLine+owHtml+`<p style="margin:0 0 6px">Every time anyone places or changes a bid, the countdown resets to <strong>${(st[0]||{}).hours||48} hours</strong>.</p>${quiet}`; return; }
+  el.innerHTML=endLine+owHtml+`<p style="margin:0 0 6px">Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:</p><ul style="margin:0 0 0 18px;padding:0">${items}</ul>${quiet}`;
 }
 function isAuctionClosed(){
   if(!timerData.enabled||!timerData.lastChange) return false;
@@ -2781,8 +2783,9 @@ function timerRulesEmailText(){
   if(r.quietEnabled){ quiet=`\n\nOnce the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between ${fmtHour12(r.quietStart)} and ${fmtHour12(r.quietEnd)} Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.`; }
   let owTxt='';
   if(r.openingWindow){ owTxt=`\n\nEach phase opens with a ${r.openingWindow.days}-day window: the timer counts down continuously (bids do NOT reset it) until ${(st[0]||{}).hours||48} hours remain — then the reset rules above take over.`; }
-  if(st.length<=1){ return `Every time anyone places or changes a bid, the countdown resets to ${(st[0]||{}).hours||48} hours.${quiet}${owTxt}`; }
-  return `Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}${owTxt}`;
+  const endLine='Each phase ends when the countdown timer gets to 0. ';
+  if(st.length<=1){ return endLine+`Every time anyone places or changes a bid, the countdown resets to ${(st[0]||{}).hours||48} hours.${quiet}${owTxt}`; }
+  return endLine+`Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}${owTxt}`;
 }
 function buildWelcomeEmailBody(user){
   const limLine=cumulativeCapDescription();
@@ -2806,13 +2809,14 @@ ${bullets([
   `Vacation selections are called "bids" — the process works like an auction, where user bids compete for limited slots`,
   `Enter your bids early, it benefits everyone`,
   `Sniping is not possible, do not try it`,
-  `Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly`,
+  `The auction has 4 phases — similar to the rounds in previous years`,
   limLine,
   `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
   `Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better`,
   `On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1,2, or 1,2,3 may be used`,
   npPhasesDescription(),
-  `To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`
+  `To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
+  `Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly`
 ])}
 
 ${B('TIMER RULES')}
