@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 175;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 177;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -3736,7 +3736,7 @@ window.completePhase=function(){
             <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:13px;line-height:1.6">${rdy.problems.map(p=>'<li>'+p+'</li>').join('')}</ul>
             <div style="color:var(--t2);font-size:12px">Closing bidding expires the timer and locks all 52 weeks. You can then decide bids and complete the phase.</div>`,
       okText:'⏱ Close Phase '+cur+' bidding', danger:true,
-      onConfirm:()=>{ if(typeof closePhaseBidding==='function') closePhaseBidding(cur); }
+      onConfirm:()=>{ if(typeof closePhaseBidding==='function'){ _bkBypass=true; try{ closePhaseBidding(cur); } finally { _bkBypass=false; } } } // backup was already offered when Complete Phase was clicked — don't prompt twice in one gesture
     });
     return;
   }
@@ -3986,14 +3986,17 @@ function _beginPhaseLockDecisionInner(next){
   // the six high-demand weeks — no Smart-Lock decision applies. (The admin already
   // confirmed this in the Begin Phase 1 dialog, which lists the exact weeks.)
   if(next===1){
-    (async()=>{
-      const dotted={}; let lockedCount=0;
-      mondays.forEach(d=>{ const wk=dateKey(d); if(HIGH_DEMAND_WEEKS.has(wk)){ dotted['weeks.'+wk]=false; } else { dotted['weeks.'+wk]=true; lockedCount++; } });
-      await mergeFields(locksRef,dotted);
-      await _commitBeginPhase(1);
-      toast('🔒 Phase 1: '+lockedCount+' standard weeks locked — only the 6 high-demand weeks are open','warn');
+    return (async()=>{
+      try{
+        const dotted={}; let lockedCount=0;
+        mondays.forEach(d=>{ const wk=dateKey(d); if(HIGH_DEMAND_WEEKS.has(wk)){ dotted['weeks.'+wk]=false; } else { dotted['weeks.'+wk]=true; lockedCount++; } });
+        await mergeFields(locksRef,dotted);
+        await _commitBeginPhase(1);
+        toast('🔒 Phase 1: '+lockedCount+' standard weeks locked — only the 6 high-demand weeks are open','warn');
+      }catch(e){
+        toast('⚠️ Could not begin Phase 1 — '+(e?.message||e)+'. Check the week locks (some standard weeks may already be locked) and try again.','err');
+      }
     })();
-    return;
   }
   const need=weeksNeedingLock(true).list;                 // should be locked
   const wrongLocked=lockedWeeksWithAvailability().list;    // should be unlocked
@@ -5381,6 +5384,7 @@ function _refreshReadinessBox(){
   }
 }
 window._fixClosePhaseBidding=async function(cur){
+  if(!_bkBypass){ _backupThen('closing Phase '+cur+' bidding',function(){ _bkBypass=true; try{ window._fixClosePhaseBidding(cur); } finally { _bkBypass=false; } }); return; }
   await _lockEveryWeek();
   // Close bidding by EXPIRING the timer (not disabling it) — users see the
   // auction-closed notice; only the on/off toggle ever disables the timer.
@@ -5766,7 +5770,7 @@ window.renderEditTable=function(){
       const isHistorical=bidPh<cur;
       const controls=isHistorical?
         `<span style="color:var(--t3);font-size:11px;font-style:italic">Phase ${bidPh} — locked</span>`:
-        `<select class="sel" onchange="adminChangePriority('${u}','${wk}',this.value)">${['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3'].map(v=>`<option${String(pl)===v?' selected':''}>${v}</option>`).join('')}</select>`;
+        `<select class="sel" onchange="adminChangePriority('${u}','${wk}',this.value)">${['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3'].map(v=>`<option value="${v}"${String(pl)===v.replace(/,/g,'/')?' selected':''}>${v.replace(/,/g,'/')}</option>`).join('')}</select>`;
       const removeBtn=isHistorical?'':`<button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminRemove('${u}','${wk}')">Remove</button>`;
       rows.push(`<tr>
         <td>${phaseBadge}<strong>${u}</strong></td><td class="mono">${wLabel(m)}</td><td style="color:var(--t2)">${wRange(m)}</td>
@@ -7351,7 +7355,7 @@ window.confirmAdminEdit=function(user,wk){
           <div style="margin-top:8px;font-size:12px;color:var(--t2)">Current bid: <strong style="font-family:var(--mono)">${curLbl}</strong></div>
           <div style="margin-top:14px"><label style="font-size:11px;color:var(--t2)">New bid: </label>
             <select id="cmEditSel" class="sel" style="margin-left:6px">
-              ${['1','2','3','4','5','6','7','8','9','10','1,2','1,2,3','NP'].map(v=>`<option${String(curLbl)===v?' selected':''}>${v}</option>`).join('')}
+              ${['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3'].map(v=>`<option value="${v}"${String(curLbl)===v.replace(/,/g,'/')?' selected':''}>${v.replace(/,/g,'/')}</option>`).join('')}
             </select>
           </div>
           <div class="cmodal-warn">Any Priority Lock for this user on this week will be removed, allowing them to rebid freely.</div>`,

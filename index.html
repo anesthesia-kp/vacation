@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 103;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 104;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1722,14 +1722,14 @@ window.reviewBid=function(){
     const usedElsewhere=[];
     for(const w of myCountedWeeks(user)){ if(w===pendingWeek)continue; const p=data[user][w]; if(p==="NP")continue; Array.isArray(p)?usedElsewhere.push(...p):usedElsewhere.push(p); }
     const conflicts=priorities.filter(p=>usedElsewhere.includes(p));
-    if(conflicts.length){showError("Bid "+conflicts.join("/")+" already used on another week.");return;}
+    if(conflicts.length){showError("Bid"+(conflicts.length>1?"s":"")+" "+conflicts.join(", ")+" already used on another week.");return;}
     const isNew=!isVisibleBid(user,pendingWeek);
     if(isNew&&bidLimitStatus(user).atLimit){showBidLimitModal();return;}
   }
   // Populate confirmation panel
   const meta=weekMeta[pendingWeek];
   document.getElementById("confirmDates").textContent=meta.range;
-  document.getElementById("confirmBidLevel").textContent=val==="NP"?"NP (No Priority)":val;
+  document.getElementById("confirmBidLevel").textContent=val==="NP"?"NP (No Priority)":val.replace(/,/g,'/');
   document.getElementById("prioStep1").style.display="none";
   document.getElementById("prioStep2").style.display="block";
 };
@@ -1754,7 +1754,7 @@ window.confirmPriority=async function(){
   if(getPriorPhaseWinners(pendingWeek).has(user)){ showCenterAlert("You already won this week in a previous phase — it's locked in for you."); window.closeModal(); return; }
   // High-demand weeks accept only the allowed numeric set — NP is NOT allowed either.
   // (NP previously slipped past this re-check via a val!=="NP" guard.)
-  if((weekMeta[pendingWeek]?.highPriorityOnly) && (val==="NP" || !HIGH_PRIORITY_ALLOWED.has(val))){ showCenterAlert("This high-demand week only accepts bids of 1, 2, 3, 4, \"1,2\", or \"1,2,3\"."); window.closeModal(); return; }
+  if((weekMeta[pendingWeek]?.highPriorityOnly) && (val==="NP" || !HIGH_PRIORITY_ALLOWED.has(val))){ showCenterAlert("This high-demand week only accepts bids of 1, 2, 3, 4, \"1/2\", or \"1/2/3\"."); window.closeModal(); return; }
   // Priority-lock FLOOR re-check now also covers NP: NP (score 99) is weaker than any
   // numbered floor, so submitting NP under a numeric floor is a below-floor bid and is blocked.
   if(adminSettings.priorityLockEnabled!==false){
@@ -1796,7 +1796,7 @@ window.confirmPriority=async function(){
   const usedElsewhere=[...getPriorPhaseUsedPriorities(user)];
   for(const w of myCountedWeeks(user)){ if(w===pendingWeek)continue; const p=data[user][w]; if(p==="NP")continue; Array.isArray(p)?usedElsewhere.push(...p):usedElsewhere.push(p); }
   const conflicts=priorities.filter(p=>usedElsewhere.includes(p));
-  if(conflicts.length){showError("Bid "+conflicts.join("/")+" already used on another week.");return;}
+  if(conflicts.length){showError("Bid"+(conflicts.length>1?"s":"")+" "+conflicts.join(", ")+" already used on another week.");return;}
   const isNew=!isVisibleBid(user,pendingWeek);
   if(isNew&&bidLimitStatus(user).atLimit){showBidLimitModal();window.closeModal();return;}
   if(!data[user])data[user]={};
@@ -2262,7 +2262,7 @@ function renderCalendar(user,ap){
       const wn=document.createElement("div");
       wn.style.cssText="font-size:.62rem;font-weight:700;color:#006ba6;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px";
       wn.textContent="Week "+meta.weekNum; div.appendChild(wn);
-      // Line 1: Mon, Nov 22 – Nov 28
+      // Line 1: e.g. "Nov 21 – Nov 27" (Sunday-start range)
       const dl=document.createElement("div"); dl.className="week-day-label";
       dl.textContent=meta.range; div.appendChild(dl);
       // Line 2: Special labels (moved above FTE Available)
