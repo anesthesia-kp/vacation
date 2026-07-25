@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 115;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 116;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1069,6 +1069,12 @@ function renderTimerRulesInfo(){
   el.innerHTML=endLine+owHtml+`<p style="margin:0 0 6px">Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:</p><ul style="margin:0 0 0 18px;padding:0">${items}</ul>${quiet}`;
 }
 function isAuctionClosed(){
+  // [FIX 25 Jul 2026 · delta-audit #8] The admin's explicit "close bidding" flag is
+  // authoritative and server-enforced (firestore.rules biddingNotClosed gates every bid
+  // write). Without this the board stayed fully interactive after the admin closed bidding
+  // whenever the timer was off or had been restarted, and a user's bid failed with a raw
+  // "Missing or insufficient permissions" instead of the normal auction-closed notice.
+  if(timerData.biddingClosed===true) return true;
   if(!timerData.enabled||!timerData.lastChange) return false;
   return ((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)<=0;
 }
@@ -2600,14 +2606,26 @@ window.userGoogleSignIn = async function(){
 
 // After the first real Google sign-in, keep the PII docs (login map + secondary
 // emails) live via authenticated listeners. Called once; harmless if re-invoked.
-let _sensitiveSubbed=false;
+let _sensitiveSubbed=false, _sensitiveUnsubs=[];
 function _subscribeSensitiveOnce(){
   if(_sensitiveSubbed) return; _sensitiveSubbed=true;
-  onSnapshot(loginEmailsRef, snap=>{ loginEmailsData=snap.exists()?snap.data():{}; });
-  onSnapshot(emailsRef, snap=>{ emailsData=snap.exists()?snap.data():{}; _emailsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
+  _sensitiveUnsubs.push(onSnapshot(loginEmailsRef, snap=>{ loginEmailsData=snap.exists()?snap.data():{}; }));
+  _sensitiveUnsubs.push(onSnapshot(emailsRef, snap=>{ emailsData=snap.exists()?snap.data():{}; _emailsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); }));
   // [AUDIT 2026-07-25 #6] mailQueue moved here from the top level — it is registered-user
   // -only in firestore.rules now, so it must not be subscribed during anonymous bootstrap.
-  onSnapshot(mailQueueRef, snap=>{ mailQueueData=snap.exists()?snap.data():{}; scheduleMailQueueRelay(); });
+  _sensitiveUnsubs.push(onSnapshot(mailQueueRef, snap=>{ mailQueueData=snap.exists()?snap.data():{}; scheduleMailQueueRelay(); }));
+}
+// [FIX 25 Jul 2026 · delta-audit #10] Tear these down when the Google session ends. The latch
+// above is one-shot and was never reset, while "Sign in as someone else" / "Sign out" drop the
+// tab to an anonymous session — under which the rules reject these docs, and a rejected snapshot
+// listener NEVER retries. The tab was left permanently blind AND still holding a stale
+// mailQueueData, so its relay kept re-stamping claimedAt on entries it could no longer send,
+// making them ineligible for every other page — silently starving real outbid alerts.
+function _unsubscribeSensitive(){
+  try{ _sensitiveUnsubs.forEach(fn=>{ try{ fn(); }catch(_){} }); } finally { _sensitiveUnsubs=[]; _sensitiveSubbed=false; }
+  mailQueueData={};              // never relay or re-claim from a stale cache
+  _recipMapsLoaded=false;        // the relay's own gate — re-armed by the next sign-in
+  if(_mqTimer){ try{ clearTimeout(_mqTimer); }catch(_){} _mqTimer=null; }
 }
 // SECOND auth handler (the anonymous bootstrap one above is left intact). Fires on
 // every auth change but only acts on a non-anonymous Google user with an email.
@@ -2697,6 +2715,10 @@ window.signinShowPicker=function(){
   selectedSignInName="";
   // Drop any active Google session so a DIFFERENT account can be chosen, then
   // re-establish the anonymous read session that keeps public data flowing.
+  // [FIX 25 Jul 2026 · delta-audit #10] Detach the signed-in-only listeners FIRST, so they
+  // aren't left permanently rejected against the anonymous session (and re-subscribe cleanly
+  // on the next sign-in). Must run before signOut, while the token is still valid.
+  try{ _unsubscribeSensitive(); }catch(_){}
   try{ signOut(auth).catch(()=>{}); }catch(_){}
   try{ signInAnonymously(auth).catch(()=>{}); }catch(_){}
 };

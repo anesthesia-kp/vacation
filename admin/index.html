@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 199;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 200;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1635,13 +1635,21 @@ function getUserFTE(u){ return fteData[u]!==undefined?fteData[u]:1.0; }
 const FTE_MIN=0.4;
 window.FTE_MIN=FTE_MIN;
 // Roster users whose FTE is missing OR out of range. Mirrors weeksMissingCapacity().
+// [FIX 25 Jul 2026 · delta-audit #6] Checks everyone the ENGINE will score, not just the
+// roster. computeApprovals iterates `scheduleData`, so a bidder who is not in `names` was
+// never checked and silently consumed the 1.0 fallback. That is reachable: "Restore One User"
+// offers users drawn from the backup's userList/schedule and writes their bids WITHOUT
+// touching userList or fteMap, so a departed employee can be restored into a live auction
+// with no FTE at all. Union the roster with anyone holding bids.
 function usersMissingFte(){
-  return (names||[]).filter(u=>{
+  const scored=new Set(names||[]);
+  try{ for(const u in (scheduleData||{})){ if(scheduleData[u]&&Object.keys(scheduleData[u]).length) scored.add(u); } }catch(_){}
+  return [...scored].filter(u=>{
     const v=fteData[u];
     if(v===undefined||v===null||v==='') return true;
     const n=Number(v);
     return isNaN(n)||n<FTE_MIN||n>1;
-  });
+  }).sort();
 }
 window.usersMissingFte=usersMissingFte;
 
@@ -2633,7 +2641,13 @@ window.openSummaryTab=function(kind){
 };
 // Unlock every week that is locked but still has availability.
 window.unlockAvailabilityWeeks=function(){
-  const toUnlock=lockedWeeksWithAvailability().list;
+  // [FIX 25 Jul 2026 · delta-audit #12] Match the dashboard row's scope EXACTLY. renderLockSummary
+  // narrows the "wrongly locked" row to high-demand weeks during a live Phase 1 (the 46 standard
+  // weeks are locked on purpose), but this handler re-derived the unfiltered list — so a row
+  // reading "1 locked week" opened a dialog offering to unlock 47, and there was no way to unlock
+  // just the flagged one. Same filter, same list.
+  const _all=lockedWeeksWithAvailability().list;
+  const toUnlock=p1HighDemandOnly()?_all.filter(w=>HIGH_DEMAND_WEEKS.has(w.wk)):_all;
   if(!toUnlock.length){ toast('No locked weeks with availability.','ok'); return; }
   openConfirm({
     title:'🔓 Unlock winnable weeks',
@@ -3790,9 +3804,17 @@ function renderNextStep(){
   // [FTE 25 Jul 2026] Same rule as week capacity: no built-in defaults. A user with no
   // saved FTE blocks the auction from starting rather than being silently treated as 1.0.
   const missingFte=usersMissingFte();
+  // [FIX 25 Jul 2026 · delta-audit #5] A missing FTE must NEVER pre-empt the phase workflow.
+  // These branches hold the only call sites for Close Bidding / Send Results / Complete Phase /
+  // Begin Next Phase, so gating them on missingFte hid the entire workflow mid-auction — and
+  // said "bidding cannot begin" when it had already begun. Pre-launch it is genuinely the next
+  // step; once Phase 1 has started it becomes a banner ABOVE the real next step instead.
+  const fteNote=(missingFte.length&&phase1Started())
+    ? `<div style="background:rgba(234,179,8,.10);border:1px solid rgba(234,179,8,.4);border-radius:10px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:var(--t1)">⚠️ <strong>${missingFte.length}</strong> user${missingFte.length!==1?'s have':' has'} no valid saved FTE (${missingFte.map(u=>esc(u)).join(', ')}) — they are being scored with a fallback. Fix before the next phase begins. <button class="btn btn-ghost" style="padding:2px 8px;font-size:11px;margin-left:6px" onclick="gotoUsersPanel()">👤 Open Users</button></div>`
+    : '';
   if(missingCaps>0){
     html=box(`<strong>${missingCaps}</strong> week${missingCaps!==1?'s have':' has'} no saved FTE capacity — those weeks are unbiddable (capacity 0) until you save a value. There are no built-in defaults.`,btn('📆 Open FTE Availability','gotoSlotsPanel()'));
-  } else if(missingFte.length>0){
+  } else if(missingFte.length>0 && !phase1Started()){
     html=box(`<strong>${missingFte.length}</strong> user${missingFte.length!==1?'s have':' has'} no valid saved FTE — bidding cannot begin until every user has one between ${FTE_MIN} and 1.0. There are no built-in defaults.<div style="margin-top:6px;color:var(--t2);font-size:11.5px">${missingFte.map(u=>esc(u)).join(', ')}</div>`,btn('👤 Open Users','gotoUsersPanel()'));
   } else if(!phase1Started()){
     html=box('Bidding has not begun. Begin Phase 1 to open the auction to users.',btn('▶ Begin Phase 1','beginPhase1()','btn-success'));
@@ -3809,17 +3831,25 @@ function renderNextStep(){
   } else {
     const r=approvalReadiness();
     if(!r.ready){
-      html=box(`Phase ${cur} bidding is OPEN — users can place and change bids. When bidding should end, close it (expires the timer and locks all weeks).`,btn('⏱ Close Phase '+cur+' bidding','closePhaseBidding('+cur+')'));
+      // [FIX 25 Jul 2026 · delta-audit #8] Never claim bidding is OPEN while the server-side
+      // biddingClosed flag is set — users would be told they can bid and then hit a raw
+      // permissions error. Name the real state and offer the way back.
+      html=biddingIsClosedFlag()
+        ? box(`Phase ${cur} bidding is <strong>CLOSED</strong> (server-side), but the timer or week locks were changed afterwards, so this screen looks half-open. Users cannot bid until you reopen it.`,
+            btn('↩ Reopen Phase '+cur+' bidding','reopenBidding()','btn-ghost')
+            + '&nbsp;' + btn('⏱ Re-close it properly','closePhaseBidding('+cur+')'))
+        : box(`Phase ${cur} bidding is OPEN — users can place and change bids. When bidding should end, close it (expires the timer and locks all weeks).`,btn('⏱ Close Phase '+cur+' bidding','closePhaseBidding('+cur+')'));
     } else {
       const pending=countPendingDecisions();
+      const reopen='&nbsp;'+btn('↩ Reopen bidding','reopenBidding()','btn-ghost');
       if(pending>0){
-        html=box(`Bidding is closed. <strong>${pending}</strong> bid${pending!==1?'s':''} still need${pending===1?'s':''} an approve or deny decision before the phase can be completed.`,btn('✅ Go to Approvals/Denials','gotoAppDenials()'));
+        html=box(`Bidding is closed. <strong>${pending}</strong> bid${pending!==1?'s':''} still need${pending===1?'s':''} an approve or deny decision before the phase can be completed.`,btn('✅ Go to Approvals/Denials','gotoAppDenials()')+reopen);
       } else {
-        html=box(`Bidding is closed and every bid is decided. Complete Phase ${cur} to lock in the results.`,btn('✓ Complete Phase '+cur,'completePhase()','btn-success'));
+        html=box(`Bidding is closed and every bid is decided. Complete Phase ${cur} to lock in the results.`,btn('✓ Complete Phase '+cur,'completePhase()','btn-success')+reopen);
       }
     }
   }
-  el.innerHTML=html;
+  el.innerHTML=fteNote+html;
 }
 function renderPhasePanel(){
   renderNextStep();
@@ -5518,18 +5548,30 @@ window.jumpToNextDecision=function(){
 function approvalReadiness(){
   const allWeeksLocked = !!locksData.globalLock || mondays.every(d=>!!locksData?.weeks?.[dateKey(d)]);
   const timerRunning = !!(timerData?.enabled && timerData?.lastChange && (((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)>0));
-  const phaseOpen = timerRunning && !locksData.globalLock; // users can still change bids
+  // [FIX 25 Jul 2026 · delta-audit #8] The server-side flag is authoritative: when it is set,
+  // users genuinely cannot bid no matter what the timer or locks say, so readiness must not
+  // report "the timer is still running — the phase is open".
+  const phaseOpen = !biddingIsClosedFlag() && timerRunning && !locksData.globalLock;
   const problems=[];
   if(phaseOpen) problems.push('the bidding timer is still running — the phase is open and users can still change bids');
   if(!allWeeksLocked) problems.push('not all weeks are locked — bids can still change on unlocked weeks');
-  // [AUDIT 2026-07-25 #9] The cumulative win cap existed only in the settings screen
-  // and the welcome e-mail — nothing in the approval path ever checked it, so "Approve
-  // All Current Winners" could hand someone more weeks than the rules promised everyone.
-  for(const w of capBreaches()) problems.push(w);
-  return {ready:problems.length===0, problems};
+  // [FIX 25 Jul 2026 · delta-audit #2/#9] Cap breaches are ADVISORY, not blocking. They used
+  // to be pushed into `problems`, which drives `ready`, which completePhase() treats as a hard
+  // gate — and the only remedy the gate offers (Close Phase Bidding) cannot change anyone's
+  // win count, so a breach deadlocked phase completion with no way out. A breach is the result
+  // of admin approval decisions; it must be visible, never a trap.
+  const warnings=capBreaches();
+  return {ready:problems.length===0, problems, warnings};
 }
-// Users whose PROJECTED wins this phase would take them past the cumulative cap.
-// Counts prior-phase wins plus the weeks they currently project to win/are approved for.
+// Users whose wins this phase would take them past the cumulative cap.
+// [FIX 25 Jul 2026 · delta-audit #1] This previously DOUBLE-COUNTED prior-phase wins.
+// computeApprovals() seeds every week's winner set with getPriorPhaseWinners(wk)
+// (see `const winners=new Set(priorWinners)`), and getOutcome() returns 'win' for anyone in
+// that set — so `won[u]` ALREADY spans prior + current phases, each week counted once.
+// Adding _adminPriorApprovedCount(u) on top produced 2*prior + current, so from Phase 2 on
+// a user with 2 prior wins breached a cap of 3 with zero current wins. This is exactly the
+// error the adApprove comment below warns about ("each counted exactly ONCE"). The winner
+// set is the single deduplicated source of truth; do not add anything to it.
 function capBreaches(){
   const out=[];
   try{
@@ -5538,14 +5580,14 @@ function capBreaches(){
     if(cap===null) return out;
     const ap=computeApprovals();
     const won={};
+    // Count every user present in the winner sets — not just `names` — so a bidder who is
+    // no longer on the roster (e.g. restored from a backup) is still surfaced. [delta-audit #6]
     mondays.forEach(d=>{
-      const wk=dateKey(d); const a=ap[wk]; if(!a) return;
-      // computeApprovals() (no ignoreAdmin) already folds admin approvals into winners.
-      for(const u of names){ if(getOutcome(wk,u,ap)==='win') won[u]=(won[u]||0)+1; }
+      const wk=dateKey(d); const a=ap[wk]; if(!a||!a.winners) return;
+      a.winners.forEach(u=>{ won[u]=(won[u]||0)+1; });
     });
-    for(const u of names){
-      const total=_adminPriorApprovedCount(u)+(won[u]||0);
-      if(total>cap) out.push('<strong>'+esc(u)+'</strong> would end Phase '+cur+' with '+total+' weeks — over the cumulative cap of '+cap);
+    for(const u of Object.keys(won)){
+      if(won[u]>cap) out.push('<strong>'+esc(u)+'</strong> would end Phase '+cur+' with '+won[u]+' weeks — over the cumulative cap of '+cap);
     }
   }catch(e){ console.warn('capBreaches failed',e); }
   return out;
@@ -5555,9 +5597,16 @@ window.approvalReadiness=approvalReadiness;
 // Warning banner injected into approve/deny confirm dialogs; empty when ready.
 function readinessWarnHtml(){
   const r=approvalReadiness();
-  if(r.ready) return '';
   const cur=Number(phasesData.currentPhase||1);
-  return `<div class="cmodal-warn" id="readinessWarnBox" style="margin-top:8px"><strong>⚠️ Bidding isn't fully closed yet.</strong> Approvals &amp; denials should ideally wait until bidding is stopped and all weeks are locked. Right now:
+  // [FIX 25 Jul 2026 · delta-audit #2] Cap breaches are advisory: show them even when
+  // bidding IS properly closed, and never let them imply the phase can't be completed.
+  const capHtml=(r.warnings&&r.warnings.length)
+    ? `<div class="cmodal-warn" style="margin-top:8px"><strong>⚠️ Cumulative cap exceeded.</strong> These users would finish the phase with more weeks than the cap allows:
+       <ul style="margin:6px 0 0 16px;line-height:1.6">${r.warnings.map(w=>`<li>${w}</li>`).join('')}</ul>
+       <div style="margin-top:6px;font-size:11px;color:var(--t3)">Revoke an approval to bring them back under the cap, or proceed deliberately — this does not block completing the phase.</div></div>`
+    : '';
+  if(r.ready) return capHtml;
+  return capHtml+`<div class="cmodal-warn" id="readinessWarnBox" style="margin-top:8px"><strong>⚠️ Bidding isn't fully closed yet.</strong> Approvals &amp; denials should ideally wait until bidding is stopped and all weeks are locked. Right now:
     <ul style="margin:6px 0 0 16px;line-height:1.6">${r.problems.map(p=>`<li>${p}</li>`).join('')}</ul>
     <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
       <button type="button" class="btn btn-ghost" style="font-size:11px" onclick="_fixClosePhaseBidding(${cur})">⏱ Stop bidding &amp; lock all weeks now</button>
@@ -6092,7 +6141,7 @@ function adminBidIssues(u,wk,val,isNew){
   return out;
 }
 // Wraps any manual bid write in a warning confirm when it breaks a bidder-facing rule.
-function guardAdminBid(u,wk,val,isNew,proceed){
+function guardAdminBid(u,wk,val,isNew,proceed,onCancel){
   const issues=adminBidIssues(u,wk,val,isNew);
   if(!issues.length){ proceed(); return; }
   openConfirm({
@@ -6101,7 +6150,12 @@ function guardAdminBid(u,wk,val,isNew,proceed){
           <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">${issues.map(i=>'<li>'+i+'</li>').join('')}</ul>
           <div class="cmodal-danger">Admin entries bypass every check the bidding engine applies. Only continue if this override is deliberate.</div>`,
     okText:'Save anyway', danger:true,
-    onConfirm:()=>proceed()
+    onConfirm:()=>proceed(),
+    // [FIX 25 Jul 2026 · delta-audit #7] On cancel nothing is written, but the Edit Selections
+    // <select> has ALREADY changed to the new value in the DOM (the handler runs on `onchange`),
+    // and nothing re-renders because no Firestore snapshot fires. The admin was left reading a
+    // value that was never saved. Redraw from the live data so the table tells the truth.
+    onCancel:()=>{ try{ if(typeof onCancel==='function') onCancel(); else refreshAll(); }catch(_){ } }
   });
 }
 window.adminBidIssues=adminBidIssues; window.guardAdminBid=guardAdminBid;
@@ -6944,6 +6998,33 @@ window.toggleTimerEnabled=function(){
     }
   });
 };
+// [FIX 25 Jul 2026 · delta-audit #3/#4/#8] The server-side "bidding is closed" flag, and the
+// single supported way to undo it. firestore.rules denies every bid write while this is true,
+// so it must be both VISIBLE in the admin UI and clearable without advancing the phase (which
+// would wipe the current phase's approvals) or nuking the auction.
+function biddingIsClosedFlag(){ return timerData?.biddingClosed===true; }
+window.biddingIsClosedFlag=biddingIsClosedFlag;
+window.reopenBidding=function(){
+  const cur=Number(phasesData.currentPhase||1);
+  const lockedCount=mondays.filter(d=>!!locksData?.weeks?.[dateKey(d)]).length;
+  openConfirm({
+    title:'↩ Reopen Phase '+cur+' bidding',
+    body:`<div>Let users place and change bids again for Phase ${cur}?</div>
+          <div class="cmodal-info" style="margin-top:8px">This clears the server-side bidding-closed flag and restarts the countdown. Approvals and denials already made are <strong>not</strong> touched.</div>
+          ${lockedCount?`<div class="cmodal-warn" style="margin-top:8px">⚠️ ${lockedCount} of ${mondays.length} weeks are still locked — users can only bid on the unlocked ones. Unlock what you want reopened.</div>`:''}`,
+    okText:'↩ Reopen bidding',
+    onConfirm:async()=>{
+      const _n=Date.now();
+      const owr=getTimerRules().openingWindow;
+      // Re-arm the countdown too: leaving an expired timer would keep the auction closed by
+      // the OTHER server-side gate (timerNotExpired), so clearing only the flag isn't enough.
+      const payload={biddingClosed:false};
+      if(timerData?.enabled===true){ payload.lastChange=_n; payload.durationHours=openingWindowActive()&&owr?owr.days*24:timerResetHours(timerPhaseStartMs(),_n); }
+      try{ await setDoc(timerRef,payload,{merge:true}); toast('↩ Phase '+cur+' bidding reopened','ok'); }
+      catch(e){ toast('Could not reopen bidding — '+(e?.message||e),'err'); }
+    }
+  });
+};
 window.adminResetTimer=function(){
   if(!timerData.enabled)return;
   const owr=getTimerRules().openingWindow, owActive=openingWindowActive();
@@ -6953,7 +7034,12 @@ window.adminResetTimer=function(){
     body:`<div>Reset timer to <strong>${fmtDuration(Math.round(newDurH*10)/10)}</strong> from this moment?</div>`
       +((owActive&&owr)?`<div class="cmodal-info" style="margin-top:6px">The opening window is active — this restarts the full ${owr.days}-day window.</div>`:''),
     okText:'Reset',
-    onConfirm:async()=>{ const _n=Date.now(); await setDoc(timerRef,{lastChange:_n,durationHours:(owActive&&owr)?owr.days*24:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}); toast("↺ Timer reset","ok"); }
+    // [FIX 25 Jul 2026 · delta-audit #3/#4] Reset Timer is the UI's advertised way to REOPEN
+    // bidding, so it must also clear biddingClosed. Previously the flag was set by Close Phase
+    // Bidding and cleared only by Begin Phase (which wipes the current phase's decisions) or a
+    // full Reset Auction — so restarting the countdown left a live-looking board where every
+    // bid was still denied server-side with a raw permissions error and no explanation.
+    onConfirm:async()=>{ const _n=Date.now(); await setDoc(timerRef,{lastChange:_n,biddingClosed:false,durationHours:(owActive&&owr)?owr.days*24:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}); toast("↺ Timer reset — bidding is open again","ok"); }
   });
 };
 // (Clear Timer removed — the slider's 0 position and the enable toggle cover it.)
