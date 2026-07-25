@@ -81,8 +81,14 @@ service cloud.firestore {
     // `phases` is intentionally NOT here — completedPhases snapshots must stay
     // world-readable for the user site's phase-history reports (those are the
     // public channel, released only when a phase is completed).
+    // [AUDIT 2026-07-25 #3] 'changesDecisions' joins them: the admin's approve/deny/revoke
+    // entries used to be appended to the world-readable `changes` log, which every staff
+    // browser already holds — so the live winner/loser list streamed out mid-phase and the
+    // H-4 gate above protected nothing in practice. Decisions now live here, admin-only.
+    // (Both sites' change-log views already discarded decision entries, so no UI lost data;
+    // completePhase archives the merged log into changesArchive once results are public.)
     function isAdminReadDoc(docId) {
-      return docId in ['approvals', 'denials'];
+      return docId in ['approvals', 'denials', 'changesDecisions'];
     }
 
     // ── Vacation Auction collection ───────────────────────────────────────────
@@ -103,6 +109,7 @@ service cloud.firestore {
         'adminAccess',
         'loginEmails',
         'changesArchive',
+        'changesDecisions',
         'meta',
         'emailToUser',
         'usernames'
@@ -141,6 +148,20 @@ service cloud.firestore {
         || get(/databases/$(database)/documents/vacations/timer).data.get('lastChange', null) == null
         || request.time.toMillis() < get(/databases/$(database)/documents/vacations/timer).data.get('lastChange', 0)
              + int(get(/databases/$(database)/documents/vacations/timer).data.get('durationHours', 48) * 3600000);
+    }
+    // Has the admin explicitly CLOSED bidding? [AUDIT 2026-07-25 #2]
+    // Bid writes used to be gated by the timer alone, so with the timer switched OFF a
+    // registered user could keep writing bids from devtools after "Close Phase Bidding" —
+    // while the admin was approving. Per-week locks can't be checked here (week keys sit
+    // inside nested maps that rules cannot diff), so the admin sets one explicit flag.
+    // It lives on the TIMER doc on purpose: timerNotExpired() already fetches that
+    // document and identical lookups are cached, so this gate costs ZERO extra
+    // document-access calls — a bid write is already near Firestore's limit of 10.
+    // Users cannot clear it: timerWriteSane() confines their timer writes to
+    // lastChange/durationHours. Begin Phase and Reset Auction clear it.
+    function biddingNotClosed() {
+      return !exists(/databases/$(database)/documents/vacations/timer)
+        || get(/databases/$(database)/documents/vacations/timer).data.get('biddingClosed', false) != true;
     }
     // User timer writes may only touch lastChange/durationHours with sane values.
     // [AUDIT 2026-07-25 #1] The old version bounded lastChange but left durationHours
@@ -185,7 +206,7 @@ service cloud.firestore {
                    || (docId == 'welcomeLog' && (isRegisteredUser() || isAdmin()))
                    // Bid docs: own keys only, and never after server-clock expiry.
                    || (isBidDoc(docId) && (isAdmin()
-                        || (isRegisteredUser() && writesOnlyOwnKeys() && timerNotExpired())))
+                        || (isRegisteredUser() && writesOnlyOwnKeys() && timerNotExpired() && biddingNotClosed())))
                    // The timer itself: users may reset it via bids — but not once it has
                    // truly expired (a skewed clock could otherwise reopen bidding), and only
                    // with a fresh, sane lastChange/duration (no forced-expiry or stalling

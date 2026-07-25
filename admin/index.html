@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 194;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 195;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1071,6 +1071,10 @@ const scheduleRef = doc(db,"vacations","schedule");
 const locksRef    = doc(db,"vacations","locks");
 const metaRef     = doc(db,"vacations","meta");
 const changesRef  = doc(db,"vacations","changes");
+// [AUDIT 2026-07-25 #3] Admin-only twin of `changes`, holding ONLY approve/deny/revoke
+// entries. Admin-read + admin-write in firestore.rules, so live decisions never reach a
+// staff browser before results go out.
+const changesDecisionsRef = doc(db,"vacations","changesDecisions");
 const adminRef    = doc(db,"vacations","adminSettings");
 const timerRef    = doc(db,"vacations","timer");
 const worstBidsRef = doc(db,"vacations","bestBids");
@@ -1183,7 +1187,7 @@ function _knownRosterAddress(a){
   return false;
 }
 window._knownRosterAddress=_knownRosterAddress;
-let changesLog=[], changesResetAt=0, adminSettings={emailNotifsEnabled:true}, timerData={enabled:false,lastChange:null};
+let changesLog=[], changesDecisionsLog=[], changesResetAt=0, adminSettings={emailNotifsEnabled:true}, timerData={enabled:false,lastChange:null};
 function getReviewThreshold(){ const raw=adminSettings?.reviewThreshold; if(raw===undefined||raw===null)return 0.5; const n=Number(raw); if(isNaN(n))return 0.5; const clamped=Math.max(0,Math.min(2,n)); return Math.round(clamped*10)/10; }
 // Returns the FTE of the lowest-FTE user in the roster. Used by the auto-lock rule.
 function getLowestFTE(){ let m=Infinity; for(const u of names){ const f=getUserFTE(u); if(f<m) m=f; } return m===Infinity?1:m; }
@@ -1396,6 +1400,13 @@ onSnapshot(changesRef,  snap=>{
   const p=document.getElementById("panel-changelog");
   if(p&&p.classList.contains("on")) renderChangelog();
   if(typeof renderInsights==='function') renderInsights(); // keep Popcornometer in sync
+});
+// [AUDIT #3] The admin-only decision log. Admin pages merge it back into the Change Log
+// view; nothing else consumes it (Fair Play and the counters exclude decisions anyway).
+onSnapshot(changesDecisionsRef, snap=>{
+  changesDecisionsLog=snap.exists()?(snap.data().log||[]):[];
+  const p=document.getElementById("panel-changelog");
+  if(p&&p.classList.contains("on")) renderChangelog();
 });
 onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{}; syncControls(); refreshAll(); });
 onSnapshot(timerRef,    snap=>{ timerData=snap.exists()?snap.data():{enabled:false,lastChange:null}; syncTimer(); startTick(); if(typeof _autoCloseOnExpiry==='function') _autoCloseOnExpiry(); refreshAll(); });
@@ -3604,10 +3615,13 @@ window.clearEverything=function(){
               // does NOT let anyone bid before Begin Phase 1.
               setDoc(locksRef,{globalLock:false,weeks:{}}),
               // Timer back to zero/off; Begin Phase 1 re-arms it to a fresh 48h.
-              setDoc(timerRef,{enabled:false,lastChange:null,durationHours:48}),
+              // [AUDIT #2] Plain setDoc (no merge) — this also drops any biddingClosed flag.
+              setDoc(timerRef,{enabled:false,lastChange:null,durationHours:48,biddingClosed:false}),
               // Change log + resetAt fence → Popcornometer and the "changes in
               // last 24h" counters read 0 on BOTH sites after a full reset.
               setDoc(changesRef,{log:[],resetAt:Date.now()}),
+              // [AUDIT #3] The admin-only decision log resets with everything else.
+              setDoc(changesDecisionsRef,{log:[],resetAt:Date.now()}),
               // New auction → drop the per-phase archive so the Fair Play report
               // starts empty (it covers everything since the last auction reset).
               setDoc(changesArchiveRef,{}),
@@ -3938,12 +3952,18 @@ window.completePhase=function(){
       // after a phase closes. resetAt also fences off bidTimes stamps from the
       // closed phase, which would otherwise keep feeding the counters.
       let resetOk=true;
-      if(changesLog.length){
-        try{ await setDoc(changesArchiveRef,{[cur]:changesLog},{merge:true}); }
+      // [AUDIT #3] Archive the MERGED log (bids + decisions) so the phase-history Change
+      // Log is unchanged from before the split. Safe: the phase is complete, results are
+      // going out, and Fair Play filters decision entries out of the archive regardless.
+      const _mergedLog=[...changesLog,...changesDecisionsLog];
+      if(_mergedLog.length){
+        try{ await setDoc(changesArchiveRef,{[cur]:_mergedLog},{merge:true}); }
         catch(e){ resetOk=false; console.error('completePhase change-archive failed:',e); }
       }
       try{ await setDoc(changesRef,{log:[],resetAt:Date.now()}); }
       catch(e){ resetOk=false; console.error('completePhase change-reset failed:',e); }
+      try{ await setDoc(changesDecisionsRef,{log:[],resetAt:Date.now()}); }
+      catch(e){ resetOk=false; console.error('completePhase decision-log reset failed:',e); }
       if(lockOk && lockClearOk && resetOk){
         toast('✓ Phase '+cur+' completed — all weeks locked, priority locks released','ok');
       } else if(!lockOk){
@@ -3989,7 +4009,9 @@ async function _commitBeginPhase(next){
   // no resets until the starting-reset mark); otherwise phases open with the normal
   // starting reset from the timer rules.
   const _ow=getTimerRules().openingWindow;
-  { const _n=Date.now(); try{ await setDoc(timerRef,{enabled:true,durationHours:_ow?_ow.days*24:timerResetHours(_n,_n),lastChange:_n},{merge:true}); }
+  // [AUDIT 2026-07-25 #2] biddingClosed:false is written in the SAME merge as the timer
+  // re-arm, so a phase can never open with the server-side bidding gate still shut.
+  { const _n=Date.now(); try{ await setDoc(timerRef,{enabled:true,biddingClosed:false,durationHours:_ow?_ow.days*24:timerResetHours(_n,_n),lastChange:_n},{merge:true}); }
     catch(e){ _timerOk=false; console.error('begin-phase timer reset failed:',e); } }
   toast(_timerOk
     ? (_ow ? '▶ Phase '+next+' begun — bidding is open (opening window: '+_ow.days+' days, no timer resets until '+stage0Hours()+'h remain)'
@@ -5503,6 +5525,14 @@ window._fixClosePhaseBidding=async function(cur){
   if(timerData.enabled===true){
     await setDoc(timerRef,{lastChange:Date.now()-getDurationMs()-1000},{merge:true});
   }
+  // [AUDIT 2026-07-25 #2] Expiring the timer only closes bidding when the timer is ON.
+  // With it OFF, timerNotExpired() in firestore.rules passes and a registered user could
+  // still write bids from devtools while the admin was approving. This flag lives on the
+  // TIMER doc deliberately: the rules already fetch that document, so gating on it costs
+  // no extra document-access calls (a bid write is near Firestore's limit of 10), and
+  // timerWriteSane() confines user timer writes to lastChange/durationHours, so a user
+  // cannot clear it. Begin Phase and Reset Auction clear it again.
+  await setDoc(timerRef,{biddingClosed:true},{merge:true}).catch(e=>console.error('biddingClosed set failed:',e));
   toast('⏱ Phase '+cur+' bidding closed. This does NOT complete the phase — decide the bids below, then use Complete Phase on the dashboard.','ok');
   _refreshReadinessBox();
 };
@@ -6430,7 +6460,10 @@ function renderChangelog(){
     }
   }
   const phVal=phSel?.value||'current';
-  const srcLog=phVal==='current'?changesLog:(changesArchiveData[phVal.slice(2)]||[]);
+  // [AUDIT #3] Decisions now live in their own admin-only doc — merge them back in so the
+  // admin Change Log still shows the complete picture. Archived phases already contain
+  // both (completePhase archives the merged list).
+  const srcLog=phVal==='current'?[...changesLog,...changesDecisionsLog]:(changesArchiveData[phVal.slice(2)]||[]);
   if(!srcLog.length){
     host.innerHTML=`<div style="text-align:center;color:var(--t2);padding:30px;background:var(--card);border:1px solid var(--b1);border-radius:10px">No changes logged.</div>`;
     return;
@@ -6509,14 +6542,22 @@ async function adminLog(u,wk,type,bidValue){
   // so two entries with identical fields (same ms timestamp) would silently drop one.
   const entry={id:Math.random().toString(36).slice(2),user:u, weekKey:wk, action, actor:'admin', type, ts:Date.now()};
   if(bidValue!==undefined) entry.bidValue=bidValue;
+  // [AUDIT 2026-07-25 #3] Approve/deny/revoke entries go to an ADMIN-ONLY doc, never to
+  // vacations/changes. `changes` is world-readable and already sits in every staff
+  // browser, so writing decisions there streamed the live winner/loser list mid-phase —
+  // the exact thing the H-4 read gate on approvals/denials exists to prevent. Both the
+  // staff site and this one already DISCARD decision entries when rendering the change
+  // log (isDecisionEntry), so nothing user-facing loses information; only the leak goes.
+  // The admin Change Log merges the two docs back together for display.
+  const ref = isDecisionEntry(entry) ? changesDecisionsRef : changesRef;
   // Atomically append using arrayUnion — never overwrites existing entries.
   // If the doc doesn't exist yet, create it with this entry as the first.
   try {
-    await updateDoc(changesRef, { log: arrayUnion(entry) });
+    await updateDoc(ref, { log: arrayUnion(entry) });
   } catch(e) {
     // Document doesn't exist — create it (only happens once)
     if(e.code==='not-found'||e.message?.includes('No document')){
-      await setDoc(changesRef, { log: [entry] }, { merge: true });
+      await setDoc(ref, { log: [entry] }, { merge: true });
     }
     // Otherwise silently ignore — do NOT overwrite the log on other errors
   }
@@ -6526,7 +6567,7 @@ window.clearChangelog=function(){
     title:'🗑 Clear Change Log',
     body:`<div>Permanently clear the entire change log?</div><div class="cmodal-danger">All historical change records will be lost. This cannot be undone.</div>`,
     okText:'Clear Log', danger:true,
-    onConfirm:async()=>{ await setDoc(changesRef,{log:[]}); toast("🗑 Log cleared","ok"); }
+    onConfirm:async()=>{ await setDoc(changesRef,{log:[]}); await setDoc(changesDecisionsRef,{log:[]}).catch(()=>{}); toast("🗑 Log cleared","ok"); } // [AUDIT #3] clear both halves
   });
 };
 // ── Dynamic bidding-timer rules (admin-configurable via adminSettings.timerRules) ──
@@ -7774,7 +7815,7 @@ window._restoreFull=function(i){
 };
 async function _doFullRestore(f){
   const d=f.data;
-  const map={schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,mailStats:mailStatsRef,slcMap:slcRef,signInMisses:signInMissesRef,slots:doc(db,'vacations','slots'),passcodes:doc(db,'vacations','passcodes')};
+  const map={schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesDecisions:changesDecisionsRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,mailStats:mailStatsRef,slcMap:slcRef,signInMisses:signInMissesRef,slots:doc(db,'vacations','slots'),passcodes:doc(db,'vacations','passcodes')};
   // Deliberately NOT restored: mailQueue (cleared — stale entries re-send e-mails),
   // welcomeLog (kept current — an older log re-welcomes users), adminAccess (kept
   // current — a stale list could lock the restoring admin out mid-flight).
@@ -7888,9 +7929,10 @@ function _backupThen(label,fn){
 // Downloads every auction document as one JSON file. There is no server-side undo —
 // this file is the recovery path. Run it before every Close/Complete/Begin Phase.
 window.exportBackup=async function(){
-  // ALL 27 documents either site ever touches (verified by enumeration) — this file
+  // ALL 28 documents either site ever touches (verified by enumeration; changesDecisions
+  // added 25 Jul 2026 with the AUDIT #3 decision-log split) — this file
   // IS the complete auction state at the moment of the click.
-  const docs={schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,welcomeLog:welcomeLogRef,mailQueue:mailQueueRef,mailStats:mailStatsRef,slcMap:slcRef,adminAccess:adminAccessRef,passcodes:doc(db,'vacations','passcodes'),signInMisses:signInMissesRef,slots:doc(db,'vacations','slots')};
+  const docs={schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesDecisions:changesDecisionsRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,welcomeLog:welcomeLogRef,mailQueue:mailQueueRef,mailStats:mailStatsRef,slcMap:slcRef,adminAccess:adminAccessRef,passcodes:doc(db,'vacations','passcodes'),signInMisses:signInMissesRef,slots:doc(db,'vacations','slots')};
   const out={_exportedAt:new Date().toISOString(),_build:(typeof window.BUILD!=='undefined'?window.BUILD:'?')};
   let fails=0;
   for(const [name,ref] of Object.entries(docs)){
