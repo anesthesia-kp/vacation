@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 193;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 194;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1506,7 +1506,16 @@ async function processMailQueue(minAgeMs){
         if(mailQueueData[qid]?.claimedBy!==MQ_ID) continue; // another page won this one (local view)
         // Authoritative re-check: the local cache can show our own claim before a rival's
         // overwrite arrives on a slow connection — that window caused double-sends.
-        try{ const _fresh=await getDoc(mailQueueRef); if(((_fresh.exists()?_fresh.data():{})[qid]||{}).claimedBy!==MQ_ID) continue; }catch(_){ continue; }
+        try{
+          const _fresh=await getDoc(mailQueueRef); const _f=(_fresh.exists()?_fresh.data():{})[qid]||{};
+          if(_f.claimedBy!==MQ_ID) continue;
+          // [AUDIT 2026-07-25 #11] The claim above writes DOTTED paths, which RECREATE an
+          // entry another page deleted after it finished sending. The resurrected stub owns
+          // our claim id, so the claimedBy check alone passes and we would re-send the whole
+          // alert from this page's stale copy. A real entry still carries its original ts;
+          // a stub does not. Mismatch → the send already happened elsewhere: bin the stub.
+          if(_f.ts!==e.ts){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
+        }catch(_){ continue; }
         if(isWelcome && _welcomed(wkey)){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; } // re-check after claim
         for(const email of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:e.body||''}); trackEmailSent(); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(email)}).catch(()=>{}); }
         if(isWelcome && wkey){ try{ await setDoc(welcomeLogRef,{sent:{[wkey]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[wkey]=true; }catch(_){} }
