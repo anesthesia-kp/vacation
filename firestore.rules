@@ -58,6 +58,20 @@ service cloud.firestore {
       return docId in ['loginEmails', 'emails', 'adminAccess', 'emailToUser', 'signInMisses'];
     }
 
+    // ── Outbound mail relay [AUDIT 2026-07-25 #6] ─────────────────────────────
+    // mailQueue holds pending alert/welcome entries — each carrying a staff e-mail
+    // address and the message body. It used to fall through to the world-readable
+    // default, so anyone with the (public) Firebase config could poll it from the
+    // open internet and harvest exactly the PII that `emails` is gated to protect.
+    // Reads now require a REGISTERED user (not merely any verified Google account):
+    // outsiders with a Google login are not auction participants and have no reason
+    // to see the outbox. The staff site attaches its mailQueue listener only on the
+    // signed-in path (same pattern as the L-5 emails listener) so the anonymous
+    // login bootstrap never trips this gate with a dead permission-denied listener.
+    function isRelayDoc(docId) {
+      return docId == 'mailQueue';
+    }
+
     // ── Admin-READ-only documents (live mid-phase decisions) [H-4] ────────────
     // approvals / denials hold the admin's LIVE approve/deny decisions for the
     // current phase. They must never leak before results e-mails go out: the user
@@ -128,9 +142,18 @@ service cloud.firestore {
         || request.time.toMillis() < get(/databases/$(database)/documents/vacations/timer).data.get('lastChange', 0)
              + int(get(/databases/$(database)/documents/vacations/timer).data.get('durationHours', 48) * 3600000);
     }
-    // User timer writes may only touch lastChange/durationHours with sane values:
-    // lastChange within 10 minutes of the server clock (no forced expiry via
-    // lastChange:0, no future-dated stalls) and a duration of at most 90 days.
+    // User timer writes may only touch lastChange/durationHours with sane values.
+    // [AUDIT 2026-07-25 #1] The old version bounded lastChange but left durationHours
+    // at "> 0 && <= 2160", so any registered bidder could write durationHours:0.001 and
+    // force-expire the phase for everyone (the first open admin page then auto-locks all
+    // 52 weeks), or 2160 to stall it for 90 days. Three tightenings:
+    //   1. duration floor of 1h — the client engine's stages are 3/6/12/24/48h, and the
+    //      quiet-hours adjustment only ever EXTENDS, so 1 is well below anything real.
+    //   2. duration ceiling of 72h — users never legitimately exceed the 48h stage-0
+    //      value (long opening windows are written by admins, who bypass this function).
+    //   3. the resulting deadline must still be at least an hour out BY THE SERVER CLOCK.
+    //      This is the one that actually closes the hole: a clamp on durationHours alone
+    //      is defeated by a legal 10-minute-old lastChange plus a small duration.
     function timerWriteSane() {
       return (resource == null
                 ? request.resource.data.keys().hasOnly(['lastChange', 'durationHours'])
@@ -139,8 +162,11 @@ service cloud.firestore {
         && request.resource.data.get('lastChange', 0) > request.time.toMillis() - 600000
         && request.resource.data.get('lastChange', 0) < request.time.toMillis() + 600000
         && request.resource.data.get('durationHours', 48) is number
-        && request.resource.data.get('durationHours', 48) > 0
-        && request.resource.data.get('durationHours', 48) <= 2160;
+        && request.resource.data.get('durationHours', 48) >= 1
+        && request.resource.data.get('durationHours', 48) <= 72
+        && request.resource.data.get('lastChange', 0)
+             + int(request.resource.data.get('durationHours', 48) * 3600000)
+           > request.time.toMillis() + 3600000;
     }
 
     match /vacations/{docId} {
@@ -148,7 +174,8 @@ service cloud.firestore {
       // docs require a verified sign-in; everything else (roster, usernames, phases,
       // schedule, …) stays public for the anonymous login screen.
       allow read: if isAdminReadDoc(docId) ? isAdmin()
-                   : (isSensitiveDoc(docId) ? isVerifiedAccount() : true);
+                   : (isRelayDoc(docId) ? (isRegisteredUser() || isAdmin())
+                   : (isSensitiveDoc(docId) ? isVerifiedAccount() : true));
       // welcomeLog only records which addresses have already been welcomed (no PII, no
       // control data). [L-8] Writable by a REGISTERED user or an admin — tightened from
       // "any verified Google account" so a signed-in outsider who isn't in the auction

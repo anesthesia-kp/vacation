@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 191;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 192;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1173,6 +1173,16 @@ function recipientsFor(user){
   add(emailsDataAdmin[user]);
   return out;
 }
+// [AUDIT 2026-07-25 #6] Is this address one the roster actually knows? Guards the
+// relay against a mailQueue entry naming an arbitrary external recipient.
+function _knownRosterAddress(a){
+  const s=String(a||'').trim().toLowerCase();
+  if(!s||!s.includes('@')) return false;
+  for(const k in loginEmailsDataAdmin){ if(String(loginEmailsDataAdmin[k]||'').trim().toLowerCase()===s) return true; }
+  for(const k in emailsDataAdmin){ if(String(emailsDataAdmin[k]||'').trim().toLowerCase()===s) return true; }
+  return false;
+}
+window._knownRosterAddress=_knownRosterAddress;
 let changesLog=[], changesResetAt=0, adminSettings={emailNotifsEnabled:true}, timerData={enabled:false,lastChange:null};
 function getReviewThreshold(){ const raw=adminSettings?.reviewThreshold; if(raw===undefined||raw===null)return 0.5; const n=Number(raw); if(isNaN(n))return 0.5; const clamped=Math.max(0,Math.min(2,n)); return Math.round(clamped*10)/10; }
 // Returns the FTE of the lowest-FTE user in the roster. Used by the auto-lock rule.
@@ -1461,6 +1471,12 @@ async function processMailQueue(minAgeMs){
       // fanning out to both addresses. Otherwise: primary (login) + secondary, with a
       // fallback to the recorded `email` if the user has no addresses on file yet.
       const isWelcome=!!(e.to && e.to!=='__skip__' && String(e.to).includes('@'));
+      // [AUDIT 2026-07-25 #6] mailQueue is user-writable, and this relay sends e.body to
+      // whatever address e.to names — so an injected entry could mail arbitrary text to
+      // an arbitrary outsider from the department's EmailJS account. A single-target
+      // entry may now only address someone on the roster. Skip (never delete) an unknown
+      // one: this page's maps may simply not have loaded, and it must stay visible.
+      if(isWelcome && !_knownRosterAddress(e.to)) continue;
       const wkey=isWelcome?(e.wkey||_wlKey(e.to)):null;
       // A welcome already recorded in the welcome log was delivered once — drop this
       // leftover copy rather than re-sending it.
@@ -2056,9 +2072,14 @@ function renderLockSummary(){
     `🔒 <strong style="color:var(--t1)">${s.lockedCount}</strong> of ${s.total} week${s.total!==1?'s':''} locked`,
     s.lockedCount, s.lockedWeeks, '#334155');
   // 2) Locked weeks that still have availability (+ Unlock button)
-  const wa=s.lockedWithAvailability;
+  // [AUDIT 2026-07-25 #4] During a live Phase 1 the 46 standard weeks are locked ON
+  // PURPOSE, so listing them as a problem (with an Unlock button) told the admin to
+  // break their own phase. Only high-demand weeks can be wrongly locked in Phase 1.
+  const _p1=p1HighDemandOnly();
+  const wa=_p1?s.lockedWithAvailability.filter(w=>HIGH_DEMAND_WEEKS.has(w.wk)):s.lockedWithAvailability;
+  const _p1Hidden=_p1?(s.lockedWithAvailability.length-wa.length):0;
   html+=row('wrongLocked',
-    `<span style="color:${wa.length?'#946200':'var(--t2)'}">${wa.length?'⚠️ ':'✓ '}<strong>${wa.length}</strong> locked week${wa.length!==1?'s':''} at/above ${wa.length!==1?'their':'its'} Smart Lock Control</span>`,
+    `<span style="color:${wa.length?'#946200':'var(--t2)'}">${wa.length?'⚠️ ':'✓ '}<strong>${wa.length}</strong> locked week${wa.length!==1?'s':''} at/above ${wa.length!==1?'their':'its'} Smart Lock Control</span>${_p1Hidden?`<span style="color:var(--t3);font-size:11px;margin-left:8px">(${_p1Hidden} standard week${_p1Hidden!==1?'s':''} locked by Phase 1 — not counted)</span>`:''}`,
     wa.length, wa, '#d97706',
     wa.length?`<button class="btn" style="font-size:11px;background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="unlockAvailabilityWeeks()">🔓 Unlock these</button>`:'');
   // 3) Unlocked weeks with no availability (+ Lock button)
@@ -2573,11 +2594,11 @@ window.unlockAvailabilityWeeks=function(){
       <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12px;line-height:1.7;max-height:150px;overflow-y:auto">${toUnlock.map(w=>`<li>${w.label} <span style="color:var(--green)">(Remaining: ${w.remaining})</span></li>`).join('')}</ul>
       <div class="cmodal-info">Users will be able to bid on these weeks again.</div>`,
     okText:'🔓 Unlock These',
-    onConfirm:async()=>{
+    onConfirm:()=>guardP1Unlock(toUnlock.map(w=>w.wk),async()=>{   // [AUDIT #4]
       const dotted={}; toUnlock.forEach(w=>dotted['weeks.'+w.wk]=false);
       await mergeFields(locksRef,dotted);
       toast('🔓 Unlocked '+toUnlock.length+' week'+(toUnlock.length!==1?'s':''),'ok');
-    }
+    })
   });
 };
 // Lock every unlocked week whose remaining FTE is below its Smart Lock Control.
@@ -3121,13 +3142,19 @@ window.toggleWeekLock=async function(wk){
         body:`<div>Unlock <strong>${wLabel(wkDate(wk))}</strong>?</div>
               <div class="cmodal-warn" style="margin-top:8px">⚠️ This week is <strong>below its Smart Lock Control</strong> (remaining ${remaining}, control ${slc}) — it is effectively full, and users could waste bids on it. Confirm to override.</div>`,
         okText:'Unlock Anyway', danger:true,
-        onConfirm:async()=>{
+        onConfirm:()=>guardP1Unlock([wk],async()=>{                 // [AUDIT #4]
           await mergeFields(locksRef,{['weeks.'+wk]:false});
           toast("🔓 Unlocked",'ok');
-        }
+        })
       });
       return;
     }
+    // [AUDIT #4] Plain unlock of a single week still needs the Phase-1 gate.
+    guardP1Unlock([wk],async()=>{
+      await mergeFields(locksRef,{['weeks.'+wk]:false});
+      toast("🔓 Unlocked",'ok');
+    });
+    return;
   }
   await mergeFields(locksRef,{['weeks.'+wk]:!cur});
   toast(cur?"🔓 Unlocked":"🔒 Locked",cur?"ok":"warn");
@@ -3149,14 +3176,38 @@ window.unlockAllWeeks=function(){
     body:(()=>{const ap=computeApprovals();let full=0;mondays.forEach(d=>{const wk=dateKey(d);const a=ap[wk];const rem=Math.round((getSlots(wk)-(a?.fteWon||0))*10)/10;if(rem<getSlc(wk))full++;});
       return `<div>Unlock all 52 weeks?</div><div class="cmodal-info">Users will be able to add, edit, and remove bids on any week.</div>${full?`<div class="cmodal-warn" style="margin-top:8px">⚠️ ${full} week${full!==1?'s are':' is'} below ${full!==1?'their':'its'} Smart Lock Control (effectively full) — users could waste bids there.</div>`:''}`;})(),
     okText:'Unlock All',
-    onConfirm:async()=>{
+    onConfirm:()=>guardP1Unlock(null,async()=>{                     // [AUDIT #4]
       await setDoc(locksRef,{weeks:{}},{merge:true}); toast("🔓 All unlocked","ok");
-    }
+    })
   });
 };
 
 // High-demand week keys (kept open when locking all except high demand)
 const HIGH_DEMAND_WEEKS=new Set(["2027-02-14","2027-03-28","2027-04-04","2027-11-21","2027-12-19","2027-12-26"]);
+// [AUDIT 2026-07-25 #4] Phase 1 is high-demand-only, enforced purely by per-week
+// locks. smartLockUnlock had a Phase-1 warning but every OTHER unlock path did not,
+// and the dashboard's Lock Summary actively flagged the 46 correctly-locked standard
+// weeks as a problem with a one-click "Unlock these" button whose dialog never
+// mentioned Phase 1. These two helpers give every unlock path the same gate.
+function p1HighDemandOnly(){
+  return Number(phasesData.currentPhase||1)===1 && phase1Started() && !phasesData.completedPhases?.[1];
+}
+// Runs `proceed` immediately unless this would unlock STANDARD weeks during a live
+// Phase 1 — in which case the admin must deliberately confirm first. `wks` is a list
+// of week keys about to be unlocked; pass null to mean "all 52 weeks".
+function guardP1Unlock(wks,proceed){
+  const all=(wks===null)?mondays.map(d=>dateKey(d)):(wks||[]);
+  const std=all.filter(wk=>!HIGH_DEMAND_WEEKS.has(wk));
+  if(!p1HighDemandOnly()||!std.length){ proceed(); return; }
+  openConfirm({
+    title:'⚠️ Phase 1 is high-demand only',
+    body:`<div>Phase 1 keeps every standard week LOCKED. This would <strong>unlock ${std.length} standard week${std.length!==1?'s':''}</strong> that are supposed to stay locked until Phase 2.</div>
+          <div class="cmodal-danger">Only continue if you deliberately want standard weeks biddable during Phase 1.</div>`,
+    okText:'Continue anyway', danger:true,
+    onConfirm:()=>proceed()
+  });
+}
+window.p1HighDemandOnly=p1HighDemandOnly; window.guardP1Unlock=guardP1Unlock;
 // Display labels for the six high-demand weeks. Week keys are SUNDAYS (the old
 // Monday dates shown here previously were a leftover from before the timezone fix).
 const HD_WEEK_LABELS=["Wk 7 · Sun Feb 14 (⛷️ Ski)","Wk 13 · Sun Mar 28 (🌸 Spring)","Wk 14 · Sun Apr 4 (🌸 Spring)","Wk 47 · Sun Nov 21 (🦃 Thanksgiving)","Wk 51 · Sun Dec 19 (🎄 Christmas)","Wk 52 · Sun Dec 26 (🎆 NYE)"];
@@ -7633,6 +7684,16 @@ async function _doUserRestore(f,u){
   if(/[.~*/[\]]/.test(u)){ toast('Cannot restore user "'+u+'" — the name contains characters that are unsafe as a field key.','err'); return; }
   const d=f.data;
   const pairs=[[scheduleRef,'schedule'],[worstBidsRef,'bestBids'],[bidTimesRef,'bidTimes'],[bidPhaseRef,'bidPhase']];
+  // [AUDIT 2026-07-25 #5] A doc that failed to read at backup time is stored as the
+  // STRING 'FETCH-FAILED: …', not a map. Full restore already skips those (see the
+  // typeof check in the batch loop); this path did not — (d[k]||{})[u] on a string is
+  // undefined, so the loop below would deleteField() the user's live bids/locks/times
+  // and report success. Refuse the whole restore instead: a partial one is worse.
+  const unusable=pairs.filter(([,k])=>typeof d[k]==='string'||(d[k]!==undefined&&d[k]!==null&&typeof d[k]!=='object')).map(([,k])=>k);
+  if(unusable.length){
+    toast('🛟 Restore ABORTED — this backup could not read '+unusable.join(', ')+'. Restoring would delete '+u+"'s live data for those. Use a complete backup.",'err');
+    return;
+  }
   const fails=[];
   for(const [ref,k] of pairs){
     const val=(d[k]||{})[u];

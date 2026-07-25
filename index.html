@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 111;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 112;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1266,7 +1266,12 @@ function trackEmailSent(){
   updateDoc(mailStatsRef,{[k]:increment(1)}).catch(()=>setDoc(mailStatsRef,{[k]:1},{merge:true}).catch(()=>{}));
 }
 onSnapshot(slotsRef,   snap=>{ slotsData=snap.exists()?snap.data():{}; applySlotOverrides(); scheduleRender(); });
-onSnapshot(mailQueueRef,snap=>{ mailQueueData=snap.exists()?snap.data():{}; scheduleMailQueueRelay(); });
+// [AUDIT 2026-07-25 #6] No top-level mailQueue listener. That doc is now readable only
+// by REGISTERED users (it carries staff addresses + message bodies, and was previously
+// world-readable), so attaching during the anonymous bootstrap would be rejected
+// permission-denied — and a rejected snapshot listener never retries. Same reasoning as
+// the L-5 emails listener above; _subscribeSensitiveOnce() attaches it after sign-in.
+// The relay could never run before sign-in anyway (it is gated on _recipMapsLoaded).
 
 // ── Outbid-alert queue relay ──
 // If the bidder's browser died before its alert email went out, the alert sits
@@ -1294,6 +1299,18 @@ function recipientsFor(user){
   add(loginEmailsData[user]); add(emailsData[user]);
   return out;
 }
+// [AUDIT 2026-07-25 #6] Is this address one the roster actually knows? mailQueue is
+// user-writable, and the relay below mails e.body to whatever address e.to names — so
+// without this an injected entry could send arbitrary text to an arbitrary outsider
+// from the department's EmailJS account.
+function _knownRosterAddress(a){
+  const s=String(a||'').trim().toLowerCase();
+  if(!s||!s.includes('@')) return false;
+  for(const k in loginEmailsData){ if(String(loginEmailsData[k]||'').trim().toLowerCase()===s) return true; }
+  for(const k in emailsData){ if(String(emailsData[k]||'').trim().toLowerCase()===s) return true; }
+  return false;
+}
+window._knownRosterAddress=_knownRosterAddress;
 window._recipientsFor=recipientsFor; // exposed for testing
 async function relayMailQueue(){
   // A tab may only relay once its recipient maps have GENUINELY loaded after sign-in.
@@ -1309,6 +1326,9 @@ async function relayMailQueue(){
       // A `to` field means single-target (welcome e-mail) — send ONLY there. Otherwise
       // (outbid/results alerts) fan out to both the Google login and KP addresses.
       const isWelcome=!!(e.to && String(e.to).includes('@') && String(e.to)!=='__skip__');
+      // [AUDIT 2026-07-25 #6] Single-target entries may only address someone on the
+      // roster. Skip (never delete) an unknown one — it must stay visible to an admin.
+      if(isWelcome && !_knownRosterAddress(e.to)) continue;
       const wkey=isWelcome?(e.wkey||_wlKey(e.to)):null;
       // A welcome whose address is ALREADY in the welcome log was delivered once already
       // (this is a leftover copy whose delete didn't land). Drop it — never re-send.
@@ -2569,6 +2589,9 @@ function _subscribeSensitiveOnce(){
   if(_sensitiveSubbed) return; _sensitiveSubbed=true;
   onSnapshot(loginEmailsRef, snap=>{ loginEmailsData=snap.exists()?snap.data():{}; });
   onSnapshot(emailsRef, snap=>{ emailsData=snap.exists()?snap.data():{}; _emailsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
+  // [AUDIT 2026-07-25 #6] mailQueue moved here from the top level — it is registered-user
+  // -only in firestore.rules now, so it must not be subscribed during anonymous bootstrap.
+  onSnapshot(mailQueueRef, snap=>{ mailQueueData=snap.exists()?snap.data():{}; scheduleMailQueueRelay(); });
 }
 // SECOND auth handler (the anonymous bootstrap one above is left intact). Fires on
 // every auth change but only acts on a non-anonymous Google user with an email.
