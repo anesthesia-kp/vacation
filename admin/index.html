@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 197;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 198;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -701,6 +701,10 @@ thead th{color:var(--t2)}
           <div class="tog" id="fteEditToggle" onclick="toggleFteEdit()"></div>
         </div>
         <div id="fteLockNote" style="font-size:12px;color:var(--yellow);font-weight:600;margin-bottom:10px"></div>
+        <!-- [FTE 25 Jul 2026] Shown only while some users still have no SAVED FTE. The old
+             UI printed a fallback number in every box, so "never entered" looked identical
+             to "entered" — this names the gap and offers one deliberate write to close it. -->
+        <div id="fteMissingBox" style="display:none;background:rgba(234,179,8,.10);border:1px solid rgba(234,179,8,.4);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:12.5px"></div>
         <div id="signInMissBox" style="display:none;background:rgba(198,40,40,.08);border:1px solid rgba(198,40,40,.3);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:12.5px"></div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px;flex-wrap:wrap">
           <button class="btn btn-danger" style="background:rgba(198,40,40,.22);border-color:rgba(198,40,40,.6)" onclick="deleteAllUsers()">🗑 Delete All Users</button>
@@ -7024,15 +7028,32 @@ function renderUsersCombined(){
     :(phase1Started()?'⚠️ FTE editing is ON during a live auction — change what you must, then switch it back OFF.':'✏️ FTE editing is ON — remember to switch it OFF when done.');
   const ftog=document.getElementById('fteEditToggle');
   if(ftog) ftog.className='tog'+(fteLocked?'':' on');
+  // [FTE 25 Jul 2026] Name the users whose FTE has never actually been saved, and offer a
+  // single deliberate write to set them all at once.
+  const _miss=usersMissingFte();
+  const mbox=document.getElementById('fteMissingBox');
+  if(mbox){
+    if(!_miss.length){ mbox.style.display='none'; mbox.innerHTML=''; }
+    else{
+      mbox.style.display='';
+      mbox.innerHTML=`<div style="font-weight:700;color:#946200">⚠️ ${_miss.length} user${_miss.length!==1?'s have':' has'} no saved FTE</div>
+        <div style="color:var(--t2);margin-top:4px;line-height:1.5">Their boxes below show <strong>${1.0}</strong> because that is the fallback the code uses when nothing is stored — it is not a value you entered. Bidding cannot begin until each is saved.</div>
+        <div style="color:var(--t2);margin-top:6px;font-size:11.5px">${_miss.map(u=>esc(u)).join(', ')}</div>
+        ${fteLocked
+          ? '<div style="margin-top:8px;color:var(--t3);font-size:11.5px">🔒 Switch FTE editing ON above to set them.</div>'
+          : `<button class="btn btn-primary" style="margin-top:8px;padding:4px 12px;font-size:12px" onclick="bulkSaveMissingFte()">✔ Set FTE for all ${_miss.length}…</button>`}`;
+    }
+  }
   tb.innerHTML=names.map(n=>{
     const fte=getUserFTE(n);
+    const _unsaved=_miss.includes(n);
     const em=emailsData[n]||''; const skip=em==='__skip__';
     return `<tr>
       <td class="mono" style="white-space:nowrap"><strong>${n}</strong></td>
       <td style="white-space:nowrap"><input type="text" id="ufn_${n}" class="inp" autocomplete="off" style="width:160px" value="${esc(usernamesData[n]||'')}" placeholder="Full name">
         <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveFullName('${n}')">Save</button></td>
-      <td style="white-space:nowrap"><input type="number" id="fte_${n}" class="inp" autocomplete="off" style="width:70px" value="${fte}" step="0.1" min="0.4" max="1"${fteLocked?' disabled title="FTE editing is off — use the FTE editing toggle above"':''}>
-        ${fteLocked?'<span title="FTE editing is off — use the FTE editing toggle above" style="font-size:13px;color:var(--t3)">🔒</span>':`<button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveFte('${n}')">Save</button>`}</td>
+      <td style="white-space:nowrap"><input type="number" id="fte_${n}" class="inp" autocomplete="off" style="width:70px${_unsaved?';border-color:#eab308;background:rgba(234,179,8,.08)':''}" value="${fte}" step="0.1" min="0.4" max="1"${_unsaved?' title="NOT SAVED — this is the code\'s fallback, not a value you entered"':''}${fteLocked?' disabled title="FTE editing is off — use the FTE editing toggle above"':''}>
+        ${_unsaved?'<span title="Not saved — this number is the fallback the code shows when no FTE is stored" style="font-size:11px;color:#946200;font-weight:700">unsaved</span> ':''}${fteLocked?'<span title="FTE editing is off — use the FTE editing toggle above" style="font-size:13px;color:var(--t3)">🔒</span>':`<button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveFte('${n}')">Save</button>`}</td>
       <td style="white-space:nowrap"><input type="email" id="lem_${n}" class="inp" autocomplete="off" style="width:200px" value="${esc(loginEmailsData[n]||'')}" placeholder="their-google@gmail.com">
         <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveLoginEmail('${n}')">Save</button>
         <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearLoginEmail('${n}')">Clear</button></td>
@@ -7251,6 +7272,36 @@ window.toggleFteEdit=function(){
       :`<div>Lock the FTE fields again to prevent accidental changes?</div>`,
     okText:turningOn?'Enable editing':'Lock editing', danger:turningOn&&phase1Started(),
     onConfirm:async()=>{ await setDoc(adminRef,{fteEditEnabled:turningOn},{merge:true}); toast(turningOn?'✏️ FTE editing ON':'🔒 FTE editing OFF',turningOn?'warn':'ok'); }
+  });
+};
+// [FTE 25 Jul 2026] Bulk-set every user who has no SAVED FTE. Their boxes have been
+// showing the code's 1.0 fallback, which is indistinguishable from a real entry — this
+// turns that assumption into an explicit, admin-authored value in one deliberate action.
+// The dialog names every user and takes ONE value; anyone part-time still needs their own
+// entry, so the confirm says so rather than pretending this is a general-purpose tool.
+window.bulkSaveMissingFte=function(){
+  if(adminSettings.fteEditEnabled!==true){ toast('FTE editing is OFF — flip the FTE editing toggle first.','warn'); return; }
+  const miss=usersMissingFte();
+  if(!miss.length){ toast('Every user already has a saved FTE.','ok'); return; }
+  openConfirm({
+    title:'✔ Set FTE for '+miss.length+' user'+(miss.length!==1?'s':''),
+    body:`<div>These ${miss.length} user${miss.length!==1?'s have':' has'} <strong>no saved FTE</strong>. The number currently shown next to them is the code's fallback, not a value you entered.</div>
+          <div style="margin-top:8px;color:var(--t2);font-size:12px;line-height:1.6">${miss.map(u=>esc(u)).join(', ')}</div>
+          <div style="margin-top:10px"><label style="font-size:12px;color:var(--t2)">Save this FTE for all of them: </label>
+            <input type="number" id="bulkFteVal" class="inp" style="width:80px;margin-left:6px" value="1.0" step="0.1" min="${FTE_MIN}" max="1"></div>
+          <div class="cmodal-warn" style="margin-top:8px">Only use this if every user listed really is that FTE. Anyone part-time must be set individually — this writes the same value to all ${miss.length}.</div>`,
+    okText:'Save for all '+miss.length,
+    onConfirm:async()=>{
+      const raw=parseFloat(document.getElementById('bulkFteVal')?.value);
+      if(isNaN(raw)||raw<FTE_MIN||raw>1){ toast('FTE must be between '+FTE_MIN+' and 1','err'); return; }
+      const val=Math.round(raw*10)/10;                      // 0.1 grid, same as saveFte
+      const patch={}; miss.forEach(u=>{ patch[u]=val; });    // one write, not N
+      try{
+        await setDoc(fteRef,patch,{merge:true});
+        await adminLog('ALL','ALL','admin-fte-bulk',val).catch(()=>{});
+        toast('✔ Saved FTE '+val+' for '+miss.length+' user'+(miss.length!==1?'s':''),'ok');
+      }catch(e){ toast('Could not save — '+(e?.message||e),'err'); }
+    }
   });
 };
 window.saveFte=async function(u){
