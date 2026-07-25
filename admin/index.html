@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 198;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 199;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -3466,9 +3466,17 @@ window._runSimulationNow=async function(){
     }
     const weeks=fyShuffle([...allWeeks].filter(wk=>!priorWonWeeks.has(wk)&&!existingWeeks.has(wk)));
     let bidCount=existingWeeks.size; // target INCLUDES bids the user already placed
+    // [SIM 25 Jul 2026] Honour the CUMULATIVE cap, not just the slider. A real user is
+    // stopped by bidLimitStatus() at priorApprovedCount + live bids >= cap, so a slider
+    // set above the cap used to let the simulator build a board no real auction could
+    // reach. priorWonWeeks is exactly this user's prior-phase win count, so the room left
+    // is cap - priorWins; the slider can only ever make the target SMALLER, never larger.
+    const _simCap=_cumCap(cur);
+    const _capRoom=(_simCap===null)?Infinity:Math.max(0,_simCap-priorWonWeeks.size);
+    const _simTarget=Math.min(SIM_MAX_BIDS,_capRoom);
     const userBids={};
     for(const wk of weeks){
-      if(bidCount>=SIM_MAX_BIDS) break;
+      if(bidCount>=_simTarget) break;
       const _floor=(worstBidsData[user]||{})[wk]; // [M-5] existing priority-lock floor, if any
       const allowed=simGetAllowedBids(wk).filter(b=>{
         if(b==='NP'){ if(usedPrios.has('NP')) return false; }
@@ -3574,7 +3582,10 @@ window._runSimulationNow=async function(){
       // or the timer stops accurately reflecting "time since the last bid activity."
       // M-6: but if the timer is already EXPIRED (phase closed), do NOT reset it — that would
       // silently reopen a closed phase. Only reset while bidding is genuinely still open.
-      { const _rem=getDurationMs()-(Date.now()-(timerData.lastChange||0)); if(timerData.enabled && _rem>0 && !openingWindowActive()){ const _n=Date.now(); await setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{}); } }
+      // [SIM 25 Jul 2026] `lastChange||0` treated "timer on, never started" as long expired,
+      // so a simulated bid silently failed to START the countdown — where a real bid does
+      // (the staff site defaults its remaining-time to 1 in exactly this case). Mirror it.
+      { const _rem=timerData.lastChange?(getDurationMs()-(Date.now()-timerData.lastChange)):1; if(timerData.enabled && _rem>0 && !openingWindowActive()){ const _n=Date.now(); await setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{}); } }
     }
     // Outbid alerts: simulated bids are real bid activity, so affected users get
     // the same projection-change alerts a real bid triggers. One batched diff of
