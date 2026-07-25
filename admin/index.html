@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 195;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 196;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1615,8 +1615,20 @@ function mName(m){ return m.toLocaleDateString('en-US',{month:'long',year:'numer
 function fmtWk(wk){ const d=wkDate(wk); return `${MS[d.getMonth()]} ${d.getDate()}`; }
 function groupByMonth(){ const g={}; mondays.forEach(d=>{ const k=mName(d); if(!g[k])g[k]=[]; g[k].push(d); }); return g; }
 
-const FTE_MAP={MA:.4,BC:.5,EC:.8,SC:.6,SFI:.8,NG:.8,MK:.8,SYK:.8,SL:.9,JLO:.7,KN:.8,AQ:.6,DR:.8,DNS:.9};
-function getUserFTE(u){ return fteData[u]!==undefined?fteData[u]:(FTE_MAP[u]||1.0); }
+// [FTE 25 Jul 2026] The hardcoded FTE_MAP fallback is GONE — every user's FTE must be
+// entered by the admin, exactly like week capacity. (The old map was already dead: all 14
+// users in it had saved values.) The 1.0 below is a last-resort arithmetic guard, NOT a
+// default: getUserFTE feeds ~49 capacity sums, and returning 0 or NaN instead would make
+// an unset user consume nothing and therefore win everything — the opposite of the safe
+// direction unset week capacity takes. The state is prevented instead of valued:
+// usersMissingFte() blocks Begin Phase and warns on the dashboard, and addUser refuses a
+// blank FTE, so no auction can run while anyone is unset and this line stays unreachable.
+function getUserFTE(u){ return fteData[u]!==undefined?fteData[u]:1.0; }
+// Roster users with no admin-entered FTE. Mirrors weeksMissingCapacity().
+function usersMissingFte(){
+  return (names||[]).filter(u=>fteData[u]===undefined||fteData[u]===null||fteData[u]===''||isNaN(Number(fteData[u])));
+}
+window.usersMissingFte=usersMissingFte;
 
 function pScore(p){ if(p==="NP")return 99; if(Array.isArray(p)){ const s=[...p].sort((a,b)=>a-b).join(','); if(s==='1,2,3')return 0; if(s==='1,2')return 1; return Math.min(...p)+1; } return p+1; }
 
@@ -3692,6 +3704,7 @@ window.closePhaseBidding=function(cur){
   });
 };
 window.gotoSlotsPanel=function(){ nav('slots',document.querySelector('[onclick*="\'slots\'"]')); };
+window.gotoUsersPanel=function(){ nav('users',document.querySelector('[onclick*="\'users\'"]')); };
 // ── NP bids by phase ──
 // Initial policy (admin-requested): OFF for phases 1-2, ON for phases 3-4.
 function npDefaultFor(ph){ return ph>=3; }
@@ -3748,8 +3761,13 @@ function renderNextStep(){
   const btn=(label,onclick,cls)=>`<button class="btn ${cls||'btn-primary'}" style="margin-top:8px;padding:4px 12px;font-size:12px" onclick="${onclick}">${label}</button>`;
   let html;
   const missingCaps=weeksMissingCapacity().length;
+  // [FTE 25 Jul 2026] Same rule as week capacity: no built-in defaults. A user with no
+  // saved FTE blocks the auction from starting rather than being silently treated as 1.0.
+  const missingFte=usersMissingFte();
   if(missingCaps>0){
     html=box(`<strong>${missingCaps}</strong> week${missingCaps!==1?'s have':' has'} no saved FTE capacity — those weeks are unbiddable (capacity 0) until you save a value. There are no built-in defaults.`,btn('📆 Open FTE Availability','gotoSlotsPanel()'));
+  } else if(missingFte.length>0){
+    html=box(`<strong>${missingFte.length}</strong> user${missingFte.length!==1?'s have':' has'} no saved FTE — bidding cannot begin until every user has one. There are no built-in defaults.<div style="margin-top:6px;color:var(--t2);font-size:11.5px">${missingFte.map(u=>esc(u)).join(', ')}</div>`,btn('👤 Open Users','gotoUsersPanel()'));
   } else if(!phase1Started()){
     html=box('Bidding has not begun. Begin Phase 1 to open the auction to users.',btn('▶ Begin Phase 1','beginPhase1()','btn-success'));
   } else if(phasesData.completedPhases?.[cur]){
@@ -3979,7 +3997,28 @@ window.completePhase=function(){
   });
 };
 
+// [FTE 25 Jul 2026] Hard gate: no phase may open while any roster user has no
+// admin-entered FTE. This is what makes "no default FTE" real — getUserFTE's 1.0 guard
+// exists only so the ~49 capacity sums can't produce NaN or zero, and this check is what
+// keeps it unreachable. Returns true (and explains) when the phase must NOT proceed.
+// Called at BOTH ends: before the Phase-1 week-lock write (so a blocked start doesn't
+// leave 46 weeks locked with no phase running) and inside _commitBeginPhase as a backstop
+// for every other entry point.
+function blockedByMissingFte(){
+  const miss=usersMissingFte();
+  if(!miss.length) return false;
+  openConfirm({
+    title:'⛔ FTE missing for '+miss.length+' user'+(miss.length!==1?'s':''),
+    body:`<div>Bidding cannot begin until every user has an admin-entered FTE. There are no built-in defaults — the engine fits FTE against each week's capacity, so a missing value would silently treat that person as full-time.</div>
+          <div style="margin-top:8px;color:var(--t2);font-size:12px;line-height:1.6">${miss.map(u=>esc(u)).join(', ')}</div>
+          <div class="cmodal-danger">Enter an FTE for each of these users on the Users page, then begin the phase.</div>`,
+    okText:'👤 Open Users', onConfirm:()=>{ if(typeof gotoUsersPanel==='function') gotoUsersPanel(); }
+  });
+  return true;
+}
+window.blockedByMissingFte=blockedByMissingFte;
 async function _commitBeginPhase(next){
+  if(blockedByMissingFte()) return false;
   if(next===1){
     await setDoc(phasesRef,{currentPhase:1,phase1Started:true,phaseBeganAt:{...(phasesData.phaseBeganAt||{}),1:Date.now()}},{merge:true});
   } else {
@@ -4084,6 +4123,10 @@ function _beginPhaseLockDecision(next){
 }
 window._beginPhaseKeepGlobalLock=function(next){ closeConfirm(); _beginPhaseLockDecisionInner(next); };
 function _beginPhaseLockDecisionInner(next){
+  // [FTE 25 Jul 2026] Check BEFORE any write. The Phase-1 branch below locks 46 weeks
+  // before committing the phase, so gating only inside _commitBeginPhase would leave the
+  // calendar locked with no phase started.
+  if(blockedByMissingFte()) return;
   // Phase 1 is HIGH-DEMAND ONLY: deterministically lock every standard week and open
   // the six high-demand weeks — no Smart-Lock decision applies. (The admin already
   // confirmed this in the Begin Phase 1 dialog, which lists the exact weeks.)
@@ -7037,14 +7080,14 @@ window.addUser=async function(){
   const loginEmail=(document.getElementById("newUserLoginEmail")?.value||'').trim().toLowerCase();
   const email2=(document.getElementById("newUserEmail2")?.value||'').trim();
   if(loginEmail && !loginEmail.includes('@')){toast("Login e-mail must be a valid address","err");return;}
-  // FTE for the new user (defaults to 1.0 if blank; must be between 0 and 1).
+  // [FTE 25 Jul 2026] FTE is now REQUIRED — no silent 1.0 for a blank field. Same rule as
+  // week capacity: only admin-entered values count, so a new user can't join the roster
+  // without one (which would otherwise block the next Begin Phase).
   const fteEl=document.getElementById("newUserFte");
-  let fte=1.0;
-  if(fteEl && fteEl.value.trim()!==""){
-    const parsed=parseFloat(fteEl.value);
-    if(isNaN(parsed)||parsed<0||parsed>1){toast("FTE must be between 0 and 1","err");return;}
-    fte=Math.round(parsed*10)/10;
-  }
+  if(!fteEl || fteEl.value.trim()===""){toast("Enter an FTE for "+val+" — there is no default","err");return;}
+  const parsed=parseFloat(fteEl.value);
+  if(isNaN(parsed)||parsed<0||parsed>1){toast("FTE must be between 0 and 1","err");return;}
+  const fte=Math.round(parsed*10)/10;   // 0.1 grid, same as saveFte [AUDIT #10]
   try{ await updateDoc(userListRef,{users:arrayUnion(val)}); }
   catch(e){ await setDoc(userListRef,{users:[val]},{merge:true}); } // doc doesn't exist yet
   await setDoc(fteRef,{[val]:fte},{merge:true}).catch(()=>{}); // FTE is this site's own (not shared)
