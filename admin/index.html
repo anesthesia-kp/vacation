@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 192;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 193;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -5422,8 +5422,35 @@ function approvalReadiness(){
   const problems=[];
   if(phaseOpen) problems.push('the bidding timer is still running — the phase is open and users can still change bids');
   if(!allWeeksLocked) problems.push('not all weeks are locked — bids can still change on unlocked weeks');
+  // [AUDIT 2026-07-25 #9] The cumulative win cap existed only in the settings screen
+  // and the welcome e-mail — nothing in the approval path ever checked it, so "Approve
+  // All Current Winners" could hand someone more weeks than the rules promised everyone.
+  for(const w of capBreaches()) problems.push(w);
   return {ready:problems.length===0, problems};
 }
+// Users whose PROJECTED wins this phase would take them past the cumulative cap.
+// Counts prior-phase wins plus the weeks they currently project to win/are approved for.
+function capBreaches(){
+  const out=[];
+  try{
+    const cur=Number(phasesData.currentPhase||1);
+    const cap=_cumCap(cur);
+    if(cap===null) return out;
+    const ap=computeApprovals();
+    const won={};
+    mondays.forEach(d=>{
+      const wk=dateKey(d); const a=ap[wk]; if(!a) return;
+      // computeApprovals() (no ignoreAdmin) already folds admin approvals into winners.
+      for(const u of names){ if(getOutcome(wk,u,ap)==='win') won[u]=(won[u]||0)+1; }
+    });
+    for(const u of names){
+      const total=_adminPriorApprovedCount(u)+(won[u]||0);
+      if(total>cap) out.push('<strong>'+esc(u)+'</strong> would end Phase '+cur+' with '+total+' weeks — over the cumulative cap of '+cap);
+    }
+  }catch(e){ console.warn('capBreaches failed',e); }
+  return out;
+}
+window.capBreaches=capBreaches;
 window.approvalReadiness=approvalReadiness;
 // Warning banner injected into approve/deny confirm dialogs; empty when ready.
 function readinessWarnHtml(){
@@ -5877,7 +5904,111 @@ async function _reconcileStaleDenials(wk){
     }
   }catch(e){ console.warn('reconcile stale denials failed',e); }
 }
+// ── Admin manual-bid validation [AUDIT 2026-07-25 #8 / #9] ────────────────────
+// The admin's own add/edit paths wrote straight to Firestore with no checks at all,
+// so a manual entry could do things no bidder could: bid a standard week during the
+// high-demand-only Phase 1, use NP in a phase where NP is switched off, reuse a bid
+// number the user already spent (letting one "1" win two weeks), or push a user past
+// the cumulative win cap that every bidder was held to and the welcome e-mail promised.
+// These are WARNINGS, not blocks — admin override is legitimate (fixing a mistake,
+// honouring an off-line request); it just has to be a deliberate choice, not a silent one.
+
+// Weeks that count toward this user's current-phase totals (admin twin of the user
+// site's myCountedWeeks). Excludes the week being edited.
+function _adminCountedWeeks(u,exceptWk){
+  return Object.keys(scheduleData[u]||{}).filter(wk=>wk!==exceptWk
+    && scheduleData[u][wk]!==undefined && isCurrentPhaseBidAdmin(u,wk));
+}
+// Bid numbers this user spent by WINNING in earlier phases — permanently consumed
+// (admin twin of getPriorPhaseUsedPriorities). Losses/denials release their number.
+function _adminPriorUsedPriorities(u){
+  const out=[]; const cur=Number(phasesData.currentPhase||1); const cp=phasesData.completedPhases||{};
+  for(const ph of Object.keys(cp)){
+    if(Number(ph)>=cur) continue;
+    const phAp=cp[ph]?.approvals||{}, phSched=cp[ph]?.schedule||{};
+    const bids=phSched[u]||{};
+    for(const wk of Object.keys(bids)){
+      const arr=Array.isArray(phAp[wk])?phAp[wk]:[];
+      if(!arr.includes(u)) continue;
+      const p=bids[wk]; if(p==='NP') continue;
+      if(Array.isArray(p)) out.push(...p); else out.push(p);
+    }
+  }
+  return out;
+}
+// Weeks this user WON in completed phases — the prior half of the cumulative cap.
+function _adminPriorApprovedCount(u){
+  let c=0; const cur=Number(phasesData.currentPhase||1); const cp=phasesData.completedPhases||{};
+  for(const ph of Object.keys(cp)){
+    if(Number(ph)>=cur) continue;
+    const ap=cp[ph]?.approvals||{};
+    for(const wk of Object.keys(ap)){ if(Array.isArray(ap[wk])&&ap[wk].includes(u)) c++; }
+  }
+  return c;
+}
+// Returns [] when a manual bid breaks nothing, else a list of plain-English problems.
+// `val` is the raw control value ("NP", "3", or "1,2,3"); isNew=true for an add.
+function adminBidIssues(u,wk,val,isNew){
+  const out=[]; const cur=Number(phasesData.currentPhase||1);
+  try{
+    const isNP=(val==='NP');
+    const nums=isNP?[]:String(val).split(',').map(p=>parseInt(p.trim(),10)).filter(n=>!isNaN(n));
+    // 1. Phase 1 is high-demand only.
+    if(p1HighDemandOnly()&&!HIGH_DEMAND_WEEKS.has(wk))
+      out.push('Phase 1 is <strong>high-demand only</strong> — this is a standard week, which no bidder can bid on right now.');
+    // 2. The week is locked, so users cannot touch it themselves.
+    if(locksData?.globalLock) out.push('<strong>Global Lock is ON</strong> — all bidding is frozen for every user.');
+    else if(locksData?.weeks?.[wk]) out.push('This week is <strong>locked</strong> — users cannot add or change bids on it.');
+    // 3. NP switched off for this phase.
+    if(isNP&&!npAllowedForPhase(cur))
+      out.push('<strong>NP bids are switched off for Phase '+cur+'</strong> — no bidder can enter NP this phase.');
+    // 4. Bid-number uniqueness, incl. numbers permanently consumed by prior-phase wins.
+    if(nums.length){
+      const used=[..._adminPriorUsedPriorities(u)];
+      for(const w of _adminCountedWeeks(u,wk)){
+        const p=scheduleData[u][w]; if(p==='NP'||p===undefined) continue;
+        if(Array.isArray(p)) used.push(...p); else used.push(p);
+      }
+      const clash=[...new Set(nums.filter(n=>used.includes(n)))];
+      if(clash.length) out.push('Bid number'+(clash.length>1?'s':'')+' <strong>'+clash.join(', ')+'</strong> '+(clash.length>1?'are':'is')+' already used by '+esc(u)+' on another week (or was consumed by a prior-phase win).');
+    }
+    // 5. [#9] Cumulative win cap — prior wins + live current-phase bids.
+    if(isNew){
+      const cap=_cumCap(cur);
+      if(cap!==null){
+        const used=_adminPriorApprovedCount(u)+_adminCountedWeeks(u,wk).length;
+        if(used>=cap) out.push('<strong>'+esc(u)+' is at the cumulative cap of '+cap+'</strong> ('+used+' already: prior wins + live bids this phase). The user site would refuse this bid.');
+      }
+    }
+  }catch(e){ console.warn('adminBidIssues failed',e); }
+  return out;
+}
+// Wraps any manual bid write in a warning confirm when it breaks a bidder-facing rule.
+function guardAdminBid(u,wk,val,isNew,proceed){
+  const issues=adminBidIssues(u,wk,val,isNew);
+  if(!issues.length){ proceed(); return; }
+  openConfirm({
+    title:'⚠️ This bid breaks the rules users follow',
+    body:`<div>Setting <strong>${esc(u)}</strong> to <strong style="font-family:var(--mono)">${esc(String(val))}</strong> on <strong>${esc(wLabel(wkDate(wk)))}</strong> would:</div>
+          <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">${issues.map(i=>'<li>'+i+'</li>').join('')}</ul>
+          <div class="cmodal-danger">Admin entries bypass every check the bidding engine applies. Only continue if this override is deliberate.</div>`,
+    okText:'Save anyway', danger:true,
+    onConfirm:()=>proceed()
+  });
+}
+window.adminBidIssues=adminBidIssues; window.guardAdminBid=guardAdminBid;
+
 window.adminChangePriority=async function(u,wk,val){
+  // [AUDIT #8/#9] Warn before an edit that no bidder could have made. Everything
+  // below runs unchanged once the admin has confirmed (or if nothing is wrong).
+  const _issues=adminBidIssues(u,wk,val,false);
+  if(_issues.length){
+    guardAdminBid(u,wk,val,false,()=>{ window._adminChangePriorityRaw(u,wk,val); });
+    return;
+  }
+  return window._adminChangePriorityRaw(u,wk,val);
+};
+window._adminChangePriorityRaw=async function(u,wk,val){
   // Direct dropdown change in Edit Selections — real per-field writes via
   // mergeFields() (updateDoc-based); plain setDoc+merge on a nested object
   // silently wipes the user's OTHER weeks, which is what this used to do.
@@ -5926,10 +6057,15 @@ window.adminAddSelection=function(){
   if(!u||!wk){toast("Select user and week","err");return;}
   if(scheduleData[u]?.[wk]!==undefined){toast(`${u} already has this week`,"err");return;}
   const m=wkDate(wk);
+  // [AUDIT #8/#9] Surface any bidder-facing rule this manual add would break, right
+  // in the existing confirm — no extra click when the entry is clean.
+  const _iss=adminBidIssues(u,wk,pv,true);
   openConfirm({
-    title:'➕ Add Bid',
-    body:`<div>Add bid <strong style="font-family:var(--mono)">${pv}</strong> for <strong>${u}</strong> on week of <strong>${wLabel(m)}</strong> (${wRange(m)})?</div>`,
-    okText:'Add',
+    title:_iss.length?'⚠️ Add Bid — breaks the rules users follow':'➕ Add Bid',
+    body:`<div>Add bid <strong style="font-family:var(--mono)">${pv}</strong> for <strong>${u}</strong> on week of <strong>${wLabel(m)}</strong> (${wRange(m)})?</div>`
+      +(_iss.length?`<ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">${_iss.map(i=>'<li>'+i+'</li>').join('')}</ul>
+          <div class="cmodal-danger">Admin entries bypass every check the bidding engine applies. Only continue if this override is deliberate.</div>`:''),
+    okText:_iss.length?'Add anyway':'Add', danger:!!_iss.length,
     onConfirm:async()=>{
       const _prev=snapshotSchedule();
       if(!scheduleData[u])scheduleData[u]={};
@@ -7017,10 +7153,17 @@ window.saveFte=async function(u){
   // Hard guard: writes blocked unless the admin has deliberately enabled FTE editing.
   // (Backs up the disabled input — this blocks the write no matter how it's triggered.)
   if(adminSettings.fteEditEnabled!==true){ toast('FTE editing is OFF — flip the FTE editing toggle on the Users page first.','warn'); return; }
-  const val=parseFloat(document.getElementById(`fte_${u}`)?.value);
-  if(isNaN(val)||val<0||val>1){toast("FTE must be between 0 and 1","err");return;}
+  const raw=parseFloat(document.getElementById(`fte_${u}`)?.value);
+  if(isNaN(raw)||raw<0||raw>1){toast("FTE must be between 0 and 1","err");return;}
+  // [AUDIT 2026-07-25 #10] The engine's fit test rounds to the 0.1 FTE grid
+  // (Math.round((fteWon+gf-cap)*10)/10 <= 0), and getSlots() rounds week capacity the
+  // same way. An off-grid FTE like 0.75 therefore lets a real 0.05 overage round to
+  // zero — a week that should land in REVIEW is scored a clean WIN while the header
+  // still reads "Winning 3.1 of Cap 3.0". Snap to the grid on save so what is stored
+  // is what the engine can actually represent.
+  const val=Math.round(raw*10)/10;
   await setDoc(fteRef,{[u]:val},{merge:true});
-  toast(`Updated ${u} FTE to ${val}`,"ok");
+  toast(val!==raw?`Updated ${u} FTE to ${val} (rounded from ${raw} — FTE uses 0.1 steps)`:`Updated ${u} FTE to ${val}`,val!==raw?"warn":"ok");
 };
 
 // ── FTE Availability (per-week slots) ──
@@ -7628,7 +7771,12 @@ async function _doFullRestore(f){
   // current — a stale list could lock the restoring admin out mid-flight).
   // Clear the mail queue FIRST so no open page's sweep can fire a pre-restore alert
   // mid-write (those alerts describe state that's about to vanish).
-  try{ await setDoc(mailQueueRef,{}); }catch(e){ toast('Could not clear the mail queue — turn outbid alerts OFF before restoring','warn'); }
+  // [AUDIT 2026-07-25 #12] Keep what we wipe, so a FAILED batch below can say so.
+  // Previously the queue was cleared, the batch failed, and the admin was told
+  // "nothing was changed" — while every pending outbid alert had been dropped.
+  let _mqCleared=false;
+  try{ const _mqBefore=Object.keys(mailQueueData||{}).length; await setDoc(mailQueueRef,{}); _mqCleared=_mqBefore>0; }
+  catch(e){ toast('Could not clear the mail queue — turn outbid alerts OFF before restoring','warn'); }
   // One atomic batch: all-or-nothing, so a mid-restore network drop can't leave a torn
   // state, and listeners see one coherent flip rather than 25 intermediate mixes.
   let bad=[];
@@ -7647,7 +7795,10 @@ async function _doFullRestore(f){
     }
     await batch.commit();
   }catch(e){
-    toast('🛟 Restore FAILED — nothing was changed ('+(e?.message||e)+'). Try again.','err');
+    // [AUDIT #12] The batch is atomic, so no auction data changed — but the mail queue
+    // was already cleared above and that clear is NOT rolled back. Say so plainly.
+    toast('🛟 Restore FAILED — no auction data was changed ('+(e?.message||e)+').'
+      +(_mqCleared?' NOTE: the pending outbid-alert queue was already cleared and could not be recovered — those alerts will not send.':' Try again.'),'err');
     return;
   }
   try{ await adminLog('ALL','ALL','admin-restore-full'); }catch(_){ }
