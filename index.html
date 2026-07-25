@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 114;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 115;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1771,6 +1771,12 @@ window.reviewBid=function(){
 
 window.confirmPriority=async function(){
   if(!pendingWeek) return;
+  // [DRYRUN 25 Jul 2026] Capture the target week ONCE. This function reads it again
+  // after every await, and closeModal() nulls the global — so a second Confirm click
+  // (which bails on saveInProgress but still calls closeModal) cleared it mid-flight and
+  // made THIS call stamp the priority lock and change log against `null`. Observed live:
+  // bestBids.<user>.null and a change-log row with weekKey null. Use the local from here.
+  const wk=pendingWeek;
   const sel=document.getElementById("prioritySelect"), val=sel.value.toUpperCase(), user=getCurrentUser();
   if(!val){showError("Please select a bid");return;}
   // ALL gates run BEFORE any write. Previously the priority-lock, change-log,
@@ -1779,21 +1785,21 @@ window.confirmPriority=async function(){
   // phantom side effects behind.
   if(!biddingOpen()){ showCenterAlert("Bidding hasn't started yet — the auction opens when admin begins Phase 1."); window.closeModal(); return; }
   if(isAuctionClosed()){ showCenterAlert("The auction has closed — no more changes allowed."); window.closeModal(); return; }
-  if(locksData.globalLock||locksData.weeks?.[pendingWeek]){ showCenterAlert("This week has been locked by the admin — no changes allowed."); window.closeModal(); return; }
-  if(!isVisibleBid(user,pendingWeek)&&bidLimitStatus(user).atLimit){ showBidLimitModal(); window.closeModal(); return; }
+  if(locksData.globalLock||locksData.weeks?.[wk]){ showCenterAlert("This week has been locked by the admin — no changes allowed."); window.closeModal(); return; }
+  if(!isVisibleBid(user,wk)&&bidLimitStatus(user).atLimit){ showBidLimitModal(); window.closeModal(); return; }
   if(val==="NP"&&!npAllowedNow()){ showCenterAlert("NP bids are not enabled for Phase "+Number(phasesData.currentPhase||1)+" — the admin controls which phases allow them."); window.closeModal(); return; }
   // L-3: re-validate the prior-phase-won guard, high-demand restriction, and priority-lock
   // FLOOR at confirm time — not just via disabled dropdown options set at modal-open. A
   // two-tab race (or an option list built from stale state) could otherwise submit a
   // below-floor or disallowed bid. All checks run BEFORE any write (gates-first contract).
-  if(getPriorPhaseWinners(pendingWeek).has(user)){ showCenterAlert("You already won this week in a previous phase — it's locked in for you."); window.closeModal(); return; }
+  if(getPriorPhaseWinners(wk).has(user)){ showCenterAlert("You already won this week in a previous phase — it's locked in for you."); window.closeModal(); return; }
   // High-demand weeks accept only the allowed numeric set — NP is NOT allowed either.
   // (NP previously slipped past this re-check via a val!=="NP" guard.)
-  if((weekMeta[pendingWeek]?.highPriorityOnly) && (val==="NP" || !HIGH_PRIORITY_ALLOWED.has(val))){ showCenterAlert("This high-demand week only accepts bids of 1, 2, 3, 4, \"1/2\", or \"1/2/3\"."); window.closeModal(); return; }
+  if((weekMeta[wk]?.highPriorityOnly) && (val==="NP" || !HIGH_PRIORITY_ALLOWED.has(val))){ showCenterAlert("This high-demand week only accepts bids of 1, 2, 3, 4, \"1/2\", or \"1/2/3\"."); window.closeModal(); return; }
   // Priority-lock FLOOR re-check now also covers NP: NP (score 99) is weaker than any
   // numbered floor, so submitting NP under a numeric floor is a below-floor bid and is blocked.
   if(adminSettings.priorityLockEnabled!==false){
-    const _floor=(bestBidsData[user]||{})[pendingWeek];
+    const _floor=(bestBidsData[user]||{})[wk];
     if(_floor!==undefined){
       const _parsed=val==="NP"?"NP":(val.includes(',')?val.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n)):parseInt(val));
       if(priorityScore(_parsed)>priorityScore(_floor)){ showCenterAlert("Your bid on this week can only stay the same or get stronger — a previous bid set a floor here."+(val==="NP"?" NP is weaker than your existing bid.":"")); window.closeModal(); return; }
@@ -1802,24 +1808,24 @@ window.confirmPriority=async function(){
   const _prev=JSON.parse(JSON.stringify(data));
   if(val==="NP"){
     if(!data[user])data[user]={};
-    const isNewNP=data[user]?.[pendingWeek]===undefined;
-    data[user][pendingWeek]="NP";
+    const isNewNP=data[user]?.[wk]===undefined;
+    data[user][wk]="NP";
     // Persist FIRST; only stamp the floor/time/log if the write actually landed,
     // so a bid rejected by the timer/lock re-check leaves no phantom priority floor.
-    const okSaveNP=await persistScheduleChange(user,pendingWeek,"NP",_prev);
+    const okSaveNP=await persistScheduleChange(user,wk,"NP",_prev);
     if(okSaveNP){
-      await saveBestBid(user,pendingWeek,"NP");
-      logOwnChange(user,pendingWeek,isNewNP?'added':'edited',"NP");
+      await saveBestBid(user,wk,"NP");
+      logOwnChange(user,wk,isNewNP?'added':'edited',"NP");
       const nowTs=Date.now();
       if(!bidTimesData[user]) bidTimesData[user]={};
-      bidTimesData[user][pendingWeek]=nowTs;
-      await setDoc(bidTimesRef,{[user]:{[pendingWeek]:nowTs}},{merge:true});
+      bidTimesData[user][wk]=nowTs;
+      await setDoc(bidTimesRef,{[user]:{[wk]:nowTs}},{merge:true});
     } else {
       // L-2: write didn't land (save in flight, or a timer/lock re-check) — undo the optimistic
       // change on THIS key only. Don't restore `data` wholesale: a fresher snapshot may have
       // arrived during the await.
-      if(_prev[user]?.[pendingWeek]===undefined){ if(data[user]) delete data[user][pendingWeek]; }
-      else { data[user][pendingWeek]=_prev[user][pendingWeek]; }
+      if(_prev[user]?.[wk]===undefined){ if(data[user]) delete data[user][wk]; }
+      else { data[user][wk]=_prev[user][wk]; }
       scheduleRender();
     }
     window.closeModal(); return;
@@ -1829,30 +1835,30 @@ window.confirmPriority=async function(){
   // Check not already used elsewhere. L-3: seed with prior-phase permanently-consumed numbers
   // (from weeks won in earlier phases) so a race can't re-bid a number that's gone for good.
   const usedElsewhere=[...getPriorPhaseUsedPriorities(user)];
-  for(const w of myCountedWeeks(user)){ if(w===pendingWeek)continue; const p=data[user][w]; if(p==="NP")continue; Array.isArray(p)?usedElsewhere.push(...p):usedElsewhere.push(p); }
+  for(const w of myCountedWeeks(user)){ if(w===wk)continue; const p=data[user][w]; if(p==="NP")continue; Array.isArray(p)?usedElsewhere.push(...p):usedElsewhere.push(p); }
   const conflicts=priorities.filter(p=>usedElsewhere.includes(p));
   if(conflicts.length){showError("Bid"+(conflicts.length>1?"s":"")+" "+conflicts.join(", ")+" already used on another week.");return;}
-  const isNew=!isVisibleBid(user,pendingWeek);
+  const isNew=!isVisibleBid(user,wk);
   if(isNew&&bidLimitStatus(user).atLimit){showBidLimitModal();window.closeModal();return;}
   if(!data[user])data[user]={};
   const newPrio=priorities.length===1?priorities[0]:priorities;
-  const isNewBid=data[user]?.[pendingWeek]===undefined;
-  data[user][pendingWeek]=newPrio;
+  const isNewBid=data[user]?.[wk]===undefined;
+  data[user][wk]=newPrio;
   // Persist FIRST; only stamp the floor/time/log if the write actually landed, so a
   // bid rejected by the timer/lock re-check leaves no phantom priority floor.
-  const okSaveBid=await persistScheduleChange(user,pendingWeek,newPrio,_prev);
+  const okSaveBid=await persistScheduleChange(user,wk,newPrio,_prev);
   if(okSaveBid){
-    await saveBestBid(user,pendingWeek,newPrio);
-    logOwnChange(user,pendingWeek,isNewBid?'added':'edited',newPrio);
+    await saveBestBid(user,wk,newPrio);
+    logOwnChange(user,wk,isNewBid?'added':'edited',newPrio);
     // Record the timestamp this bid was placed/replaced
     const nowTs2=Date.now();
     if(!bidTimesData[user]) bidTimesData[user]={};
-    bidTimesData[user][pendingWeek]=nowTs2;
-    await setDoc(bidTimesRef,{[user]:{[pendingWeek]:nowTs2}},{merge:true});
+    bidTimesData[user][wk]=nowTs2;
+    await setDoc(bidTimesRef,{[user]:{[wk]:nowTs2}},{merge:true});
   } else {
     // L-2: write didn't land — undo the optimistic change on THIS key only (not `data` wholesale).
-    if(_prev[user]?.[pendingWeek]===undefined){ if(data[user]) delete data[user][pendingWeek]; }
-    else { data[user][pendingWeek]=_prev[user][pendingWeek]; }
+    if(_prev[user]?.[wk]===undefined){ if(data[user]) delete data[user][wk]; }
+    else { data[user][wk]=_prev[user][wk]; }
     scheduleRender();
   }
   window.closeModal();
