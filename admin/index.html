@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 196;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 197;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -676,7 +676,7 @@ thead th{color:var(--t2)}
           <input type="text" id="newUserFullName" class="inp" style="width:170px" placeholder="Full name" autocomplete="off">
           <input type="email" id="newUserLoginEmail" class="inp" style="width:210px" placeholder="Login e-mail (Google)" autocomplete="off">
           <input type="email" id="newUserEmail2" class="inp" style="width:200px" placeholder="KP e-mail" autocomplete="off">
-          <input type="number" id="newUserFte" class="inp" style="width:78px" placeholder="FTE" step="0.1" min="0" max="1" value="1.0" autocomplete="off">
+          <input type="number" id="newUserFte" class="inp" style="width:78px" placeholder="FTE" step="0.1" min="0.4" max="1" autocomplete="off" title="Required — 0.4 to 1.0. There is no default.">
           <button class="btn btn-primary" onclick="addUser()">Add</button>
         </div>
         <div class="page-sub" style="margin-top:6px">Only <strong>initials</strong> are required. Full name, login e-mail and KP e-mail are shared with the Daily Schedule; FTE here is this site's own (defaults to 1.0). Users can also enter their own KP e-mail at login.</div>
@@ -1624,9 +1624,20 @@ function groupByMonth(){ const g={}; mondays.forEach(d=>{ const k=mName(d); if(!
 // usersMissingFte() blocks Begin Phase and warns on the dashboard, and addUser refuses a
 // blank FTE, so no auction can run while anyone is unset and this line stays unreachable.
 function getUserFTE(u){ return fteData[u]!==undefined?fteData[u]:1.0; }
-// Roster users with no admin-entered FTE. Mirrors weeksMissingCapacity().
+// Nobody in the department works below 0.4 FTE, so anything under it is a data-entry
+// error, not a real value — 0 especially (it would make a user consume no capacity and
+// therefore win every week they bid on). Enforced on entry AND re-checked here, so a
+// legacy or hand-edited out-of-range value still blocks the auction from starting.
+const FTE_MIN=0.4;
+window.FTE_MIN=FTE_MIN;
+// Roster users whose FTE is missing OR out of range. Mirrors weeksMissingCapacity().
 function usersMissingFte(){
-  return (names||[]).filter(u=>fteData[u]===undefined||fteData[u]===null||fteData[u]===''||isNaN(Number(fteData[u])));
+  return (names||[]).filter(u=>{
+    const v=fteData[u];
+    if(v===undefined||v===null||v==='') return true;
+    const n=Number(v);
+    return isNaN(n)||n<FTE_MIN||n>1;
+  });
 }
 window.usersMissingFte=usersMissingFte;
 
@@ -3767,7 +3778,7 @@ function renderNextStep(){
   if(missingCaps>0){
     html=box(`<strong>${missingCaps}</strong> week${missingCaps!==1?'s have':' has'} no saved FTE capacity — those weeks are unbiddable (capacity 0) until you save a value. There are no built-in defaults.`,btn('📆 Open FTE Availability','gotoSlotsPanel()'));
   } else if(missingFte.length>0){
-    html=box(`<strong>${missingFte.length}</strong> user${missingFte.length!==1?'s have':' has'} no saved FTE — bidding cannot begin until every user has one. There are no built-in defaults.<div style="margin-top:6px;color:var(--t2);font-size:11.5px">${missingFte.map(u=>esc(u)).join(', ')}</div>`,btn('👤 Open Users','gotoUsersPanel()'));
+    html=box(`<strong>${missingFte.length}</strong> user${missingFte.length!==1?'s have':' has'} no valid saved FTE — bidding cannot begin until every user has one between ${FTE_MIN} and 1.0. There are no built-in defaults.<div style="margin-top:6px;color:var(--t2);font-size:11.5px">${missingFte.map(u=>esc(u)).join(', ')}</div>`,btn('👤 Open Users','gotoUsersPanel()'));
   } else if(!phase1Started()){
     html=box('Bidding has not begun. Begin Phase 1 to open the auction to users.',btn('▶ Begin Phase 1','beginPhase1()','btn-success'));
   } else if(phasesData.completedPhases?.[cur]){
@@ -4008,8 +4019,8 @@ function blockedByMissingFte(){
   const miss=usersMissingFte();
   if(!miss.length) return false;
   openConfirm({
-    title:'⛔ FTE missing for '+miss.length+' user'+(miss.length!==1?'s':''),
-    body:`<div>Bidding cannot begin until every user has an admin-entered FTE. There are no built-in defaults — the engine fits FTE against each week's capacity, so a missing value would silently treat that person as full-time.</div>
+    title:'⛔ FTE missing or invalid for '+miss.length+' user'+(miss.length!==1?'s':''),
+    body:`<div>Bidding cannot begin until every user has an admin-entered FTE between ${FTE_MIN} and 1.0. There are no built-in defaults — the engine fits FTE against each week's capacity, so a missing value would silently treat that person as full-time, and a value below ${FTE_MIN} is a data-entry error.</div>
           <div style="margin-top:8px;color:var(--t2);font-size:12px;line-height:1.6">${miss.map(u=>esc(u)).join(', ')}</div>
           <div class="cmodal-danger">Enter an FTE for each of these users on the Users page, then begin the phase.</div>`,
     okText:'👤 Open Users', onConfirm:()=>{ if(typeof gotoUsersPanel==='function') gotoUsersPanel(); }
@@ -7020,7 +7031,7 @@ function renderUsersCombined(){
       <td class="mono" style="white-space:nowrap"><strong>${n}</strong></td>
       <td style="white-space:nowrap"><input type="text" id="ufn_${n}" class="inp" autocomplete="off" style="width:160px" value="${esc(usernamesData[n]||'')}" placeholder="Full name">
         <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveFullName('${n}')">Save</button></td>
-      <td style="white-space:nowrap"><input type="number" id="fte_${n}" class="inp" autocomplete="off" style="width:70px" value="${fte}" step="0.1" min="0" max="1"${fteLocked?' disabled title="FTE editing is off — use the FTE editing toggle above"':''}>
+      <td style="white-space:nowrap"><input type="number" id="fte_${n}" class="inp" autocomplete="off" style="width:70px" value="${fte}" step="0.1" min="0.4" max="1"${fteLocked?' disabled title="FTE editing is off — use the FTE editing toggle above"':''}>
         ${fteLocked?'<span title="FTE editing is off — use the FTE editing toggle above" style="font-size:13px;color:var(--t3)">🔒</span>':`<button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveFte('${n}')">Save</button>`}</td>
       <td style="white-space:nowrap"><input type="email" id="lem_${n}" class="inp" autocomplete="off" style="width:200px" value="${esc(loginEmailsData[n]||'')}" placeholder="their-google@gmail.com">
         <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveLoginEmail('${n}')">Save</button>
@@ -7086,7 +7097,7 @@ window.addUser=async function(){
   const fteEl=document.getElementById("newUserFte");
   if(!fteEl || fteEl.value.trim()===""){toast("Enter an FTE for "+val+" — there is no default","err");return;}
   const parsed=parseFloat(fteEl.value);
-  if(isNaN(parsed)||parsed<0||parsed>1){toast("FTE must be between 0 and 1","err");return;}
+  if(isNaN(parsed)||parsed<FTE_MIN||parsed>1){toast("FTE must be between "+FTE_MIN+" and 1","err");return;}
   const fte=Math.round(parsed*10)/10;   // 0.1 grid, same as saveFte [AUDIT #10]
   try{ await updateDoc(userListRef,{users:arrayUnion(val)}); }
   catch(e){ await setDoc(userListRef,{users:[val]},{merge:true}); } // doc doesn't exist yet
@@ -7096,7 +7107,7 @@ window.addUser=async function(){
   if(loginEmail){ await setDoc(loginEmailsRef,{[val]:loginEmail},{merge:true}).catch(()=>{}); await maybeSyncEmailToUser(); }
   if(email2 && email2.includes('@')) await setDoc(emailsRef,{[val]:email2},{merge:true}).catch(()=>{});
   ['newUserInput','newUserFullName','newUserLoginEmail','newUserEmail2'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
-  if(fteEl) fteEl.value="1.0";
+  if(fteEl) fteEl.value="";   // blank, not 1.0 — the next user's FTE must be typed too
   // NO welcome e-mail is sent at user creation. Welcomes only ever go out once the user
   // logs in for the first time: their Google address and (if set here) their KP address
   // are both welcomed then, and the KP prompt is skipped because it's already on file.
@@ -7222,7 +7233,7 @@ function renderFtePanel(){
     const fte=getUserFTE(n);
     return `<tr>
       <td class="mono"><strong>${n}</strong></td>
-      <td><input type="number" id="fte_${n}" class="inp" style="width:80px" value="${fte}" step="0.1" min="0" max="1"></td>
+      <td><input type="number" id="fte_${n}" class="inp" style="width:80px" value="${fte}" step="0.1" min="0.4" max="1"></td>
       <td><button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveFte('${n}')">Save</button></td>
       <td><button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="removeUser('${n}')">🗑 Delete</button></td>
     </tr>`;
@@ -7247,7 +7258,7 @@ window.saveFte=async function(u){
   // (Backs up the disabled input — this blocks the write no matter how it's triggered.)
   if(adminSettings.fteEditEnabled!==true){ toast('FTE editing is OFF — flip the FTE editing toggle on the Users page first.','warn'); return; }
   const raw=parseFloat(document.getElementById(`fte_${u}`)?.value);
-  if(isNaN(raw)||raw<0||raw>1){toast("FTE must be between 0 and 1","err");return;}
+  if(isNaN(raw)||raw<FTE_MIN||raw>1){toast("FTE must be between "+FTE_MIN+" and 1 — nobody is below "+FTE_MIN+" FTE","err");return;}
   // [AUDIT 2026-07-25 #10] The engine's fit test rounds to the 0.1 FTE grid
   // (Math.round((fteWon+gf-cap)*10)/10 <= 0), and getSlots() rounds week capacity the
   // same way. An off-grid FTE like 0.75 therefore lets a real 0.05 overage round to
