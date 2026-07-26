@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 200;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 202;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -577,7 +577,6 @@ thead th{color:var(--t2)}
         <select id="editUserFilter" class="sel" onchange="renderEditTable()"><option value="">All</option></select>
         <label style="font-size:11px;color:var(--t2)">Week:</label>
         <select id="editWeekFilter" class="sel" onchange="renderEditTable()"><option value="">All</option></select>
-        <button class="btn btn-danger" style="margin-left:auto;font-weight:700" onclick="confirmRemoveAllBids()">🗑️ Remove ALL Bids &amp; Locks</button>
       </div>
       <div style="overflow-x:auto;max-height:480px;overflow-y:auto;border:1px solid var(--b1)">
         <table id="editTable">
@@ -4076,7 +4075,20 @@ window.blockedByMissingFte=blockedByMissingFte;
 async function _commitBeginPhase(next){
   if(blockedByMissingFte()) return false;
   if(next===1){
-    await setDoc(phasesRef,{currentPhase:1,phase1Started:true,phaseBeganAt:{...(phasesData.phaseBeganAt||{}),1:Date.now()}},{merge:true});
+    // [FIX 25 Jul 2026 · integrity-audit CRITICAL] Phase 1 must clear live approvals/denials too.
+    // It used to only stamp the phase, so any decision written BEFORE launch survived into the
+    // real auction — reachable by rehearsing with the simulator's auto-approve/deny (or any manual
+    // decision) and then beginning Phase 1 without a full Reset. A stale denial is invisible to the
+    // bidder: the staff site is forbidden from reading denials, so their own board shows WIN while
+    // the admin engine drops them, no outbid alert fires, and completePhase freezes the wrong
+    // winners. Cleared in ONE atomic batch, same as phases 2-4 — at a genuine Phase 1 there are
+    // never legitimate decisions to preserve.
+    const batch1=writeBatch(db);
+    batch1.set(phasesRef,{currentPhase:1,phase1Started:true,phaseBeganAt:{...(phasesData.phaseBeganAt||{}),1:Date.now()}},{merge:true});
+    batch1.set(approvalsRef,{});
+    batch1.set(deniedRef,{});
+    try{ await batch1.commit(); }
+    catch(e){ toast('Could not begin Phase 1 — nothing was changed ('+(e?.message||e)+')','err'); return false; }
   } else {
     // M-4: advance the phase AND clear the finished phase's live approvals/denials as ONE
     // atomic batch. The old code advanced the phase first, then cleared in a separate write
@@ -5595,18 +5607,23 @@ function capBreaches(){
 window.capBreaches=capBreaches;
 window.approvalReadiness=approvalReadiness;
 // Warning banner injected into approve/deny confirm dialogs; empty when ready.
-function readinessWarnHtml(){
+// [FIX 25 Jul 2026 · self-review] Both blocks live inside ONE wrapper with a stable id, and
+// the refresh below rewrites that wrapper's innerHTML. The first cut of the cap block sat
+// OUTSIDE the box that _refreshReadinessBox replaces, and that function used
+// `box.outerHTML=readinessWarnHtml()` — so every inline fix click prepended another copy of
+// the cap warning while leaving the previous one in place. Duplicates accumulated per click.
+function _capWarnHtml(){
+  const r=approvalReadiness();
+  if(!(r.warnings&&r.warnings.length)) return '';
+  return `<div class="cmodal-warn" style="margin-top:8px"><strong>⚠️ Cumulative cap exceeded.</strong> These users would finish the phase with more weeks than the cap allows:
+       <ul style="margin:6px 0 0 16px;line-height:1.6">${r.warnings.map(w=>`<li>${w}</li>`).join('')}</ul>
+       <div style="margin-top:6px;font-size:11px;color:var(--t3)">Revoke an approval to bring them back under the cap, or proceed deliberately — this does not block completing the phase.</div></div>`;
+}
+function _readinessProblemHtml(){
   const r=approvalReadiness();
   const cur=Number(phasesData.currentPhase||1);
-  // [FIX 25 Jul 2026 · delta-audit #2] Cap breaches are advisory: show them even when
-  // bidding IS properly closed, and never let them imply the phase can't be completed.
-  const capHtml=(r.warnings&&r.warnings.length)
-    ? `<div class="cmodal-warn" style="margin-top:8px"><strong>⚠️ Cumulative cap exceeded.</strong> These users would finish the phase with more weeks than the cap allows:
-       <ul style="margin:6px 0 0 16px;line-height:1.6">${r.warnings.map(w=>`<li>${w}</li>`).join('')}</ul>
-       <div style="margin-top:6px;font-size:11px;color:var(--t3)">Revoke an approval to bring them back under the cap, or proceed deliberately — this does not block completing the phase.</div></div>`
-    : '';
-  if(r.ready) return capHtml;
-  return capHtml+`<div class="cmodal-warn" id="readinessWarnBox" style="margin-top:8px"><strong>⚠️ Bidding isn't fully closed yet.</strong> Approvals &amp; denials should ideally wait until bidding is stopped and all weeks are locked. Right now:
+  if(r.ready) return '';
+  return `<div class="cmodal-warn" style="margin-top:8px"><strong>⚠️ Bidding isn't fully closed yet.</strong> Approvals &amp; denials should ideally wait until bidding is stopped and all weeks are locked. Right now:
     <ul style="margin:6px 0 0 16px;line-height:1.6">${r.problems.map(p=>`<li>${p}</li>`).join('')}</ul>
     <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
       <button type="button" class="btn btn-ghost" style="font-size:11px" onclick="_fixClosePhaseBidding(${cur})">⏱ Stop bidding &amp; lock all weeks now</button>
@@ -5614,6 +5631,10 @@ function readinessWarnHtml(){
     </div>
     <div style="margin-top:4px;font-size:11px;color:var(--t3)">(This only stops bidding — it doesn't complete Phase ${cur}. You'll still click Complete Phase afterward, once every bid below is decided.)</div>
     <div style="margin-top:6px">…or override and proceed by confirming below.</div></div>`;
+}
+// One wrapper, one id — the refresh rewrites its contents, so nothing can accumulate.
+function readinessWarnHtml(){
+  return `<div id="readinessWarnBox">${_capWarnHtml()}${_readinessProblemHtml()}</div>`;
 }
 // Inline fixes launched from the readiness warning INSIDE an approve/deny
 // dialog — they act immediately (no nested confirm, which would replace the
@@ -5625,15 +5646,15 @@ async function _lockEveryWeek(){
 function _refreshReadinessBox(){
   const box=document.getElementById('readinessWarnBox'); if(!box) return;
   const r=approvalReadiness();
-  if(r.ready){
-    box.className='cmodal-info';
-    // This step only stops bidding — it does NOT complete the phase. Say so
-    // explicitly here, since this inline path (unlike the dashboard's "Close
-    // Phase Bidding" button) has no confirm dialog to explain it up front.
-    box.innerHTML='✓ Bidding is now closed and all weeks are locked — safe to approve/deny. Once every bid is decided, come back to the dashboard and click <strong>Complete Phase</strong> to finish — that\'s still a separate, later step.';
-  } else {
-    box.outerHTML=readinessWarnHtml();
-  }
+  // Rewrite the wrapper's CONTENTS (never its outerHTML) so repeated inline fixes can't
+  // stack duplicate blocks. The cap warning is advisory and shown in both states.
+  box.className='';
+  // This step only stops bidding — it does NOT complete the phase. Say so explicitly here,
+  // since this inline path (unlike the dashboard's "Close Phase Bidding" button) has no
+  // confirm dialog to explain it up front.
+  box.innerHTML=_capWarnHtml()+(r.ready
+    ? '<div class="cmodal-info" style="margin-top:8px">✓ Bidding is now closed and all weeks are locked — safe to approve/deny. Once every bid is decided, come back to the dashboard and click <strong>Complete Phase</strong> to finish — that\'s still a separate, later step.</div>'
+    : _readinessProblemHtml());
 }
 window._fixClosePhaseBidding=async function(cur){
   if(!_bkBypass){ _backupThen('closing Phase '+cur+' bidding',function(){ _bkBypass=true; try{ window._fixClosePhaseBidding(cur); } finally { _bkBypass=false; } }); return; }
@@ -6456,51 +6477,10 @@ window.clearAllBestBids=function(){
     }
   });
 };
-window.confirmRemoveAllBids=function(){
-  // First confirmation
-  openConfirm({
-    title:'⚠️ Remove ALL Bids and Priority Locks?',
-    body:`<div style="font-size:14px;line-height:1.55"><strong style="color:var(--red)">This is a destructive action.</strong></div>
-          <div style="margin-top:10px;font-size:13px;line-height:1.5;color:var(--t2)">This will permanently delete:</div>
-          <ul style="margin:8px 0 10px 18px;color:var(--t2);font-size:13px;line-height:1.65">
-            <li>Every bid placed by every user on every week</li>
-            <li>Every priority lock stored for every user</li>
-          </ul>
-          <div class="cmodal-info">Admin approvals and denials are NOT removed by this button.</div>
-          <div class="cmodal-danger" style="margin-top:8px"><strong>This cannot be undone.</strong> The change log will still show what existed before, but no user-facing bid data will remain.</div>`,
-    okText:'Continue',
-    danger:true,
-    onConfirm:()=>{
-      // Second confirmation — type-to-confirm style for extra safety
-      openConfirm({
-        title:'🚨 Final Confirmation',
-        body:`<div style="font-size:14px;line-height:1.5"><strong>Last chance to cancel.</strong></div>
-              <div style="margin-top:8px;font-size:13px;color:var(--t2);line-height:1.5">Tap <strong style="color:var(--red)">DELETE BIDS & LOCKS</strong> to permanently wipe all bids and priority locks for all users. Admin approvals and denials will be preserved. This action cannot be undone.</div>`,
-        okText:'DELETE BIDS & LOCKS',
-        danger:true,
-        onConfirm:async()=>{
-          try {
-            // Wipe bids and priority locks only — approvals/denials are intentionally preserved
-            await Promise.all([
-              setDoc(scheduleRef,{}),
-              setDoc(worstBidsRef,{}),
-              setDoc(bidTimesRef,{}),
-              setDoc(bidPhaseRef,{})
-              // NOTE: approvalsRef and deniedRef are intentionally NOT cleared here
-            ]);
-            // Log the bulk action
-            try {
-              await adminLog('ALL','ALL','admin-bulk-remove-bids');
-            } catch(_) {}
-            toast("🗑️ All bids and priority locks removed (approvals preserved)","ok");
-          } catch(e) {
-            toast("Error: "+e.message,"warn");
-          }
-        }
-      });
-    }
-  });
-};
+// [REMOVED 25 Jul 2026] 'Remove ALL Bids & Locks' deleted at the admin's request — it was no
+// longer used, and it was the likeliest route to a confirmed CRITICAL: it preserved
+// approvals/denials, and Begin Phase 1 did not clear them, so rehearsal decisions could
+// survive into the live auction. Reset Auction remains the supported way to clear everything.
 
 
 // ── Changelog ──
