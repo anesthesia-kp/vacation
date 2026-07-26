@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 204;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 205;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1585,6 +1585,10 @@ async function processMailQueue(minAgeMs){
 window.flushMailQueue=async function(){
   const n=Object.keys(mailQueueData||{}).length;
   if(!n){ toast('Outbid alert queue is empty','ok'); return; }
+  // [AUDIT 2026-07-26 re-audit #2 low] If the mailer never loaded on THIS machine (blocked CDN),
+  // processMailQueue runs cleanup but can't send — say so plainly instead of "nothing old enough,"
+  // which sent the admin into a pointless retry loop while the queue stayed stuck.
+  if(typeof emailjs==='undefined'){ toast('✉️ E-mail sending is not available on this page (the mailer failed to load — ad-blocker, proxy, or offline). Open the auction on another machine/browser to send the queued alerts.','err'); return; }
   const sent=await processMailQueue(5000); // 5s guard against racing an in-flight bidder send
   if(!sent) toast('Nothing old enough to send yet (or another page just took it) — try again shortly','warn');
 };
@@ -1712,6 +1716,24 @@ function pScore(p){ if(p==="NP")return 99; if(Array.isArray(p)){ const s=[...p].
 // which must all agree with the engine about which stored values are real bids.
 function _isScorableBid(p){ return p==="NP"||(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10)); }
 window._isScorableBid=_isScorableBid;
+// [AUDIT 2026-07-26 re-audit #2 low] The set of "user|wk" bids disqualified for reusing a priority
+// NUMBER across current-phase weeks — the SAME rule computeApprovals applies inline (kept inline
+// there for self-contained test extraction; this standalone copy uses the same phase predicate
+// <cur so it matches the engine, including forged future-phase bids). Exposed so completePhase's
+// snapshot filter refuses to FREEZE an approval of a disqualified bid as a permanent win.
+function _i2DisqualifiedSet(){
+  const cur=Number(phasesData.currentPhase||1); const disq=new Set(); const numWeeks={};
+  for(const u in scheduleData){ for(const wk in (scheduleData[u]||{})){
+    const p=scheduleData[u][wk];
+    if(p===undefined||p==="NP"||!_isScorableBid(p)) continue;
+    if(getUserBidPhaseAdmin(u,wk)<cur) continue;
+    (numWeeks[u]=numWeeks[u]||{});
+    for(const n of (Array.isArray(p)?p:[p])){ (numWeeks[u][n]=numWeeks[u][n]||new Set()).add(wk); }
+  } }
+  for(const u in numWeeks){ for(const n in numWeeks[u]){ if(numWeeks[u][n].size>1){ for(const wk of numWeeks[u][n]) disq.add(u+'|'+wk); } } }
+  return disq;
+}
+window._i2DisqualifiedSet=_i2DisqualifiedSet;
 
 const SPECIAL={
   "2027-02-14":5,"2027-03-28":5,"2027-04-04":5,"2027-11-21":5,"2027-12-19":5,"2027-12-26":5
@@ -1861,7 +1883,12 @@ function computeApprovals(ignoreAdmin){
     for(const u in scheduleData){ for(const wk in (scheduleData[u]||{})){
       const p=scheduleData[u][wk];
       if(p===undefined||p==="NP"||!_scor(p)) continue;
-      if(getUserBidPhaseAdmin(u,wk)!==_cur) continue; // current phase only
+      // [AUDIT 2026-07-26 re-audit #2 MEDIUM] Must match the per-week COMPETITION filter below
+      // exactly, which drops only STRICTLY-prior bids (getUserBidPhaseAdmin < currentPhase) and
+      // therefore lets a FUTURE-tagged bid compete. Using !==_cur here missed those, so an insider
+      // could devtools-forge bidPhase=currentPhase+1 (rules validate the key, not the value) and
+      // slip a reused number past I2 while it still competed. Collect every bid that will compete.
+      if(getUserBidPhaseAdmin(u,wk)<_cur) continue; // matches the competition filter (not strictly-prior)
       (_numWeeks[u]=_numWeeks[u]||{});
       for(const n of (Array.isArray(p)?p:[p])){ (_numWeeks[u][n]=_numWeeks[u][n]||new Set()).add(wk); }
     } }
@@ -4077,11 +4104,14 @@ window.completePhase=function(){
       // and reports/e-mails show them APPROVED for a week they cancelled. Must run BEFORE
       // the frozen fteHead block below (which values apSnap), or the orphan's FTE is baked
       // into the immutable header even with a clean approvals array.
-      // [AUDIT 2026-07-26 medium] Also drop any approval of an UNSCORABLE bid (forged shape).
-      // adApprove now blocks these at entry, but a value forged straight into approvalsData via
-      // devtools, or approved before this guard shipped, would otherwise freeze as a permanent
-      // win the engine never recognised. The snapshot only keeps approvals of real, scorable bids.
-      for(const wk of Object.keys(apSnap)){ if(Array.isArray(apSnap[wk])) apSnap[wk]=apSnap[wk].filter(u=>snap[u]&&snap[u][wk]!==undefined&&_isScorableBid(snap[u][wk])); }
+      // [AUDIT 2026-07-26 medium + re-audit #2 low] Drop any approval the ENGINE would not honour:
+      // an UNSCORABLE bid (forged shape) OR one disqualified for cross-week number reuse (I2). Either
+      // could otherwise freeze as a permanent prior-phase win the engine no longer recognises — e.g.
+      // a user legitimately approved on week A who later forges the same number onto week B, which
+      // I2-disqualifies BOTH but leaves the stale approvalsData[A] behind. The snapshot only keeps
+      // approvals of real, scorable, non-reused bids, so a frozen winner always matches the engine.
+      const _i2d=_i2DisqualifiedSet();
+      for(const wk of Object.keys(apSnap)){ if(Array.isArray(apSnap[wk])) apSnap[wk]=apSnap[wk].filter(u=>snap[u]&&snap[u][wk]!==undefined&&_isScorableBid(snap[u][wk])&&!_i2d.has(u+'|'+wk)); }
       for(const wk of Object.keys(denSnap)){ if(Array.isArray(denSnap[wk])) denSnap[wk]=denSnap[wk].filter(u=>snap[u]&&snap[u][wk]!==undefined); }
       // Freeze each week's FTE header (approved / available / of-cap) AS OF this phase's
       // completion, so a prior-phase report never drifts later when another phase
@@ -4774,7 +4804,13 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
         // if this batch is lost the results are NOT public and resultsSent is unstamped, so the
         // workflow would silently look un-advanced. Tell the admin to retry rather than toast OK.
         try{ await _publishPhaseResults({resultsSent:{...(phasesData.resultsSent||{}),[cur]:Date.now()}}); }
-        catch(e){ toast('⚠️ Phase '+cur+' e-mails sent, but publishing the results FAILED ('+(e?.message||e)+'). Click Send again to finish publishing.','err'); return; }
+        catch(e){
+          // [AUDIT 2026-07-26 re-audit #2 low] Release the send-claim BEFORE bailing — otherwise the
+          // stale claim (<120s, held by this _sendId) makes the very retry this toast instructs abort
+          // with "another admin session is sending right now," locking the admin out of their own retry.
+          await setDoc(phasesRef,{resultsSendClaim:{...(phasesData.resultsSendClaim||{}),[cur]:{by:null,at:0}}},{merge:true}).catch(()=>{});
+          toast('⚠️ Phase '+cur+' e-mails sent, but publishing the results FAILED ('+(e?.message||e)+'). Click Send again to finish publishing.','err'); return;
+        }
         toast(`📮 Phase ${cur} results: ${ok} e-mail${ok!==1?'s':''} sent${alreadyDone?`, ${alreadyDone} already sent`:''}${skipped?` (${skipped} had no e-mail)`:''}`,'ok');
       } else if(fail===0 && ok===0 && alreadyDone){
         toast(`📮 Phase ${cur} results were already sent to all ${alreadyDone} user${alreadyDone!==1?'s':''} — nothing new to send.`,'ok');
@@ -5845,6 +5881,14 @@ window.adApprove=function(user,wk,currentOutcome){
   // Block it here; the admin must fix the bid (Edit Selections) before approving.
   if(!_isScorableBid(scheduleData[user]?.[wk])){
     toast('⚠ Cannot approve '+user+' on Wk '+(_wkNumByISO[wk]||wk)+' — their stored bid is not a valid value (edit it first).','err');
+    return;
+  }
+  // [AUDIT 2026-07-26 re-audit #2 disputed-low] Also refuse to approve a bid disqualified for
+  // cross-week number REUSE (I2). It shows LOSE in the table with no reuse flag, so an admin seeing
+  // two top-priority "1" bids might approve one; the engine won't score it, so approving it would
+  // freeze a winner the engine rejects. Block at the source (the snapshot filter is the backstop).
+  if(_i2DisqualifiedSet().has(user+'|'+wk)){
+    toast('⚠ Cannot approve '+user+' on Wk '+(_wkNumByISO[wk]||wk)+' — this bid reuses a priority number they already used on another week this phase (not a valid single bid).','err');
     return;
   }
   const m=wkDate(wk);

@@ -21,10 +21,155 @@ lesson of this session.
 **Start here, before reading further:**
 
 ```bash
-node tests/run-all.mjs        # ~30 seconds, 369 assertions
+REPO_ROOT=/Users/aaronfrankel/Documents/GitHub node tests/run-all.mjs   # ~30s, now 444 assertions across 6 suites
 ```
 
 That tells you the true state of the code faster and more reliably than any paragraph in this file.
+
+---
+
+## SESSION UPDATE — 26 July 2026 (this supersedes any conflicting [BELIEVED] item below)
+
+Two full fix-and-re-audit cycles happened this session. **Read this block first; the sections
+numbered 1–5 below are the previous session's and are now partly stale — where they conflict with
+this block or with the tests, this block and the code win.**
+
+### Verified current state — [VERIFIED]
+
+- **Live builds are 118 (vacation staff) / 204 (vacation admin).** Confirmed by fetching the live
+  pages with a cache-buster and reading `var BUILD`; `versions.json` = `{"index":118,"mobile":16,"admin":204}`.
+  Schedule app untouched (24/46).
+- **Firestore rules are published and current.** Confirmed by anonymous REST probe: the new
+  `phaseStaging` doc returns **403** to an anonymous reader (admin-only), so the latest rules are live.
+- **Test suite: 444 assertions across 6 suites, all passing.** New suite `tests/test-high-fixes.mjs`
+  (the 16 highs + the re-audit follow-ups) plus the original five. Run with the command above.
+
+### What was done — two batches, each adversarially re-audited
+
+1. **Batch 1 — all 16 HIGH findings from `INTEGRITY-AUDIT-2026-07-25.md` fixed** → builds 117/203,
+   rules updated, deployed and published.
+2. **Re-audit #1** (8-cluster adversarial workflow, every finding challenged by 2 independent
+   skeptics) **found 19 confirmed defects including 1 CRITICAL that batch 1 had introduced:** the H6
+   fix staged each completed-phase snapshot into `changesDecisions`, which `completePhase` then reset
+   with a non-merge write — destroying its own snapshot and hard-breaking phase completion. It passed
+   442 green assertions because those H6 tests were **regex-only structure checks, not executions.**
+3. **Batch 2 — all 19 re-audit findings fixed** → builds 118/204, deployed and published. Highlights:
+   - **H6 REDESIGN:** phase-snapshot staging moved to a **dedicated admin-only doc `phaseStaging`**
+     (ref `phaseStagingRef`) that nothing full-replaces. Admin merges published+staged into one view
+     (`_mergeCompletedPhasesView`). `_publishPhaseResults` / `_commitBeginPhase` / Reset / restore all
+     clear it with **non-merge** writes (a `{merge:true}` write of `{pendingPhaseSnapshots:{}}` clears
+     *nothing* — that was a second self-inflicted bug caught while writing the executing test).
+   - **I2:** both `computeApprovals` twins now disqualify a priority NUMBER reused across current-phase
+     weeks (a devtools forge of "1" on every week). NP exempt.
+   - **H9 v2 (rules):** the change log is now append-only by **containment** (`log.hasAll(old log)`),
+     not the weaker size-only check that a same-length replacement defeated.
+   - **H12 v2:** stale-denial warning surfaced **durably in the Complete Phase confirm dialog**, not a
+     transient toast.
+   - Mediums/lows: `_isScorableBid` guard (can't approve or freeze an unscorable bid; Edit-table shows
+     ⚠ for type-blind values); `usersMissingFte` split so the bulk tool never overwrites a real
+     part-timer's FTE; `_mqRelease` guarded to clear only our own mail claim; mailer-less admin page
+     still runs janitor cleanup; sign-out no longer double-fires anonymous sign-in; failed result
+     publishes are surfaced instead of toasting success.
+   - **Test hardening:** `test-high-fixes.mjs` rewritten to **execute** the real code against a mock
+     Firestore (models set/merge/batch semantics) — the H6 write sequence is now a real regression test.
+4. **Re-audit #2 (of batch 2) — COMPLETE. Result: 0 critical, 0 high, 1 medium, 4 low, 1 disputed
+   low** (severities converging: critical → medium across the two rounds). All findings are in the
+   I2 / mail-relay / test code batch 2 touched; **none are fixed yet.** They are the current small
+   work queue (see below). The auction still must not go live until these are resolved or accepted.
+
+### Batch-3 — all six batch-2 re-audit findings FIXED (builds 119/205)
+
+All resolved and locked in by tests (suite now **450 assertions**). **No rules change this round —
+push-only, no console republish needed.** As of this update builds 119/205 are on the Mac; confirm
+they're pushed/live. What changed:
+- **[MEDIUM I2 bypass] fixed:** the I2 precompute predicate in both twins changed `!==_cur` → `<_cur`
+  so collection matches the competition filter exactly — a forged future `bidPhase` can no longer
+  slip a reused number past I2. New executing test proves it (and that a single future-tagged bid is
+  unaffected).
+- **[LOW snapshot filter] fixed:** new `_i2DisqualifiedSet()` helper; completePhase's `apSnap` filter
+  now drops I2-disqualified approvals too, so a reused bid can't freeze as a permanent win.
+- **[DISPUTED LOW approve channel] fixed:** `adApprove` now refuses an I2-disqualified bid at the
+  source (backstopped by the snapshot filter).
+- **[LOW flushMailQueue] fixed:** reports "e-mail sending not available on this page" when the mailer
+  never loaded, instead of "nothing old enough."
+- **[LOW send-results claim] fixed:** the publish-failure path now releases `resultsSendClaim` before
+  returning, so the retry it instructs isn't blocked for 2 min.
+- **[LOW tautological test] fixed:** the NP-exemption assertion now really checks NP repeats still win.
+
+**A re-audit of THIS batch (119/205) has NOT been run.** The changes are small and localized, but the
+program's discipline is re-audit-after-each-batch. Consider one more adversarial pass over the 119/205
+diff before completing the dry run or going live.
+
+### Batch-2 re-audit findings — (all now FIXED above; kept for reference)
+
+- **[MEDIUM] I2 bypass via forged future `bidPhase`.** `computeApprovals`' I2 precompute scopes with
+  `getUserBidPhaseAdmin(u,wk)!==_cur` (collects only current-phase bids) but the competition filter
+  uses `<_cur` (drops only strictly-prior). A registered insider can devtools-write
+  `bidPhase[self][wk]=currentPhase+1` (rules validate the key, not the value), so a number-reused bid
+  tagged with a FUTURE phase escapes I2 collection yet still competes — re-opening the "put 1 on every
+  week" attack. Fix: change the I2 precompute predicate in BOTH twins (admin ~1864, staff ~936) from
+  `!==_cur` to `<_cur` so collection matches the competition filter exactly. (Note: the forger can't
+  actually be GRANTED the week — all grant paths gate on `===cur` — but the phantom winner displaces
+  an honest marginal bidder in the projection, causing a wrong denial. Real, medium.)
+- **[LOW] completePhase snapshot filter is shape-only.** The `apSnap` orphan filter (admin ~4084)
+  keeps an approval iff `_isScorableBid` (shape) — it does not drop an I2-disqualified (number-reused)
+  approval, so a stale approval of a reused bid can freeze as a permanent prior-phase win. Fix: also
+  drop I2-disqualified approvals from `apSnap` (or add a symmetric durable stale-APPROVAL warning to
+  the Complete Phase dialog, mirroring `_allStaleDenials`).
+- **[LOW] `flushMailQueue` mislabels a mailer-less page.** When `emailjs` never loaded (`_canSend`
+  false), Send Pending runs cleanup, sends nothing, and reports "nothing old enough — try again,"
+  so the admin never learns the mailer is unavailable on that machine. Fix: in `flushMailQueue`,
+  detect `typeof emailjs==='undefined'` and say so explicitly.
+- **[LOW] Send Results publish-failure skips the claim release.** The new failure `return` on a failed
+  publish is reached BEFORE the `resultsSendClaim` release, so the stale claim (<120s) blocks the very
+  retry the error toast instructs. Fix: release the claim before returning on the failure path (or use
+  a `finally`).
+- **[LOW] Tautological test assertion.** The NP-exemption parity check in `tests/test-high-fixes.mjs`
+  (~line 210) is `ok(!sap2.w1.losers || true, …)` — always true, protects nothing. Fix: make it a real
+  assertion that NP repeated across weeks is NOT disqualified.
+- **[DISPUTED LOW] I2 not enforced on the admin approve channel.** Same root as the two above — the
+  admin can approve a LOSE-projecting reused bid with no reuse flag in the Approvals table. Closing the
+  MEDIUM + the snapshot LOW largely covers this; a reuse warning in the Approvals row would finish it.
+
+### Updated work queue (from `INTEGRITY-AUDIT-2026-07-25.md`)
+
+- **CRITICAL: fixed (build 202, carried forward).** The 16 **HIGH: all fixed** (builds 117→118 / 203→204).
+- **Still open from the original audit: 28 medium, 14 low, 18 disputed** (2 rated critical by one
+  skeptic — `_backupThen` acting after an incomplete backup, and the duplicate-login-email access
+  leak), **and 9 unverified critic findings.** None of these have been touched.
+- Batch-2 re-audit may add a few more; check its result.
+
+### Deploy facts that changed
+
+- **New doc `vacations/phaseStaging`** (admin read + admin write). It holds unpublished completed-phase
+  snapshots between Complete Phase and Send/Skip Results. **Deliberately NOT in the 28-doc backup** —
+  it is transient and fully rebuildable by re-completing from the (backed-up) live approvals/denials/
+  schedule. Reset and restore explicitly clear it.
+- Rules changed this session (H9 containment + phaseStaging gates), so **the "publish rules in the
+  console BEFORE pushing" step applied and was done** — both are live.
+
+### OPEN ITEMS (user will address later)
+
+- **[OPEN · re-audit #2 verification]** Confirm the batch-2 re-audit is clean before launch.
+- **[OPEN · EMAIL DELIVERABILITY — auction/welcome e-mails landing in spam]** Root cause: EmailJS
+  (`service_wpprivw`) sends through a **personal `@gmail.com` account**, which **cannot be
+  authenticated** — you don't own `gmail.com`, so SPF/DKIM/DMARC can't be published for it, and a
+  consumer address blasting results to 37 people (incl. corporate `@kp.org`) is exactly what filters
+  distrust. This is an e-mail-infrastructure issue, **not an app bug** — no template change fixes it.
+  Recommendations, in order of impact:
+  1. **Real fix:** register a domain (~$12/yr) and send via a transactional provider (Amazon SES,
+     Resend, Brevo, or Postmark — free tiers generally cover ~2000/mo). Verify the domain with them
+     (paste the SPF/DKIM/DMARC DNS records they give you), then point EmailJS at it via custom SMTP,
+     **or** switch the two send call-sites in the code to the provider's API (a modest code change).
+  2. **Kaiser (`@kp.org`) addresses:** even fully authenticated, Kaiser's enterprise filter may
+     quarantine outside mail — ask **Kaiser IT to allowlist the sending domain** (internal request).
+  3. **Free immediate wins:** have all 37 physicians find one of these e-mails in spam, hit **"Not
+     spam,"** and **add the sender to contacts** — for a fixed 37-person list this trains Gmail fast.
+     Plus app-side template tweaks I can make on request: clear **From name**, a real **Reply-To**, a
+     clean subject, and an "add us to your contacts" line in the welcome e-mail.
+- **[OPEN · pre-launch, carried forward]** DB still holds a used dry-run state → a full **Reset
+  Auction** is required before launch. 21 users were bulk-set to FTE 1.0 on assumption — a human
+  should confirm that list. Dry run reached step 4 of 6 (approve/deny → Complete → Send → Reset remain).
 
 ---
 
