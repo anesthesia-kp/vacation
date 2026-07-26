@@ -173,8 +173,12 @@ service cloud.firestore {
     //   2. duration ceiling of 72h — users never legitimately exceed the 48h stage-0
     //      value (long opening windows are written by admins, who bypass this function).
     //   3. the resulting deadline must still be at least an hour out BY THE SERVER CLOCK.
-    //      This is the one that actually closes the hole: a clamp on durationHours alone
-    //      is defeated by a legal 10-minute-old lastChange plus a small duration.
+    //   4. [AUDIT 2026-07-26 H5/H8] EXTEND-ONLY: the new deadline may never land earlier
+    //      than the existing one. Clauses 1-3 alone still let a registered bidder cut a
+    //      47-hour countdown to ~65 minutes from devtools (and re-pin it there forever).
+    //      Legitimate user timer writes are bid-driven resets; the staff site skips the
+    //      write whenever its reset would not extend the current deadline, so this rule
+    //      matches the client exactly. Admins bypass this function and can still shorten.
     function timerWriteSane() {
       return (resource == null
                 ? request.resource.data.keys().hasOnly(['lastChange', 'durationHours'])
@@ -187,7 +191,16 @@ service cloud.firestore {
         && request.resource.data.get('durationHours', 48) <= 72
         && request.resource.data.get('lastChange', 0)
              + int(request.resource.data.get('durationHours', 48) * 3600000)
-           > request.time.toMillis() + 3600000;
+           > request.time.toMillis() + 3600000
+        && (resource == null
+            || resource.data.get('enabled', false) != true
+            || resource.data.get('lastChange', null) == null
+            || !(resource.data.get('lastChange', 0) is number)
+            || !(resource.data.get('durationHours', 48) is number)
+            || request.resource.data.get('lastChange', 0)
+                 + int(request.resource.data.get('durationHours', 48) * 3600000)
+               >= resource.data.get('lastChange', 0)
+                 + int(resource.data.get('durationHours', 48) * 3600000));
     }
 
     match /vacations/{docId} {
@@ -222,8 +235,38 @@ service cloud.firestore {
                         || (isVerifiedAccount() && (resource == null
                              ? request.resource.data.keys().hasOnly([request.auth.token.email.lower()])
                              : request.resource.data.diff(resource.data).affectedKeys().hasOnly([request.auth.token.email.lower()])))))
-                   || (!isAdminOnlyDoc(docId) && !isBidDoc(docId)
+                   // Change log: [AUDIT 2026-07-26 H9] users may only APPEND to the 'log'
+                   // array — never delete the doc, truncate the array, or touch other keys.
+                   // The staff writer is arrayUnion on 'log' (append), so nothing legitimate
+                   // is blocked. This closes the ERASE half of H9 (a bidder wiping their own
+                   // late-cancel trail, or the whole 24h feed). The FORGE half — appending an
+                   // entry that names a colleague — cannot be closed in rules (entry contents
+                   // in a dynamic array cannot be validated per-item); it remains a documented
+                   // insider risk for the Fair Play Monitor, which is advisory to the admin.
+                   || (docId == 'changes' && (isAdmin()
+                        || (isRegisteredUser()
+                             && (resource == null
+                                  ? request.resource.data.keys().hasOnly(['log'])
+                                  : request.resource.data.diff(resource.data).affectedKeys().hasOnly(['log']))
+                             && request.resource.data.get('log', []) is list
+                             && (resource == null
+                                  || !(resource.data.get('log', null) is list)
+                                  || request.resource.data.get('log', []).size()
+                                     >= resource.data.get('log', []).size()))))
+                   // Mail outbox: [AUDIT 2026-07-26 H15, partial] every legitimate relay
+                   // write (enqueue / claim / sentTo / delete-after-send) touches exactly ONE
+                   // top-level entry, so a user write may affect at most one key. This stops
+                   // `setDoc(mailQueueRef,{})` destroying every pending alert in one shot.
+                   // Residual (documented): a registered user can still forge one entry's
+                   // content or delete one entry per write — full validation needs a server.
+                   || (isRelayDoc(docId) && (isAdmin()
+                        || (isRegisteredUser()
+                             && (resource == null
+                                  ? request.resource.data.keys().size() <= 1
+                                  : request.resource.data.diff(resource.data).affectedKeys().size() <= 1))))
+                   || (!isAdminOnlyDoc(docId) && !isBidDoc(docId) && !isRelayDoc(docId)
                         && docId != 'timer' && docId != 'signInMisses' && docId != 'emails'
+                        && docId != 'changes'
                         && (isRegisteredUser() || isAdmin()));
     }
 

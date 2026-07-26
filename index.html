@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 116;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 117;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -699,19 +699,34 @@ setTimeout(()=>{
 // rejected snapshot listener never retries, so the page stays dead. A normal
 // browser hides this race behind a cached session; incognito has none, so it
 // loses the race every time.
-const authReady = new Promise((resolve, reject) => {
+const authReady = new Promise((resolve) => {
   // Bootstrap an ANONYMOUS session ONLY when Firebase restores NO user. The old code
   // called signInAnonymously unconditionally on every load, which REPLACED a remembered
   // Google session with an anonymous one — so "Continue as X" then saw no live Google
   // user and forced a full re-login. (The admin sites never sign in anonymously, which
   // is exactly why Remember Me works there.) Now a restored Google session survives.
-  let _bootstrapped=false;
+  // [AUDIT 2026-07-26 H16] This promise NEVER rejects. It used to: a single transient
+  // network failure during the one-shot anonymous sign-in rejected it permanently —
+  // every deferred onSnapshot's .catch(()=>{}) swallowed that, ZERO listeners attached
+  // for the life of the tab, and a later successful Google sign-in couldn't resolve an
+  // already-rejected promise. The user saw a fully-rendered, permanently EMPTY board.
+  // Now the anonymous sign-in retries with capped backoff until ANY auth user exists.
+  let _anonBackoffMs=2000, _anonPending=false;
+  const _tryAnon=()=>{
+    if(_anonPending||auth.currentUser) return;
+    _anonPending=true;
+    signInAnonymously(auth).then(()=>{ _anonPending=false; }).catch(e=>{
+      _anonPending=false;
+      console.error('[Auth] anonymous sign-in failed — retrying in '+_anonBackoffMs+'ms:', e && e.code, e && e.message);
+      setTimeout(()=>{ if(!auth.currentUser) _tryAnon(); }, _anonBackoffMs);
+      _anonBackoffMs=Math.min(_anonBackoffMs*2,60000);
+    });
+  };
   onAuthStateChanged(auth, u => {
     if (u) { resolve(u); }
-    else if (!_bootstrapped) { _bootstrapped=true; signInAnonymously(auth).catch(reject); }
-  }, reject);
+    else { _tryAnon(); }
+  }, e => console.error('[Auth] auth listener error:', e && e.code, e && e.message));
 });
-authReady.catch(e => console.error('[Auth] anonymous sign-in failed:', e && e.code, e && e.message));
 
 // Drop-in replacement for the imported onSnapshot. Defers attachment until
 // auth is ready, and surfaces listener errors instead of swallowing them.
@@ -923,6 +938,10 @@ function computeApprovals(src){
     for(const u in src){
       if(priorWinners.has(u)) continue;
       const p=src[u]?.[wk]; if(p===undefined) continue;
+      // [AUDIT 2026-07-26 H7] Only "NP", an integer 1-10, or a 2-3 element array of
+      // integers 1-10 may compete — a devtools-forged bid value (0, -1, "1", …) is
+      // ignored as if never placed. PORTED LOGIC: same filter as the admin twin.
+      if(!(p==="NP"||(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10)))) continue;
       // Prior-phase bids never compete now: winners are locked in above and
       // non-winning prior bids are dead. Without this filter, a phase-1 losing
       // bid (which this site can't see was denied) would pollute phase-2
@@ -1326,7 +1345,16 @@ async function relayMailQueue(){
   // even when signed out, so it read truthy — and a tab with failed/empty maps would
   // resolve alerts to "no recipients" and delete them unsent.)
   if(!_recipMapsLoaded) return;
+  // [AUDIT 2026-07-26 H14] A page whose EmailJS script never loaded (proxy, content
+  // blocker, flaky CDN) must not claim entries AT ALL. It used to claim first and bail at
+  // the emailjs check below with the claim still stamped — making the entry invisible to
+  // every healthy page for 90 s, then re-claiming fastest on expiry, starving the alert
+  // forever. The 15 s poll re-checks this, so a late-loading mailer starts relaying.
+  if(typeof emailjs==='undefined') return;
   if(_mqBusy) return; _mqBusy=true;
+  // Release OUR claim on any abandon path — an abandoned-but-claimed entry is dead to
+  // every other page until the 90 s expiry. (Single-entry dotted delete: rules-compatible.)
+  const _mqRelease=q=>updateDoc(mailQueueRef,{[q+'.claimedAt']:deleteField(),[q+'.claimedBy']:deleteField()}).catch(()=>{});
   try{
     for(const qid of Object.keys(mailQueueData||{})){
       const e=mailQueueData[qid];
@@ -1364,8 +1392,8 @@ async function relayMailQueue(){
           // above passes and we would re-send from this page's stale copy. A genuine entry
           // still has its original ts — a stub does not. Mismatch → already sent: bin it.
           if(_f.ts!==e.ts){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
-        }catch(_){ continue; }
-        if(typeof emailjs==='undefined') continue;
+        }catch(_){ _mqRelease(qid); continue; } // [H14] we hold the claim — release it
+        if(typeof emailjs==='undefined'){ _mqRelease(qid); continue; } // [H14] belt-and-braces (guarded at entry too)
         if(isWelcome && _welcomed(wkey)){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; } // re-check after the claim settle
         for(const to of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:to,changes:e.body||''}); trackEmailSent(); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); }
         // Mark the welcome log after a confirmed relay send so no other page re-sends it.
@@ -1621,7 +1649,15 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
     const _prevVal=prevSnapshot?.[user]?.[wk];
     const _sameVal=bid!==null&&bid!==undefined&&_prevVal!==undefined&&JSON.stringify(bid)===JSON.stringify(_prevVal);
     const _remBefore=timerData.lastChange?(((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)):1;
-    if(timerData.enabled&&_remBefore>0&&!_sameVal&&!openingWindowActive()){ const _n=Date.now(); setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{}); }
+    if(timerData.enabled&&_remBefore>0&&!_sameVal&&!openingWindowActive()){
+      const _n=Date.now(); const _resetH=timerResetHours(timerPhaseStartMs(),_n);
+      // [AUDIT 2026-07-26 H5/H8] Extend-only: firestore.rules now REJECT any user timer
+      // write whose deadline lands earlier than the current one, so a bidder can no longer
+      // truncate everyone's window from devtools. Skip the reset when it would not extend —
+      // the longer deadline stands, matching the server rule. (Admins can still shorten.)
+      const _curDeadline=timerData.lastChange?(timerData.lastChange+((timerData.durationHours||48)*3600000)):0;
+      if(_n+_resetH*3600000>=_curDeadline){ setDoc(timerRef,{lastChange:_n,durationHours:_resetH},{merge:true}).catch(()=>{}); }
+    }
     if(prevSnapshot&&adminSettings.emailNotifsEnabled!==false){
       // Build the authoritative AFTER snapshot from prevSnapshot + THIS exact change,
       // rather than reading the live `data`. On the REMOVE path `data` still holds the
@@ -1978,8 +2014,12 @@ window.openPhaseHistory=function(){
   const completed=phasesData.completedPhases||{};
   // PRIVACY RULE: a phase that is completed but whose successor has NOT begun
   // is still hidden — results only become visible once the next phase starts.
+  // [AUDIT 2026-07-26 H3] …OR once its results e-mails have been SENT. Phase 4 has no
+  // successor (currentPhase stays 4 forever), so `< curPh` alone hid the final — and most
+  // contested — allocation from every user for good; resultsSent[4] is the release stamp.
+  // (Announced results are public by definition: the e-mail already delivered them.)
   const curPh=Number(phasesData.currentPhase||1);
-  const keys=Object.keys(completed).filter(k=>Number(k)<curPh).sort((a,b)=>Number(a)-Number(b));
+  const keys=Object.keys(completed).filter(k=>Number(k)<curPh||!!phasesData.resultsSent?.[k]).sort((a,b)=>Number(a)-Number(b));
   const modal=document.getElementById('phaseHistoryModal');
   const content=document.getElementById('phaseHistoryContent');
   if(!keys.length){
