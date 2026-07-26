@@ -87,8 +87,13 @@ service cloud.firestore {
     // H-4 gate above protected nothing in practice. Decisions now live here, admin-only.
     // (Both sites' change-log views already discarded decision entries, so no UI lost data;
     // completePhase archives the merged log into changesArchive once results are public.)
+    // [AUDIT 2026-07-26 H6 REDESIGN] 'phaseStaging' joins them: it holds each completed
+    // phase's full winner/denial snapshot between Complete Phase and the moment results are
+    // announced. That is exactly the mid-phase-private data H6 exists to protect, so it must
+    // be admin-read-only (never world-readable like `phases`). Admin-write-only via
+    // isAdminOnlyDoc below. It carries NO field the anonymous login bootstrap needs.
     function isAdminReadDoc(docId) {
-      return docId in ['approvals', 'denials', 'changesDecisions'];
+      return docId in ['approvals', 'denials', 'changesDecisions', 'phaseStaging'];
     }
 
     // ── Vacation Auction collection ───────────────────────────────────────────
@@ -110,6 +115,7 @@ service cloud.firestore {
         'loginEmails',
         'changesArchive',
         'changesDecisions',
+        'phaseStaging',
         'meta',
         'emailToUser',
         'usernames'
@@ -243,6 +249,17 @@ service cloud.firestore {
                    // entry that names a colleague — cannot be closed in rules (entry contents
                    // in a dynamic array cannot be validated per-item); it remains a documented
                    // insider risk for the Fair Play Monitor, which is advisory to the admin.
+                   // [AUDIT 2026-07-26 H9 v2] APPEND-ONLY, enforced by CONTAINMENT. The first
+                   // cut only required the new log to be no SHORTER than the old — which a
+                   // same-length replacement trivially satisfies while dropping the real
+                   // entries (read the world-readable log, rebuild it with padding, write it
+                   // back: size 10 >= 10, accepted). The re-audit confirmed the erase hole was
+                   // still open. hasAll() requires the new log to CONTAIN every existing entry,
+                   // so nothing can be removed or altered — only appended. The staff writer is
+                   // arrayUnion('log',…), whose post-image is always a superset, so it still
+                   // passes. (Admins bypass via isAdmin() to reset the log at phase completion.)
+                   // The FORGE half — appending an entry naming a colleague — still cannot be
+                   // closed in rules and remains the documented insider risk.
                    || (docId == 'changes' && (isAdmin()
                         || (isRegisteredUser()
                              && (resource == null
@@ -251,8 +268,7 @@ service cloud.firestore {
                              && request.resource.data.get('log', []) is list
                              && (resource == null
                                   || !(resource.data.get('log', null) is list)
-                                  || request.resource.data.get('log', []).size()
-                                     >= resource.data.get('log', []).size()))))
+                                  || request.resource.data.get('log', []).hasAll(resource.data.get('log', []))))))
                    // Mail outbox: [AUDIT 2026-07-26 H15, partial] every legitimate relay
                    // write (enqueue / claim / sentTo / delete-after-send) touches exactly ONE
                    // top-level entry, so a user write may affect at most one key. This stops

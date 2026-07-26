@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 203;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 204;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1135,6 +1135,15 @@ const bidPhaseRef  = doc(db,"vacations","bidPhase");
 const slotsRef     = doc(db,"vacations","slots"); // per-week FTE availability overrides {wk: number}
 const mailQueueRef = doc(db,"vacations","mailQueue"); // outbox for projection-change alerts
 const changesArchiveRef = doc(db,"vacations","changesArchive"); // {phaseNum: [log entries]} — archived at phase completion
+// [AUDIT 2026-07-26 H6 REDESIGN] Completed-phase snapshots are staged here between Complete
+// Phase and the moment results are announced — a DEDICATED admin-only doc that nothing ever
+// full-replaces. The first cut staged them inside changesDecisions, but that doc is reset with
+// a non-merge setDoc in TWO places (completePhase's own decision-log reset, and the Clear Change
+// Log button), each of which silently destroyed the staged snapshot — breaking phase completion
+// entirely. This doc is admin-read + admin-write in firestore.rules and is touched only by the
+// phase-staging code below. It is intentionally NOT in the backup: a staged snapshot is transient
+// and fully rebuildable from the (backed-up) live approvals/denials/schedule by re-completing.
+const phaseStagingRef = doc(db,"vacations","phaseStaging"); // {pendingPhaseSnapshots:{[phase]:snapshot}}
 
 // Safely write ONLY specific nested fields (dotted paths like "weeks.2027-01-10"
 // or "AD.2027-01-10") without disturbing sibling data. updateDoc() is the
@@ -1406,21 +1415,24 @@ onSnapshot(changesRef,  snap=>{
 });
 // [AUDIT #3] The admin-only decision log. Admin pages merge it back into the Change Log
 // view; nothing else consumes it (Fair Play and the counters exclude decisions anyway).
-// [AUDIT 2026-07-26 H6] Completed-phase snapshots are STAGED admin-only in
-// changesDecisions.pendingPhaseSnapshots between Complete Phase and the moment results
-// are announced (Send/Skip Results, or Begin Next Phase — whichever comes first). The
-// world-readable phases doc only ever holds the PUBLISHED half; the admin UI sees
-// staged+published as one map via the merge below, so its ~40 read sites are unchanged.
+onSnapshot(changesDecisionsRef, snap=>{
+  changesDecisionsLog=snap.exists()?(snap.data().log||[]):[];
+  const p=document.getElementById("panel-changelog");
+  if(p&&p.classList.contains("on")) renderChangelog();
+});
+// [AUDIT 2026-07-26 H6 REDESIGN] Completed-phase snapshots are staged admin-only in the
+// DEDICATED phaseStaging doc between Complete Phase and the moment results are announced
+// (Send/Skip Results, or Begin Next Phase — whichever comes first). The world-readable
+// phases doc only ever holds the PUBLISHED half; the admin UI sees staged+published as one
+// map via the merge below, so its ~40 read sites are unchanged. Nothing full-replaces this
+// doc, so a decision-log reset can no longer destroy an in-flight snapshot.
 let _publishedCompletedPhases={}, _stagedCompletedPhases={};
 function _mergeCompletedPhasesView(){
   phasesData.completedPhases={..._publishedCompletedPhases,..._stagedCompletedPhases};
 }
-onSnapshot(changesDecisionsRef, snap=>{
-  changesDecisionsLog=snap.exists()?(snap.data().log||[]):[];
+onSnapshot(phaseStagingRef, snap=>{
   _stagedCompletedPhases=snap.exists()?(snap.data().pendingPhaseSnapshots||{}):{};
   _mergeCompletedPhasesView();
-  const p=document.getElementById("panel-changelog");
-  if(p&&p.classList.contains("on")) renderChangelog();
   refreshAll(); // staged snapshots drive the phase workflow (complete/send gates)
 });
 onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{}; syncControls(); refreshAll(); });
@@ -1486,14 +1498,19 @@ function scheduleMailQueueSweep(){
   _mqTimer=setTimeout(()=>{ _mqTimer=null; processMailQueue(30000).catch(()=>{}); },5000+Math.random()*10000);
 }
 async function processMailQueue(minAgeMs){
-  // [AUDIT 2026-07-26 H14] No mailer loaded → never claim. This twin had NO emailjs guard
-  // at all: an unloaded mailer threw a ReferenceError mid-send, the catch below swallowed
-  // it, and the entry stayed claimed — invisible to every healthy page for 90 s, forever.
-  if(typeof emailjs==='undefined') return 0;
+  // [AUDIT 2026-07-26 H14 + low] No mailer loaded → never CLAIM or SEND (an unloaded mailer
+  // used to throw a ReferenceError mid-send, get swallowed, and leave the entry claimed and
+  // invisible for 90 s). But do NOT bail entirely: the staff relay delegates no-recipient and
+  // already-welcomed CLEANUP to the admin page, so a mailer-blocked admin machine must still
+  // run that housekeeping. _canSend gates only the claim+send block below.
+  const _canSend=typeof emailjs!=='undefined';
   if(_mqBusy) return 0; _mqBusy=true;
   // Release OUR claim on any abandon path — an abandoned-but-claimed entry is dead to
   // every other page until the 90 s expiry. (Single-entry dotted delete: rules-compatible.)
-  const _mqRelease=q=>updateDoc(mailQueueRef,{[q+'.claimedAt']:deleteField(),[q+'.claimedBy']:deleteField()}).catch(()=>{});
+  // [AUDIT 2026-07-26 disputed-medium] Release ONLY our own claim — a blind delete could erase a
+  // rival tab's fresher claim (re-read and clear only if claimedBy is still ours); see the staff twin.
+  const _mqRelease=async q=>{ try{ const s=await getDoc(mailQueueRef); const e=(s.exists()?s.data():{})[q];
+    if(e&&e.claimedBy===MQ_ID){ await updateDoc(mailQueueRef,{[q+'.claimedAt']:deleteField(),[q+'.claimedBy']:deleteField()}); } }catch(_){} };
   try{
     let sent=0;
     for(const qid of Object.keys(mailQueueData||{})){
@@ -1532,6 +1549,7 @@ async function processMailQueue(minAgeMs){
       // failure must never re-deliver the 1st on a later retry. sentTo grows per success.
       { const done=Array.isArray(e.sentTo)?e.sentTo:[]; recips=recips.filter(to=>!done.includes(to)); }
       if(!recips.length){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
+      if(!_canSend) continue; // [H14 low] cleanup above still ran; skip claim+send with no mailer
       try{
         // Claim, let the claim settle, verify we still own it, then send.
         await updateDoc(mailQueueRef,{[qid+'.claimedAt']:Date.now(),[qid+'.claimedBy']:MQ_ID});
@@ -1676,8 +1694,24 @@ function usersMissingFte(){
   }).sort();
 }
 window.usersMissingFte=usersMissingFte;
+// [AUDIT 2026-07-26 low] usersMissingFte() unions two DIFFERENT problems: truly UNSET/out-of-range
+// (no real value — a shared bulk value is appropriate) and OFF-GRID (a real, in-range value like
+// 0.75 that just isn't on the 0.1 grid — must be snapped to ITS OWN nearest grid value, never
+// overwritten with a shared number, or a real part-timer silently becomes full-time). The bulk
+// tool needs them separated so it can't destroy a genuine part-time value.
+function _fteScored(){ const s=new Set(names||[]); try{ for(const u in (scheduleData||{})){ if(scheduleData[u]&&Object.keys(scheduleData[u]).length) s.add(u); } }catch(_){} return [...s]; }
+function usersTrulyMissingFte(){ return _fteScored().filter(u=>{ const v=fteData[u]; if(v===undefined||v===null||v==='') return true; const n=Number(v); return isNaN(n)||n<FTE_MIN||n>1; }).sort(); }
+function usersOffGridFte(){ return _fteScored().filter(u=>{ const v=fteData[u]; if(v===undefined||v===null||v==='') return false; const n=Number(v); return !isNaN(n)&&n>=FTE_MIN&&n<=1&&Math.abs(n*10-Math.round(n*10))>1e-9; }).sort(); }
+window.usersTrulyMissingFte=usersTrulyMissingFte; window.usersOffGridFte=usersOffGridFte;
 
 function pScore(p){ if(p==="NP")return 99; if(Array.isArray(p)){ const s=[...p].sort((a,b)=>a-b).join(','); if(s==='1,2,3')return 0; if(s==='1,2')return 1; return Math.min(...p)+1; } return p+1; }
+// [AUDIT 2026-07-26 mediums] A bid the ENGINE will actually score: "NP", an integer 1-10, or
+// a 2-3 element array of integers 1-10. Mirrors the inline filter in computeApprovals (kept
+// inline THERE for self-contained test extraction; this shared copy is for the non-engine
+// consumers — the approve guard, the Edit-table dropdown, and the completePhase snapshot —
+// which must all agree with the engine about which stored values are real bids.
+function _isScorableBid(p){ return p==="NP"||(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10)); }
+window._isScorableBid=_isScorableBid;
 
 const SPECIAL={
   "2027-02-14":5,"2027-03-28":5,"2027-04-04":5,"2027-11-21":5,"2027-12-19":5,"2027-12-26":5
@@ -1812,6 +1846,27 @@ function computeApprovals(ignoreAdmin){
   // would be from the bidding rules alone, before any admin approve/deny. Used to
   // label "projected WIN/DRAW/REVIEW/LOSE" so admin can see the pre-decision state.
   const out={};
+  // [AUDIT 2026-07-26 I2] One priority NUMBER per phase, enforced in the engine. Firestore
+  // rules cannot see week keys (nested maps), and the client only DISABLES reused options —
+  // so a bid forged via devtools can put "1" on every desirable week and win them all. Here
+  // each user's current-phase numbers are collected; any number appearing on more than one
+  // week disqualifies EVERY bid of that user containing it (the state is UI-impossible, so it
+  // is treated as no-bid, exactly like an invalid shape). NP is exempt (not a number). This
+  // is a per-user precompute, so it lives OUTSIDE the per-week loop below.
+  // PORTED LOGIC: the user site's computeApprovals carries the identical block.
+  const _cur=Number(phasesData.currentPhase||1);
+  const _i2Disq=new Set(); // "user|wk" keys to skip for cross-week number reuse
+  { const _numWeeks={};
+    const _scor=p=>(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10));
+    for(const u in scheduleData){ for(const wk in (scheduleData[u]||{})){
+      const p=scheduleData[u][wk];
+      if(p===undefined||p==="NP"||!_scor(p)) continue;
+      if(getUserBidPhaseAdmin(u,wk)!==_cur) continue; // current phase only
+      (_numWeeks[u]=_numWeeks[u]||{});
+      for(const n of (Array.isArray(p)?p:[p])){ (_numWeeks[u][n]=_numWeeks[u][n]||new Set()).add(wk); }
+    } }
+    for(const u in _numWeeks){ for(const n in _numWeeks[u]){ if(_numWeeks[u][n].size>1){ for(const wk of _numWeeks[u][n]) _i2Disq.add(u+'|'+wk); } } }
+  }
   mondays.forEach(d=>{
     const wk=dateKey(d);
     const cap=getSlots(wk);
@@ -1821,6 +1876,7 @@ function computeApprovals(ignoreAdmin){
     for(const u in scheduleData){
       if(priorWinners.has(u)) continue;
       const p=scheduleData[u]?.[wk]; if(p===undefined) continue;
+      if(_i2Disq.has(u+'|'+wk)) continue; // [I2] cross-week number reuse → treat as no-bid
       // [AUDIT 2026-07-26 H7] Firestore rules cannot validate bid CONTENT (week keys sit in
       // nested maps rules can't iterate), so the engine is the gate: only "NP", an integer
       // 1-10, or a 2-3 element array of integers 1-10 may compete. A devtools bid of 0 or -1
@@ -3715,6 +3771,9 @@ window.clearEverything=function(){
               setDoc(doc(db,"vacations","welcomeLog"),{sent:{}}),
               // Drain the outbox too, so no leftover welcome/alert can fire after a reset.
               setDoc(mailQueueRef,{}),
+              // [H6 REDESIGN] Drop any staged (unpublished) phase snapshot — a fresh auction
+              // must not carry a completed-phase snapshot from the previous one.
+              setDoc(phaseStagingRef,{pendingPhaseSnapshots:{}}),
             ]);
             // No adminLog here — logging the wipe would itself put the fresh
             // change counters at 1 instead of 0.
@@ -3818,7 +3877,7 @@ async function _publishPhaseResults(fields){
   const b=writeBatch(db);
   if(hasStaged){
     payload.completedPhases={..._publishedCompletedPhases,..._stagedCompletedPhases};
-    b.set(changesDecisionsRef,{pendingPhaseSnapshots:deleteField()},{merge:true});
+    b.set(phaseStagingRef,{pendingPhaseSnapshots:{}}); // clear staging in the SAME batch — NON-merge replace: a merge of an empty map clears nothing (Firestore deep-merges maps), and this doc holds only pendingPhaseSnapshots so a full replace is exact
   }
   b.set(phasesRef,payload,{merge:true});
   await b.commit();
@@ -3835,7 +3894,11 @@ window.skipPhaseResults=function(cur){
     okText:'Skip — don’t e-mail', danger:true,
     onConfirm:async()=>{
       // [H6] skipping still ANNOUNCES: publish the staged snapshot with the stamp.
-      await _publishPhaseResults({resultsSent:{...(phasesData.resultsSent||{}),[cur]:Date.now()}}).catch(()=>{});
+      // [AUDIT 2026-07-26 disputed-low] Do NOT swallow a failed publish — the batch is what
+      // makes results public and stamps resultsSent. A dropped network here used to toast
+      // "skipped" while nothing published, so the admin walked away believing it advanced.
+      try{ await _publishPhaseResults({resultsSent:{...(phasesData.resultsSent||{}),[cur]:Date.now()}}); }
+      catch(e){ toast('⚠️ Could not publish Phase '+cur+' results — nothing was changed ('+(e?.message||e)+'). Try again.','err'); return; }
       toast('⏭ Phase '+cur+' results skipped (no e-mail sent)','warn');
     }
   });
@@ -3858,7 +3921,7 @@ function renderNextStep(){
   // said "bidding cannot begin" when it had already begun. Pre-launch it is genuinely the next
   // step; once Phase 1 has started it becomes a banner ABOVE the real next step instead.
   const fteNote=(missingFte.length&&phase1Started())
-    ? `<div style="background:rgba(234,179,8,.10);border:1px solid rgba(234,179,8,.4);border-radius:10px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:var(--t1)">⚠️ <strong>${missingFte.length}</strong> user${missingFte.length!==1?'s have':' has'} no valid saved FTE (${missingFte.map(u=>esc(u)).join(', ')}) — they are being scored with a fallback. Fix before the next phase begins. <button class="btn btn-ghost" style="padding:2px 8px;font-size:11px;margin-left:6px" onclick="gotoUsersPanel()">👤 Open Users</button></div>`
+    ? `<div style="background:rgba(234,179,8,.10);border:1px solid rgba(234,179,8,.4);border-radius:10px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:var(--t1)">⚠️ <strong>${missingFte.length}</strong> user${missingFte.length!==1?'s have':' has'} an FTE the engine can't score correctly (${missingFte.map(u=>esc(u)).join(', ')}) — ${usersTrulyMissingFte().length?'some are unset (scored with a fallback)':''}${usersTrulyMissingFte().length&&usersOffGridFte().length?'; ':''}${usersOffGridFte().length?'some are off the 0.1 grid (a real value that mis-rounds)':''}. Fix before the next phase begins — the FTE panel's set/snap tool handles both. <button class="btn btn-ghost" style="padding:2px 8px;font-size:11px;margin-left:6px" onclick="gotoUsersPanel()">👤 Open Users</button></div>`
     : '';
   if(missingCaps>0){
     html=box(`<strong>${missingCaps}</strong> week${missingCaps!==1?'s have':' has'} no saved FTE capacity — those weeks are unbiddable (capacity 0) until you save a value. There are no built-in defaults.`,btn('📆 Open FTE Availability','gotoSlotsPanel()'));
@@ -3981,6 +4044,14 @@ window.completePhase=function(){
     });
     return;
   }
+  // [AUDIT 2026-07-26 H12 v2] Durable stale-denial warning at the decision point. If any
+  // current-phase denial now projects WIN/DRAW/REVIEW (e.g. the blocker that caused the loss
+  // was later edited/removed), completing now freezes it as a permanent, wrong loss. Show it
+  // here where the admin must see it before confirming — not just in a toast they may miss.
+  const _stale=_allStaleDenials();
+  const _staleHtml=_stale.length?`<div class="cmodal-warn" style="margin-top:10px"><strong>⚠️ ${_stale.length} denial${_stale.length!==1?'s':''} now project${_stale.length===1?'s':''} WIN/DRAW/REVIEW.</strong> Completing the phase freezes ${_stale.length===1?'it':'them'} as ${_stale.length===1?'a permanent loss':'permanent losses'}. Review before completing:
+        <ul style="margin:6px 0 0 16px;line-height:1.6;max-height:120px;overflow-y:auto">${_stale.map(s=>`<li>${esc(s.user)} — ${wLabel(wkDate(s.wk))} (↶ Revoke Denial in Approvals &amp; Denials if this is stale)</li>`).join('')}</ul>
+        <div style="margin-top:6px;font-size:11px;color:var(--t3)">This does not block completion — a deliberate denial (cap/draw enforcement) can legitimately project a win. Proceed only if each of these is intended.</div></div>`:'';
   openConfirm({
     title:'✓ Complete Phase '+cur,
     body:`<div>Mark Phase <strong>${cur}</strong> as complete?</div>
@@ -3991,7 +4062,7 @@ window.completePhase=function(){
             <li>Users will see Phase ${cur+1} on the bidding board</li>`:`<li><strong>This is the final phase (Phase 4)</strong> — after results are sent, the auction is complete.</li>`}
             <li>Approved bid numbers cannot be reused in future phases</li>
             <li>Denied bid numbers are returned to users for future phases</li>
-          </ul>`,
+          </ul>${_staleHtml}`,
     okText:'Complete Phase '+cur,
     onConfirm:async()=>{
       const snap=JSON.parse(JSON.stringify(scheduleData));
@@ -4006,7 +4077,11 @@ window.completePhase=function(){
       // and reports/e-mails show them APPROVED for a week they cancelled. Must run BEFORE
       // the frozen fteHead block below (which values apSnap), or the orphan's FTE is baked
       // into the immutable header even with a clean approvals array.
-      for(const wk of Object.keys(apSnap)){ if(Array.isArray(apSnap[wk])) apSnap[wk]=apSnap[wk].filter(u=>snap[u]&&snap[u][wk]!==undefined); }
+      // [AUDIT 2026-07-26 medium] Also drop any approval of an UNSCORABLE bid (forged shape).
+      // adApprove now blocks these at entry, but a value forged straight into approvalsData via
+      // devtools, or approved before this guard shipped, would otherwise freeze as a permanent
+      // win the engine never recognised. The snapshot only keeps approvals of real, scorable bids.
+      for(const wk of Object.keys(apSnap)){ if(Array.isArray(apSnap[wk])) apSnap[wk]=apSnap[wk].filter(u=>snap[u]&&snap[u][wk]!==undefined&&_isScorableBid(snap[u][wk])); }
       for(const wk of Object.keys(denSnap)){ if(Array.isArray(denSnap[wk])) denSnap[wk]=denSnap[wk].filter(u=>snap[u]&&snap[u][wk]!==undefined); }
       // Freeze each week's FTE header (approved / available / of-cap) AS OF this phase's
       // completion, so a prior-phase report never drifts later when another phase
@@ -4034,9 +4109,12 @@ window.completePhase=function(){
       // world-readable phases doc yet. Writing it here used to publish every winner and
       // denial to any anonymous visitor's devtools the moment the admin clicked Complete
       // Phase, hours before "Send Results" — while the staff UI's own privacy rule still
-      // hid them. The snapshot sits in changesDecisions.pendingPhaseSnapshots (admin-only,
-      // already inside the 28-doc backup) and is copied into the phases doc atomically
-      // when results are announced or the next phase begins — whichever comes first.
+      // hid them. The snapshot sits in the dedicated admin-only phaseStaging doc (see the
+      // [H6 REDESIGN] note at phaseStagingRef) and is copied into the phases doc atomically
+      // when results are announced or the next phase begins — whichever comes first. NOTE:
+      // the decision-log reset ~45 lines below is a NON-merge write to changesDecisions, a
+      // DIFFERENT doc — it can no longer clobber this staged snapshot (that was the H6-fix
+      // critical the re-audit caught).
       const _snapPayload={
           completedAt:Date.now(),
           approvals:apSnap,
@@ -4046,7 +4124,7 @@ window.completePhase=function(){
           fteHeadPhase:fteHeadPhaseSnap,      // frozen PHASE-SPECIFIC header per week (immutable)
           projections:serializeProjections() // pre-admin outcomes, kept for reports
       };
-      await setDoc(changesDecisionsRef,{pendingPhaseSnapshots:{[cur]:_snapPayload}},{merge:true});
+      await setDoc(phaseStagingRef,{pendingPhaseSnapshots:{[cur]:_snapPayload}},{merge:true});
       // Local-first so every immediate reader (gates, renderNextStep) sees it now.
       _stagedCompletedPhases={..._stagedCompletedPhases,[cur]:_snapPayload};
       _mergeCompletedPhasesView();
@@ -4146,7 +4224,7 @@ async function _commitBeginPhase(next){
     batch1.set(deniedRef,{});
     // [H6] discard (never publish) staged rehearsal snapshots — pre-launch artifacts
     // must not leak into the real auction (same lineage as the decision clear above).
-    batch1.set(changesDecisionsRef,{pendingPhaseSnapshots:deleteField()},{merge:true});
+    batch1.set(phaseStagingRef,{pendingPhaseSnapshots:{}}); // NON-merge replace (empty-map merge clears nothing)
     try{ await batch1.commit(); }
     catch(e){ toast('Could not begin Phase 1 — nothing was changed ('+(e?.message||e)+')','err'); return false; }
   } else {
@@ -4162,7 +4240,7 @@ async function _commitBeginPhase(next){
     // engine reads prior winners from the public phases doc; no torn instant.
     if(Object.keys(_stagedCompletedPhases||{}).length){
       _phasePayload.completedPhases={..._publishedCompletedPhases,..._stagedCompletedPhases};
-      batch.set(changesDecisionsRef,{pendingPhaseSnapshots:deleteField()},{merge:true});
+      batch.set(phaseStagingRef,{pendingPhaseSnapshots:{}}); // NON-merge replace (empty-map merge clears nothing)
     }
     batch.set(phasesRef,_phasePayload,{merge:true});
     batch.set(approvalsRef,{});
@@ -4692,7 +4770,11 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
       const allDelivered=usersWithResults.every(u=>{ const r=recipientsFor(u); return !r.length || r.every(a=>sentAddrs.has(a)); });
       if(fail===0 && allDelivered){
         // [H6] the "sent" stamp and the PUBLIC copy of the snapshot land in one batch.
-        await _publishPhaseResults({resultsSent:{...(phasesData.resultsSent||{}),[cur]:Date.now()}}).catch(()=>{});
+        // [AUDIT 2026-07-26 disputed-low] Surface a failed publish — every e-mail went out, but
+        // if this batch is lost the results are NOT public and resultsSent is unstamped, so the
+        // workflow would silently look un-advanced. Tell the admin to retry rather than toast OK.
+        try{ await _publishPhaseResults({resultsSent:{...(phasesData.resultsSent||{}),[cur]:Date.now()}}); }
+        catch(e){ toast('⚠️ Phase '+cur+' e-mails sent, but publishing the results FAILED ('+(e?.message||e)+'). Click Send again to finish publishing.','err'); return; }
         toast(`📮 Phase ${cur} results: ${ok} e-mail${ok!==1?'s':''} sent${alreadyDone?`, ${alreadyDone} already sent`:''}${skipped?` (${skipped} had no e-mail)`:''}`,'ok');
       } else if(fail===0 && ok===0 && alreadyDone){
         toast(`📮 Phase ${cur} results were already sent to all ${alreadyDone} user${alreadyDone!==1?'s':''} — nothing new to send.`,'ok');
@@ -5756,6 +5838,15 @@ window._fixLockAllWeeksInline=async function(){
   _refreshReadinessBox();
 };
 window.adApprove=function(user,wk,currentOutcome){
+  // [AUDIT 2026-07-26 medium] Refuse to approve a bid the engine will not score. An
+  // unscorable value (a devtools-forged 0/-1/"1", or a shape the filter drops) is invisible
+  // to every live projection and capacity total, but completePhase would otherwise snapshot
+  // an approval of it as a PERMANENT prior-phase win — a winner the engine never recognised.
+  // Block it here; the admin must fix the bid (Edit Selections) before approving.
+  if(!_isScorableBid(scheduleData[user]?.[wk])){
+    toast('⚠ Cannot approve '+user+' on Wk '+(_wkNumByISO[wk]||wk)+' — their stored bid is not a valid value (edit it first).','err');
+    return;
+  }
   const m=wkDate(wk);
   const cap=getSlots(wk); const ufte=getUserFTE(user);
   // Over-cap warning uses the site's ONE deduplicated winner set (computeApprovals):
@@ -5901,9 +5992,9 @@ window.adDenyAllLosers=function(){
   }
   openConfirm({
     title:'✕ Deny All Current Losers',
-    body:`<div>This will deny <strong>${toDeny.length}</strong> losing bid${toDeny.length!==1?'s':''} across all weeks.</div>
-          <div class="cmodal-info" style="margin-top:10px">Only bids currently showing as LOSE (not already approved or denied) will be denied. Their bid numbers will be returned for the next phase.</div>${readinessWarnHtml()}`,
-    okText:'Deny All '+toDeny.length+' Losers', danger:true,
+    body:`<div>This will deny <strong>up to ${toDeny.length}</strong> losing bid${toDeny.length!==1?'s':''} across all weeks.</div>
+          <div class="cmodal-info" style="margin-top:10px">Only bids currently showing as LOSE (not already approved or denied) will be denied. Denials are applied <strong>one at a time with a recompute after each</strong>, so a bid the engine PROMOTES once an earlier blocker is denied is skipped — the final count may be lower than ${toDeny.length}. Denied bid numbers are returned for the next phase.</div>${readinessWarnHtml()}`,
+    okText:'Deny losers', danger:true,
     onConfirm:async()=>{
       // [AUDIT 2026-07-26 H2] One projection is NOT enough: computeApprovals stops a week
       // at the first non-fitting group, so denying that blocker re-opens the week for the
@@ -6154,12 +6245,16 @@ window.renderEditTable=function(){
       const controls=isHistorical?
         `<span style="color:var(--t3);font-size:11px;font-style:italic">Phase ${bidPh} — locked</span>`:
         `<select class="sel" onchange="adminChangePriority('${u}','${wk}',this.value)">${
-          // [AUDIT 2026-07-26 H7] A stored value outside the option list (e.g. a devtools-
-          // forged 0 or -1) used to match no option, so the browser silently displayed the
-          // first one — "1" — indistinguishable from an honest top bid. Render it as an
-          // explicit ⚠ option instead; the engine already refuses to score it.
-          (['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3'].some(v=>String(pl)===v.replace(/,/g,'/'))?'':`<option value="" selected disabled>⚠ invalid: ${String(pl).replace(/[<>&"]/g,'')}</option>`)
-          +['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3'].map(v=>`<option value="${v}"${String(pl)===v.replace(/,/g,'/')?' selected':''}>${v.replace(/,/g,'/')}</option>`).join('')}</select>`;
+          // [AUDIT 2026-07-26 H7 + medium] A stored value the engine won't score (a devtools-
+          // forged 0, -1, or the STRING "1"/"1/2") used to slip through: the old check matched
+          // the string LABEL against the option list, so a string "1" matched option "1" and
+          // rendered as a normal valid selection while both engines silently dropped it. Gate
+          // on _isScorableBid(p) — the same predicate the engine uses — so any unscorable value
+          // (whatever its type) shows the explicit ⚠ option and NO normal option is pre-selected.
+          (()=>{ const _scor=_isScorableBid(p);
+            return (_scor?'':`<option value="" selected disabled>⚠ invalid: ${String(pl).replace(/[<>&"]/g,'')}</option>`)
+              +['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3'].map(v=>`<option value="${v}"${(_scor&&String(pl)===v.replace(/,/g,'/'))?' selected':''}>${v.replace(/,/g,'/')}</option>`).join('');
+          })()}</select>`;
       const removeBtn=isHistorical?'':`<button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminRemove('${u}','${wk}')">Remove</button>`;
       rows.push(`<tr>
         <td>${phaseBadge}<strong>${u}</strong></td><td class="mono">${wLabel(m)}</td><td style="color:var(--t2)">${wRange(m)}</td>
@@ -6195,6 +6290,27 @@ async function _reconcileStaleDenials(wk){
     }
   }catch(e){ console.warn('stale denial check failed',e); }
 }
+// [AUDIT 2026-07-26 H12 v2] Every CURRENT-phase denial whose NATURAL projection is no longer
+// a loss — i.e. a bid the engine would now promote if the denial were revoked. The per-edit
+// toast above is transient and gets overwritten by the edit's own success toast, so the admin
+// can miss it and Complete the phase with a stale denial frozen as a permanent loss. This
+// list is surfaced DURABLY in the Complete Phase confirm dialog (the actual decision point),
+// where the admin cannot proceed without seeing it. Returns [{wk,user}].
+function _allStaleDenials(){
+  const out=[];
+  try{
+    const nat=computeApprovals(true);
+    mondays.forEach(d=>{ const wk=dateKey(d);
+      const denied=Array.isArray(deniedData?.[wk])?deniedData[wk]:[];
+      for(const u of denied){
+        if(!isCurrentPhaseBidAdmin(u,wk)) continue; // only this phase's denials matter for completion
+        if(getOutcome(wk,u,nat)!=='lose') out.push({wk,user:u});
+      }
+    });
+  }catch(e){ console.warn('stale-denial sweep failed',e); }
+  return out;
+}
+window._allStaleDenials=_allStaleDenials;
 // ── Admin manual-bid validation [AUDIT 2026-07-25 #8 / #9] ────────────────────
 // The admin's own add/edit paths wrote straight to Firestore with no checks at all,
 // so a manual entry could do things no bidder could: bid a standard week during the
@@ -7310,6 +7426,26 @@ window.addUser=async function(){
   const parsed=parseFloat(fteEl.value);
   if(isNaN(parsed)||parsed<FTE_MIN||parsed>1){toast("FTE must be between "+FTE_MIN+" and 1","err");return;}
   const fte=Math.round(parsed*10)/10;   // 0.1 grid, same as saveFte [AUDIT #10]
+  // [AUDIT 2026-07-26 medium] Initials collision with a departed PRIOR WINNER. removeUser keeps
+  // a prior winner's FTE entry (H1/H11) so their completed-phase wins keep consuming the right
+  // capacity. If a NEW hire is added with those same initials, this write would overwrite that
+  // kept FTE with the new person's value — retroactively revaluing the old person's locked-in
+  // wins (an under-value silently OVER-allocates every later phase's weeks). Warn and confirm.
+  if(!_addUserBypass){
+    const _cp=phasesData.completedPhases||{};
+    const _wonWk=[]; for(const ph in _cp){ const ap=_cp[ph]?.approvals||{}; for(const wk in ap){ if(Array.isArray(ap[wk])&&ap[wk].includes(val)&&!_wonWk.includes(wk)) _wonWk.push(wk); } }
+    const _keptFte=fteData[val];
+    if(_wonWk.length && _keptFte!==undefined && Math.abs(Number(_keptFte)-fte)>1e-9){
+      openConfirm({
+        title:'⚠️ Initials reuse a prior winner',
+        body:`<div><strong>${esc(val)}</strong> already owns ${_wonWk.length} locked-in win${_wonWk.length!==1?'s':''} from a completed phase, recorded at FTE <strong>${_keptFte}</strong>.</div>
+              <div class="cmodal-warn" style="margin-top:8px">Adding a new person with these initials at FTE ${fte} will <strong>revalue those prior wins</strong> — every later phase's capacity math for those weeks changes. Only proceed if this is the SAME person; otherwise use different initials for the new hire.</div>`,
+        okText:'Add anyway (same person)', danger:true,
+        onConfirm:()=>{ _addUserBypass=true; try{ window.addUser(); } finally { _addUserBypass=false; } }
+      });
+      return;
+    }
+  }
   try{ await updateDoc(userListRef,{users:arrayUnion(val)}); }
   catch(e){ await setDoc(userListRef,{users:[val]},{merge:true}); } // doc doesn't exist yet
   await setDoc(fteRef,{[val]:fte},{merge:true}).catch(()=>{}); // FTE is this site's own (not shared)
@@ -7491,8 +7627,23 @@ window.toggleFteEdit=function(){
 // entry, so the confirm says so rather than pretending this is a general-purpose tool.
 window.bulkSaveMissingFte=function(){
   if(adminSettings.fteEditEnabled!==true){ toast('FTE editing is OFF — flip the FTE editing toggle first.','warn'); return; }
-  const miss=usersMissingFte();
-  if(!miss.length){ toast('Every user already has a saved FTE.','ok'); return; }
+  // [AUDIT 2026-07-26 low] Off-grid users (a real 0.75) are NOT bulk-set to a shared value —
+  // that would overwrite a genuine part-time value with 1.0. They are snapped to their OWN
+  // nearest grid value in one write. Only truly-UNSET users get the shared bulk value.
+  const off=usersOffGridFte();
+  if(off.length){
+    const patch={}; off.forEach(u=>{ patch[u]=Math.round(Number(fteData[u])*10)/10; });
+    openConfirm({
+      title:'📐 Snap '+off.length+' off-grid FTE'+(off.length!==1?'s':''),
+      body:`<div>These ${off.length} user${off.length!==1?'s have':' has'} a real FTE that is <strong>off the 0.1 grid</strong> (e.g. 0.75). The engine rounds to 0.1 steps, so an off-grid value can mis-score a week. Each will be snapped to <strong>its own nearest 0.1</strong> — no shared value, no part-timer turned full-time.</div>
+            <div style="margin-top:8px;color:var(--t2);font-size:12px;line-height:1.7">${off.map(u=>esc(u)+': '+fteData[u]+' → '+patch[u]).join('<br>')}</div>`,
+      okText:'Snap to grid',
+      onConfirm:async()=>{ try{ await setDoc(fteRef,patch,{merge:true}); await adminLog('ALL','ALL','admin-fte-snap').catch(()=>{}); toast('📐 Snapped '+off.length+' FTE value'+(off.length!==1?'s':'')+' to the 0.1 grid','ok'); }catch(e){ toast('Could not save — '+(e?.message||e),'err'); } }
+    });
+    return;
+  }
+  const miss=usersTrulyMissingFte();
+  if(!miss.length){ toast('Every user already has a valid, on-grid saved FTE.','ok'); return; }
   openConfirm({
     title:'✔ Set FTE for '+miss.length+' user'+(miss.length!==1?'s':''),
     body:`<div>These ${miss.length} user${miss.length!==1?'s have':' has'} <strong>no saved FTE</strong>. The number currently shown next to them is the code's fallback, not a value you entered.</div>
@@ -8174,6 +8325,12 @@ async function _doFullRestore(f){
       }
       batch.set(ref, v||{});
     }
+    // [H6 REDESIGN] phaseStaging is NOT in the backup (transient, rebuildable). Clear it as
+    // part of the restore so a restored OLDER state can't inherit a stale staged snapshot
+    // from the live database. If the backup was taken mid-"completed-but-not-announced", the
+    // admin simply re-clicks Complete Phase — the snapshot rebuilds from the restored live
+    // approvals/denials/schedule, identical to the original.
+    batch.set(phaseStagingRef,{pendingPhaseSnapshots:{}});
     await batch.commit();
   }catch(e){
     // [AUDIT #12] The batch is atomic, so no auction data changed — but the mail queue
@@ -8245,6 +8402,7 @@ async function _doUserRestore(f,u){
 // Every workflow step that changes auction state irreversibly offers a one-click
 // backup first. "Skip backup (testing)" proceeds without one.
 let _bkBypass=false;
+let _addUserBypass=false; // [AUDIT 2026-07-26] set only while re-running addUser past the initials-collision confirm
 window._bkProceed=null;
 function _backupThen(label,fn){
   window._bkProceed=fn;

@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 117;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 118;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -921,6 +921,24 @@ function computeApprovals(src){
   if(typeof src==='boolean') throw new Error('computeApprovals(src): user variant takes a schedule snapshot object, not a boolean');
   src=src||data;
   const a={};
+  // [AUDIT 2026-07-26 I2] One priority NUMBER per phase, enforced in the engine — a bid forged
+  // via devtools can reuse "1" on every week (the client only disables reused options; rules
+  // can't see week keys). Any number a user uses on >1 current-phase week disqualifies every
+  // bid of theirs containing it (UI-impossible → treated as no-bid). NP is exempt.
+  // PORTED LOGIC: identical to the admin twin's block.
+  const _cur=Number(phasesData.currentPhase||1);
+  const _i2Disq=new Set();
+  { const _numWeeks={};
+    const _scor=p=>(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10));
+    for(const u in src){ for(const wk in (src[u]||{})){
+      const p=src[u][wk];
+      if(p===undefined||p==="NP"||!_scor(p)) continue;
+      if(getUserBidPhase(u,wk)!==_cur) continue;
+      (_numWeeks[u]=_numWeeks[u]||{});
+      for(const n of (Array.isArray(p)?p:[p])){ (_numWeeks[u][n]=_numWeeks[u][n]||new Set()).add(wk); }
+    } }
+    for(const u in _numWeeks){ for(const n in _numWeeks[u]){ if(_numWeeks[u][n].size>1){ for(const wk of _numWeeks[u][n]) _i2Disq.add(u+'|'+wk); } } }
+  }
   mondays.forEach(date=>{
     const wk=dateKey(date);
     const cap=weekMeta[wk].slots;
@@ -942,6 +960,7 @@ function computeApprovals(src){
       // integers 1-10 may compete — a devtools-forged bid value (0, -1, "1", …) is
       // ignored as if never placed. PORTED LOGIC: same filter as the admin twin.
       if(!(p==="NP"||(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10)))) continue;
+      if(_i2Disq.has(u+'|'+wk)) continue; // [I2] cross-week number reuse → treat as no-bid
       // Prior-phase bids never compete now: winners are locked in above and
       // non-winning prior bids are dead. Without this filter, a phase-1 losing
       // bid (which this site can't see was denied) would pollute phase-2
@@ -1354,7 +1373,13 @@ async function relayMailQueue(){
   if(_mqBusy) return; _mqBusy=true;
   // Release OUR claim on any abandon path — an abandoned-but-claimed entry is dead to
   // every other page until the 90 s expiry. (Single-entry dotted delete: rules-compatible.)
-  const _mqRelease=q=>updateDoc(mailQueueRef,{[q+'.claimedAt']:deleteField(),[q+'.claimedBy']:deleteField()}).catch(()=>{});
+  // [AUDIT 2026-07-26 disputed-medium] Release ONLY our own claim. A blind delete could erase a
+  // RIVAL's fresher claim if a rival re-claimed between our claim write and this release (e.g. our
+  // verification getDoc failed on a slow link while another tab, seeing the entry, claimed and
+  // began sending) — re-opening a double-send window. Re-read and clear only if claimedBy is still
+  // ours; if the re-read also fails, leave it (the 90s claim expiry is the backstop).
+  const _mqRelease=async q=>{ try{ const s=await getDoc(mailQueueRef); const e=(s.exists()?s.data():{})[q];
+    if(e&&e.claimedBy===MQ_ID){ await updateDoc(mailQueueRef,{[q+'.claimedAt']:deleteField(),[q+'.claimedBy']:deleteField()}); } }catch(_){} };
   try{
     for(const qid of Object.keys(mailQueueData||{})){
       const e=mailQueueData[qid];
@@ -2759,8 +2784,12 @@ window.signinShowPicker=function(){
   // aren't left permanently rejected against the anonymous session (and re-subscribe cleanly
   // on the next sign-in). Must run before signOut, while the token is still valid.
   try{ _unsubscribeSensitive(); }catch(_){}
+  // [AUDIT 2026-07-26 H16 low] signOut fires onAuthStateChanged with null, and the auth
+  // listener's retry (_tryAnon, guarded by _anonPending) re-establishes the anonymous read
+  // session. Calling signInAnonymously HERE too raced that listener — two concurrent anonymous
+  // sign-ins per sign-out, and a stray anon sign-in could land AFTER a fresh Google sign-in and
+  // replace it. Let the single listener path own anonymous bootstrap; just sign out here.
   try{ signOut(auth).catch(()=>{}); }catch(_){}
-  try{ signInAnonymously(auth).catch(()=>{}); }catch(_){}
 };
 // Full sign-out from the board (mirrors the admin sites' "Sign out"): hide the
 // board, forget the remembered name, drop the Google session, and return to the
