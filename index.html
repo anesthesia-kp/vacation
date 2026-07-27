@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 121;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 122;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -2224,25 +2224,37 @@ function render(){
 // [WHITELIST TRACKER 2026-07-26] One-time prompt: ask the signed-in user to add the auction sender
 // to their Google contacts / mark Not-Spam, and self-confirm so the admin can track completion.
 // Purely additive — reads/writes only whitelistConfirmData/whitelistConfirmRef; never touches bidding.
+// Tracks what the banner currently shows ('hidden' or the exact user string it's prompting), so
+// repeated render() calls DON'T rebuild the innerHTML when nothing changed. Rebuilding on every
+// background refresh could destroy the button the instant a user clicked it (a "nothing happened"
+// click), and it churned the DOM needlessly. Now the banner is only touched on a real state change.
+let _whitelistBannerState=null;
 function renderWhitelistBanner(){
   const el=document.getElementById("whitelistBanner"); if(!el) return;
   const user=getCurrentUser();
-  // Stay hidden until the confirmation state has loaded — prevents the on-load flash for users who
-  // have already confirmed. Also hidden when signed out or already confirmed.
-  if(!_whitelistLoaded || !user || (whitelistConfirmData && whitelistConfirmData[user])){ el.innerHTML=""; return; }
+  // Stay hidden until the confirmation state has loaded (prevents the on-load flash), when signed
+  // out, or once already confirmed.
+  const shouldShow = _whitelistLoaded && user && !(whitelistConfirmData && whitelistConfirmData[user]);
+  const desired = shouldShow ? user : 'hidden';
+  if(_whitelistBannerState===desired) return; // idempotent — nothing changed, leave the DOM (and any live click) alone
+  _whitelistBannerState=desired;
+  if(!shouldShow){ el.innerHTML=""; return; }
+  // Bake the resolved user into the button so the click NEVER depends on re-reading getCurrentUser()
+  // at click time (which could be momentarily empty right after sign-in — the real cause of the
+  // silent "nothing happened" first click). The banner only shows when `user` is known, so this is safe.
   el.innerHTML=`<div style="background:linear-gradient(135deg,rgba(59,130,246,.10),rgba(0,107,166,.08));border:1px solid rgba(0,107,166,.35);border-radius:12px;padding:14px 16px;margin-bottom:14px">
     <div style="font-weight:800;color:#132f49;font-size:.95rem;margin-bottom:6px">📌 One quick step so you don't miss auction e-mails</div>
     <div style="font-size:.85rem;color:#2c4763;line-height:1.6">
       Bid confirmations, outbid alerts, and results come from <strong>${WHITELIST_SENDER}</strong>. Please add that address to your Google <strong>Contacts</strong> and, if any of our e-mails landed in <strong>Spam/Junk</strong>, open one and click <strong>“Not spam.”</strong> This keeps them reliably in your inbox — even mail that arrives fine today can start going to spam later, and adding us as a contact prevents that.
     </div>
     <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <button onclick="confirmWhitelist()" style="font-size:.82rem;font-weight:700;color:#fff;background:linear-gradient(135deg,#3b82f6,#006ba6);border:none;border-radius:9px;padding:8px 16px;cursor:pointer">✓ I've added the contact &amp; checked spam</button>
+      <button onclick="confirmWhitelist('${user}')" style="font-size:.82rem;font-weight:700;color:#fff;background:linear-gradient(135deg,#3b82f6,#006ba6);border:none;border-radius:9px;padding:8px 16px;cursor:pointer">✓ I've added the contact &amp; checked spam</button>
       <span style="font-size:.72rem;color:#6b8299">This just lets the admin know you're set — it takes a second.</span>
     </div>
   </div>`;
 }
-window.confirmWhitelist=async function(){
-  const user=getCurrentUser(); if(!user) return;
+window.confirmWhitelist=async function(u){
+  const user=u||getCurrentUser(); if(!user) return; // user is baked into the button; getCurrentUser is only a fallback
   const write=()=>setDoc(whitelistConfirmRef,{[user]:{confirmedAt:Date.now()}},{merge:true});
   // The per-user rule confines this write to the caller's own key, which it resolves via the
   // emailToUser map the admin keeps synced. For a JUST-added user that map can lag by a moment, so
