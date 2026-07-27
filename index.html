@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 124;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 125;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -2251,7 +2251,13 @@ let _whitelistPendingConfirm=null;
 function _wlAttr(s){ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function renderWhitelistBanner(){
   const el=document.getElementById("whitelistBanner"); if(!el) return;
-  const user=getCurrentUser();
+  // [BUILD 125 flash root cause] Key the banner to the AUTHORITATIVE signed-in identity, never
+  // getCurrentUser(): personSelect silently defaults to the FIRST roster option from page load,
+  // so before sign-in resolved, the banner rendered (behind the login screen) for whoever is
+  // alphabetically first — and when the login screen lifted, a confirmed user briefly saw the
+  // banner meant for that other, unconfirmed person until the next async render cleared it.
+  // selectedSignInName is "" until a real sign-in completes, so pre-sign-in renders stay hidden.
+  const user=selectedSignInName;
   // Stay hidden until the confirmation state has loaded (prevents the on-load flash), when signed
   // out, once already confirmed, or while THIS user's confirm write is still in flight (no flicker).
   const shouldShow = _whitelistLoaded && user && !(whitelistConfirmData && whitelistConfirmData[user]) && _whitelistPendingConfirm!==user;
@@ -2274,7 +2280,7 @@ function renderWhitelistBanner(){
   </div>`;
 }
 window.confirmWhitelist=async function(u){
-  const user=u||getCurrentUser(); if(!user) return; // user is carried on the button's data-attr; getCurrentUser is only a fallback
+  const user=u||selectedSignInName; if(!user) return; // user is carried on the button's data-attr; the signed-in identity is only a fallback
   const write=()=>setDoc(whitelistConfirmRef,{[user]:{confirmedAt:Date.now()}},{merge:true});
   // [re-audit #3 low] Mark this user's confirm as pending and hide the banner NOW — and keep it hidden
   // through the retry window even if an interim (rolled-back) snapshot arrives, so a freshly-added user
@@ -2962,6 +2968,11 @@ function completeSignIn(){
     const _teb=document.getElementById('topBarEmail'); if(_teb) _teb.textContent=_em;
     const _tbi=document.getElementById('topBarInitials'); if(_tbi) _tbi.textContent=displayName(selectedSignInName);
   }catch(_){}
+  // [BUILD 125 flash root cause] Re-render the whitelist banner SYNCHRONOUSLY, for the real
+  // signed-in identity, BEFORE the board becomes visible. Anything rendered behind the login
+  // screen (historically: the first-roster-option user) is corrected here in the same task,
+  // so the browser can never paint a stale banner — this is the only place the board is shown.
+  if(typeof renderWhitelistBanner==='function') renderWhitelistBanner();
   document.getElementById("accountSelectModal").classList.remove("show");
   mainContainer.style.display="block";
   startListening();
