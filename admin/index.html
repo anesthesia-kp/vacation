@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 211;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 212;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -7537,23 +7537,35 @@ KP East Bay Anesthesia — Vacation Auction
 
 Sign in here: ${AUCTION_SITE_URL}`;
 }
+// [BUILD 212] The whitelist ask is a GMAIL exercise (add the sender to Google Contacts), so it
+// goes ONLY to each user's Google login address. KP (@kp.org) inboxes are deliberately excluded —
+// Kaiser deliverability is a separate workstream (IT allowlist request), and these instructions
+// make no sense in a KP inbox.
+function _wlLoginAddr(u){
+  const a=loginEmailsDataAdmin[u]; const v=(typeof a==='string')?a.trim():'';
+  return (v && v!=='__skip__' && v.includes('@'))?v:'';
+}
 async function _sendWhitelistAsk(targetUsers,label,opts){
   opts=opts||{}; // no default-param braces here — the test suite's verbatim extractor counts braces
   if(typeof emailjs==='undefined'){ toast('✉️ E-mail sending is not available on this page (the mailer failed to load). Open the admin site on another machine/browser.','err'); return; }
-  const targets=targetUsers.filter(u=>recipientsFor(u).length); // skip users with no address on file
+  const targets=targetUsers.filter(u=>_wlLoginAddr(u)); // only users with a Google login address on file
   const noAddr=targetUsers.length-targets.length;
-  if(!targets.length){ toast('No '+label+' with an e-mail address on file to send to.','warn'); return; }
+  if(!targets.length){ toast('No '+label+' with a Google login e-mail on file to send to.','warn'); return; }
   openConfirm({
     title:'✉️ Send whitelist ask',
     body:`<div>Send the "add us to your contacts" e-mail to <strong>${targets.length}</strong> ${label}?</div>
           ${opts.warnAll?`<div class="cmodal-warn" style="margin-top:8px">⚠️ This goes to ALL users — including those who have already confirmed. For a nudge to just the stragglers, use "Send reminder to unconfirmed only" instead.</div>`:''}
-          ${noAddr?`<div class="cmodal-warn" style="margin-top:8px">${noAddr} user${noAddr!==1?'s have':' has'} no e-mail on file and will be skipped.</div>`:''}
-          <div class="cmodal-info" style="margin-top:8px">Sends now from this page. It goes to each user's addresses on file (Google + KP). Note: it shares the standard e-mail subject line — the body carries the full instructions.</div>`,
+          ${noAddr?`<div class="cmodal-warn" style="margin-top:8px">${noAddr} user${noAddr!==1?'s have':' has'} no Google login e-mail on file and will be skipped.</div>`:''}
+          <div class="cmodal-info" style="margin-top:8px">Sends now from this page, to each user's <strong>Google login e-mail only</strong> — KP addresses are deliberately not included (KP deliverability is handled separately). Note: it shares the standard e-mail subject line — the body carries the full instructions.</div>`,
     okText:'Send to '+targets.length,
     onConfirm:async()=>{
       let ok=0,fail=0;
       for(const u of targets){
-        const r=await adminSendEmail(u,'KP Anesthesia Vacation Auction — please add us to your contacts',_whitelistEmailBody(u));
+        // Confine delivery to the Google login address via adminSendEmail's existing skip set:
+        // every OTHER address on file (KP, aliases) is skipped. Shared mail code stays untouched.
+        const login=_wlLoginAddr(u).toLowerCase();
+        const skip=new Set(recipientsFor(u).filter(e=>e.trim().toLowerCase()!==login));
+        const r=await adminSendEmail(u,'KP Anesthesia Vacation Auction — please add us to your contacts',_whitelistEmailBody(u),skip);
         ok+=r.ok; fail+=r.fail;
       }
       toast(fail? `✉️ Sent ${ok}, ${fail} failed — check the mailer/quota and retry.` : `✉️ Sent the whitelist ask to ${ok} recipient${ok!==1?'s':''}.`, fail?'warn':'ok');
