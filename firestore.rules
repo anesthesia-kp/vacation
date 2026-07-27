@@ -280,9 +280,19 @@ service cloud.firestore {
                              && (resource == null
                                   ? request.resource.data.keys().size() <= 1
                                   : request.resource.data.diff(resource.data).affectedKeys().size() <= 1))))
+                   // Whitelist confirmations [WHITELIST TRACKER 2026-07-26]: each entry is
+                   // {initials: {confirmedAt}} — a user's self-report that they've added the
+                   // auction sender to their Google contacts / marked it Not-Spam. A registered
+                   // user may write ONLY their own initials key (writesOnlyOwnKeys, same guard as
+                   // the emails doc), so nobody can forge or clear a colleague's confirmation;
+                   // the admin may write/clear the whole doc. Read falls through to the public
+                   // default below (initials→timestamp only, no PII), which the admin panel and
+                   // the staff banner both read. Isolated from the auction: no auction doc, engine,
+                   // or phase logic touches it.
+                   || (docId == 'whitelistConfirm' && (isAdmin() || (isRegisteredUser() && writesOnlyOwnKeys())))
                    || (!isAdminOnlyDoc(docId) && !isBidDoc(docId) && !isRelayDoc(docId)
                         && docId != 'timer' && docId != 'signInMisses' && docId != 'emails'
-                        && docId != 'changes'
+                        && docId != 'changes' && docId != 'whitelistConfirm'
                         && (isRegisteredUser() || isAdmin()));
     }
 

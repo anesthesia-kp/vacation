@@ -30,6 +30,31 @@ That tells you the true state of the code faster and more reliably than any para
 
 ## SESSION UPDATE — 26 July 2026 (this supersedes any conflicting [BELIEVED] item below)
 
+### LATEST: Whitelist Tracker feature added (builds 120/206) — NOT yet re-audited
+
+A new, deliberately-isolated feature to fight the spam problem on the Gmail side while the durable
+e-mail fix is deferred. Suite now **466 assertions**, all pass. **Rules changed → publish rules in the
+console BEFORE pushing.**
+- **Staff site:** a one-time banner asks the signed-in user to add the auction sender
+  (`WHITELIST_SENDER`, currently `dr.vacation.goddess@gmail.com` — a constant at the top of BOTH
+  files; change it if EmailJS sends from a different address) to Google contacts + mark Not-Spam, and
+  a "✓ I've done this" button writes a per-user flag to a new `vacations/whitelistConfirm` doc.
+- **Admin site:** new "📌 Whitelist Tracker" panel under Users — per-user confirmed/not marking,
+  a confirmed/not summary with a "show who hasn't" reveal, an "e-mail all users the ask" blast, and a
+  "reminder to unconfirmed only" send (both via the existing mail path). Plus a pre-launch advisory
+  line in the dashboard next-step (non-blocking).
+- **Rules:** `whitelistConfirm` — a user may write ONLY their own key (writesOnlyOwnKeys); admin full;
+  excluded from the catch-all. Read is public (initials→timestamp only, no PII).
+- **Isolation:** touches no auction doc/engine/phase; the only shared-workflow contact is the
+  additive, non-blocking pre-launch next-step note. Tests assert the isolation.
+- **Known limitation:** the ask e-mail shares the EmailJS template's fixed subject line (the body
+  carries the full instructions). To give it its own subject, add a `{{subject}}` param to the
+  EmailJS template and it can be passed per-send. Also: it still sends through personal Gmail, so the
+  ask itself can land in spam — pair it with the out-of-band "check your spam" heads-up.
+- **NOT re-audited yet.** Consider an adversarial pass over the 120/206 diff before relying on it.
+
+
+
 Two full fix-and-re-audit cycles happened this session. **Read this block first; the sections
 numbered 1–5 below are the previous session's and are now partly stale — where they conflict with
 this block or with the tests, this block and the code win.**

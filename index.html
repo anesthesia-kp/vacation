@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 119;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 120;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -467,6 +467,10 @@ body{zoom:1.15}
   <div id="otherSystems" style="display:none;text-align:right;margin:0 0 10px">
     <a href="https://anesthesia-kp.github.io/vacation/admin/?portal=1" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;font-size:.78rem;font-weight:700;color:#006ba6;text-decoration:none;border:1px solid #9fb4c6;border-radius:9px;padding:4px 11px;background:#fff">🔧 Vacation Admin →</a>
   </div>
+  <!-- [WHITELIST TRACKER 2026-07-26] One-time prompt asking the signed-in user to add the auction
+       sender to their contacts and confirm. Filled by renderWhitelistBanner(); hidden once confirmed.
+       Reads/writes only the whitelistConfirm doc — nothing here touches bidding. -->
+  <div id="whitelistBanner"></div>
   <header style="position:relative">
     <h1 class="header-top">Vacation Auction</h1>
     <p class="header-sub">Department of Anesthesia &nbsp;·&nbsp; 2027</p>
@@ -636,6 +640,14 @@ const bidPhaseRef   = doc(db,"vacations","bidPhase");
 const deniedRef      = doc(db,"vacations","denials");
 const slotsRef       = doc(db,"vacations","slots"); // admin per-week FTE availability overrides
 const mailQueueRef   = doc(db,"vacations","mailQueue"); // outbox for projection-change alerts
+// [WHITELIST TRACKER 2026-07-26] Self-reported "I've added the auction sender to my Google
+// contacts / marked it Not-Spam" flags: {initials:{confirmedAt}}. A dedicated doc, isolated from
+// the auction — rules confine each user to writing only their own key (see firestore.rules).
+const whitelistConfirmRef = doc(db,"vacations","whitelistConfirm");
+// The address the auction e-mails come FROM — the one users must whitelist. ASSUMPTION: this is
+// the Gmail account EmailJS sends through. If EmailJS sends from a different address, change this
+// one string (and the admin twin) to match.
+const WHITELIST_SENDER = "dr.vacation.goddess@gmail.com";
 
 // ── State ──
 let data={}, locksData={globalLock:false,weeks:{}};
@@ -1283,6 +1295,9 @@ function renderBidPool(user){
 `;
 }
 onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; if(typeof popcornRefresh==='function') popcornRefresh(); scheduleRender(); });
+// [WHITELIST TRACKER 2026-07-26] Public read (initials→timestamp only). Drives the confirm banner.
+let whitelistConfirmData={};
+onSnapshot(whitelistConfirmRef, snap=>{ whitelistConfirmData=snap.exists()?snap.data():{}; if(typeof renderWhitelistBanner==='function') renderWhitelistBanner(); });
 onSnapshot(passcodesRef,snap=>{ passcodesData=snap.exists()?snap.data():{}; _passcodesReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; _usernamesReady=true; if(typeof refreshLoginUsers==='function') refreshLoginUsers(); });
 // L-5: no top-level loginEmailsRef listener either — same reason; the signed-in path re-subscribes.
@@ -2194,6 +2209,7 @@ _pcStart();
 function render(){
   const user=getCurrentUser(); if(!user) return;
   popcornRefresh();
+  renderWhitelistBanner();
   document.getElementById("globalLockBanner").style.display=locksData.globalLock?"block":"none";
   const nsb=document.getElementById("notStartedBanner"); if(nsb) nsb.style.display=biddingOpen()?"none":"block";
   const ap=computeApprovals();
@@ -2202,6 +2218,35 @@ function render(){
   renderSelections(user,ap);
   renderCalendar(user,ap);
 }
+
+// [WHITELIST TRACKER 2026-07-26] One-time prompt: ask the signed-in user to add the auction sender
+// to their Google contacts / mark Not-Spam, and self-confirm so the admin can track completion.
+// Purely additive — reads/writes only whitelistConfirmData/whitelistConfirmRef; never touches bidding.
+function renderWhitelistBanner(){
+  const el=document.getElementById("whitelistBanner"); if(!el) return;
+  const user=getCurrentUser();
+  if(!user || (whitelistConfirmData && whitelistConfirmData[user])){ el.innerHTML=""; return; } // hidden once confirmed
+  el.innerHTML=`<div style="background:linear-gradient(135deg,rgba(59,130,246,.10),rgba(0,107,166,.08));border:1px solid rgba(0,107,166,.35);border-radius:12px;padding:14px 16px;margin-bottom:14px">
+    <div style="font-weight:800;color:#132f49;font-size:.95rem;margin-bottom:6px">📌 One quick step so you don't miss auction e-mails</div>
+    <div style="font-size:.85rem;color:#2c4763;line-height:1.6">
+      Bid confirmations, outbid alerts, and results come from <strong>${WHITELIST_SENDER}</strong>. Please add that address to your Google <strong>Contacts</strong> and, if any of our e-mails landed in <strong>Spam/Junk</strong>, open one and click <strong>“Not spam.”</strong> This keeps them reliably in your inbox — even mail that arrives fine today can start going to spam later, and adding us as a contact prevents that.
+    </div>
+    <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button onclick="confirmWhitelist()" style="font-size:.82rem;font-weight:700;color:#fff;background:linear-gradient(135deg,#3b82f6,#006ba6);border:none;border-radius:9px;padding:8px 16px;cursor:pointer">✓ I've added the contact &amp; checked spam</button>
+      <span style="font-size:.72rem;color:#6b8299">This just lets the admin know you're set — it takes a second.</span>
+    </div>
+  </div>`;
+}
+window.confirmWhitelist=async function(){
+  const user=getCurrentUser(); if(!user) return;
+  try{
+    await setDoc(whitelistConfirmRef,{[user]:{confirmedAt:Date.now()}},{merge:true});
+    if(!whitelistConfirmData) whitelistConfirmData={};
+    whitelistConfirmData[user]={confirmedAt:Date.now()}; // optimistic; the snapshot will confirm
+    renderWhitelistBanner();
+    showCenterAlert("Thanks! You're all set — you won't see this reminder again.");
+  }catch(e){ showCenterAlert("Couldn't save that just now — please try again in a moment."); }
+};
 
 window.toggleNotifPop=function(id){
   const isOpen=document.getElementById(id).classList.contains('open');

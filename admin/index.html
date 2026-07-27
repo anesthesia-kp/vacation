@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 205;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 206;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -396,6 +396,7 @@ thead th{color:var(--t2)}
       <a onclick="nav('changelog',this)">📋 Change Log</a>
       <div class="nav-section">People</div>
       <a onclick="nav('users',this)">👤 Users</a>
+      <a onclick="nav('whitelist',this)">📌 Whitelist Tracker</a>
       <div class="nav-section">Settings</div>
       <a onclick="nav('slots',this)">📆 FTE Availability</a>
       <a onclick="nav('controls',this)">⚙️ Controls</a>
@@ -711,6 +712,22 @@ thead th{color:var(--t2)}
         <div style="overflow-x:auto;max-height:560px;overflow-y:auto;border:1px solid var(--b1)">
           <table><thead><tr><th>Initials</th><th>Full Name</th><th>FTE</th><th>Login e-mail (Google)</th><th>KP e-mail</th><th></th></tr></thead><tbody id="usersBody"></tbody></table>
         </div>
+      </div>
+    </div>
+
+    <!-- WHITELIST TRACKER [2026-07-26] — self-contained: tracks who has confirmed adding the
+         auction sender to their Google contacts / marking it Not-Spam. Reads the whitelistConfirm
+         doc + roster (read-only); sends the ask/reminder via the existing mail path. No auction
+         state is read or written here. -->
+    <div class="panel" id="panel-whitelist">
+      <div class="page-head"><div class="page-title">📌 Whitelist Tracker</div><div class="page-sub">Who has confirmed adding <span class="mono" id="wlSenderLabel"></span> to their contacts &amp; marked it Not-Spam, so auction e-mails reach their inbox.</div></div>
+      <div id="wlSummary" style="margin-bottom:12px"></div>
+      <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-primary" style="font-size:12px" onclick="sendWhitelistBlast()">✉️ E-mail all users the ask</button>
+        <button class="btn" style="font-size:12px;background:rgba(251,191,36,.15);color:var(--yellow);border:1px solid rgba(251,191,36,.3)" onclick="sendWhitelistReminder()">🔔 Send reminder to unconfirmed only</button>
+      </div>
+      <div style="overflow-x:auto;max-height:560px;overflow-y:auto;border:1px solid var(--b1)">
+        <table><thead><tr><th>Initials</th><th>Full Name</th><th>Login e-mail (Google)</th><th>Confirmed?</th></tr></thead><tbody id="wlBody"></tbody></table>
       </div>
     </div>
 
@@ -1144,6 +1161,12 @@ const changesArchiveRef = doc(db,"vacations","changesArchive"); // {phaseNum: [l
 // phase-staging code below. It is intentionally NOT in the backup: a staged snapshot is transient
 // and fully rebuildable from the (backed-up) live approvals/denials/schedule by re-completing.
 const phaseStagingRef = doc(db,"vacations","phaseStaging"); // {pendingPhaseSnapshots:{[phase]:snapshot}}
+// [WHITELIST TRACKER 2026-07-26] Users' self-reported "added the sender to contacts / marked
+// Not-Spam" confirmations: {initials:{confirmedAt}}. Isolated from the auction; read here for the
+// tracker panel. WHITELIST_SENDER is the address users must whitelist — ASSUMED to be the Gmail
+// EmailJS sends through; change this one string (and the staff twin) if the sending address differs.
+const whitelistConfirmRef = doc(db,"vacations","whitelistConfirm");
+const WHITELIST_SENDER = "dr.vacation.goddess@gmail.com";
 
 // Safely write ONLY specific nested fields (dotted paths like "weeks.2027-01-10"
 // or "AD.2027-01-10") without disturbing sibling data. updateDoc() is the
@@ -1447,6 +1470,9 @@ onSnapshot(emailsRef,   snap=>{ emailsData=snap.exists()?snap.data():{}; emailsD
 onSnapshot(loginEmailsRef, snap=>{ loginEmailsData=snap.exists()?snap.data():{}; loginEmailsDataAdmin=loginEmailsData; _adminMapsReady=true; maybeSyncEmailToUser(); const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); }); // [H-3] keep the reverse map current on every login-email change
 onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; if(typeof renderInsights==='function') renderInsights(); });
 onSnapshot(passwordsRef,snap=>{ passwordsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
+// [WHITELIST TRACKER 2026-07-26] Confirmation flags for the tracker panel. Re-render when visible.
+let whitelistConfirmData={};
+onSnapshot(whitelistConfirmRef, snap=>{ whitelistConfirmData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-whitelist'); if(p&&p.classList.contains('on')&&typeof renderWhitelistTracker==='function') renderWhitelistTracker(); if(typeof renderNextStep==='function') renderNextStep(); });
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
   onSnapshot(fteRef, snap=>{ fteData=snap.exists()?snap.data():{}; refreshAll(); });
 onSnapshot(approvalsRef, snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()?snap.data():{}); refreshAll(); });
@@ -1615,6 +1641,7 @@ window.nav = function(id, el) {
   if(id==='drawsreviews') renderDrawsReviews();
   if(id==='changelog') renderChangelog();
   if(id==='users'&&typeof renderUsersCombined==='function') renderUsersCombined();
+  if(id==='whitelist'&&typeof renderWhitelistTracker==='function') renderWhitelistTracker();
 };
 
 // ── Helpers ──
@@ -3987,7 +4014,20 @@ function renderNextStep(){
       }
     }
   }
-  el.innerHTML=fteNote+html;
+  // [WHITELIST TRACKER 2026-07-26] Pre-launch "first step": an advisory prompt to e-mail the group
+  // the whitelist ask, shown ABOVE the normal next step until everyone has confirmed. Additive and
+  // non-blocking — it never gates Begin Phase 1, and disappears once all users confirm or once the
+  // auction has started. Purely reads the whitelist confirmation counts.
+  let wlNote='';
+  try{
+    if(!phase1Started() && (names||[]).length){
+      const un=(typeof _wlUnconfirmed==='function')?_wlUnconfirmed():[];
+      if(un.length){
+        wlNote=`<div style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.3);border-radius:10px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:var(--t1)">📌 <strong>Before you launch:</strong> ${un.length} of ${names.length} user${names.length!==1?'s':''} haven't confirmed they've whitelisted the auction sender — do this first so results/alerts reach inboxes. <button class="btn btn-ghost" style="padding:2px 8px;font-size:11px;margin-left:6px" onclick="sendWhitelistBlast()">✉️ E-mail the ask</button> <button class="btn btn-ghost" style="padding:2px 8px;font-size:11px" onclick="nav('whitelist',document.querySelector('[onclick*=\\'whitelist\\']'))">📌 Open tracker</button></div>`;
+      }
+    }
+  }catch(_){}
+  el.innerHTML=wlNote+fteNote+html;
 }
 function renderPhasePanel(){
   renderNextStep();
@@ -7415,6 +7455,99 @@ function renderUsersCombined(){
   }).join('');
 }
 window.renderUsersCombined=renderUsersCombined;
+
+// ── Whitelist Tracker [2026-07-26] ───────────────────────────────────────────
+// Self-contained: reads the roster (names/usernames/loginEmails) + the whitelistConfirm doc,
+// renders who has self-confirmed adding the auction sender to contacts, and sends the ask/reminder
+// through the existing mail path. Touches NO auction state.
+function _wlConfirmed(u){ return !!(whitelistConfirmData && whitelistConfirmData[u]); }
+function _wlUnconfirmed(){ return (names||[]).filter(u=>!_wlConfirmed(u)).sort(); }
+function renderWhitelistTracker(){
+  const lbl=document.getElementById('wlSenderLabel'); if(lbl) lbl.textContent=WHITELIST_SENDER;
+  const roster=[...(names||[])].sort();
+  const done=roster.filter(_wlConfirmed), notDone=roster.filter(u=>!_wlConfirmed(u));
+  const sum=document.getElementById('wlSummary');
+  if(sum){
+    sum.innerHTML=`<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;background:var(--card);border:1px solid var(--b1);border-radius:10px;padding:12px 14px">
+      <div style="font-size:22px;font-weight:800;color:var(--green)">${done.length}<span style="font-size:12px;font-weight:600;color:var(--t2)"> confirmed</span></div>
+      <div style="font-size:22px;font-weight:800;color:${notDone.length?'var(--red)':'var(--t3)'}">${notDone.length}<span style="font-size:12px;font-weight:600;color:var(--t2)"> not yet</span></div>
+      <div style="font-size:12px;color:var(--t2)">of ${roster.length} users</div>
+      ${notDone.length?`<button class="btn btn-ghost" style="font-size:11px;margin-left:auto" onclick="document.getElementById('wlUnconfirmedList').style.display=(document.getElementById('wlUnconfirmedList').style.display==='none'?'block':'none')">👁 Show who hasn't</button>`:''}
+      </div>
+      ${notDone.length?`<div id="wlUnconfirmedList" style="display:none;margin-top:8px;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.25);border-radius:8px;padding:10px 12px;font-size:12.5px;color:var(--t1)"><strong>Not yet confirmed (${notDone.length}):</strong> ${notDone.map(esc).join(', ')}</div>`:''}`;
+  }
+  const tb=document.getElementById('wlBody'); if(!tb) return;
+  tb.innerHTML=roster.map(u=>{
+    const yes=_wlConfirmed(u);
+    const when=yes&&whitelistConfirmData[u]&&whitelistConfirmData[u].confirmedAt?new Date(whitelistConfirmData[u].confirmedAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';
+    return `<tr>
+      <td class="mono"><strong>${esc(u)}</strong></td>
+      <td>${esc(usernamesData[u]||'')}</td>
+      <td class="mono" style="color:var(--t2)">${esc(loginEmailsData[u]||'—')}</td>
+      <td>${yes
+        ? `<span class="pill p-green">✓ Confirmed${when?' · '+when:''}</span>`
+        : `<span class="pill p-red">— Not yet</span>`}</td>
+    </tr>`;
+  }).join('')||`<tr><td colspan="4" style="text-align:center;color:var(--t2);padding:20px">No users on the roster yet.</td></tr>`;
+}
+window.renderWhitelistTracker=renderWhitelistTracker;
+
+// The friendly ask e-mail body (plain text; delivered via the existing template's {{changes}} param,
+// so it shares that template's subject line — see the note in the deploy summary). Personalized per user.
+function _whitelistEmailBody(user){
+  const name=usernamesData[user]||user;
+  return `Hi ${name},
+
+Quick favor that makes sure you never miss a vacation-auction e-mail (bid confirmations, outbid alerts, and results are all time-sensitive).
+
+Our auction sends from:
+    ${WHITELIST_SENDER}
+
+Please do two things so these always reach your inbox:
+
+1) ADD US AS A CONTACT (most important)
+   In Gmail, add ${WHITELIST_SENDER} to your Contacts. Once we're a saved contact, Google keeps our e-mails in your inbox.
+   - Easiest way: open any e-mail from us, hover over our name at the top, and click "Add to contacts."
+
+2) IF YOU FIND US IN SPAM/JUNK
+   Open the message, then click "Not spam" (Gmail) or "Report not junk." That moves us to the inbox and teaches Gmail we're wanted.
+
+WHAT IF THIS E-MAIL IS ALREADY IN YOUR INBOX?
+Great — but please still add us as a contact. E-mail that arrives fine today can start going to spam later; saving us as a contact is what prevents that.
+
+LAST STEP — LET US KNOW YOU'RE SET
+Please sign in to the auction site and click the blue "I've added the contact & checked spam" banner at the top. That lets the admin see who's all set (so we're not chasing everyone).
+
+Thank you!
+KP East Bay Anesthesia — Vacation Auction`;
+}
+async function _sendWhitelistAsk(targetUsers,label){
+  if(typeof emailjs==='undefined'){ toast('✉️ E-mail sending is not available on this page (the mailer failed to load). Open the admin site on another machine/browser.','err'); return; }
+  const targets=targetUsers.filter(u=>recipientsFor(u).length); // skip users with no address on file
+  const noAddr=targetUsers.length-targets.length;
+  if(!targets.length){ toast('No '+label+' with an e-mail address on file to send to.','warn'); return; }
+  openConfirm({
+    title:'✉️ Send whitelist ask',
+    body:`<div>Send the "add us to your contacts" e-mail to <strong>${targets.length}</strong> ${label}?</div>
+          ${noAddr?`<div class="cmodal-warn" style="margin-top:8px">${noAddr} user${noAddr!==1?'s have':' has'} no e-mail on file and will be skipped.</div>`:''}
+          <div class="cmodal-info" style="margin-top:8px">Sends now from this page. It goes to each user's addresses on file (Google + KP). Note: it shares the standard e-mail subject line — the body carries the full instructions.</div>`,
+    okText:'Send to '+targets.length,
+    onConfirm:async()=>{
+      let ok=0,fail=0;
+      for(const u of targets){
+        const r=await adminSendEmail(u,'KP Anesthesia Vacation Auction — please add us to your contacts',_whitelistEmailBody(u));
+        ok+=r.ok; fail+=r.fail;
+      }
+      toast(fail? `✉️ Sent ${ok}, ${fail} failed — check the mailer/quota and retry.` : `✉️ Sent the whitelist ask to ${ok} recipient${ok!==1?'s':''}.`, fail?'warn':'ok');
+    }
+  });
+}
+window.sendWhitelistBlast=function(){ _sendWhitelistAsk([...(names||[])].sort(),'users (everyone)'); };
+window.sendWhitelistReminder=function(){
+  const un=_wlUnconfirmed();
+  if(!un.length){ toast('Everyone has already confirmed — no reminder needed. 🎉','ok'); return; }
+  _sendWhitelistAsk(un,'unconfirmed user'+(un.length!==1?'s':''));
+};
 // Save (or clear, if blanked) a user's Full Name. Stored in the shared usernames doc,
 // so it shows on BOTH the Vacation Auction and Daily Schedule admin sites. Blank + Save
 // removes it (the person then shows as their initials).
