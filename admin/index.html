@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 208;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 209;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -7465,19 +7465,26 @@ window.renderUsersCombined=renderUsersCombined;
 // through the existing mail path. Touches NO auction state.
 function _wlConfirmed(u){ return !!(whitelistConfirmData && whitelistConfirmData[u]); }
 function _wlUnconfirmed(){ return (names||[]).filter(u=>!_wlConfirmed(u)).sort(); }
+// [re-audit #1 low] Persist the "show who hasn't" reveal across re-renders. renderWhitelistTracker
+// re-runs on every incoming confirmation (the very event stream the admin is watching), and rebuilding
+// the summary innerHTML used to reset the revealed list to display:none — collapsing it mid-read.
+// This module flag survives the rebuild; the toggle flips it and re-renders.
+let _wlRevealShown=false;
+window.toggleWlReveal=function(){ _wlRevealShown=!_wlRevealShown; renderWhitelistTracker(); };
 function renderWhitelistTracker(){
   const lbl=document.getElementById('wlSenderLabel'); if(lbl) lbl.textContent=WHITELIST_SENDER;
   const roster=[...(names||[])].sort();
   const done=roster.filter(_wlConfirmed), notDone=roster.filter(u=>!_wlConfirmed(u));
   const sum=document.getElementById('wlSummary');
   if(sum){
+    const reveal=_wlRevealShown&&notDone.length;
     sum.innerHTML=`<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;background:var(--card);border:1px solid var(--b1);border-radius:10px;padding:12px 14px">
       <div style="font-size:22px;font-weight:800;color:var(--green)">${done.length}<span style="font-size:12px;font-weight:600;color:var(--t2)"> confirmed</span></div>
       <div style="font-size:22px;font-weight:800;color:${notDone.length?'var(--red)':'var(--t3)'}">${notDone.length}<span style="font-size:12px;font-weight:600;color:var(--t2)"> not yet</span></div>
       <div style="font-size:12px;color:var(--t2)">of ${roster.length} users</div>
-      ${notDone.length?`<button class="btn btn-ghost" style="font-size:11px;margin-left:auto" onclick="document.getElementById('wlUnconfirmedList').style.display=(document.getElementById('wlUnconfirmedList').style.display==='none'?'block':'none')">👁 Show who hasn't</button>`:''}
+      ${notDone.length?`<button class="btn btn-ghost" style="font-size:11px;margin-left:auto" onclick="toggleWlReveal()">👁 ${reveal?'Hide list':'Show who hasn’t'}</button>`:''}
       </div>
-      ${notDone.length?`<div id="wlUnconfirmedList" style="display:none;margin-top:8px;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.25);border-radius:8px;padding:10px 12px;font-size:12.5px;color:var(--t1)"><strong>Not yet confirmed (${notDone.length}):</strong> ${notDone.map(esc).join(', ')}</div>`:''}`;
+      ${reveal?`<div id="wlUnconfirmedList" style="margin-top:8px;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.25);border-radius:8px;padding:10px 12px;font-size:12.5px;color:var(--t1)"><strong>Not yet confirmed (${notDone.length}):</strong> ${notDone.map(esc).join(', ')}</div>`:''}`;
   }
   const tb=document.getElementById('wlBody'); if(!tb) return;
   tb.innerHTML=roster.map(u=>{

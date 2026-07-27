@@ -30,26 +30,23 @@ That tells you the true state of the code faster and more reliably than any para
 
 ## SESSION UPDATE — 26 July 2026 (this supersedes any conflicting [BELIEVED] item below)
 
-### LATEST: Whitelist Tracker feature added (builds 122/208) — RE-AUDITED CLEAN
+### LATEST: Whitelist Tracker feature — RE-AUDITED CLEAN, all follow-up lows FIXED (builds 123/209)
 
-Current live builds after this feature: **122 staff / 208 admin** (mobile 16). Suite **468 assertions**,
-all pass. **Rules changed for this feature (whitelistConfirm) — already published + pushed by the user.**
+Current live builds after this feature: **123 staff / 209 admin** (mobile 16). Suite **474 assertions**,
+all pass. **Rules changed for this feature (whitelistConfirm) — already published + pushed.**
 
-**Re-audit of the feature (122/208) — DONE. Result: 0 critical, 0 high, 0 medium; 1 confirmed low +
-2 disputed low; 24 clean checks.** [VERIFIED by the adversarial workflow] Reviewers executed the code
-against a mock DOM/Firestore and PROVED the isolation (no auction doc/engine touched), the own-key
-write confinement, and that no injection is reachable (initials are letters-only). The three low items,
-all cosmetic/self-healing, are NOT yet fixed:
-- **[LOW · confirmed] Admin reveal collapses on remote confirmation.** `renderWhitelistTracker` rebuilds
-  the summary innerHTML on every incoming confirmation, so the "show who hasn't" list re-hides mid-read.
-  Fix: preserve the reveal toggle across re-renders (or don't rebuild the summary node).
-- **[LOW · disputed] Initials baked unescaped into the confirm button onclick.** Not reachable in
-  practice (initials are letters-only by construction), but escaping the baked value is trivial defensive
-  hardening.
-- **[LOW · disputed] Freshly-added user sees a ~1.5s banner flicker.** On the just-added path the first
-  write is rejected (emailToUser lag), the optimistic hide rolls back, and the banner re-shows until the
-  retry succeeds. Self-healing, no data harm. Fix: hold the optimistic-confirmed state until the retry
-  resolves rather than rolling back on the interim snapshot.
+**Re-audit of the feature — DONE. Result: 0 critical, 0 high, 0 medium; 1 confirmed low + 2 disputed
+low; 24 clean checks.** Reviewers executed the code against a mock DOM/Firestore and PROVED the
+isolation (no auction doc/engine touched), the own-key write confinement, and that no injection is
+reachable. **All three low items are now FIXED (builds 123/209), each covered by an executing test:**
+- **[LOW · confirmed] Admin reveal collapse — FIXED.** The "show who hasn't" list is now driven by a
+  persistent `_wlRevealShown` flag + `toggleWlReveal()`, so an incoming confirmation no longer collapses
+  it mid-read.
+- **[LOW · disputed] Initials injection — FIXED.** The confirm button now carries the user on a
+  `data-user` attribute (HTML-escaped via `_wlAttr`) and calls `confirmWhitelist(this.dataset.user)`, so
+  a quote/backslash in initials can never break the handler.
+- **[LOW · disputed] Freshly-added-user banner flicker — FIXED.** A `_whitelistPendingConfirm` guard
+  keeps the banner hidden through the retry window, so an interim rolled-back snapshot can't re-show it.
 
 Post-view fixes already shipped (121→122/207→208): staff banner no longer FLASHES on load (gated on a `_whitelistLoaded`
 flag until the confirmation snapshot arrives); the confirm button AUTO-RETRIES once on a failed
@@ -91,13 +88,17 @@ this block or with the tests, this block and the code win.**
 
 ### Verified current state — [VERIFIED]
 
-- **Live builds are 118 (vacation staff) / 204 (vacation admin).** Confirmed by fetching the live
-  pages with a cache-buster and reading `var BUILD`; `versions.json` = `{"index":118,"mobile":16,"admin":204}`.
-  Schedule app untouched (24/46).
-- **Firestore rules are published and current.** Confirmed by anonymous REST probe: the new
-  `phaseStaging` doc returns **403** to an anonymous reader (admin-only), so the latest rules are live.
-- **Test suite: 444 assertions across 6 suites, all passing.** New suite `tests/test-high-fixes.mjs`
-  (the 16 highs + the re-audit follow-ups) plus the original five. Run with the command above.
+- **Live builds are 123 (vacation staff) / 209 (vacation admin), mobile 16.** Bumped across this
+  session from 116/202 through the fix batches, the H6 redesign, and the Whitelist Tracker feature.
+  `versions.json` = `{"index":123,"mobile":16,"admin":209}`. Schedule app untouched (24/46).
+  **Confirm live** by fetching the pages with a cache-buster and reading `var BUILD` (they were pushed
+  incrementally; 123/209 is the last build — verify it's the one live before launch).
+- **Firestore rules are published and current.** This session added `phaseStaging` (admin-only; an
+  anonymous probe returns 403) and `whitelistConfirm` (own-key write for users). Rules were published
+  before each dependent push.
+- **Test suite: 474 assertions across 6 suites, all passing.** `tests/test-high-fixes.mjs` (the 16
+  highs + all re-audit follow-ups + the Whitelist Tracker) plus the original five. Run with the command
+  above — it is the ground truth about the code.
 
 ### What was done — two batches, each adversarially re-audited
 

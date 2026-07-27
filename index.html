@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 122;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 123;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -2229,45 +2229,57 @@ function render(){
 // background refresh could destroy the button the instant a user clicked it (a "nothing happened"
 // click), and it churned the DOM needlessly. Now the banner is only touched on a real state change.
 let _whitelistBannerState=null;
+// [re-audit #3 low] The user who just clicked confirm, held until the write DEFINITIVELY succeeds or
+// fails. Keeps the banner hidden across the interim snapshot churn on the freshly-added path (the
+// first write is rejected while emailToUser lags, Firestore rolls back its optimistic snapshot, and
+// without this the banner would briefly re-appear before the retry lands).
+let _whitelistPendingConfirm=null;
+// HTML-attribute escape for a value baked into the banner (defence-in-depth for the initials, which
+// are letters-only in practice but not character-restricted at entry).
+function _wlAttr(s){ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function renderWhitelistBanner(){
   const el=document.getElementById("whitelistBanner"); if(!el) return;
   const user=getCurrentUser();
   // Stay hidden until the confirmation state has loaded (prevents the on-load flash), when signed
-  // out, or once already confirmed.
-  const shouldShow = _whitelistLoaded && user && !(whitelistConfirmData && whitelistConfirmData[user]);
+  // out, once already confirmed, or while THIS user's confirm write is still in flight (no flicker).
+  const shouldShow = _whitelistLoaded && user && !(whitelistConfirmData && whitelistConfirmData[user]) && _whitelistPendingConfirm!==user;
   const desired = shouldShow ? user : 'hidden';
   if(_whitelistBannerState===desired) return; // idempotent — nothing changed, leave the DOM (and any live click) alone
   _whitelistBannerState=desired;
   if(!shouldShow){ el.innerHTML=""; return; }
-  // Bake the resolved user into the button so the click NEVER depends on re-reading getCurrentUser()
-  // at click time (which could be momentarily empty right after sign-in — the real cause of the
-  // silent "nothing happened" first click). The banner only shows when `user` is known, so this is safe.
+  // [re-audit #2 low] The user is carried on a data-attribute and read back via this.dataset.user, so
+  // the click never depends on re-reading getCurrentUser() at click time (the "nothing happened" fix)
+  // AND the value can never break the JS string / HTML attribute (an apostrophe or quote in initials).
   el.innerHTML=`<div style="background:linear-gradient(135deg,rgba(59,130,246,.10),rgba(0,107,166,.08));border:1px solid rgba(0,107,166,.35);border-radius:12px;padding:14px 16px;margin-bottom:14px">
     <div style="font-weight:800;color:#132f49;font-size:.95rem;margin-bottom:6px">📌 One quick step so you don't miss auction e-mails</div>
     <div style="font-size:.85rem;color:#2c4763;line-height:1.6">
       Bid confirmations, outbid alerts, and results come from <strong>${WHITELIST_SENDER}</strong>. Please add that address to your Google <strong>Contacts</strong> and, if any of our e-mails landed in <strong>Spam/Junk</strong>, open one and click <strong>“Not spam.”</strong> This keeps them reliably in your inbox — even mail that arrives fine today can start going to spam later, and adding us as a contact prevents that.
     </div>
     <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <button onclick="confirmWhitelist('${user}')" style="font-size:.82rem;font-weight:700;color:#fff;background:linear-gradient(135deg,#3b82f6,#006ba6);border:none;border-radius:9px;padding:8px 16px;cursor:pointer">✓ I've added the contact &amp; checked spam</button>
+      <button data-user="${_wlAttr(user)}" onclick="confirmWhitelist(this.dataset.user)" style="font-size:.82rem;font-weight:700;color:#fff;background:linear-gradient(135deg,#3b82f6,#006ba6);border:none;border-radius:9px;padding:8px 16px;cursor:pointer">✓ I've added the contact &amp; checked spam</button>
       <span style="font-size:.72rem;color:#6b8299">This just lets the admin know you're set — it takes a second.</span>
     </div>
   </div>`;
 }
 window.confirmWhitelist=async function(u){
-  const user=u||getCurrentUser(); if(!user) return; // user is baked into the button; getCurrentUser is only a fallback
+  const user=u||getCurrentUser(); if(!user) return; // user is carried on the button's data-attr; getCurrentUser is only a fallback
   const write=()=>setDoc(whitelistConfirmRef,{[user]:{confirmedAt:Date.now()}},{merge:true});
-  // The per-user rule confines this write to the caller's own key, which it resolves via the
-  // emailToUser map the admin keeps synced. For a JUST-added user that map can lag by a moment, so
-  // the first write can be denied — which is why a freshly-added user used to have to click twice.
-  // Auto-retry once after a short delay so a single click always sticks (also covers transient blips).
+  // [re-audit #3 low] Mark this user's confirm as pending and hide the banner NOW — and keep it hidden
+  // through the retry window even if an interim (rolled-back) snapshot arrives, so a freshly-added user
+  // never sees the banner flicker back. Cleared only on definitive success or definitive failure.
+  _whitelistPendingConfirm=user; renderWhitelistBanner();
+  // The per-user rule confines this write to the caller's own key, resolved via the emailToUser map the
+  // admin keeps synced. For a JUST-added user that map can lag a moment, so the first write can be
+  // denied. Auto-retry once after a short delay so a single click always sticks (also covers blips).
   try{ await write(); }
   catch(e){
     console.warn('[whitelist] first confirm write failed:', e && e.code, e && e.message); // diagnostic if this recurs
     try{ await new Promise(r=>setTimeout(r,1500)); await write(); }
-    catch(e2){ console.warn('[whitelist] retry also failed:', e2 && e2.code, e2 && e2.message); showCenterAlert("Couldn't save that just now — please try again in a moment."); return; }
+    catch(e2){ console.warn('[whitelist] retry also failed:', e2 && e2.code, e2 && e2.message); _whitelistPendingConfirm=null; renderWhitelistBanner(); showCenterAlert("Couldn't save that just now — please try again in a moment."); return; }
   }
   if(!whitelistConfirmData) whitelistConfirmData={};
   whitelistConfirmData[user]={confirmedAt:Date.now()}; // optimistic; the snapshot will confirm
+  _whitelistPendingConfirm=null; // real flag now set — the snapshot keeps the banner hidden
   renderWhitelistBanner();
   showCenterAlert("Thanks! You're all set — you won't see this reminder again.");
 };
