@@ -30,9 +30,28 @@ That tells you the true state of the code faster and more reliably than any para
 
 ## SESSION UPDATE — 26 July 2026 (this supersedes any conflicting [BELIEVED] item below)
 
-### LATEST: Whitelist Tracker feature added (builds 121/207) — NOT yet re-audited
+### LATEST: Whitelist Tracker feature added (builds 122/208) — RE-AUDITED CLEAN
 
-Post-view fixes (121/207): staff banner no longer FLASHES on load (gated on a `_whitelistLoaded`
+Current live builds after this feature: **122 staff / 208 admin** (mobile 16). Suite **468 assertions**,
+all pass. **Rules changed for this feature (whitelistConfirm) — already published + pushed by the user.**
+
+**Re-audit of the feature (122/208) — DONE. Result: 0 critical, 0 high, 0 medium; 1 confirmed low +
+2 disputed low; 24 clean checks.** [VERIFIED by the adversarial workflow] Reviewers executed the code
+against a mock DOM/Firestore and PROVED the isolation (no auction doc/engine touched), the own-key
+write confinement, and that no injection is reachable (initials are letters-only). The three low items,
+all cosmetic/self-healing, are NOT yet fixed:
+- **[LOW · confirmed] Admin reveal collapses on remote confirmation.** `renderWhitelistTracker` rebuilds
+  the summary innerHTML on every incoming confirmation, so the "show who hasn't" list re-hides mid-read.
+  Fix: preserve the reveal toggle across re-renders (or don't rebuild the summary node).
+- **[LOW · disputed] Initials baked unescaped into the confirm button onclick.** Not reachable in
+  practice (initials are letters-only by construction), but escaping the baked value is trivial defensive
+  hardening.
+- **[LOW · disputed] Freshly-added user sees a ~1.5s banner flicker.** On the just-added path the first
+  write is rejected (emailToUser lag), the optimistic hide rolls back, and the banner re-shows until the
+  retry succeeds. Self-healing, no data harm. Fix: hold the optimistic-confirmed state until the retry
+  resolves rather than rolling back on the interim snapshot.
+
+Post-view fixes already shipped (121→122/207→208): staff banner no longer FLASHES on load (gated on a `_whitelistLoaded`
 flag until the confirmation snapshot arrives); the confirm button AUTO-RETRIES once on a failed
 first write (a freshly-added user's own-key rule can briefly lag emailToUser sync — root cause of
 the double-click not fully confirmed since the affected user was actually older; a `console.warn`
