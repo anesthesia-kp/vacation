@@ -30,7 +30,18 @@ That tells you the true state of the code faster and more reliably than any para
 
 ## SESSION UPDATE — 26 July 2026 (this supersedes any conflicting [BELIEVED] item below)
 
-### LATEST: Whitelist Tracker feature added (builds 120/206) — NOT yet re-audited
+### LATEST: Whitelist Tracker feature added (builds 121/207) — NOT yet re-audited
+
+Post-view fixes (121/207): staff banner no longer FLASHES on load (gated on a `_whitelistLoaded`
+flag until the confirmation snapshot arrives); the confirm button AUTO-RETRIES once on a failed
+first write (a freshly-added user's own-key rule can briefly lag emailToUser sync — root cause of
+the double-click not fully confirmed since the affected user was actually older; a `console.warn`
+now logs the real error code if it recurs). The ask e-mail links the staff site at the bottom
+(`AUCTION_SITE_URL`). **Reset Auction does NOT clear whitelist confirmations** — by design, since
+whitelisting persists in each user's Gmail across cycles; the feature stays isolated from the
+auction lifecycle. (If a per-cycle reset is ever wanted, add a dedicated button to the tracker
+panel rather than coupling it to Reset Auction.)
+
 
 A new, deliberately-isolated feature to fight the spam problem on the Gmail side while the durable
 e-mail fix is deferred. Suite now **466 assertions**, all pass. **Rules changed → publish rules in the
@@ -188,6 +199,14 @@ Remaining before launch is now operational + the untouched original-audit queue,
 
 ### OPEN ITEMS (user will address later)
 
+- **[OPEN · KP (@kp.org) WHITELISTING — user is handling the KP side separately]** The Gmail-side
+  deliverability work (Whitelist Tracker + the contact/not-spam ask) does NOT solve Kaiser
+  `@kp.org` addresses — Kaiser runs an enterprise mail filter that can quarantine outside mail even
+  when it is perfectly authenticated. **Action (user, later):** ask **Kaiser IT to allowlist the
+  auction's sending address/domain** (currently `dr.vacation.goddess@gmail.com`; the address the
+  users' KP inboxes must accept) so results/alerts reach `@kp.org` inboxes. This is an internal
+  Kaiser request, independent of everything in the app. Until it's done, assume KP addresses may not
+  receive auction e-mail reliably — lean on each physician's personal Gmail as the primary channel.
 - **[OPEN · re-audit #2 verification]** Confirm the batch-2 re-audit is clean before launch.
 - **[OPEN · EMAIL DELIVERABILITY — auction/welcome e-mails landing in spam]** Root cause: EmailJS
   (`service_wpprivw`) sends through a **personal `@gmail.com` account**, which **cannot be
