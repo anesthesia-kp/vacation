@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 123;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 124;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1298,8 +1298,20 @@ onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; if(ty
 // [WHITELIST TRACKER 2026-07-26] Public read (initials→timestamp only). Drives the confirm banner.
 // _whitelistLoaded gates the banner so it can't FLASH on before the confirmation state has loaded
 // (without it, a confirmed user briefly sees the banner on sign-in until the first snapshot arrives).
+// [BUILD 124 flash fix] Only a SERVER-confirmed snapshot may set _whitelistLoaded. On a slow or
+// still-connecting network Firestore can first emit an EMPTY from-cache snapshot; treating that as
+// "loaded" flashed the reminder at users who HAD already confirmed. A cached empty snapshot is also
+// never allowed to wipe known confirmations — absence-from-cache is not evidence of absence.
+// Named (not inline) so the test suite can extract and execute it verbatim.
 let whitelistConfirmData={}, _whitelistLoaded=false;
-onSnapshot(whitelistConfirmRef, snap=>{ whitelistConfirmData=snap.exists()?snap.data():{}; _whitelistLoaded=true; if(typeof renderWhitelistBanner==='function') renderWhitelistBanner(); });
+function _wlOnSnap(snap){
+  const fromCache = !!(snap.metadata && snap.metadata.fromCache);
+  if(snap.exists()) whitelistConfirmData=snap.data();
+  else if(!fromCache) whitelistConfirmData={};        // server says the doc is truly empty/gone
+  if(!fromCache) _whitelistLoaded=true;               // banner may only appear on server truth
+  if(typeof renderWhitelistBanner==='function') renderWhitelistBanner();
+}
+onSnapshot(whitelistConfirmRef, _wlOnSnap);
 onSnapshot(passcodesRef,snap=>{ passcodesData=snap.exists()?snap.data():{}; _passcodesReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; _usernamesReady=true; if(typeof refreshLoginUsers==='function') refreshLoginUsers(); });
 // L-5: no top-level loginEmailsRef listener either — same reason; the signed-in path re-subscribes.
