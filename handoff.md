@@ -96,9 +96,22 @@ they're pushed/live. What changed:
   returning, so the retry it instructs isn't blocked for 2 min.
 - **[LOW tautological test] fixed:** the NP-exemption assertion now really checks NP repeats still win.
 
-**A re-audit of THIS batch (119/205) has NOT been run.** The changes are small and localized, but the
-program's discipline is re-audit-after-each-batch. Consider one more adversarial pass over the 119/205
-diff before completing the dry run or going live.
+**Re-audit of 119/205 — DONE. Result: CLEAN — 0 confirmed, 0 disputed, 0 raised.** [VERIFIED by the
+adversarial workflow] 5 reviewers + 2-skeptic verify over the localized diff; reviewers EXECUTED both
+computeApprovals twins over 3k–20k fuzz states, confirmed I7 twin parity holds, proved
+`_i2DisqualifiedSet()` matches the inline engine on every input, confirmed no legitimate bid is dropped
+by the `<_cur` change, and verified the mail/send-results fixes and the test honesty. Across the three
+rounds the severity converged critical → medium → clean. **119/205 is the current clean build.**
+
+Remaining before launch is now operational + the untouched original-audit queue, not known regressions:
+- **Push 119/205** (on the Mac; push-only, no rules republish this round).
+- Original-audit queue still open: **28 medium, 14 low, 18 disputed** (2 rated critical by one skeptic),
+  **9 unverified critic.**
+- Pre-launch ops: finish the dry run (approve/deny → Complete → Send → Reset), a full **Reset Auction**
+  before launch, and a human check of the 21 users bulk-set to FTE 1.0.
+- **[OPEN] e-mail deliverability** — see the OPEN ITEMS section above (personal-Gmail root cause; user
+  deferred the domain+provider decision; free mitigations — physician "whitelist us" note + EmailJS
+  From-Name/Reply-To — are ready to apply).
 
 ### Batch-2 re-audit findings — (all now FIXED above; kept for reference)
 
