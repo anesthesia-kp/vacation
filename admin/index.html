@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 210;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 211;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -722,9 +722,12 @@ thead th{color:var(--t2)}
     <div class="panel" id="panel-whitelist">
       <div class="page-head"><div class="page-title">📌 Whitelist Tracker</div><div class="page-sub">Who has confirmed adding <span class="mono" id="wlSenderLabel"></span> to their contacts &amp; marked it Not-Spam, so auction e-mails reach their inbox.</div></div>
       <div id="wlSummary" style="margin-bottom:12px"></div>
+      <!-- [BUILD 211] Reminder-to-unconfirmed is the everyday action → leftmost + primary style.
+           E-mail-EVERYONE is the rare action → small, pushed to the far right, and its confirm
+           dialog carries an explicit "includes already-confirmed users" warning (see warnAll). -->
       <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
-        <button class="btn btn-primary" style="font-size:12px" onclick="sendWhitelistBlast()">✉️ E-mail all users the ask</button>
-        <button class="btn" style="font-size:12px;background:rgba(251,191,36,.15);color:var(--yellow);border:1px solid rgba(251,191,36,.3)" onclick="sendWhitelistReminder()">🔔 Send reminder to unconfirmed only</button>
+        <button class="btn btn-primary" style="font-size:12px" onclick="sendWhitelistReminder()">🔔 Send reminder to unconfirmed only</button>
+        <button class="btn btn-ghost" style="font-size:11px;padding:3px 9px;margin-left:auto" onclick="sendWhitelistBlast()">✉️ E-mail all users the ask</button>
       </div>
       <div style="overflow-x:auto;max-height:560px;overflow-y:auto;border:1px solid var(--b1)">
         <table><thead><tr><th>Initials</th><th>Full Name</th><th>Login e-mail (Google)</th><th>Confirmed?</th></tr></thead><tbody id="wlBody"></tbody></table>
@@ -4026,7 +4029,7 @@ function renderNextStep(){
     if(!phase1Started() && (names||[]).length){
       const un=(typeof _wlUnconfirmed==='function')?_wlUnconfirmed():[];
       if(un.length){
-        wlNote=`<div style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.3);border-radius:10px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:var(--t1)">📌 <strong>Before you launch:</strong> ${un.length} of ${names.length} user${names.length!==1?'s':''} haven't confirmed they've whitelisted the auction sender — do this first so results/alerts reach inboxes. <button class="btn btn-ghost" style="padding:2px 8px;font-size:11px;margin-left:6px" onclick="sendWhitelistBlast()">✉️ E-mail the ask</button> <button class="btn btn-ghost" style="padding:2px 8px;font-size:11px" onclick="nav('whitelist',document.querySelector('[onclick*=\\'whitelist\\']'))">📌 Open tracker</button></div>`;
+        wlNote=`<div style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.3);border-radius:10px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:var(--t1)">📌 <strong>Before you launch:</strong> ${un.length} of ${names.length} user${names.length!==1?'s':''} haven't confirmed they've whitelisted the auction sender — do this first so results/alerts reach inboxes. <button class="btn btn-ghost" style="padding:2px 8px;font-size:11px;margin-left:6px" onclick="sendWhitelistReminder()">✉️ E-mail the unconfirmed</button> <button class="btn btn-ghost" style="padding:2px 8px;font-size:11px" onclick="nav('whitelist',document.querySelector('[onclick*=\\'whitelist\\']'))">📌 Open tracker</button></div>`;
       }
     }
   }catch(_){}
@@ -7534,7 +7537,8 @@ KP East Bay Anesthesia — Vacation Auction
 
 Sign in here: ${AUCTION_SITE_URL}`;
 }
-async function _sendWhitelistAsk(targetUsers,label){
+async function _sendWhitelistAsk(targetUsers,label,opts){
+  opts=opts||{}; // no default-param braces here — the test suite's verbatim extractor counts braces
   if(typeof emailjs==='undefined'){ toast('✉️ E-mail sending is not available on this page (the mailer failed to load). Open the admin site on another machine/browser.','err'); return; }
   const targets=targetUsers.filter(u=>recipientsFor(u).length); // skip users with no address on file
   const noAddr=targetUsers.length-targets.length;
@@ -7542,6 +7546,7 @@ async function _sendWhitelistAsk(targetUsers,label){
   openConfirm({
     title:'✉️ Send whitelist ask',
     body:`<div>Send the "add us to your contacts" e-mail to <strong>${targets.length}</strong> ${label}?</div>
+          ${opts.warnAll?`<div class="cmodal-warn" style="margin-top:8px">⚠️ This goes to ALL users — including those who have already confirmed. For a nudge to just the stragglers, use "Send reminder to unconfirmed only" instead.</div>`:''}
           ${noAddr?`<div class="cmodal-warn" style="margin-top:8px">${noAddr} user${noAddr!==1?'s have':' has'} no e-mail on file and will be skipped.</div>`:''}
           <div class="cmodal-info" style="margin-top:8px">Sends now from this page. It goes to each user's addresses on file (Google + KP). Note: it shares the standard e-mail subject line — the body carries the full instructions.</div>`,
     okText:'Send to '+targets.length,
@@ -7555,7 +7560,7 @@ async function _sendWhitelistAsk(targetUsers,label){
     }
   });
 }
-window.sendWhitelistBlast=function(){ _sendWhitelistAsk([...(names||[])].sort(),'users (everyone)'); };
+window.sendWhitelistBlast=function(){ _sendWhitelistAsk([...(names||[])].sort(),'users (everyone)',{warnAll:true}); };
 window.sendWhitelistReminder=function(){
   const un=_wlUnconfirmed();
   if(!un.length){ toast('Everyone has already confirmed — no reminder needed. 🎉','ok'); return; }
