@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 212;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 213;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -783,6 +783,17 @@ thead th{color:var(--t2)}
           <div id="restoreList"></div>
         </div>
       </div>
+      <!-- CLOUD BACKUPS [build 213] — one-click snapshot INTO Firestore (admin-only `backups`
+           collection), shared by every admin from any computer. The local 💾 download above is
+           unchanged and remains the off-site copy for milestones. Last 15 kept, older pruned. -->
+      <div class="card">
+        <div class="card-title" onclick="toggleCloudBackups()" style="cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none"><span>☁️ Cloud Backups</span><span id="cbChevron" class="chev">▸ Show</span></div>
+        <div id="cloudBackupWrap" style="display:none">
+          <div class="page-sub" style="margin-bottom:10px">One click saves a full snapshot of the auction into the database's own admin-only backup area — <strong>visible to every admin, from any computer</strong>, restorable in seconds. The most recent <strong>15</strong> are kept; older ones are pruned automatically. For milestones (before Reset Auction, after final results) also keep a local file with 💾 Backup All Data above — that copy lives outside the database entirely.</div>
+          <button class="btn" id="cbNowBtn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3);margin-bottom:10px" onclick="cloudBackupNow()">☁️ Back up to cloud now</button>
+          <div id="cloudBackupList"></div>
+        </div>
+      </div>
       <div class="card">
         <div class="card-title" id="timerRulesHead" onclick="toggleTimerRules()" style="cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none">
           <span>⏱ Timer Rules</span>
@@ -1074,7 +1085,7 @@ thead th{color:var(--t2)}
 
 <script type="module">
 import { initializeApp }    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, getDoc, increment, writeBatch, runTransaction, onSnapshot as _onSnapshot }
+import { getFirestore, doc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, getDoc, increment, writeBatch, runTransaction, collection, getDocs, onSnapshot as _onSnapshot }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
@@ -8460,6 +8471,11 @@ function renderRestoreList(){
 }
 window._restoreFull=function(i){
   const f=_restoreFiles[i]; if(!f||f.error) return;
+  _confirmFullRestore(f); // [build 213] shared confirm chain — cloud restore uses it too
+};
+// The double-confirm (danger dialog + typed RESTORE) in front of _doFullRestore. Takes the same
+// {data, ts} shape whether the backup came from a local file or the cloud store.
+function _confirmFullRestore(f){
   const when=new Date(f.ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
   openConfirm({
     title:'🛟 Full Restore — are you sure?',
@@ -8624,17 +8640,27 @@ function _backupThen(label,fn){
 // ── Full-data backup ──
 // Downloads every auction document as one JSON file. There is no server-side undo —
 // this file is the recovery path. Run it before every Close/Complete/Begin Phase.
-window.exportBackup=async function(){
-  // ALL 28 documents either site ever touches (verified by enumeration; changesDecisions
-  // added 25 Jul 2026 with the AUDIT #3 decision-log split) — this file
-  // IS the complete auction state at the moment of the click.
-  const docs={schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesDecisions:changesDecisionsRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,welcomeLog:welcomeLogRef,mailQueue:mailQueueRef,mailStats:mailStatsRef,slcMap:slcRef,adminAccess:adminAccessRef,passcodes:doc(db,'vacations','passcodes'),signInMisses:signInMissesRef,slots:doc(db,'vacations','slots')};
+// ALL 28 documents either site ever touches (verified by enumeration; changesDecisions
+// added 25 Jul 2026 with the AUDIT #3 decision-log split). ONE shared map so the local
+// download and the cloud backup can never cover different document sets.
+function _backupDocMap(){
+  return {schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesDecisions:changesDecisionsRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,welcomeLog:welcomeLogRef,mailQueue:mailQueueRef,mailStats:mailStatsRef,slcMap:slcRef,adminAccess:adminAccessRef,passcodes:doc(db,'vacations','passcodes'),signInMisses:signInMissesRef,slots:doc(db,'vacations','slots')};
+}
+// Fetch every backed-up document once. Same semantics both pathways rely on:
+// exists → data, missing → null, fetch error → 'FETCH-FAILED: …' marker + fails count.
+async function _backupFetchAll(){
+  const docs=_backupDocMap();
   const out={_exportedAt:new Date().toISOString(),_build:(typeof window.BUILD!=='undefined'?window.BUILD:'?')};
   let fails=0;
   for(const [name,ref] of Object.entries(docs)){
     try{ const s=await getDoc(ref); out[name]=s.exists()?s.data():null; }
     catch(e){ out[name]='FETCH-FAILED: '+(e.code||e.message); fails++; }
   }
+  return {out,fails};
+}
+window.exportBackup=async function(){
+  // This file IS the complete auction state at the moment of the click.
+  const {out,fails}=await _backupFetchAll();
   const blob=new Blob([JSON.stringify(out,null,1)],{type:'application/json'});
   // Filename in LOCAL time (the ISO/UTC stamp confused the admin — 17:58Z is 10:58 PDT)
   const _d=new Date(), _p=n=>String(n).padStart(2,'0');
@@ -8644,6 +8670,125 @@ window.exportBackup=async function(){
   a.download=fname;
   a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),5000);
   toast(fails?('💾 Backup downloaded — but '+fails+' document(s) failed to fetch, re-run it'):'💾 Backup downloaded — keep this file safe',fails?'warn':'ok');
+};
+
+// ── Cloud Backups [build 213] ────────────────────────────────────────────────
+// One-click snapshot INTO Firestore: admin-only `backups` collection, shared by all
+// admins. Each backup = a manifest doc backups/bk<ts> (when/who/build/counts/names)
+// plus one subdoc per source document, backups/bk<ts>/docs/<name>, holding the data
+// as a JSON string — a faithful round-trip of the local backup-file format, written
+// in ONE atomic batch (29 ops, far under the 500-op limit). Restore reuses the exact
+// same double-confirm + _doFullRestore path as a file restore. Local download above
+// is untouched. Rules: the `backups` block must be PUBLISHED before this ships.
+const CLOUD_BACKUP_KEEP=15; // most recent kept; older pruned after each new backup
+window.toggleCloudBackups=function(){ const w=document.getElementById('cloudBackupWrap'),c=document.getElementById('cbChevron'); if(!w)return; const show=w.style.display==='none'; w.style.display=show?'':'none'; if(c)c.textContent=show?'▾ Hide':'▸ Show'; if(show) renderCloudBackups(); };
+window.cloudBackupNow=async function(){
+  const btn=document.getElementById('cbNowBtn');
+  if(btn&&btn.disabled) return; // re-entrancy guard: one backup at a time
+  if(btn){ btn.disabled=true; btn.textContent='☁️ Backing up…'; }
+  try{
+    const r=await _backupFetchAll();
+    // Stricter than the local download on purpose: _doFullRestore REFUSES a partial backup
+    // (H13 pre-flight), so storing one in the cloud would only be a restore that can't run.
+    if(r.fails){ toast('☁️ Cloud backup NOT saved — '+r.fails+' document(s) failed to fetch. Try again.','err'); return; }
+    const ts=Date.now(), id='bk'+ts;
+    const names=Object.keys(r.out).filter(k=>k.charAt(0)!=='_');
+    const batch=writeBatch(db);
+    let bytes=0;
+    for(const n of names){
+      const payload=JSON.stringify(r.out[n]===undefined?null:r.out[n]);
+      bytes+=payload.length;
+      batch.set(doc(db,'backups',id,'docs',n),{j:payload});
+    }
+    const bc=_bidCount(r.out.schedule||{});
+    batch.set(doc(db,'backups',id),{
+      ts, by:(auth.currentUser&&auth.currentUser.email)||'?',
+      build:r.out._build, exportedAt:r.out._exportedAt, names, bytes,
+      phase:Number(((r.out.phases)||{}).currentPhase||1), bids:bc.weeks, bidUsers:bc.users
+    });
+    await batch.commit();
+    toast('☁️ Cloud backup saved — '+new Date(ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'}),'ok');
+    await _cbPrune();
+    await renderCloudBackups();
+  }catch(e){
+    toast('☁️ Cloud backup FAILED — nothing was saved ('+(e?.code||e?.message||e)+').','err');
+  }finally{
+    if(btn){ btn.disabled=false; btn.textContent='☁️ Back up to cloud now'; }
+  }
+};
+async function _cbList(){
+  const snap=await getDocs(collection(db,'backups'));
+  const arr=[]; snap.forEach(d=>arr.push({id:d.id,...d.data()}));
+  arr.sort((a,b)=>(b.ts||0)-(a.ts||0));
+  return arr;
+}
+async function _cbPrune(){
+  try{
+    const arr=await _cbList();
+    for(const b of arr.slice(CLOUD_BACKUP_KEEP)){ await _cbDeleteRaw(b); }
+  }catch(_){ /* pruning is housekeeping — never let it break the backup that just saved */ }
+}
+async function _cbDeleteRaw(b){
+  // Subdocs are deleted with the manifest in ONE atomic batch. The manifest's own `names`
+  // list drives the subdoc deletes, so a backup taken under an older document set still
+  // deletes completely; current map names are the fallback for a manifest without one.
+  const names=(b&&Array.isArray(b.names)&&b.names.length)?b.names:Object.keys(_backupDocMap());
+  const batch=writeBatch(db);
+  for(const n of names) batch.delete(doc(db,'backups',b.id,'docs',n));
+  batch.delete(doc(db,'backups',b.id));
+  await batch.commit();
+}
+window.cloudDeleteBackup=function(id,when){
+  openConfirm({
+    title:'🗑 Delete this cloud backup?',
+    body:`<div>Delete the cloud backup taken <strong>${esc(when)}</strong>?</div>
+          <div class="cmodal-warn" style="margin-top:8px">This cannot be undone. Any local file copies you downloaded are unaffected.</div>`,
+    okText:'Delete', danger:true,
+    onConfirm:async()=>{
+      try{
+        const m=await getDoc(doc(db,'backups',id));
+        await _cbDeleteRaw({id, ...(m.exists()?m.data():{})});
+        toast('🗑 Cloud backup deleted.','ok');
+      }catch(e){ toast('Could not delete that backup ('+(e?.code||e?.message||e)+').','err'); }
+      renderCloudBackups();
+    }
+  });
+};
+window.cloudRestore=async function(id){
+  let f=null;
+  try{
+    const m=await getDoc(doc(db,'backups',id));
+    if(!m.exists()){ toast('That cloud backup no longer exists — refreshing the list.','warn'); renderCloudBackups(); return; }
+    const md=m.data();
+    const data={_exportedAt:md.exportedAt,_build:md.build};
+    for(const n of (md.names||Object.keys(_backupDocMap()))){
+      const s=await getDoc(doc(db,'backups',id,'docs',n));
+      if(!s.exists()){ toast('☁️ This cloud backup is INCOMPLETE ('+n+' is missing) — not restoring. Use another backup.','err'); return; }
+      data[n]=JSON.parse(s.data().j);
+    }
+    f={name:'cloud backup',data,ts:md.ts};
+  }catch(e){ toast('Could not read that cloud backup ('+(e?.code||e?.message||e)+').','err'); return; }
+  _confirmFullRestore(f); // same double-confirm (danger + typed RESTORE) + _doFullRestore as a file restore
+};
+window.renderCloudBackups=async function(){
+  const el=document.getElementById('cloudBackupList'); if(!el) return;
+  el.innerHTML='<div style="color:var(--t3);font-size:12px">Loading…</div>';
+  let arr=[];
+  try{ arr=await _cbList(); }
+  catch(e){ el.innerHTML='<div style="color:var(--red);font-size:12px">Could not load cloud backups ('+esc(String(e?.code||e?.message||e))+'). If the rules were just published, reload the page.</div>'; return; }
+  if(!arr.length){ el.innerHTML='<div style="color:var(--t3);font-size:12px">No cloud backups yet — click the button above to save the first one.</div>'; return; }
+  el.innerHTML=arr.map(b=>{
+    const when=new Date(b.ts||0).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
+    const kb=Math.max(1,Math.round((b.bytes||0)/1024));
+    return `<div style="border:1px solid var(--b1);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:12.5px">
+      <div style="font-weight:700;color:var(--t1)">☁️ ${esc(when)}</div>
+      <div style="color:var(--t2);margin-top:3px">Phase ${esc(String(b.phase||'?'))} · ${Number(b.bids)||0} bid${Number(b.bids)!==1?'s':''} across ${Number(b.bidUsers)||0} user${Number(b.bidUsers)!==1?'s':''} · build ${esc(String(b.build||'?'))} · ${kb} KB · by ${esc(b.by||'?')}</div>
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-danger" style="padding:3px 10px;font-size:11px" onclick="cloudRestore('${esc(b.id)}')">🛟 Full Restore…</button>
+        <button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;margin-left:auto" onclick="cloudDeleteBackup('${esc(b.id)}','${esc(when)}')">🗑 Delete…</button>
+      </div>
+    </div>`;
+  }).join('');
 };
 // ── Toast ──
 let toastT;
