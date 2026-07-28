@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 215;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 216;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -771,7 +771,6 @@ thead th{color:var(--t2)}
         <div><div class="page-title">Controls</div><div class="page-sub">Global schedule settings.</div></div>
         <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
           <button class="btn btn-ghost" id="ctlExpandAllBtn" onclick="toggleAllControlPanels()">▾ Expand all</button>
-          <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportBackup()" title="Download every auction document as one JSON file — the auction's only undo">💾 Backup All Data</button>
           <button class="btn btn-danger" style="background:rgba(220,38,38,.25);border-color:rgba(220,38,38,.6)" onclick="clearEverything()">💣 Reset Auction</button>
         </div>
       </div>
@@ -782,7 +781,12 @@ thead th{color:var(--t2)}
         <div class="card-title" onclick="toggleBackups()" style="cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none"><span>💾 Backups &amp; Restore</span><span id="bkChevron" class="chev">▸ Show</span></div>
         <div id="backupsWrap" style="display:none">
           <div class="page-sub" style="margin-bottom:10px">☁️ <strong>Cloud backups</strong> save a full snapshot into the database's own admin-only backup area — visible to every admin, from any computer, restorable in seconds. The newest <strong>15</strong> are kept (recent 3 shown; older ones prune automatically). For milestones (before Reset Auction, after final results) also keep a local file with 💾 Backup All Data above — that copy lives outside the database entirely.</div>
-          <button class="btn" id="cbNowBtn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3);margin-bottom:10px" onclick="cloudBackupNow()">☁️ Back up to cloud now</button>
+          <!-- [build 216] Backup All Data moved here from the Controls header — both backup
+               actions now live side by side in the one card, cloud first. -->
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+            <button class="btn" id="cbNowBtn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="cloudBackupNow()">☁️ Back up to cloud now</button>
+            <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportBackup()" title="Download every auction document as one JSON file to this computer — the off-site milestone copy">💾 Backup All Data</button>
+          </div>
           <div id="cloudBackupList" style="margin-bottom:14px"></div>
           <div style="border-top:1px solid var(--b1);padding-top:10px">
             <div style="font-weight:700;color:var(--t1);font-size:12.5px;margin-bottom:6px">🛟 Restore from a local backup file</div>
@@ -8640,21 +8644,13 @@ function _backupThen(label,fn){
   // its confirmation. The globals below are closures over `fn`; opening a newer prompt replaces
   // them together with the visible dialog, so a click always runs the transition it describes.
   window._bkProceed=fn; // read only at CLICK time (skip button) — synchronous, no clobber window
-  window._bkLocalRun=function(){
-    // Local download fallback: success-checked. exportBackup reports {fails}; a knowingly-partial
-    // file is exactly what _doFullRestore refuses, so proceeding on it would gate a transition on
-    // an undo that can never run. A rejected download no longer silently drops the transition.
-    const proceed=fn;
-    exportBackup().then(function(r){
-      if(r&&r.fails){ toast('💾 Backup was INCOMPLETE ('+r.fails+' document(s) failed) — '+label+' did NOT run. Try the ☁️ cloud backup.','err'); return; }
-      proceed();
-    },function(e){ toast('💾 Backup FAILED — '+label+' did NOT run ('+((e&&e.message)||e)+').','err'); });
-  };
+  // [build 216] Local download removed from this workflow at the admin's request — the cloud
+  // backup is the one recommendation. Local files remain available any time via 💾 Backup All
+  // Data in the Backups & Restore card (the off-site milestone copy).
   openConfirm({
     title:'💾 Back up before '+label+'?',
     body:`<div>Save a <strong>cloud backup</strong> first? It takes a few seconds, every admin can see it, and it is the auction's undo.</div>
-          <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="closeConfirm();window._bkLocalRun()">💾 Local download instead &amp; continue</button>
-          <button class="btn btn-ghost" style="margin-top:8px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="closeConfirm();window._bkProceed()">⏭ Skip backup (testing)</button>`,
+          <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="closeConfirm();window._bkProceed()">⏭ Skip backup (testing)</button>`,
     okText:'☁️ Cloud Backup & Continue',
     onConfirm:async()=>{
       // Cloud is the default AND success-gated: if the snapshot does not verifiably save
@@ -8673,7 +8669,8 @@ function _backupThen(label,fn){
 // decision-log split). ONE shared map so the local download and the cloud backup can never
 // cover different document sets. Deliberately OUTSIDE the backup: phaseStaging (transient,
 // rebuilt by re-completing a phase; restore clears it) and whitelistConfirm (isolated from
-// the auction lifecycle by design — whether to back it up is an open product decision).
+// the auction lifecycle by design — per the admin's decision [28 Jul 2026] it is neither
+// backed up, restored, nor cleared by Reset Auction; confirmations simply persist).
 function _backupDocMap(){
   return {schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesDecisions:changesDecisionsRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,welcomeLog:welcomeLogRef,mailQueue:mailQueueRef,mailStats:mailStatsRef,slcMap:slcRef,adminAccess:adminAccessRef,passcodes:doc(db,'vacations','passcodes'),signInMisses:signInMissesRef,slots:doc(db,'vacations','slots')};
 }
@@ -8836,10 +8833,10 @@ window.renderCloudBackups=async function(){
     const kb=Math.max(1,Math.round((b.bytes||0)/1024));
     const tip='build '+String(b.build||'?')+' · '+kb+' KB · '+(Number(b.bidUsers)||0)+' user'+(Number(b.bidUsers)!==1?'s':'')+' bidding · by '+String(b.by||'?');
     return `<div title="${esc(tip)}" style="display:flex;align-items:center;gap:10px;border:1px solid var(--b1);border-radius:8px;padding:5px 10px;margin-bottom:6px;font-size:12px;flex-wrap:wrap">
+      <button class="btn btn-danger" style="padding:2px 8px;font-size:11px" onclick="cloudRestore('${esc(b.id)}')">🛟 Restore…</button>
       <span style="font-weight:700;color:var(--t1);white-space:nowrap">☁️ ${esc(when)}</span>
       <span style="color:var(--t2);white-space:nowrap">Phase ${esc(String(b.phase||'?'))} · ${Number(b.bids)||0} bid${Number(b.bids)!==1?'s':''} · ${esc(String(b.by||'?').split('@')[0])}</span>
-      <span style="margin-left:auto;display:flex;gap:6px">
-        <button class="btn btn-danger" style="padding:2px 8px;font-size:11px" onclick="cloudRestore('${esc(b.id)}')">🛟 Restore…</button>
+      <span style="margin-left:auto">
         <button class="btn btn-ghost" style="padding:2px 6px;font-size:11px" title="Delete this backup" onclick="cloudDeleteBackup('${esc(b.id)}','${esc(when)}')">🗑</button>
       </span>
     </div>`;
