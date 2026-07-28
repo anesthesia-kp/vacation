@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 214;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 215;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -775,23 +775,21 @@ thead th{color:var(--t2)}
           <button class="btn btn-danger" style="background:rgba(220,38,38,.25);border-color:rgba(220,38,38,.6)" onclick="clearEverything()">💣 Reset Auction</button>
         </div>
       </div>
+      <!-- BACKUPS & RESTORE [build 215] — one card. Cloud backups (admin-only `backups`
+           collection, shared by every admin, newest 15 kept) on top; restore-from-local-file
+           below. The 💾 Backup All Data download above is unchanged (milestone off-site copy). -->
       <div class="card">
-        <div class="card-title" onclick="toggleRestorePanel()" style="cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none"><span>🛟 Restore from Backup</span><span id="restoreChevron" class="chev">▸ Show</span></div>
-        <div id="restoreWrap" style="display:none">
-          <div class="page-sub" style="margin-bottom:10px">Pick one or more backup files (e.g. from Downloads → Auction Backups). Each file is read locally in your browser and summarized below — <strong>nothing changes until you explicitly restore</strong>. Tip: turn the global lock ON before a mid-auction restore so nobody is bidding while state changes.</div>
-          <div id="restoreDrop" ondragover="event.preventDefault()" ondrop="event.preventDefault();loadRestoreFiles(event.dataTransfer.files)" style="border:2px dashed var(--b2);border-radius:10px;padding:14px;text-align:center;color:var(--t2);font-size:12.5px;margin-bottom:10px">Drag backup files here, or <label style="color:var(--blue);cursor:pointer;text-decoration:underline">choose files<input type="file" accept=".json,application/json" multiple style="display:none" onchange="loadRestoreFiles(this.files);this.value=''"></label></div>
-          <div id="restoreList"></div>
-        </div>
-      </div>
-      <!-- CLOUD BACKUPS [build 213] — one-click snapshot INTO Firestore (admin-only `backups`
-           collection), shared by every admin from any computer. The local 💾 download above is
-           unchanged and remains the off-site copy for milestones. Last 15 kept, older pruned. -->
-      <div class="card">
-        <div class="card-title" onclick="toggleCloudBackups()" style="cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none"><span>☁️ Cloud Backups</span><span id="cbChevron" class="chev">▸ Show</span></div>
-        <div id="cloudBackupWrap" style="display:none">
-          <div class="page-sub" style="margin-bottom:10px">One click saves a full snapshot of the auction into the database's own admin-only backup area — <strong>visible to every admin, from any computer</strong>, restorable in seconds. The most recent <strong>15</strong> are kept; older ones are pruned automatically. For milestones (before Reset Auction, after final results) also keep a local file with 💾 Backup All Data above — that copy lives outside the database entirely.</div>
+        <div class="card-title" onclick="toggleBackups()" style="cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none"><span>💾 Backups &amp; Restore</span><span id="bkChevron" class="chev">▸ Show</span></div>
+        <div id="backupsWrap" style="display:none">
+          <div class="page-sub" style="margin-bottom:10px">☁️ <strong>Cloud backups</strong> save a full snapshot into the database's own admin-only backup area — visible to every admin, from any computer, restorable in seconds. The newest <strong>15</strong> are kept (recent 3 shown; older ones prune automatically). For milestones (before Reset Auction, after final results) also keep a local file with 💾 Backup All Data above — that copy lives outside the database entirely.</div>
           <button class="btn" id="cbNowBtn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3);margin-bottom:10px" onclick="cloudBackupNow()">☁️ Back up to cloud now</button>
-          <div id="cloudBackupList"></div>
+          <div id="cloudBackupList" style="margin-bottom:14px"></div>
+          <div style="border-top:1px solid var(--b1);padding-top:10px">
+            <div style="font-weight:700;color:var(--t1);font-size:12.5px;margin-bottom:6px">🛟 Restore from a local backup file</div>
+            <div class="page-sub" style="margin-bottom:10px">Pick one or more backup files (e.g. from Downloads → Auction Backups). Each file is read locally in your browser and summarized below — <strong>nothing changes until you explicitly restore</strong>. Tip: turn the global lock ON before a mid-auction restore so nobody is bidding while state changes.</div>
+            <div id="restoreDrop" ondragover="event.preventDefault()" ondrop="event.preventDefault();loadRestoreFiles(event.dataTransfer.files)" style="border:2px dashed var(--b2);border-radius:10px;padding:14px;text-align:center;color:var(--t2);font-size:12.5px;margin-bottom:10px">Drag backup files here, or <label style="color:var(--blue);cursor:pointer;text-decoration:underline">choose files<input type="file" accept=".json,application/json" multiple style="display:none" onchange="loadRestoreFiles(this.files);this.value=''"></label></div>
+            <div id="restoreList"></div>
+          </div>
         </div>
       </div>
       <div class="card">
@@ -8386,7 +8384,7 @@ function initControlsCollapsibles(){
   panel.querySelectorAll('.card').forEach(card=>{
     const title=card.querySelector('.card-title'); if(!title||title.dataset.collapsible) return;
     title.dataset.collapsible='1';
-    if(card.querySelector('#timerRulesWrap')||card.querySelector('#restoreWrap')) return; // these two already collapse
+    if(card.querySelector('#timerRulesWrap')||card.querySelector('#backupsWrap')) return; // these two already collapse (a second injected chevron made the title say Show twice — build 215)
     const wrap=document.createElement('div');
     while(title.nextSibling) wrap.appendChild(title.nextSibling);
     card.appendChild(wrap);
@@ -8412,6 +8410,8 @@ window.toggleAllControlPanels=function(){
     const chev=title.querySelector('.chev'); if(chev) chev.textContent=expand?'▾ Hide':'▸ Show';
   });
   if(btn) btn.textContent=expand?'▴ Collapse all':'▾ Expand all';
+  // [build 215] Expand-all also reveals the Backups card — refresh its cloud list so it's live.
+  if(expand&&typeof renderCloudBackups==='function') renderCloudBackups();
 };
 // ── Restore console ────────────────────────────────────────────────────────
 // Reads backup JSON files locally (never uploaded), summarizes each, and offers
@@ -8419,7 +8419,8 @@ window.toggleAllControlPanels=function(){
 // SINGLE-USER restore (one person's bids/locks/times/phase tags — the everyday
 // fix that leaves everyone else's newer activity untouched).
 let _restoreFiles=[];
-window.toggleRestorePanel=function(){ const w=document.getElementById('restoreWrap'),c=document.getElementById('restoreChevron'); if(!w)return; const show=w.style.display==='none'; w.style.display=show?'':'none'; if(c)c.textContent=show?'▾ Hide':'▸ Show'; };
+// [build 215] One toggle for the merged Backups & Restore card; opening it loads the cloud list.
+window.toggleBackups=function(){ const w=document.getElementById('backupsWrap'),c=document.getElementById('bkChevron'); if(!w)return; const show=w.style.display==='none'; w.style.display=show?'':'none'; if(c)c.textContent=show?'▾ Hide':'▸ Show'; if(show&&typeof renderCloudBackups==='function') renderCloudBackups(); };
 function _bidCount(sch){ let users=0,weeks=0; for(const u in (sch||{})){ const n=Object.keys(sch[u]||{}).length; if(n>0){users++;weeks+=n;} } return {users,weeks}; }
 window.loadRestoreFiles=function(files){
   [...files].forEach(f=>{
@@ -8513,9 +8514,14 @@ async function _doFullRestore(f){
   // unusable docs ("a partial one is worse"); the full path now does the same, BEFORE
   // any side effect (the mail-queue clear below included).
   {
-    const _unusable=Object.keys(map).filter(k=>typeof d[k]==='string');
+    // [build 215 audit] A key that is ABSENT (undefined) is as unusable as a FETCH-FAILED one:
+    // a backup from before a document existed (e.g. pre-changesDecisions files) used to slip
+    // through this gate, get written as {} by the `v||{}` below, and wipe the live document
+    // while the toast reported a clean restore. Absent now aborts exactly like unreadable.
+    // (A stored null is fine — it means the document genuinely didn't exist at backup time.)
+    const _unusable=Object.keys(map).filter(k=>typeof d[k]==='string'||d[k]===undefined);
     if(_unusable.length){
-      toast('🛟 Restore ABORTED — '+_unusable.length+' document(s) in this backup are unreadable ('
+      toast('🛟 Restore ABORTED — '+_unusable.length+' document(s) in this backup are unreadable or missing ('
         +_unusable.join(', ')+'). Restoring the rest would mix two different auction states. '
         +'Nothing was changed. Use a complete backup.','err');
       return;
@@ -8628,21 +8634,46 @@ let _bkBypass=false;
 let _addUserBypass=false; // [AUDIT 2026-07-26] set only while re-running addUser past the initials-collision confirm
 window._bkProceed=null;
 function _backupThen(label,fn){
-  window._bkProceed=fn;
+  // [build 215 audit] Every path binds THIS prompt's transition at creation time. The old code
+  // read window._bkProceed AFTER awaiting the backup — if the admin opened another transition's
+  // prompt during those seconds, the global was overwritten and the WRONG transition ran without
+  // its confirmation. The globals below are closures over `fn`; opening a newer prompt replaces
+  // them together with the visible dialog, so a click always runs the transition it describes.
+  window._bkProceed=fn; // read only at CLICK time (skip button) — synchronous, no clobber window
+  window._bkLocalRun=function(){
+    // Local download fallback: success-checked. exportBackup reports {fails}; a knowingly-partial
+    // file is exactly what _doFullRestore refuses, so proceeding on it would gate a transition on
+    // an undo that can never run. A rejected download no longer silently drops the transition.
+    const proceed=fn;
+    exportBackup().then(function(r){
+      if(r&&r.fails){ toast('💾 Backup was INCOMPLETE ('+r.fails+' document(s) failed) — '+label+' did NOT run. Try the ☁️ cloud backup.','err'); return; }
+      proceed();
+    },function(e){ toast('💾 Backup FAILED — '+label+' did NOT run ('+((e&&e.message)||e)+').','err'); });
+  };
   openConfirm({
     title:'💾 Back up before '+label+'?',
-    body:`<div>Download a full data backup first? It takes two seconds and is the auction's only undo.</div>
-          <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="closeConfirm();window._bkProceed()">⏭ Skip backup (testing)</button>`,
-    okText:'💾 Backup & Continue',
-    onConfirm:async()=>{ await exportBackup(); window._bkProceed(); }
+    body:`<div>Save a <strong>cloud backup</strong> first? It takes a few seconds, every admin can see it, and it is the auction's undo.</div>
+          <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="closeConfirm();window._bkLocalRun()">💾 Local download instead &amp; continue</button>
+          <button class="btn btn-ghost" style="margin-top:8px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="closeConfirm();window._bkProceed()">⏭ Skip backup (testing)</button>`,
+    okText:'☁️ Cloud Backup & Continue',
+    onConfirm:async()=>{
+      // Cloud is the default AND success-gated: if the snapshot does not verifiably save
+      // (partial fetch, write failure), the transition does NOT run. `fn` is the closure —
+      // never the global — so a prompt opened mid-backup cannot swap the transition.
+      const saved=await cloudBackupNow();
+      if(saved){ fn(); }
+      else{ setTimeout(function(){ toast('Nothing was changed — '+label+' did NOT run. Fix the backup problem and try again.','warn'); },3200); }
+    }
   });
 }
 // ── Full-data backup ──
 // Downloads every auction document as one JSON file. There is no server-side undo —
 // this file is the recovery path. Run it before every Close/Complete/Begin Phase.
-// ALL 28 documents either site ever touches (verified by enumeration; changesDecisions
-// added 25 Jul 2026 with the AUDIT #3 decision-log split). ONE shared map so the local
-// download and the cloud backup can never cover different document sets.
+// The 28 backed-up documents (changesDecisions added 25 Jul 2026 with the AUDIT #3
+// decision-log split). ONE shared map so the local download and the cloud backup can never
+// cover different document sets. Deliberately OUTSIDE the backup: phaseStaging (transient,
+// rebuilt by re-completing a phase; restore clears it) and whitelistConfirm (isolated from
+// the auction lifecycle by design — whether to back it up is an open product decision).
 function _backupDocMap(){
   return {schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesDecisions:changesDecisionsRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,welcomeLog:welcomeLogRef,mailQueue:mailQueueRef,mailStats:mailStatsRef,slcMap:slcRef,adminAccess:adminAccessRef,passcodes:doc(db,'vacations','passcodes'),signInMisses:signInMissesRef,slots:doc(db,'vacations','slots')};
 }
@@ -8670,6 +8701,7 @@ window.exportBackup=async function(){
   a.download=fname;
   a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),5000);
   toast(fails?('💾 Backup downloaded — but '+fails+' document(s) failed to fetch, re-run it'):'💾 Backup downloaded — keep this file safe',fails?'warn':'ok');
+  return {fails}; // [build 215 audit] callers (the _backupThen fallback) gate transitions on this
 };
 
 // ── Cloud Backups [build 213] ────────────────────────────────────────────────
@@ -8681,17 +8713,22 @@ window.exportBackup=async function(){
 // same double-confirm + _doFullRestore path as a file restore. Local download above
 // is untouched. Rules: the `backups` block must be PUBLISHED before this ships.
 const CLOUD_BACKUP_KEEP=15; // most recent kept; older pruned after each new backup
-window.toggleCloudBackups=function(){ const w=document.getElementById('cloudBackupWrap'),c=document.getElementById('cbChevron'); if(!w)return; const show=w.style.display==='none'; w.style.display=show?'':'none'; if(c)c.textContent=show?'▾ Hide':'▸ Show'; if(show) renderCloudBackups(); };
+let _cbBusy=false; // [build 215 audit] module flag, not the DOM button — fails CLOSED if the button is ever renamed
 window.cloudBackupNow=async function(){
+  // Returns true only when the snapshot verifiably saved — _backupThen gates transitions on it.
+  if(_cbBusy){ toast('☁️ A cloud backup is already running — wait a moment and try again.','warn'); return false; }
+  _cbBusy=true;
   const btn=document.getElementById('cbNowBtn');
-  if(btn&&btn.disabled) return; // re-entrancy guard: one backup at a time
   if(btn){ btn.disabled=true; btn.textContent='☁️ Backing up…'; }
   try{
     const r=await _backupFetchAll();
     // Stricter than the local download on purpose: _doFullRestore REFUSES a partial backup
     // (H13 pre-flight), so storing one in the cloud would only be a restore that can't run.
-    if(r.fails){ toast('☁️ Cloud backup NOT saved — '+r.fails+' document(s) failed to fetch. Try again.','err'); return; }
-    const ts=Date.now(), id='bk'+ts;
+    if(r.fails){ toast('☁️ Cloud backup NOT saved — '+r.fails+' document(s) failed to fetch. Try again.','err'); return false; }
+    // ts = the snapshot's _exportedAt instant (fetch START), matching the file path's
+    // Date.parse(_exportedAt) — the manifest's ts and exportedAt can no longer disagree,
+    // so timer-resume math is identical whichever pathway restores this moment.
+    const ts=Date.parse(r.out._exportedAt)||Date.now(), id='bk'+ts;
     const names=Object.keys(r.out).filter(k=>k.charAt(0)!=='_');
     const batch=writeBatch(db);
     let bytes=0;
@@ -8707,12 +8744,19 @@ window.cloudBackupNow=async function(){
       phase:Number(((r.out.phases)||{}).currentPhase||1), bids:bc.weeks, bidUsers:bc.users
     });
     await batch.commit();
-    toast('☁️ Cloud backup saved — '+new Date(ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'}),'ok');
-    await _cbPrune();
-    await renderCloudBackups();
+    // [build 215 audit] Everything after the commit is housekeeping: it must never convert a
+    // durably-saved backup into a false "nothing was saved" report or a blocked transition.
+    try{
+      toast('☁️ Cloud backup saved — '+new Date(ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'}),'ok');
+      await _cbPrune(id);
+      await renderCloudBackups();
+    }catch(_){}
+    return true;
   }catch(e){
     toast('☁️ Cloud backup FAILED — nothing was saved ('+(e?.code||e?.message||e)+').','err');
+    return false;
   }finally{
+    _cbBusy=false;
     if(btn){ btn.disabled=false; btn.textContent='☁️ Back up to cloud now'; }
   }
 };
@@ -8720,12 +8764,17 @@ async function _cbList(){
   const snap=await getDocs(collection(db,'backups'));
   const arr=[]; snap.forEach(d=>arr.push({id:d.id,...d.data()}));
   arr.sort((a,b)=>(b.ts||0)-(a.ts||0));
-  return arr;
+  // [build 215 audit] Only well-formed ids are ever listed or acted on (defence-in-depth for
+  // the onclick handlers that embed the id; every id this code writes is bk<milliseconds>).
+  return arr.filter(b=>/^bk\d+$/.test(b.id));
 }
-async function _cbPrune(){
+async function _cbPrune(keepId){
   try{
     const arr=await _cbList();
-    for(const b of arr.slice(CLOUD_BACKUP_KEEP)){ await _cbDeleteRaw(b); }
+    // keepId = the backup that JUST saved. A skewed-back client clock could sort it below 15
+    // older manifests and this loop would eat its own fresh backup — while cloudBackupNow
+    // returns true and a transition proceeds believing the undo exists. Never prune keepId.
+    for(const b of arr.slice(CLOUD_BACKUP_KEEP)){ if(keepId&&b.id===keepId) continue; await _cbDeleteRaw(b); }
   }catch(_){ /* pruning is housekeeping — never let it break the backup that just saved */ }
 }
 async function _cbDeleteRaw(b){
@@ -8770,6 +8819,10 @@ window.cloudRestore=async function(id){
   }catch(e){ toast('Could not read that cloud backup ('+(e?.code||e?.message||e)+').','err'); return; }
   _confirmFullRestore(f); // same double-confirm (danger + typed RESTORE) + _doFullRestore as a file restore
 };
+// [build 215] Compact list: one line per backup, recent 3 shown, the rest behind "Show all".
+// Full detail (build, size, users, full e-mail) lives in each row's hover tooltip.
+let _cbShowAll=false;
+window._cbToggleShowAll=function(){ _cbShowAll=!_cbShowAll; renderCloudBackups(); };
 window.renderCloudBackups=async function(){
   const el=document.getElementById('cloudBackupList'); if(!el) return;
   el.innerHTML='<div style="color:var(--t3);font-size:12px">Loading…</div>';
@@ -8777,18 +8830,21 @@ window.renderCloudBackups=async function(){
   try{ arr=await _cbList(); }
   catch(e){ el.innerHTML='<div style="color:var(--red);font-size:12px">Could not load cloud backups ('+esc(String(e?.code||e?.message||e))+'). If the rules were just published, reload the page.</div>'; return; }
   if(!arr.length){ el.innerHTML='<div style="color:var(--t3);font-size:12px">No cloud backups yet — click the button above to save the first one.</div>'; return; }
-  el.innerHTML=arr.map(b=>{
+  const shown=_cbShowAll?arr:arr.slice(0,3);
+  el.innerHTML=shown.map(b=>{
     const when=new Date(b.ts||0).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
     const kb=Math.max(1,Math.round((b.bytes||0)/1024));
-    return `<div style="border:1px solid var(--b1);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:12.5px">
-      <div style="font-weight:700;color:var(--t1)">☁️ ${esc(when)}</div>
-      <div style="color:var(--t2);margin-top:3px">Phase ${esc(String(b.phase||'?'))} · ${Number(b.bids)||0} bid${Number(b.bids)!==1?'s':''} across ${Number(b.bidUsers)||0} user${Number(b.bidUsers)!==1?'s':''} · build ${esc(String(b.build||'?'))} · ${kb} KB · by ${esc(b.by||'?')}</div>
-      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-danger" style="padding:3px 10px;font-size:11px" onclick="cloudRestore('${esc(b.id)}')">🛟 Full Restore…</button>
-        <button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;margin-left:auto" onclick="cloudDeleteBackup('${esc(b.id)}','${esc(when)}')">🗑 Delete…</button>
-      </div>
+    const tip='build '+String(b.build||'?')+' · '+kb+' KB · '+(Number(b.bidUsers)||0)+' user'+(Number(b.bidUsers)!==1?'s':'')+' bidding · by '+String(b.by||'?');
+    return `<div title="${esc(tip)}" style="display:flex;align-items:center;gap:10px;border:1px solid var(--b1);border-radius:8px;padding:5px 10px;margin-bottom:6px;font-size:12px;flex-wrap:wrap">
+      <span style="font-weight:700;color:var(--t1);white-space:nowrap">☁️ ${esc(when)}</span>
+      <span style="color:var(--t2);white-space:nowrap">Phase ${esc(String(b.phase||'?'))} · ${Number(b.bids)||0} bid${Number(b.bids)!==1?'s':''} · ${esc(String(b.by||'?').split('@')[0])}</span>
+      <span style="margin-left:auto;display:flex;gap:6px">
+        <button class="btn btn-danger" style="padding:2px 8px;font-size:11px" onclick="cloudRestore('${esc(b.id)}')">🛟 Restore…</button>
+        <button class="btn btn-ghost" style="padding:2px 6px;font-size:11px" title="Delete this backup" onclick="cloudDeleteBackup('${esc(b.id)}','${esc(when)}')">🗑</button>
+      </span>
     </div>`;
-  }).join('');
+  }).join('')
+  +(arr.length>3?`<div style="margin-top:2px"><a style="font-size:11.5px;color:var(--blue);cursor:pointer;text-decoration:underline;text-underline-offset:3px" onclick="_cbToggleShowAll()">${_cbShowAll?'▴ Show recent 3 only':'▾ Show all '+arr.length}</a></div>`:'');
 };
 // ── Toast ──
 let toastT;
