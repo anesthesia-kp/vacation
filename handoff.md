@@ -1,519 +1,255 @@
 # Handoff — KP East Bay Anesthesia Vacation Auction
 
-**Written:** 25 July 2026, end of session · **By:** the outgoing Claude session
+**Written:** 29 July 2026, end of session · **By:** the outgoing Claude session
+**Next session:** the user intends to run you as Opus 5. You are expected to operate as an
+elite senior software engineer: precise, skeptical, evidence-driven, with high attention to
+detail. The code must be excellent; the explanations must be simple (the user is not a coder).
 
 ---
 
 ## How to read this file
 
-The handoff that *started* this session was well written and stated "Current Bug / Blocker: **None.**"
-Three audits later that session's work had 59 confirmed defects, one critical. The document was not
-careless — it faithfully recorded what that session *believed*. Prose carries beliefs, and beliefs decay.
+Prose carries beliefs, and beliefs decay. A previous handoff said "Current Bug/Blocker: None"
+and three audits later that session's work had 59 confirmed defects. So:
 
-So every claim below is tagged:
+- **[VERIFIED]** — proven by a test you can run, or observed directly against the live system.
+- **[BELIEVED]** — reasoning, not independently confirmed. Treat as a lead, not a fact.
 
-- **[VERIFIED]** — proven by a test you can run, or observed directly in the live database.
-- **[BELIEVED]** — my reasoning, not independently confirmed. Treat as a lead, not a fact.
-
-**Do not trust the [BELIEVED] items enough to act on them without checking.** That is the single
-lesson of this session.
+**If anything in this document conflicts with what the code actually does, the code is right
+and this document is wrong — say so, and correct the record.**
 
 **Start here, before reading further:**
 
 ```bash
-REPO_ROOT=/Users/aaronfrankel/Documents/GitHub node tests/run-all.mjs   # ~30s, now 444 assertions across 6 suites
+REPO_ROOT=/Users/aaronfrankel/Documents/GitHub node tests/run-all.mjs   # 6 suites, 541 assertions
 ```
 
-That tells you the true state of the code faster and more reliably than any paragraph in this file.
+That command is the ground truth about the code. Then confirm live builds (see §1).
 
 ---
 
-## SESSION UPDATE — 26 July 2026 (this supersedes any conflicting [BELIEVED] item below)
-
-### LATEST: Whitelist Tracker feature — RE-AUDITED CLEAN, all follow-up lows FIXED (builds 123/209)
-
-Current live builds after this feature: **123 staff / 209 admin** (mobile 16). Suite **474 assertions**,
-all pass. **Rules changed for this feature (whitelistConfirm) — already published + pushed.**
-
-**Re-audit of the feature — DONE. Result: 0 critical, 0 high, 0 medium; 1 confirmed low + 2 disputed
-low; 24 clean checks.** Reviewers executed the code against a mock DOM/Firestore and PROVED the
-isolation (no auction doc/engine touched), the own-key write confinement, and that no injection is
-reachable. **All three low items are now FIXED (builds 123/209), each covered by an executing test:**
-- **[LOW · confirmed] Admin reveal collapse — FIXED.** The "show who hasn't" list is now driven by a
-  persistent `_wlRevealShown` flag + `toggleWlReveal()`, so an incoming confirmation no longer collapses
-  it mid-read.
-- **[LOW · disputed] Initials injection — FIXED.** The confirm button now carries the user on a
-  `data-user` attribute (HTML-escaped via `_wlAttr`) and calls `confirmWhitelist(this.dataset.user)`, so
-  a quote/backslash in initials can never break the handler.
-- **[LOW · disputed] Freshly-added-user banner flicker — FIXED.** A `_whitelistPendingConfirm` guard
-  keeps the banner hidden through the retry window, so an interim rolled-back snapshot can't re-show it.
-
-Post-view fixes already shipped (121→122/207→208): staff banner no longer FLASHES on load (gated on a `_whitelistLoaded`
-flag until the confirmation snapshot arrives); the confirm button AUTO-RETRIES once on a failed
-first write (a freshly-added user's own-key rule can briefly lag emailToUser sync — root cause of
-the double-click not fully confirmed since the affected user was actually older; a `console.warn`
-now logs the real error code if it recurs). The ask e-mail links the staff site at the bottom
-(`AUCTION_SITE_URL`). **Reset Auction does NOT clear whitelist confirmations** — by design, since
-whitelisting persists in each user's Gmail across cycles; the feature stays isolated from the
-auction lifecycle. (If a per-cycle reset is ever wanted, add a dedicated button to the tracker
-panel rather than coupling it to Reset Auction.)
-
-
-A new, deliberately-isolated feature to fight the spam problem on the Gmail side while the durable
-e-mail fix is deferred. Suite now **466 assertions**, all pass. **Rules changed → publish rules in the
-console BEFORE pushing.**
-- **Staff site:** a one-time banner asks the signed-in user to add the auction sender
-  (`WHITELIST_SENDER`, currently `dr.vacation.goddess@gmail.com` — a constant at the top of BOTH
-  files; change it if EmailJS sends from a different address) to Google contacts + mark Not-Spam, and
-  a "✓ I've done this" button writes a per-user flag to a new `vacations/whitelistConfirm` doc.
-- **Admin site:** new "📌 Whitelist Tracker" panel under Users — per-user confirmed/not marking,
-  a confirmed/not summary with a "show who hasn't" reveal, an "e-mail all users the ask" blast, and a
-  "reminder to unconfirmed only" send (both via the existing mail path). Plus a pre-launch advisory
-  line in the dashboard next-step (non-blocking).
-- **Rules:** `whitelistConfirm` — a user may write ONLY their own key (writesOnlyOwnKeys); admin full;
-  excluded from the catch-all. Read is public (initials→timestamp only, no PII).
-- **Isolation:** touches no auction doc/engine/phase; the only shared-workflow contact is the
-  additive, non-blocking pre-launch next-step note. Tests assert the isolation.
-- **Known limitation:** the ask e-mail shares the EmailJS template's fixed subject line (the body
-  carries the full instructions). To give it its own subject, add a `{{subject}}` param to the
-  EmailJS template and it can be passed per-send. Also: it still sends through personal Gmail, so the
-  ask itself can land in spam — pair it with the out-of-band "check your spam" heads-up.
-- **NOT re-audited yet.** Consider an adversarial pass over the 120/206 diff before relying on it.
-
-
-
-Two full fix-and-re-audit cycles happened this session. **Read this block first; the sections
-numbered 1–5 below are the previous session's and are now partly stale — where they conflict with
-this block or with the tests, this block and the code win.**
-
-### Verified current state — [VERIFIED]
-
-- **Live builds are 123 (vacation staff) / 209 (vacation admin), mobile 16.** Bumped across this
-  session from 116/202 through the fix batches, the H6 redesign, and the Whitelist Tracker feature.
-  `versions.json` = `{"index":123,"mobile":16,"admin":209}`. Schedule app untouched (24/46).
-  **Confirm live** by fetching the pages with a cache-buster and reading `var BUILD` (they were pushed
-  incrementally; 123/209 is the last build — verify it's the one live before launch).
-- **Firestore rules are published and current.** This session added `phaseStaging` (admin-only; an
-  anonymous probe returns 403) and `whitelistConfirm` (own-key write for users). Rules were published
-  before each dependent push.
-- **Test suite: 474 assertions across 6 suites, all passing.** `tests/test-high-fixes.mjs` (the 16
-  highs + all re-audit follow-ups + the Whitelist Tracker) plus the original five. Run with the command
-  above — it is the ground truth about the code.
-
-### What was done — two batches, each adversarially re-audited
-
-1. **Batch 1 — all 16 HIGH findings from `INTEGRITY-AUDIT-2026-07-25.md` fixed** → builds 117/203,
-   rules updated, deployed and published.
-2. **Re-audit #1** (8-cluster adversarial workflow, every finding challenged by 2 independent
-   skeptics) **found 19 confirmed defects including 1 CRITICAL that batch 1 had introduced:** the H6
-   fix staged each completed-phase snapshot into `changesDecisions`, which `completePhase` then reset
-   with a non-merge write — destroying its own snapshot and hard-breaking phase completion. It passed
-   442 green assertions because those H6 tests were **regex-only structure checks, not executions.**
-3. **Batch 2 — all 19 re-audit findings fixed** → builds 118/204, deployed and published. Highlights:
-   - **H6 REDESIGN:** phase-snapshot staging moved to a **dedicated admin-only doc `phaseStaging`**
-     (ref `phaseStagingRef`) that nothing full-replaces. Admin merges published+staged into one view
-     (`_mergeCompletedPhasesView`). `_publishPhaseResults` / `_commitBeginPhase` / Reset / restore all
-     clear it with **non-merge** writes (a `{merge:true}` write of `{pendingPhaseSnapshots:{}}` clears
-     *nothing* — that was a second self-inflicted bug caught while writing the executing test).
-   - **I2:** both `computeApprovals` twins now disqualify a priority NUMBER reused across current-phase
-     weeks (a devtools forge of "1" on every week). NP exempt.
-   - **H9 v2 (rules):** the change log is now append-only by **containment** (`log.hasAll(old log)`),
-     not the weaker size-only check that a same-length replacement defeated.
-   - **H12 v2:** stale-denial warning surfaced **durably in the Complete Phase confirm dialog**, not a
-     transient toast.
-   - Mediums/lows: `_isScorableBid` guard (can't approve or freeze an unscorable bid; Edit-table shows
-     ⚠ for type-blind values); `usersMissingFte` split so the bulk tool never overwrites a real
-     part-timer's FTE; `_mqRelease` guarded to clear only our own mail claim; mailer-less admin page
-     still runs janitor cleanup; sign-out no longer double-fires anonymous sign-in; failed result
-     publishes are surfaced instead of toasting success.
-   - **Test hardening:** `test-high-fixes.mjs` rewritten to **execute** the real code against a mock
-     Firestore (models set/merge/batch semantics) — the H6 write sequence is now a real regression test.
-4. **Re-audit #2 (of batch 2) — COMPLETE. Result: 0 critical, 0 high, 1 medium, 4 low, 1 disputed
-   low** (severities converging: critical → medium across the two rounds). All findings are in the
-   I2 / mail-relay / test code batch 2 touched; **none are fixed yet.** They are the current small
-   work queue (see below). The auction still must not go live until these are resolved or accepted.
-
-### Batch-3 — all six batch-2 re-audit findings FIXED (builds 119/205)
-
-All resolved and locked in by tests (suite now **450 assertions**). **No rules change this round —
-push-only, no console republish needed.** As of this update builds 119/205 are on the Mac; confirm
-they're pushed/live. What changed:
-- **[MEDIUM I2 bypass] fixed:** the I2 precompute predicate in both twins changed `!==_cur` → `<_cur`
-  so collection matches the competition filter exactly — a forged future `bidPhase` can no longer
-  slip a reused number past I2. New executing test proves it (and that a single future-tagged bid is
-  unaffected).
-- **[LOW snapshot filter] fixed:** new `_i2DisqualifiedSet()` helper; completePhase's `apSnap` filter
-  now drops I2-disqualified approvals too, so a reused bid can't freeze as a permanent win.
-- **[DISPUTED LOW approve channel] fixed:** `adApprove` now refuses an I2-disqualified bid at the
-  source (backstopped by the snapshot filter).
-- **[LOW flushMailQueue] fixed:** reports "e-mail sending not available on this page" when the mailer
-  never loaded, instead of "nothing old enough."
-- **[LOW send-results claim] fixed:** the publish-failure path now releases `resultsSendClaim` before
-  returning, so the retry it instructs isn't blocked for 2 min.
-- **[LOW tautological test] fixed:** the NP-exemption assertion now really checks NP repeats still win.
-
-**Re-audit of 119/205 — DONE. Result: CLEAN — 0 confirmed, 0 disputed, 0 raised.** [VERIFIED by the
-adversarial workflow] 5 reviewers + 2-skeptic verify over the localized diff; reviewers EXECUTED both
-computeApprovals twins over 3k–20k fuzz states, confirmed I7 twin parity holds, proved
-`_i2DisqualifiedSet()` matches the inline engine on every input, confirmed no legitimate bid is dropped
-by the `<_cur` change, and verified the mail/send-results fixes and the test honesty. Across the three
-rounds the severity converged critical → medium → clean. **119/205 is the current clean build.**
-
-Remaining before launch is now operational + the untouched original-audit queue, not known regressions:
-- **Push 119/205** (on the Mac; push-only, no rules republish this round).
-- Original-audit queue still open: **28 medium, 14 low, 18 disputed** (2 rated critical by one skeptic),
-  **9 unverified critic.**
-- Pre-launch ops: finish the dry run (approve/deny → Complete → Send → Reset), a full **Reset Auction**
-  before launch, and a human check of the 21 users bulk-set to FTE 1.0.
-- **[OPEN] e-mail deliverability** — see the OPEN ITEMS section above (personal-Gmail root cause; user
-  deferred the domain+provider decision; free mitigations — physician "whitelist us" note + EmailJS
-  From-Name/Reply-To — are ready to apply).
-
-### Batch-2 re-audit findings — (all now FIXED above; kept for reference)
-
-- **[MEDIUM] I2 bypass via forged future `bidPhase`.** `computeApprovals`' I2 precompute scopes with
-  `getUserBidPhaseAdmin(u,wk)!==_cur` (collects only current-phase bids) but the competition filter
-  uses `<_cur` (drops only strictly-prior). A registered insider can devtools-write
-  `bidPhase[self][wk]=currentPhase+1` (rules validate the key, not the value), so a number-reused bid
-  tagged with a FUTURE phase escapes I2 collection yet still competes — re-opening the "put 1 on every
-  week" attack. Fix: change the I2 precompute predicate in BOTH twins (admin ~1864, staff ~936) from
-  `!==_cur` to `<_cur` so collection matches the competition filter exactly. (Note: the forger can't
-  actually be GRANTED the week — all grant paths gate on `===cur` — but the phantom winner displaces
-  an honest marginal bidder in the projection, causing a wrong denial. Real, medium.)
-- **[LOW] completePhase snapshot filter is shape-only.** The `apSnap` orphan filter (admin ~4084)
-  keeps an approval iff `_isScorableBid` (shape) — it does not drop an I2-disqualified (number-reused)
-  approval, so a stale approval of a reused bid can freeze as a permanent prior-phase win. Fix: also
-  drop I2-disqualified approvals from `apSnap` (or add a symmetric durable stale-APPROVAL warning to
-  the Complete Phase dialog, mirroring `_allStaleDenials`).
-- **[LOW] `flushMailQueue` mislabels a mailer-less page.** When `emailjs` never loaded (`_canSend`
-  false), Send Pending runs cleanup, sends nothing, and reports "nothing old enough — try again,"
-  so the admin never learns the mailer is unavailable on that machine. Fix: in `flushMailQueue`,
-  detect `typeof emailjs==='undefined'` and say so explicitly.
-- **[LOW] Send Results publish-failure skips the claim release.** The new failure `return` on a failed
-  publish is reached BEFORE the `resultsSendClaim` release, so the stale claim (<120s) blocks the very
-  retry the error toast instructs. Fix: release the claim before returning on the failure path (or use
-  a `finally`).
-- **[LOW] Tautological test assertion.** The NP-exemption parity check in `tests/test-high-fixes.mjs`
-  (~line 210) is `ok(!sap2.w1.losers || true, …)` — always true, protects nothing. Fix: make it a real
-  assertion that NP repeated across weeks is NOT disqualified.
-- **[DISPUTED LOW] I2 not enforced on the admin approve channel.** Same root as the two above — the
-  admin can approve a LOSE-projecting reused bid with no reuse flag in the Approvals table. Closing the
-  MEDIUM + the snapshot LOW largely covers this; a reuse warning in the Approvals row would finish it.
-
-### Updated work queue (from `INTEGRITY-AUDIT-2026-07-25.md`)
-
-- **CRITICAL: fixed (build 202, carried forward).** The 16 **HIGH: all fixed** (builds 117→118 / 203→204).
-- **Still open from the original audit: 28 medium, 14 low, 18 disputed** (2 rated critical by one
-  skeptic — `_backupThen` acting after an incomplete backup, and the duplicate-login-email access
-  leak), **and 9 unverified critic findings.** None of these have been touched.
-- Batch-2 re-audit may add a few more; check its result.
-
-### Deploy facts that changed
-
-- **New doc `vacations/phaseStaging`** (admin read + admin write). It holds unpublished completed-phase
-  snapshots between Complete Phase and Send/Skip Results. **Deliberately NOT in the 28-doc backup** —
-  it is transient and fully rebuildable by re-completing from the (backed-up) live approvals/denials/
-  schedule. Reset and restore explicitly clear it.
-- Rules changed this session (H9 containment + phaseStaging gates), so **the "publish rules in the
-  console BEFORE pushing" step applied and was done** — both are live.
-
-### OPEN ITEMS (user will address later)
-
-- **[OPEN · KP (@kp.org) WHITELISTING — user is handling the KP side separately]** The Gmail-side
-  deliverability work (Whitelist Tracker + the contact/not-spam ask) does NOT solve Kaiser
-  `@kp.org` addresses — Kaiser runs an enterprise mail filter that can quarantine outside mail even
-  when it is perfectly authenticated. **Action (user, later):** ask **Kaiser IT to allowlist the
-  auction's sending address/domain** (currently `dr.vacation.goddess@gmail.com`; the address the
-  users' KP inboxes must accept) so results/alerts reach `@kp.org` inboxes. This is an internal
-  Kaiser request, independent of everything in the app. Until it's done, assume KP addresses may not
-  receive auction e-mail reliably — lean on each physician's personal Gmail as the primary channel.
-- **[OPEN · re-audit #2 verification]** Confirm the batch-2 re-audit is clean before launch.
-- **[OPEN · EMAIL DELIVERABILITY — auction/welcome e-mails landing in spam]** Root cause: EmailJS
-  (`service_wpprivw`) sends through a **personal `@gmail.com` account**, which **cannot be
-  authenticated** — you don't own `gmail.com`, so SPF/DKIM/DMARC can't be published for it, and a
-  consumer address blasting results to 37 people (incl. corporate `@kp.org`) is exactly what filters
-  distrust. This is an e-mail-infrastructure issue, **not an app bug** — no template change fixes it.
-  Recommendations, in order of impact:
-  1. **Real fix:** register a domain (~$12/yr) and send via a transactional provider (Amazon SES,
-     Resend, Brevo, or Postmark — free tiers generally cover ~2000/mo). Verify the domain with them
-     (paste the SPF/DKIM/DMARC DNS records they give you), then point EmailJS at it via custom SMTP,
-     **or** switch the two send call-sites in the code to the provider's API (a modest code change).
-  2. **Kaiser (`@kp.org`) addresses:** even fully authenticated, Kaiser's enterprise filter may
-     quarantine outside mail — ask **Kaiser IT to allowlist the sending domain** (internal request).
-  3. **Free immediate wins:** have all 37 physicians find one of these e-mails in spam, hit **"Not
-     spam,"** and **add the sender to contacts** — for a fixed 37-person list this trains Gmail fast.
-     Plus app-side template tweaks I can make on request: clear **From name**, a real **Reply-To**, a
-     clean subject, and an "add us to your contacts" line in the welcome e-mail.
-- **[OPEN · pre-launch, carried forward]** DB still holds a used dry-run state → a full **Reset
-  Auction** is required before launch. 21 users were bulk-set to FTE 1.0 on assumption — a human
-  should confirm that list. Dry run reached step 4 of 6 (approve/deny → Complete → Send → Reset remain).
-
----
-
-## 0. Operating instructions — read before doing anything
-
-These are **the user's standing rules**, carried forward verbatim from the previous session, followed
-by practices this session learned the hard way. Both halves are binding.
+## 0. STANDING RULES — binding, read before doing anything
 
 ### The user's rules (verbatim, unchanged)
 
-1. **Never rewrite entire files.** Output only the exact lines or functions that change, and always
-   locate them by reading the current file first — never from memory.
+1. **Never rewrite entire files.** Output only the exact lines or functions that change, and
+   always locate them by reading the current file first — never from memory.
 2. **Before every code change:** read the target code, make the edit, syntax-check every inline
    `<script>` with `node --check`, and run the test suites when logic is touched.
-3. **After each change:** bump `var BUILD` in the HTML **and** the matching key in `versions.json`,
-   deliver the file, commit it to the repo, and tell the user to push.
-4. **If you are unsure of an exact string, file path, or requirement, STOP and ask.** Do not guess.
-5. **Keep explanations under three sentences. Focus on the code.**
-6. **Do NOT "fix" anything on the deferred / non-issues list without asking first.**
+3. **After each change:** bump `var BUILD` in the HTML **and** the matching key in
+   `versions.json`, deliver the file, commit it to the repo, and give a concise commit summary
+   ready to paste into GitHub Desktop.
+4. **If you are unsure of an exact string, file path, or requirement, STOP and ask.**
+5. **Keep explanations short and plain** (the user is not a coder) — but the code itself must
+   be high quality, no shortcuts hidden behind simple language.
+6. **Do NOT "fix" anything on the deferred / known-accepted list (§6) without asking first.**
+7. **Do not agree with a bad idea.** Push back and explain why. The user asked for this
+   explicitly; it has repeatedly caught real problems.
+8. **Rules changes must be PUBLISHED in the Firebase console BEFORE pushing dependent client
+   code.** (The console refuses to publish when content is identical to what's live — that
+   means it's already published, not that something is broken.)
 
-### The user's stated preferences
+### Practices this project learned the hard way (equally binding)
 
-- They are **not a coder**. Keep explanations simple and plain — but the code itself must be high
-  quality, with no shortcuts hidden behind simple language.
-- **Do not agree with every idea.** If a request is a bad idea, or the answer is not what they want to
-  hear, say so directly and explain why. They asked for this explicitly and it has already prevented
-  at least one inverted-logic bug this session.
-- **Every deployment gets its own concise commit summary**, written ready to paste into GitHub Desktop.
-- **Never write an unprompted summary of the conversation.** Instead, **warn them when context is
-  growing large enough that compaction is near**, so they know quality may be about to degrade. A
-  watcher script for this is included at `tests/../ctx-watch` guidance below; if unavailable, report
-  the context figure whenever it is asked for and flag it proactively past ~750k tokens.
-
-### Practices this session learned the hard way
-
-- **Verify every assumption against the code before acting on it.** Two "bugs" the fuzzer reported were
-  the auditor's own wrong assumptions, not defects.
-- **Never let a test stub the thing it is testing.** The one critical bug shipped this session passed
-  four assertions because its test stubbed `computeApprovals` to match a belief about it.
-- **Expect fixes to introduce defects — today's rate was about 1:1.** Re-audit after each batch rather
-  than trusting a clean run of tests written by the same author who wrote the fix.
-- **Tag claims as verified or believed** when reporting state, and never let a belief be phrased as a
-  fact. That failure is what made the previous handoff dangerous.
-- **Prefer targeted `grep` and line-ranged reads over whole-file reads**, and push bulk reading to
-  subagents whose context stays out of the main conversation. Whole-file reads of the 520KB admin file
-  were the largest single driver of context growth this session.
-
----
-
-## 1. Current State & Progress
-
-### Verified complete
-
-**Test infrastructure — 369 assertions across 5 suites.** [VERIFIED — run the command above]
-The suites extract functions **verbatim** from the shipping HTML and execute them, so they cannot
-drift from the code. `tests/test-engine-fuzz.mjs` generates 4,000 random auctions and checks the
-allocation invariants on 12,000 week-allocations; it also proves the staff and admin engines agree
-on winners across 400 auctions, and that allocation is deterministic and order-independent.
-
-**Backups genuinely restore an auction.** [VERIFIED — `tests/test-backup-restore.mjs`]
-A mid-auction fixture was exported, re-parsed and restored through the real code paths, then the real
-`computeApprovals` was re-run over the restored data: **every week's winners, draws, reviews, losers
-and FTE totals came back identical.** The backup covers all 28 documents (none missing, none stale),
-restore is one atomic 25-op batch, timer elapsed-time is preserved, an expired timer restores expired,
-and `FETCH-FAILED` documents are skipped rather than wiping live data. **This is the safety net: any
-remaining bug costs a restore, not an auction.**
-
-**Firestore rules changes are live.** [VERIFIED — anonymous REST probes against the live project]
-`changesDecisions`, `approvals`, `denials`, `mailQueue`, `emails`, `loginEmails`, `adminAccess`,
-`emailToUser`, `signInMisses` and `dailysched/adminAccess` all return **403** to an anonymous reader.
-`userList`, `phases`, `changes`, `slots`, `timer`, `schedule`, `usernames` still return **200**, so the
-anonymous login bootstrap works. Confirmed by calibration: a denied-and-missing doc returns 403 while
-an allowed-and-missing doc returns 404.
-
-**Dry run reached step 4 of 6.** [VERIFIED — live database reads]
-Reset → Begin Phase 1 verified (exactly the 6 high-demand weeks unlocked, 46 locked, timer armed,
-FTE editing auto-locked); non-admin bidding verified from a real Google account with per-user
-confinement holding; **outbid e-mail confirmed delivered** under the new registered-user-only
-mailQueue gate; both server-side close gates confirmed (`biddingClosed: true` + timer expired + 52
-weeks locked). Not yet done: approve/deny, Complete Phase, Send Results, final Reset.
-
-**All 37 users have a saved FTE.** [VERIFIED — live `vacations/fteMap` read]
-Distribution: 23 at 1.0, 7 at 0.8, 2 at 0.9, 2 at 0.6, one each at 0.7, 0.5, 0.4. Zero missing, zero
-out of range. **Worth a human check:** the 23 at 1.0 include 21 that were bulk-set today on the
-assumption they are full-time. If any is actually part-time, the engine will now score them as full
-and nothing will flag it.
-
-### Build state
-
-| | Build | Committed to Mac | Pushed | Rules published |
-|---|---|---|---|---|
-| vacation staff | 116 | yes | **unknown** | — |
-| vacation admin | 202 | yes | **unknown** | — |
-| schedule staff | 24 | yes | **unknown** | — |
-| schedule admin | 46 | yes | **unknown** | — |
-| firestore.rules | — | yes | — | **yes, verified** |
-
-**[BELIEVED]** Live was verified at 115/198 earlier in the session. Builds 116/200/201 were committed
-to the Mac but their push was never confirmed — the device bridge and browser tools disconnected before
-verification. **First action next session: confirm the live builds.** The published rules are current
-regardless; that was verified after the last publish.
-
-### NOT complete — the big one
-
-**The full integrity audit found 59 confirmed defects. The critical is fixed; 58 remain.**
-
-See `INTEGRITY-AUDIT-2026-07-25.md` (delivered to the user in chat; ask for it if it isn't in the
-repo). 195 agents; 15 specialists each took one subsystem, every finding was challenged by **two
-independent skeptics** and only listed as confirmed where both agreed. Also 18 **disputed** (the two
-skeptics split — these need a human decision) and 9 unverified **critic** findings.
-
-Severity spread as reported: **1 critical, 17 high, 28 medium, 13 low.**
-
-**The critical is FIXED (build 202) — 17 high remain.** [VERIFIED — `tests/test-delta-fixes.mjs`]
-
-**The critical (now fixed):** `_commitBeginPhase` cleared `approvals`/`denials` only for phases 2-4,
-not Phase 1. Any decision written before launch — the simulator's auto-approve/deny, or a manual one —
-survived into the real auction. A stale denial is invisible to the bidder: the staff site is forbidden
-from reading denials, so their own board showed WIN while the admin engine dropped them, no outbid
-alert fired, and `completePhase` froze the wrong winners.
-
-Fixed in build 202: Phase 1 now clears both documents in one atomic batch with the phase stamp, and a
-failed commit aborts Begin Phase rather than half-starting it. Locked in by tests.
-
-Also in build 202, at the admin's request: **`Remove ALL Bids & Locks` has been deleted entirely**
-(button and function). It was unused and was the likeliest route to the bug above, since it wiped bids
-while deliberately preserving approvals/denials. **Reset Auction is now the only bulk-clear**, and it
-clears decisions too. [VERIFIED — no remaining references; asserted by test]
+- **Work in small batches by subsystem, and adversarially re-audit after each batch.** The
+  measured fix→regression rate here is ~1:1. Every batch that skipped scrutiny shipped a
+  defect that passed green tests — including one found in the outgoing session's own new
+  feature (see §3).
+- **Never let a test stub or pattern-match the thing it verifies — make it EXECUTE the real
+  code.** The suites extract functions VERBATIM from the shipping HTML and run them against
+  mock DOM/Firestore. Keep that standard. When you fix a bug, prove the new test FAILS against
+  the old code (an "honesty check") before trusting it.
+- **Verify every assumption against the code before acting on it.** Multiple "bugs" here have
+  been the auditor's wrong assumption. The outgoing session also shipped a wrong fix (build
+  124) by assuming what getCurrentUser() returned instead of reading it — the real cause was
+  elsewhere. Read first.
+- **Two extraction gotchas in the test harness:** the verbatim extractor brace-matches from the
+  first `{` after the function name — so no default-param braces (`opts={}`) in extracted
+  functions (use `opts=opts||{}` in the body) and no stray `{` in comments inside them.
+- Prefer targeted grep + line-ranged reads over whole-file reads (admin file is ~560KB).
 
 ---
 
-## 2. Decisions Made & Why
+## 1. VERIFIED CURRENT STATE (29 Jul 2026)
 
-**FTE has no defaults; the missing state is prevented, not valued.** `FTE_MAP` was deleted from both
-sites. `getUserFTE` still ends in `1.0`, but that is an **arithmetic guard**, not a sentinel — it feeds
-~49 capacity sums, and returning 0 would make an unset user consume nothing and therefore *win every
-week*. The state is made unreachable instead: `usersMissingFte()` hard-blocks Begin Phase, `addUser`
-refuses a blank FTE, and `FTE_MIN = 0.4` is enforced on entry **and** re-validated on read.
-*Do not "simplify" this to a sentinel return.*
-
-**Cap breaches are advisory, never blocking.** They were briefly fed into `approvalReadiness().ready`,
-which `completePhase()` treats as a hard gate — and the only remedy offered (Close Bidding) cannot
-change anyone's win count, so it deadlocked phase completion. `approvalReadiness()` now returns
-`{ready, problems, warnings}`; cap breaches go in `warnings` and never affect `ready`.
-
-**`capBreaches` counts ONLY from the winner set.** `computeApprovals` seeds each week's winners with
-`getPriorPhaseWinners(wk)`, so `won[u]` already spans prior + current phases with each week counted
-once. Adding `_adminPriorApprovedCount` on top double-counted. *This bug shipped because its test
-stubbed `computeApprovals` to match an assumption about it.* It is now tested against the real engine.
-
-**`biddingClosed` lives on the `timer` document, not `locks`.** The rules already fetch the timer doc
-and identical lookups are cached, so gating on it costs **zero** extra document reads — and a bid write
-already spends ~8 of Firestore's hard limit of 10. On `locks` it would have hit exactly 10.
-
-**Decisions were split out of the world-readable change log.** Approve/deny/revoke entries go to
-`vacations/changesDecisions` (admin read + admin write). Both sites already discarded decision entries
-when rendering, so nothing user-facing lost information — only the leak.
-
-**Schedule claims are won before they are assigned.** `decideReq` runs the open-shift transaction
-first; winning the shift is what authorises the write. On failure it releases the claim and returns the
-request to pending.
-
-**Per-week locks are deliberately NOT enforced in Firestore rules.** Week keys live inside nested maps
-that rules cannot diff. `biddingClosed` is the server-side gate instead.
+- **Live builds: staff 125 / admin 217.** `versions.json` = `{"index":125,"mobile":16,"admin":217}`.
+  [VERIFIED — cache-busted fetch of live pages + versions.json; user pushed 217 at session end —
+  re-confirm live builds as your first act.] Schedule app untouched (24/46). **mobile.html is a
+  retired redirect stub with no BUILD variable — ignore it** (the "mobile":16 key is vestigial).
+- **Firestore rules are published and current**, including the new admin-only `backups`
+  collection (manifest + `docs` subcollection, both `isAdmin()`-gated). [VERIFIED — anonymous
+  probes: approvals/denials/changesDecisions/phaseStaging/mailQueue/emails/loginEmails/
+  adminAccess/emailToUser/signInMisses/dailysched-adminAccess → 403; public bootstrap docs +
+  whitelistConfirm → 200; backups → 403 to outsiders; AND an admin cloud-backup write succeeded
+  live, which is only possible with the new block published.]
+- **Test suite: 541 assertions across 6 suites, all passing.** [VERIFIED — run it.]
+- **Pre-launch ops DONE (user-confirmed):** the dry run, the full Reset Auction, and the human
+  check of the 21 bulk-set FTE-1.0 users.
+- Firebase project `vacation-25e8e`. Default admins in rules: dr.vacation.goddess@gmail.com,
+  aaronjfrankel@gmail.com. EmailJS `service_wpprivw` / `template_rss3fn3`, quota 2000/mo.
+- Paths: `/Users/aaronfrankel/Documents/GitHub/` → `vacation-kp.github.io/` (index.html,
+  admin/index.html, versions.json, firestore.rules), `schedule/`, `tests/`. Live at
+  https://anesthesia-kp.github.io/vacation/ (staff) and …/vacation/admin/.
 
 ---
 
-## 3. Active Constraints
+## 2. WHAT THIS SESSION DID (builds: staff 123→125, admin 209→217)
 
-### Must not be altered without explicit instruction
+Each change was delivered, committed, tested; the cloud-backup feature was adversarially
+audited (3 independent skeptics) and its findings fixed. All [VERIFIED] by the current suite.
 
-- **`getUserFTE`'s `1.0` fallback** — see above. Removing or changing it to 0 inverts the auction.
-- **Per-week lock enforcement in `firestore.rules`** — not possible; do not attempt.
-- **The deferred list:** client-clock timer *display* skew (the security path is server-enforced);
-  `welcomeLog`/`mailStats` insider griefing; rare multi-device double-welcome; the OAuth consent
-  domain showing `vacation-25e8e.firebaseapp.com`; `mailQueue`/`welcomeLog`/`adminAccess` excluded
-  from restore. All were reasoned through and deliberately accepted.
-- **Both `computeApprovals` twins** intentionally differ in signature — admin takes a boolean
-  `ignoreAdmin`, staff takes a schedule snapshot. Port **logic**, never whole functions. Both carry a
-  runtime guard that throws on a cross-port.
-- **The staff site must never read `approvalsData`/`deniedData` for the current phase.** This is the
-  mid-phase privacy invariant.
+1. **Staff 124→125 — whitelist-banner flash truly fixed.** Build 124's from-cache-snapshot
+   hardening was correct but NOT the cause (a lesson in verifying assumptions). Root cause:
+   the identity dropdown (`personSelect`) defaults to the FIRST roster option before sign-in,
+   so the banner rendered for the wrong, unconfirmed person behind the login screen and
+   flashed when the board appeared. Fix: banner keys off `selectedSignInName` (authoritative,
+   "" until sign-in) and `completeSignIn()` re-renders it synchronously BEFORE revealing the
+   board (the only place the board is shown). Executing tests incl. the exact repro.
+2. **Admin 210 — whitelist ask e-mail wording:** "During the Department of Anesthesia vacation
+   auction, you will receive time sensitive e-mail notifications from …".
+3. **Admin 211 — whitelist send buttons:** reminder-to-unconfirmed is leftmost/primary; e-mail-
+   everyone is small, far right, and its confirm dialog warns it includes already-confirmed
+   users; the dashboard advisory button now e-mails the unconfirmed only. (The dashboard
+   advisory itself auto-disappears once everyone confirms or Phase 1 starts.)
+4. **Admin 212 — whitelist e-mails go to Google login addresses ONLY.** KP (@kp.org) addresses
+   are excluded via `adminSendEmail`'s existing skip-set (shared mail code untouched); users
+   with no Google login on file are skipped and counted in the dialog.
+5. **Admin 213 — CLOUD BACKUPS (new feature) + rules.** One click saves the same 28-doc
+   snapshot into admin-only `backups/bk<ts>` (manifest: ts/by/build/exportedAt/names/bytes/
+   phase/bids/bidUsers) + `backups/bk<ts>/docs/<name>` pieces (`{j: JSON-string}`), one atomic
+   29-op batch. Shared fetch path `_backupFetchAll()` + shared `_backupDocMap()` so local and
+   cloud coverage can never diverge. List/restore/delete in the admin UI; keep-newest-15 with
+   auto-prune; restore reuses the SAME double-confirm (typed RESTORE) + `_doFullRestore` path
+   as file restore. Partial snapshots are refused outright (a partial cloud backup could never
+   restore — H13 refuses partials).
+6. **Admin 215 — adversarial audit of the backup feature + fixes** (3 skeptic agents; every
+   claim checked against source). Confirmed-and-fixed:
+   - **CRITICAL — prompt-clobber race:** `_backupThen`'s OK path read the global `_bkProceed`
+     AFTER the multi-second backup await; a second prompt opened meanwhile swapped it, running
+     the WRONG transition unconfirmed. Now every path binds its own transition via closure.
+   - **HIGH — missing-document wipe (pre-existing, both restore paths):** a backup lacking a
+     doc key (e.g. pre-changesDecisions files) restored that doc as `{}` and reported success.
+     `_doFullRestore`'s pre-flight now aborts on absent keys exactly like unreadable ones
+     (stored `null` = doc genuinely absent at backup time — still fine).
+   - Busy-guard is a module flag failing CLOSED (was a DOM-button check failing open) with an
+     honest "already running" message; prune can never delete the just-saved backup (skewed
+     clock case); post-commit housekeeping errors can't fake "nothing was saved"; manifest
+     `ts` now equals the snapshot's `_exportedAt` instant so cloud/file timer-resume math is
+     identical; list renders only well-formed `bk<digits>` ids (defence-in-depth for onclick).
+   - Also merged the Backups & Restore card, fixed a doubled Show/Hide chevron (the
+     auto-collapsible injector needed the merged card on its exclusion list), compact 3-of-15
+     list with "Show all" toggle.
+7. **Admin 216-217 — backup UX per the user:** the backup-before-step prompt recommends ONLY
+   the cloud backup (local button removed from that workflow; "⏭ Skip backup (testing)"
+   retained; success-gating unchanged — a failed/partial cloud backup still blocks the
+   transition). "Backup All Data" renamed **"💾 Local Hard Drive Backup"** and moved into the
+   Backups & Restore card, right of the cloud button. Cloud list has its own "🛟 Restore from
+   a cloud backup" header above the local-file restore section. Each backup row: Restore
+   leftmost, 🗑 right.
+8. **Admin 214 — Add User helper text corrected** ("Initials and FTE are required. Users are
+   shared with the Daily Schedule, but FTE is not." — FTE is strictly required 0.4-1.0, no
+   default; the old text described pre-audit behavior).
 
-### Paths and facts
+### Decisions the user made this session (do not relitigate; do not "fix")
 
-```
-/Users/aaronfrankel/Documents/GitHub/vacation-kp.github.io/   index.html, admin/index.html,
-                                                              versions.json, firestore.rules
-/Users/aaronfrankel/Documents/GitHub/schedule/                index.html, admin/index.html, versions.json
-/Users/aaronfrankel/Documents/GitHub/anesthesia-kp.github.io/ landing page (untouched this session)
-```
-
-- Firebase project **`vacation-25e8e`**, shared by both apps. Collections `vacations/*` and `dailysched/*`.
-- Default admins hardcoded in the rules: `dr.vacation.goddess@gmail.com`, `aaronjfrankel@gmail.com`.
-- **Backup is 28 documents** (was 27; `changesDecisions` added today).
-- EmailJS `service_wpprivw`, template `template_rss3fn3`, `{{changes}}` param. Welcome e-mails are
-  plain text. Quota 2000/month.
-- **Deploy flow:** edit → bump `var BUILD` **and** the matching key in `versions.json` → syntax-check
-  every inline `<script>` with `node --check` → run `tests/run-all.mjs` → deliver → user pushes via
-  GitHub Desktop. **Rules changes must be published in the Firebase console *before* pushing dependent
-  client code.**
-- **Never rewrite whole files.** Locate code by reading the current file, never from memory.
-- The schedule app is a **non-functional demo** carrying a red banner and is not going live soon —
-  but it writes to **shared** documents (`vacations/userList`, `usernames`, `loginEmails`), so damage
-  there is real.
-
-### Working agreement that actually caught things
-
-- **Verify every assumption against the code before acting on it.** Two "bugs" found by the fuzzer were
-  my own wrong assumptions (NP means "No Priority", not non-participation; a prior-phase winner may
-  legitimately sit above a week's capacity after an admin override). Both were corrected in the tests,
-  not the engine.
-- **Never let a test stub the thing it is testing.** That is precisely how the critical `capBreaches`
-  bug passed four assertions while being fundamentally wrong.
-- **Expect fixes to introduce defects.** Today's rate was roughly 1:1 — the audit of a 12-fix batch
-  found 12 new regressions. **Re-audit after each batch of fixes.**
-
----
-
-## 4. Immediate Next Steps
-
-*Context for the next session, in priority order. Nothing here should be started without the user
-saying so.*
-
-**The live build state is unconfirmed.** Builds 116/201 were committed to the Mac but never verified
-live, because the device bridge and browser tools disconnected. Confirming what is actually deployed is
-the natural first move, and it is cheap — fetching each page and reading `var BUILD`, plus
-`versions.json`.
-
-**The auction must not go live, and the dry run should not be completed, until at least the critical
-and the 17 high findings are fixed.** Several would produce a wrong allocation silently, which is the
-failure mode that actually harms people. The audit report is the work queue; each entry carries a file,
-a line, quoted evidence and a reproduction.
-
-**The fixes are best done in small batches by subsystem, each followed by a targeted re-audit** rather
-than one large sweep. The evidence for this is direct: today, a 12-fix batch delivered with confidence
-introduced 12 new regressions including a critical one.
-
-**Several high findings live in `firestore.rules`** — bid *content* is never validated (a priority of 0
-or a negative number wins every week), `vacations/changes` has no author confinement so any bidder can
-forge or erase the audit trail, and `mailQueue` is fully writable by any registered user. These group
-naturally into one rules edit and one publish.
-
-**Eighteen disputed findings need a human decision**, not more analysis — the two skeptics genuinely
-split on each. They include two rated critical by one side: `_backupThen` running an irreversible
-action after an incomplete backup, and a duplicated Google login e-mail granting one physician write
-access to another's bids.
-
-**Nine critic findings were never verified.** They were produced by the completeness pass at the end
-and should go through the same two-skeptic treatment before being acted on.
-
-**The database currently holds a used test state** — Phase 1 with bidding closed and eight bidders. A
-full **Reset Auction** (not the lighter "Remove All Bids" cleanup) is required before launch, and is
-also the last step of the dry run.
-
-**Twenty-one users were bulk-set to FTE 1.0 today** on the assumption they are full-time. A human
-confirming that list would close the last unverified data question.
+- **whitelistConfirm is never reset, never backed up, never restored.** It is deliberately
+  outside the auction lifecycle; confirmations persist across cycles. Recorded in the
+  `_backupDocMap` comment.
+- **mobile.html is ignored** (retired redirect).
+- **No second Firebase project for backups.** In-project cloud backups + occasional local
+  hard-drive files are the accepted design.
+- Whitelist e-mails never go to KP addresses (that's the separate KP IT allowlist workstream).
 
 ---
 
-## 5. Wait for instructions
+## 3. THE TO-DO LIST (in the user's priority order — wait for their go-ahead)
 
-**Do not begin any of the work described above.**
+1. **Live-fire check of backup/restore, cloud & local.** Take a cloud backup → 🛟 Restore it
+   (identical state ⇒ zero risk) → confirm the loop. Then a 💾 Local Hard Drive Backup →
+   load the file in the restore console → confirm it summarizes correctly. Nobody has yet
+   executed a real cloud RESTORE against the live database. [BELIEVED safe; tests prove the
+   logic, not the live round trip.]
+2. **The two disputed criticals from INTEGRITY-AUDIT-2026-07-25.md** (the two skeptics split;
+   these need the USER's decision, prepared by you with evidence + a plain recommendation):
+   - **(a) `_backupThen` acting on an incomplete backup — largely CLOSED by this session:**
+     both remaining paths are success-gated (cloud verifies the save; the local path was
+     removed from that workflow). Remaining decision: formal sign-off, and whether
+     "⏭ Skip backup (testing)" survives to launch.
+   - **(b) Duplicate-login-e-mail access leak:** a duplicated Google login e-mail can grant
+     one physician write access to another's bids (emailToUser maps e-mail→initials; a
+     duplicate entry collides). UNTOUCHED. Needs evidence, recommendation, user ruling, fix.
+3. **The original audit queue, in SMALL RE-AUDITED BATCHES:** 16 more disputed (user decides
+   each), 28 medium, 14 low — see INTEGRITY-AUDIT-2026-07-25.md (each entry has file/line/
+   evidence/repro). PLUS new small items from this session's audit: single-user restore is
+   not reachable from a cloud backup (full-restore only; local files still support per-user
+   restore — a deliberate scope cut, user may want it later); `vacations/passcodes` appears
+   in neither isSensitiveDoc nor isAdminOnlyDoc, so it is world-readable and registered-user-
+   writable via the catch-all (pre-existing observation — needs triage, it may be empty/unused).
+4. **The 9 unverified critic findings** from the audit: run each through two-skeptic
+   verification BEFORE acting. Expensive — use subagents, batch sensibly.
+5. **E-mail deliverability (deferred, durable fix):** EmailJS sends via personal Gmail which
+   can't be authenticated. Chosen path: ~$12/yr domain + transactional provider (SES/Resend/
+   Brevo/Postmark) via EmailJS custom SMTP or swapped call-sites. The Whitelist Tracker is the
+   interim Gmail-side mitigation. Separate user-side item: KP IT allowlist request for the
+   sending address so @kp.org inboxes accept auction mail.
 
-Read this file, run `node tests/run-all.mjs`, confirm the live build state if asked, and then **wait for
-the user to tell you what to work on.** Do not start fixing audit findings, do not modify any file, and
-do not push or publish anything until explicitly instructed.
+### Audits still needed (explicit)
 
-If anything in this document conflicts with what the code actually does, **the code is right and this
-file is wrong** — say so, and correct the record.
+- **None outstanding for the cloud-backup feature** — it received its adversarial pass and the
+  fixes landed with executing tests. But builds 216-217 (UI-only changes on top) had tests and
+  no re-audit; treat any NEXT touch of backup code as requiring a fresh adversarial pass.
+- **Every future fix batch needs its own re-audit** (the ~1:1 regression rate is real).
+- The **audit queue items themselves (§3.3, §3.4)** are the remaining known audit work.
+
+---
+
+## 4. ARCHITECTURE IN 10 LINES (read the code for the rest)
+
+Two static sites (GitHub Pages) sharing one Firestore: staff `index.html` (bidding board,
+sign-in via Google + emailToUser mapping, its own computeApprovals twin for projections) and
+`admin/index.html` (roster, phases, approvals engine, timer rules, mail relay, backups,
+whitelist tracker). All logic is inline `<script>` in each HTML file. The two
+`computeApprovals` twins deliberately differ in SIGNATURE (admin takes `ignoreAdmin`, staff
+takes a schedule snapshot) — port LOGIC only, never whole functions; both carry a runtime
+guard that throws on a cross-port. The mail queue (`vacations/mailQueue`) is relayed by ANY
+open signed-in page (staff or admin) with randomized delay + claim protocol — not admin-only.
+Rules enforce: per-user bid confinement (writesOnlyOwnKeys via emailToUser), server-clock
+timer expiry, explicit biddingClosed gate, append-only change log by containment (hasAll),
+admin-only decision docs (approvals/denials/changesDecisions/phaseStaging), admin-only backups.
+
+---
+
+## 5. DEPLOY FLOW (every change)
+
+read target code → minimal edit → `node --check` every inline `<script>` → run
+`tests/run-all.mjs` (expect 541+, all green; add executing tests for anything you fix, with an
+honesty check) → bump `var BUILD` + `versions.json` key → deliver file + commit summary →
+if rules changed: user publishes in Firebase console BEFORE pushing → user pushes via GitHub
+Desktop → confirm live via cache-busted fetch of the page reading `var BUILD`.
+
+---
+
+## 6. DEFERRED / KNOWN-ACCEPTED — do not "fix" without asking
+
+- `getUserFTE`'s `1.0` fallback is an arithmetic guard, NOT a default (FTE_MAP deleted;
+  missing-FTE state is made unreachable: usersMissingFte blocks Begin Phase, addUser refuses
+  blank FTE, FTE_MIN 0.4 enforced on entry and read). Do not "simplify."
+- Per-week lock enforcement in rules is impossible (nested map keys); biddingClosed is the gate.
+- Client-clock timer DISPLAY skew; welcomeLog/mailStats insider griefing; rare multi-device
+  double-welcome; OAuth consent showing vacation-25e8e.firebaseapp.com; mailQueue/welcomeLog/
+  adminAccess excluded from restore (deliberate — stale queue re-sends mail, stale welcomeLog
+  re-welcomes, stale adminAccess can lock the restoring admin out).
+- mailQueue residual: a registered user can forge/delete ONE entry per write (full validation
+  needs a server) — documented insider risk, size-≤1-key rule limits blast radius.
+- Change-log FORGE half (appending an entry naming a colleague) can't be closed in rules;
+  Fair Play Monitor is the advisory backstop.
+- The staff site must NEVER read approvals/denials for the current phase (mid-phase privacy
+  invariant). whitelistConfirm: see §2 decisions.
+
+---
+
+## 7. WAIT FOR INSTRUCTIONS
+
+Read this file, run the suite, confirm the live builds, report your understanding briefly and
+plainly — then STOP. Do not start any queue item, do not modify files, do not push or publish
+until the user directs you. They drive the order of work.
