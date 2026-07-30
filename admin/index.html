@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 219;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 220;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -963,12 +963,14 @@ thead th{color:var(--t2)}
         <div class="page-sub">Fill all users with random bids for testing purposes. Users who already placed bids are topped up to the target — their existing bids count.</div>
       </div>
       <div id="simStatusBanner" style="display:none;padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:13px;font-weight:600"></div>
-      <!-- Simulator master switch. Default OFF. Must be ON to run the simulator, and turning
-           it ON during a live auction throws an aggressive confirm (toggleSimulator). -->
-      <div id="simArmedBanner" style="display:none;padding:12px 16px;border-radius:10px;margin-bottom:14px;background:rgba(220,38,38,.12);border:2px solid var(--red);color:var(--red);font-weight:800;font-size:14px;line-height:1.4">🎲 SIMULATOR IS ARMED — this is a TESTING tool. Turn it OFF before real clinicians bid: while armed it can e-mail real users about fake bids and reset the live countdown.</div>
+      <!-- Rehearsal Mode master switch [build 220]. Default OFF. Gates the simulator below, the
+           "Skip backup (testing)" button, and "Skip sending (testing)" for results. REFUSES to
+           turn on once Phase 1 has started (toggleSimulator) — no click-through. Element ids kept
+           from the old simulator switch so existing wiring and tests stay valid. -->
+      <div id="simArmedBanner" style="display:none;padding:12px 16px;border-radius:10px;margin-bottom:14px;background:rgba(220,38,38,.12);border:2px solid var(--red);color:var(--red);font-weight:800;font-size:14px;line-height:1.4">🎭 REHEARSAL MODE IS ON — simulator, skip-backup and skip-results are unlocked. This is NOT a sandbox: everything still writes the real auction and real e-mails still send. Turn it OFF before real clinicians bid.</div>
       <div class="card" style="margin-bottom:12px">
         <div class="trow" style="align-items:center;margin-bottom:6px">
-          <div><div class="trow-label">Simulator Mode</div><div class="trow-desc">Master switch — must be ON to run the simulator below. Keep it <strong>OFF during a live auction</strong>.</div></div>
+          <div><div class="trow-label">🎭 Rehearsal Mode</div><div class="trow-desc">One switch for every testing tool: the simulator below, "⏭ Skip backup" on phase steps, and "⏭ Skip sending" for results e-mails. Cannot be turned on once the auction is live. E-mails still send in rehearsal.</div></div>
           <div class="tog" id="simulatorToggle" onclick="toggleSimulator()"></div>
         </div>
       </div>
@@ -3289,29 +3291,31 @@ window.toggleWelcomeEmails=async function(){
 // Simulator master switch. Default OFF. Arming it during a LIVE auction (Phase 1 begun)
 // throws an aggressive double confirm, because running the sim on live data e-mails real
 // clinicians about fake bids, resets the live countdown, and can overwrite real bids.
+// [REHEARSAL MODE · build 220] One switch now controls every rehearsal-only tool: the simulator
+// (and its run buttons), the "⏭ Skip backup (testing)" button in the backup-before-step prompt,
+// and "⏭ Skip sending (testing)" for phase results. The stored key is still `simulatorEnabled`
+// for compatibility — every existing read, backup file, and restore keeps working; only the
+// MEANING widened. Mail deliberately stays LIVE in rehearsal (the admin tests e-mail features
+// constantly and wants to see them fire) — that is a recorded decision, not an oversight.
+//
+// ONE-WAY DOOR [admin's ruling, 30 Jul 2026]: once Phase 1 has started, rehearsal mode REFUSES to
+// turn on. No click-through. The old double-confirm() was exactly how the C1 class of accidents
+// stayed reachable — a tired admin can click through two dialogs; nobody can click through a
+// refusal. Turning it OFF is always allowed (that is the direction launch needs), and Begin
+// Phase 1 already offers to switch it off. This is NOT a sandbox: while ON, the simulator still
+// writes the real documents. The switch controls which rehearsal tools are REACHABLE, nothing more.
 window.toggleSimulator=async function(){
   const cur=adminSettings.simulatorEnabled===true;
   if(!cur){
     if(phase1Started()){
-      const w1=confirm('⚠️  DANGER — THE AUCTION IS LIVE  ⚠️\n\n'
-        +'Turning the SIMULATOR on during a live auction can:\n'
-        +'  •  e-mail REAL clinicians about FAKE competitor bids\n'
-        +'  •  reset the live bidding countdown, extending the deadline for everyone\n'
-        +"  •  overwrite real users' bids\n"
-        +'  •  burn your monthly e-mail quota (which then blocks real results e-mails)\n\n'
-        +'The simulator is a TESTING tool for a NON-live auction ONLY.\n\n'
-        +'Are you absolutely sure you want to ARM it right now?');
-      if(!w1) return;
-      const w2=confirm('LAST CHANCE.\n\nThe simulator will be ARMED on a LIVE auction with real users. Only continue if you are deliberately testing and fully understand the consequences above.\n\nClick OK only if you truly mean to arm it now.');
-      if(!w2) return;
+      toast('🚫 Rehearsal Mode cannot be turned ON — the auction is LIVE. Rehearsal tools (simulator, skip-backup, skip-results) are for a non-live auction only.','err');
+      return;
     }
     await setDoc(adminRef,{simulatorEnabled:true},{merge:true});
-    toast(phase1Started()
-      ? '🎲 Simulator ARMED on a LIVE auction — turn it OFF as soon as you are done'
-      : '🎲 Simulator ON (testing) — remember to turn it OFF before going live','warn');
+    toast('🎭 Rehearsal Mode ON — simulator, skip-backup and skip-results are available. Turn it OFF before going live.','warn');
   } else {
     await setDoc(adminRef,{simulatorEnabled:false},{merge:true});
-    toast('🔒 Simulator OFF','ok');
+    toast('🔒 Rehearsal Mode OFF — live-auction safeguards fully active','ok');
   }
 };
 
@@ -3580,7 +3584,7 @@ function renderSimPanel(){
 }
 
 window.runSimulation=function(){
-  if(adminSettings.simulatorEnabled!==true){ alert('The simulator is OFF.\n\nTurn on "Simulator Mode" at the top of the Simulator panel first. It is a testing tool — never use it on a live auction.'); return; }
+  if(adminSettings.simulatorEnabled!==true){ alert('The simulator is OFF.\n\nTurn on "🎭 Rehearsal Mode" at the top of the Simulation panel first. It is a testing tool — it cannot be enabled on a live auction.'); return; }
   openConfirm({
     title:'🎲 Run Simulation?',
     body:`<div>Run the simulator now?</div>
@@ -3978,6 +3982,13 @@ async function _publishPhaseResults(fields){
 // so the workflow can advance to Begin Next Phase during testing. This is the ONLY step
 // that can be skipped — every other step (begin, close, decide, complete) is mandatory.
 window.skipPhaseResults=function(cur){
+  // [REHEARSAL MODE · build 220] Rehearsal-only. In a live auction, results e-mails are how users
+  // learn what they won or lost — skipping the send must not be reachable. The button is also
+  // hidden outside rehearsal, but this guard is the enforcement (the button is just paint).
+  if(adminSettings.simulatorEnabled!==true){
+    toast('🚫 "Skip sending" is a Rehearsal Mode tool. In a live auction, send the results e-mails — users have no other way to learn their outcome.','err');
+    return;
+  }
   cur=Number(cur||phasesData.currentPhase||1);
   openConfirm({
     title:'⏭ Skip sending Phase '+cur+' results?',
@@ -4025,7 +4036,8 @@ function renderNextStep(){
     if(!phasesData.resultsSent?.[cur]){
       html=box(`Phase ${cur} is complete, but users have NOT been e-mailed their results yet.`,
         btn('📮 Send Phase '+cur+' Results','sendPhaseResultsEmails()','btn-success')
-        + '&nbsp;' + btn('⏭ Skip sending (testing)','skipPhaseResults('+cur+')','btn-ghost'));
+        // [build 220] skip is a rehearsal-only tool; the button only renders in Rehearsal Mode
+        + (adminSettings.simulatorEnabled===true?'&nbsp;'+btn('⏭ Skip sending (testing)','skipPhaseResults('+cur+')','btn-ghost'):''));
     } else if(cur>=4){
       html=box('Phase 4 is complete and results are sent — the auction is finished. 🎉','');
     } else {
@@ -4383,17 +4395,19 @@ async function _commitBeginPhase(next){
 // Begin Phase 1: opens bidding for the first time. Runs the same lock decision
 // (Smart Lock & Unlock) as every other phase start.
 window.beginPhase1=function(){
-  // If the simulator is ARMED when opening the auction to real users, block with an
-  // aggressive warning and offer to turn it off in one click.
+  // [REHEARSAL MODE · build 220] Going live requires Rehearsal Mode OFF — full stop. The one-way
+  // door is sealed from BOTH sides: toggleSimulator refuses to arm rehearsal once live, and this
+  // refuses to go live while rehearsal is on. The old "Begin Phase 1 with the simulator STILL ON
+  // (not recommended)" override made the forbidden state reachable in one ghost-button click, so
+  // it is gone. The OK button turns rehearsal off and continues — one click, nothing lost.
   if(adminSettings.simulatorEnabled===true){
     openConfirm({
-      title:'🛑 The SIMULATOR is ON',
-      body:`<div class="cmodal-danger" style="font-size:14px;font-weight:800">The simulator is currently ARMED — and you are about to open the auction to REAL clinicians.</div>
-            <div style="margin-top:8px">If the simulator is left on and run, it will e-mail real users about FAKE bids, reset their live countdown, and can overwrite their real bids.</div>
-            <div class="cmodal-warn" style="margin-top:8px"><strong>Turn the simulator OFF now, then begin Phase 1.</strong></div>
-            <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="_beginPhase1SimOverride()">Begin Phase 1 with the simulator STILL ON (not recommended)</button>`,
-      okText:'🔒 Turn OFF simulator & continue', danger:true,
-      onConfirm:async()=>{ await setDoc(adminRef,{simulatorEnabled:false},{merge:true}); toast('🔒 Simulator OFF','ok'); _beginPhase1Confirm(); }
+      title:'🛑 Rehearsal Mode is ON',
+      body:`<div class="cmodal-danger" style="font-size:14px;font-weight:800">Rehearsal Mode is ON — and you are about to open the auction to REAL clinicians.</div>
+            <div style="margin-top:8px">A live auction cannot begin in Rehearsal Mode: the simulator could e-mail real users about fake bids and overwrite real bids, and phase steps could skip their backups.</div>
+            <div class="cmodal-warn" style="margin-top:8px"><strong>Turn Rehearsal Mode OFF, then Phase 1 begins normally.</strong></div>`,
+      okText:'🔒 Turn OFF Rehearsal Mode & continue', danger:true,
+      onConfirm:async()=>{ await setDoc(adminRef,{simulatorEnabled:false},{merge:true}); toast('🔒 Rehearsal Mode OFF','ok'); _beginPhase1Confirm(); }
     });
     return;
   }
@@ -4410,7 +4424,8 @@ function _beginPhase1Confirm(){
     onConfirm:()=>_beginPhaseLockDecision(1)
   });
 }
-window._beginPhase1SimOverride=function(){ closeConfirm(); _beginPhase1Confirm(); };
+// [build 220] _beginPhase1SimOverride removed — going live with rehearsal tools armed is no
+// longer a reachable state (see beginPhase1).
 // Override path: begin the phase WITHOUT applying lock fixes (admin's explicit choice).
 window._beginPhaseOverride=function(next){
   closeConfirm();
@@ -6281,7 +6296,7 @@ window.lockFullWeeks=function(){
 
 // Confirmation wrapper — auto-approve is a bulk decision, so admin must confirm it.
 window.runSimulationApprovals=function(){
-  if(adminSettings.simulatorEnabled!==true){ alert('The simulator is OFF.\n\nTurn on "Simulator Mode" at the top of the Simulator panel first. It is a testing tool — never use it on a live auction.'); return; }
+  if(adminSettings.simulatorEnabled!==true){ alert('The simulator is OFF.\n\nTurn on "🎭 Rehearsal Mode" at the top of the Simulation panel first. It is a testing tool — it cannot be enabled on a live auction.'); return; }
   const cur=Number(phasesData.currentPhase||1);
   openConfirm({
     title:'✅ Auto-Approve/Deny Results',
@@ -8595,7 +8610,7 @@ function renderRestoreList(){
     if(tm.enabled&&typeof tm.lastChange==='number'){ const rem=(tm.durationHours||48)*3600000-(f.ts-tm.lastChange); tmTxt=rem>0?('timer '+Math.floor(rem/3600000)+'h '+Math.floor((rem%3600000)/60000)+'m left'):'timer expired'; }
     else if(tm.enabled) tmTxt='timer waiting';
     const phTxt=esc(ph.phase1Started||Number(ph.currentPhase||1)>1?('Phase '+(ph.currentPhase||1)+(ph.completedPhases&&ph.completedPhases[ph.currentPhase]?' (complete)':'')):'pre-launch');
-    const simTxt=(d.adminSettings&&d.adminSettings.simulatorEnabled===true)?' · <span style="color:var(--yellow)">simulator ON</span>':'';
+    const simTxt=(d.adminSettings&&d.adminSettings.simulatorEnabled===true)?' · <span style="color:var(--yellow)">rehearsal was ON (a restore always lands with it OFF)</span>':'';
     // diff vs current
     const cur=_bidCount(scheduleData); const dBids=cur.weeks-bc.weeks;
     const phNow=Number(phasesData.currentPhase||1);
@@ -8690,6 +8705,12 @@ async function _doFullRestore(f){
     for(const [k,ref] of Object.entries(map)){
       let v=d[k];
       if(typeof v==='string'){ bad.push(k); continue; } // FETCH-FAILED placeholder in the backup
+      // [REHEARSAL MODE · build 220] A restore always lands with Rehearsal Mode OFF. Without this,
+      // restoring a pre-launch backup mid-auction would silently re-arm the simulator, the
+      // skip-backup button and skip-results all at once — the backup's adminSettings are written
+      // verbatim. A restore is exactly the moment the rails should be up, not down; re-enabling
+      // rehearsal after a restore is a deliberate flip of the switch, never a side effect.
+      if(k==='adminSettings'&&v&&v.simulatorEnabled===true){ v={...v,simulatorEnabled:false}; }
       if(k==='timer'&&v&&v.enabled&&typeof v.lastChange==='number'){
         const resumed=Date.now()-(f.ts-v.lastChange);
         // If the backup's countdown had already run out, don't resurrect it as a live
@@ -8789,8 +8810,13 @@ function _backupThen(label,fn){
   // Drive Backup in the Backups & Restore card (the off-site milestone copy).
   openConfirm({
     title:'💾 Back up before '+label+'?',
-    body:`<div>Save a <strong>cloud backup</strong> first? It takes a few seconds, every admin can see it, and it is the auction's undo.</div>
-          <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="closeConfirm();window._bkProceed()">⏭ Skip backup (testing)</button>`,
+    // [REHEARSAL MODE · build 220] The skip button exists ONLY in rehearsal. In a live auction
+    // every irreversible step requires a verified cloud backup, with no one-click bypass — this
+    // was one of the two disputed criticals, resolved by the admin's rehearsal-mode ruling.
+    body:`<div>Save a <strong>cloud backup</strong> first? It takes a few seconds, every admin can see it, and it is the auction's undo.</div>`
+      +(adminSettings.simulatorEnabled===true
+        ?`<button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="closeConfirm();window._bkProceed()">⏭ Skip backup (testing)</button>`
+        :''),
     okText:'☁️ Cloud Backup & Continue',
     onConfirm:async()=>{
       // Cloud is the default AND success-gated: if the snapshot does not verifiably save
