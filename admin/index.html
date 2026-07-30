@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 218;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 219;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -3178,11 +3178,27 @@ window._confirmSaveReviewThreshold=function(){
     onCancel:()=>{ _syncReviewThresholdFromSaved(); }
   });
 };
-window.toggleGlobalLock=async function(){
+// [SWEEP D5 · 30 Jul 2026] This was a bare toggle div on the Dashboard with no confirmation, one
+// click from freezing every physician out of bidding mid-phase — while the board still shows the
+// phase as open and nothing but a 3-second toast records it. The code elsewhere already treats this
+// flag as severe: _beginPhaseLockDecision interrupts a phase start with a red interstitial purely
+// because it is set. Both directions now confirm; only FREEZING is danger-styled.
+window.toggleGlobalLock=function(){
   const v=!locksData.globalLock;
-  // Single-field update — preserves weeks map
-  await setDoc(locksRef,{globalLock:v},{merge:true});
-  toast(v?"🔒 Globally locked":"🔓 Lock removed",v?"warn":"ok");
+  openConfirm({
+    title:v?'🔒 Freeze ALL bidding?':'🔓 Unfreeze bidding?',
+    body:v
+      ? `<div>Freeze bidding for <strong>every user</strong>, on every week?</div>
+         <div class="cmodal-danger" style="margin-top:8px">No user can add, edit or remove any bid while this is on. Their board still shows the phase as open, so nobody is told why their bid is refused. Use the per-week locks if you only mean to close some weeks.</div>`
+      : `<div>Remove the global freeze and let users bid again?</div>
+         <div class="cmodal-info" style="margin-top:8px">Per-week locks are unaffected — a week that is individually locked stays locked.</div>`,
+    okText:v?'🔒 Freeze all bidding':'🔓 Unfreeze', danger:v,
+    onConfirm:async()=>{
+      // Single-field update — preserves weeks map
+      await setDoc(locksRef,{globalLock:v},{merge:true});
+      toast(v?"🔒 Globally locked":"🔓 Lock removed",v?"warn":"ok");
+    }
+  });
 };
 
 // Resolve the four phases to [p1,p2,p3,p4] where each is a number or null (= no limit).
@@ -3904,7 +3920,9 @@ window.closePhaseBidding=function(cur){
             <li>Next you'll decide approvals/denials, then complete the phase</li>
           </ul>`,
     okText:'⏱ Close Bidding', danger:true,
-    onConfirm:async()=>{ await _fixClosePhaseBidding(cur); }
+    // [SWEEP D2] Call the CONFIRMED worker, not the entry point — the entry point now opens its own
+    // dialog for the inline route, and routing the dashboard through it would ask twice.
+    onConfirm:async()=>{ await window._fixClosePhaseBiddingConfirmed(cur); }
   });
 };
 window.gotoSlotsPanel=function(){ nav('slots',document.querySelector('[onclick*="\'slots\'"]')); };
@@ -5908,8 +5926,16 @@ function _refreshReadinessBox(){
     ? '<div class="cmodal-info" style="margin-top:8px">✓ Bidding is now closed and all weeks are locked — safe to approve/deny. Once every bid is decided, come back to the dashboard and click <strong>Complete Phase</strong> to finish — that\'s still a separate, later step.</div>'
     : _readinessProblemHtml());
 }
-window._fixClosePhaseBidding=async function(cur){
-  if(!_bkBypass){ _backupThen('closing Phase '+cur+' bidding',function(){ _bkBypass=true; try{ window._fixClosePhaseBidding(cur); } finally { _bkBypass=false; } }); return; }
+// [SWEEP D2 · 30 Jul 2026] This inline route had NO confirmation of its own — the only gate was
+// the backup prompt, whose text never mentions what is about to happen. So "Skip backup" or
+// "Cloud Backup & Continue" was one click from locking all 52 weeks, expiring the countdown and
+// setting the server-side biddingClosed gate for every physician. The dashboard button reaching the
+// SAME function has always confirmed first (window.closePhaseBidding); this one now does too.
+// The original comment above _lockEveryWeek explains why these inline fixes were built without a
+// dialog: a nested confirm REPLACES the approve/deny dialog the admin is standing in. That is the
+// accepted cost here — closing bidding for the whole department is worth interrupting a single
+// decision, and _refreshReadinessBox() already no-ops when its box is gone.
+window._fixClosePhaseBiddingConfirmed=async function(cur){
   await _lockEveryWeek();
   // Close bidding by EXPIRING the timer (not disabling it) — users see the
   // auction-closed notice; only the on/off toggle ever disables the timer.
@@ -5927,11 +5953,43 @@ window._fixClosePhaseBidding=async function(cur){
   toast('⏱ Phase '+cur+' bidding closed. This does NOT complete the phase — decide the bids below, then use Complete Phase on the dashboard.','ok');
   _refreshReadinessBox();
 };
-window._fixLockAllWeeksInline=async function(){
+window._fixClosePhaseBidding=function(cur){
+  openConfirm({
+    title:'⏱ Stop Phase '+cur+' bidding now?',
+    body:`<div>End bidding for Phase <strong>${esc(String(cur))}</strong> immediately?</div>
+          <ul style="margin:10px 0 8px 18px;color:var(--t2);font-size:13px;line-height:1.65">
+            <li>All 52 weeks are locked — no bid can be added, edited or removed</li>
+            <li>The countdown expires — users see the auction-closed notice</li>
+            <li>Bidding is closed on the SERVER, so it cannot be bypassed from a browser</li>
+            <li>This does NOT complete the phase — you still decide the bids, then Complete Phase</li>
+          </ul>
+          <div class="cmodal-warn" style="margin-top:6px">This closes the dialog you are in. Reopen the decision afterwards.</div>`,
+    okText:'⏱ Stop bidding & lock all weeks', danger:true,
+    onConfirm:async()=>{
+      // The backup prompt stays INSIDE the confirmed path: the admin has now agreed to the action
+      // itself, so the backup question is the second gate rather than the only one.
+      if(!_bkBypass){ _backupThen('closing Phase '+cur+' bidding',function(){ _bkBypass=true; try{ window._fixClosePhaseBiddingConfirmed(cur); } finally { _bkBypass=false; } }); return; }
+      await window._fixClosePhaseBiddingConfirmed(cur);
+    }
+  });
+};
+// [SWEEP D1 · 30 Jul 2026] Same story: a ghost button inside the readiness box locked all 52 weeks
+// with no dialog. Locking is reversible, so this confirm is informational rather than danger-styled.
+window._fixLockAllWeeksInlineConfirmed=async function(){
   await _lockEveryWeek();
   // [H4] Locks are client-side; say plainly when the server-side gate is still open.
   toast('🔒 All weeks locked'+(approvalReadiness().ready?'':' — bidding itself is still OPEN; use "⏱ Stop bidding & lock all weeks" to set the server-side gate'),'warn');
   _refreshReadinessBox();
+};
+window._fixLockAllWeeksInline=function(){
+  openConfirm({
+    title:'🔒 Lock all 52 weeks?',
+    body:`<div>Lock every week so no bid can be added, edited or removed?</div>
+          <div class="cmodal-info" style="margin-top:8px">This is the client-side lock only — bidding itself stays OPEN on the server until you use “⏱ Stop bidding &amp; lock all weeks”. Locking is reversible from the Lock Weeks panel.</div>
+          <div class="cmodal-warn" style="margin-top:6px">This closes the dialog you are in. Reopen the decision afterwards.</div>`,
+    okText:'🔒 Lock all weeks',
+    onConfirm:async()=>{ await window._fixLockAllWeeksInlineConfirmed(); }
+  });
 };
 window.adApprove=function(user,wk,currentOutcome){
   // [AUDIT 2026-07-26 medium] Refuse to approve a bid the engine will not score. An
@@ -6421,6 +6479,12 @@ function _allStaleDenials(){
       const denied=Array.isArray(deniedData?.[wk])?deniedData[wk]:[];
       for(const u of denied){
         if(!isCurrentPhaseBidAdmin(u,wk)) continue; // only this phase's decisions matter for completion
+        // Denied DRAW and denied REVIEW are both deliberately NOT flagged. Considered and rejected
+        // [30 Jul 2026]: "nobody from the draw was approved" looked like a staleness signal, but the
+        // admin confirms that denying an ENTIRE draw is a legitimate outcome, so that test would
+        // fire on normal work. Outcome alone cannot separate a deliberate denial from one that went
+        // stale — only knowing what the projection was WHEN the decision was made can. See the
+        // queue item on recording projection-at-decision-time.
         if(getOutcome(wk,u,nat)==='win') out.push({wk,user:u,proj:'win',decision:'denied'});
       }
     });
@@ -6555,7 +6619,27 @@ window.adminChangePriority=async function(u,wk,val){
     guardAdminBid(u,wk,val,false,()=>{ window._adminChangePriorityRaw(u,wk,val); });
     return;
   }
-  return window._adminChangePriorityRaw(u,wk,val);
+  // [SWEEP D3 · 30 Jul 2026] A rule-LEGAL change used to write straight through with no dialog at
+  // all — and this handler is an onchange on a <select>, so a trackpad scroll over a focused
+  // dropdown was enough to overwrite a physician's bid, delete their priority lock, strip any
+  // approval AND denial for that week, and fire outbid e-mails to colleagues. Every sibling
+  // operation on the same data already confirms (adminRemove, adminAddSelection, confirmAdminEdit,
+  // clearBestBid); this was the outlier. Rule-BREAKING values keep going through guardAdminBid, so
+  // exactly one dialog ever appears.
+  const _cur=scheduleData[u]?.[wk];
+  openConfirm({
+    title:'✏️ Change this bid?',
+    body:`<div>Change <strong>${esc(u)}</strong> on <strong>${esc(wLabel(wkDate(wk)))}</strong> from
+            <strong style="font-family:var(--mono)">${esc(bidLblAdmin(_cur))}</strong> to
+            <strong style="font-family:var(--mono)">${esc(String(val))}</strong>?</div>
+          <div class="cmodal-warn" style="margin-top:8px">This also clears ${esc(u)}'s priority lock for the week and removes any approval or denial already recorded, and may e-mail colleagues whose projection changes.</div>`,
+    okText:'Save change', danger:true,
+    onConfirm:()=>{ window._adminChangePriorityRaw(u,wk,val); },
+    // [delta-audit #7, same trap] The <select> has ALREADY moved to the new value in the DOM and
+    // no snapshot fires when nothing is written, so a cancel would leave the table showing a value
+    // that was never saved. Redraw from live data, exactly as guardAdminBid does.
+    onCancel:()=>{ try{ refreshAll(); }catch(_){ } }
+  });
 };
 window._adminChangePriorityRaw=async function(u,wk,val){
   // Direct dropdown change in Edit Selections — real per-field writes via
@@ -8029,9 +8113,31 @@ window.saveAllSlots=async function(){
   });
   if(bad){toast(`${bad} week(s) have invalid availability — every week needs a number 0 or higher`,"err");return;}
   if(badSlc){toast(`${badSlc} week(s) have an invalid Smart Lock Control — must be -1.0 to 1.0`,"err");return;}
-  await setDoc(slotsRef,updates,{merge:true});
-  await setDoc(slcRef,slcUpdates,{merge:true});
-  toast(`💾 Saved availability + smart lock control for all ${mondays.length} weeks`,"ok");
+  // [SWEEP D4 · 30 Jul 2026] This wrote all 52 capacities and all 52 Smart Lock Controls from
+  // whatever the DOM held, on one click, with no confirmation — re-deciding who wins across the
+  // whole calendar. (applyGlobalSlc, which writes strictly less, has always confirmed.) It now says
+  // exactly what would change, and a no-op save is refused rather than rewriting 104 fields for
+  // nothing — renderSlotsPanel deliberately refuses to refresh while the cursor is in the table, so
+  // a blind bulk write is the one operation most likely to save a stale value.
+  const _chSlots=Object.keys(updates).filter(wk=>Math.abs(Number(updates[wk])-Number(getSlots(wk)))>1e-9);
+  const _chSlc=Object.keys(slcUpdates).filter(wk=>Math.abs(Number(slcUpdates[wk])-Number(getSlc(wk)))>1e-9);
+  if(!_chSlots.length&&!_chSlc.length){ toast('Nothing to save — every week already matches what is stored.','ok'); return; }
+  const _wkList=a=>a.slice(0,6).map(wk=>wLabel(wkDate(wk))).join(', ')+(a.length>6?' and '+(a.length-6)+' more':'');
+  openConfirm({
+    title:'💾 Save all 52 weeks?',
+    body:`<div>Write the whole table to the auction?</div>
+          <ul style="margin:10px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">
+            ${_chSlots.length?`<li><strong>${_chSlots.length}</strong> week${_chSlots.length!==1?'s':''} change availability: ${esc(_wkList(_chSlots))}</li>`:'<li>No availability changes</li>'}
+            ${_chSlc.length?`<li><strong>${_chSlc.length}</strong> week${_chSlc.length!==1?'s':''} change Smart Lock Control: ${esc(_wkList(_chSlc))}</li>`:'<li>No Smart Lock Control changes</li>'}
+          </ul>
+          <div class="cmodal-warn" style="margin-top:6px">Changing a week's availability re-decides that week's winners immediately.</div>`,
+    okText:'💾 Save these changes', danger:true,
+    onConfirm:async()=>{
+      await setDoc(slotsRef,updates,{merge:true});
+      await setDoc(slcRef,slcUpdates,{merge:true});
+      toast(`💾 Saved ${_chSlots.length} availability and ${_chSlc.length} smart-lock change${(_chSlots.length+_chSlc.length)!==1?'s':''}`,"ok");
+    }
+  });
 };
 
 
