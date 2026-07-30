@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 217;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 218;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -4135,10 +4135,10 @@ window.completePhase=function(){
   // current-phase denial now projects WIN/DRAW/REVIEW (e.g. the blocker that caused the loss
   // was later edited/removed), completing now freezes it as a permanent, wrong loss. Show it
   // here where the admin must see it before confirming — not just in a toast they may miss.
-  const _stale=_allStaleDenials();
-  const _staleHtml=_stale.length?`<div class="cmodal-warn" style="margin-top:10px"><strong>⚠️ ${_stale.length} denial${_stale.length!==1?'s':''} now project${_stale.length===1?'s':''} WIN/DRAW/REVIEW.</strong> Completing the phase freezes ${_stale.length===1?'it':'them'} as ${_stale.length===1?'a permanent loss':'permanent losses'}. Review before completing:
-        <ul style="margin:6px 0 0 16px;line-height:1.6;max-height:120px;overflow-y:auto">${_stale.map(s=>`<li>${esc(s.user)} — ${wLabel(wkDate(s.wk))} (↶ Revoke Denial in Approvals &amp; Denials if this is stale)</li>`).join('')}</ul>
-        <div style="margin-top:6px;font-size:11px;color:var(--t3)">This does not block completion — a deliberate denial (cap/draw enforcement) can legitimately project a win. Proceed only if each of these is intended.</div></div>`:'';
+  const _stale=_allStaleDenials().concat(_allStaleApprovals());
+  const _staleHtml=_stale.length?`<div class="cmodal-warn" style="margin-top:10px"><strong>⚠️ ${_stale.length} decision${_stale.length!==1?'s':''} contradict${_stale.length===1?'s':''} the projection.</strong> Completing the phase freezes ${_stale.length===1?'it':'them'} permanently. Review before completing:
+        <ul style="margin:6px 0 0 16px;line-height:1.6;max-height:120px;overflow-y:auto">${_stale.map(s=>`<li>${esc(s.user)} — ${wLabel(wkDate(s.wk))} — projects <strong>${s.proj==='win'?'WIN':'LOSE'}</strong> but is <strong>${s.decision==='denied'?'DENIED':'APPROVED'}</strong> (↶ ${s.decision==='denied'?'Revoke Denial':'Revoke Approval'} in Approvals &amp; Denials if this is stale)</li>`).join('')}</ul>
+        <div style="margin-top:6px;font-size:11px;color:var(--t3)">This does not block completion — a deliberate override can be correct. Normal draw and review resolutions are NOT listed here; only decisions the engine contradicts outright. Proceed only if each of these is intended.</div></div>`:'';
   openConfirm({
     title:'✓ Complete Phase '+cur,
     body:`<div>Mark Phase <strong>${cur}</strong> as complete?</div>
@@ -6383,23 +6383,36 @@ window.renderEditTable=function(){
 // one is one click — but it is now a visible human choice, never an automatic write.
 async function _reconcileStaleDenials(wk){
   try{
-    const denied=Array.isArray(deniedData?.[wk])?[...deniedData[wk]]:[];
-    if(!denied.length) return;
     const nat=computeApprovals(true); // natural projection (ignores all admin decisions)
-    const stale=denied.filter(u=>getOutcome(wk,u,nat)!=='lose');
-    if(stale.length){
-      toast('⚠ '+stale.length+' denial'+(stale.length!==1?'s':'')+' on Wk '+(_wkNumByISO[wk]||wk)
-        +' ('+stale.join(', ')+') now project'+(stale.length===1?'s':'')
-        +' WIN/DRAW/REVIEW — review in Approvals & Denials (↶ Revoke Denial if stale)','warn');
+    const denied=Array.isArray(deniedData?.[wk])?[...deniedData[wk]]:[];
+    const appr=Array.isArray(approvalsData?.[wk])?[...approvalsData[wk]]:[];
+    if(!denied.length&&!appr.length) return;
+    // Only CONTRADICTED decisions — see the rule note on _allStaleDenials below.
+    const badDeny=denied.filter(u=>getOutcome(wk,u,nat)==='win');
+    const badAppr=appr.filter(u=>getOutcome(wk,u,nat)==='lose');
+    const bits=[];
+    if(badDeny.length) bits.push(badDeny.join(', ')+' project'+(badDeny.length===1?'s':'')+' WIN but '+(badDeny.length===1?'is':'are')+' DENIED');
+    if(badAppr.length) bits.push(badAppr.join(', ')+' project'+(badAppr.length===1?'s':'')+' LOSE but '+(badAppr.length===1?'is':'are')+' APPROVED');
+    if(bits.length){
+      toast('⚠ Wk '+(_wkNumByISO[wk]||wk)+': '+bits.join(' · ')
+        +' — review in Approvals & Denials','warn');
     }
-  }catch(e){ console.warn('stale denial check failed',e); }
+  }catch(e){ console.warn('stale decision check failed',e); }
 }
-// [AUDIT 2026-07-26 H12 v2] Every CURRENT-phase denial whose NATURAL projection is no longer
-// a loss — i.e. a bid the engine would now promote if the denial were revoked. The per-edit
-// toast above is transient and gets overwritten by the edit's own success toast, so the admin
-// can miss it and Complete the phase with a stale denial frozen as a permanent loss. This
-// list is surfaced DURABLY in the Complete Phase confirm dialog (the actual decision point),
-// where the admin cannot proceed without seeing it. Returns [{wk,user}].
+// [AUDIT 2026-07-26 H12 v2] Decisions that CONTRADICT the natural projection, surfaced DURABLY
+// in the Complete Phase confirm dialog (the actual decision point) because the per-edit toast
+// above is transient and gets overwritten by the edit's own success toast.
+//
+// [30 Jul 2026 — admin's ruling, replaces the original rule] The first cut flagged any denial
+// whose projection was not a loss. That was wrong and it fired constantly: a denial on a DRAW or
+// a REVIEW is exactly how those outcomes are SUPPOSED to resolve — the admin picks one winner out
+// of a draw and denies the rest, and a review exists to be decided either way. Warning on normal
+// resolution trains the eye to click past the dialog, which is worse than no warning at all.
+// Only two states genuinely contradict the engine:
+//   projected WIN but DENIED   — the engine would have given them the week outright
+//   projected LOSE but APPROVED — the week is handed to a bid the engine did not seat
+// Both stay ADVISORY. A deliberate override (cap enforcement, an off-line request) is legitimate;
+// it just has to be a seen choice. Returns [{wk,user,proj,decision}].
 function _allStaleDenials(){
   const out=[];
   try{
@@ -6407,14 +6420,34 @@ function _allStaleDenials(){
     mondays.forEach(d=>{ const wk=dateKey(d);
       const denied=Array.isArray(deniedData?.[wk])?deniedData[wk]:[];
       for(const u of denied){
-        if(!isCurrentPhaseBidAdmin(u,wk)) continue; // only this phase's denials matter for completion
-        if(getOutcome(wk,u,nat)!=='lose') out.push({wk,user:u});
+        if(!isCurrentPhaseBidAdmin(u,wk)) continue; // only this phase's decisions matter for completion
+        if(getOutcome(wk,u,nat)==='win') out.push({wk,user:u,proj:'win',decision:'denied'});
       }
     });
   }catch(e){ console.warn('stale-denial sweep failed',e); }
   return out;
 }
+// The mirror case the original rule missed entirely: an APPROVAL on a bid the engine projects to
+// LOSE. Completing the phase freezes a win the engine never seated, which silently consumes the
+// week's capacity and can push a legitimately-winning colleague out.
+function _allStaleApprovals(){
+  const out=[];
+  try{
+    const nat=computeApprovals(true);
+    mondays.forEach(d=>{ const wk=dateKey(d);
+      const appr=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
+      for(const u of appr){
+        if(!isCurrentPhaseBidAdmin(u,wk)) continue;
+        if(getOutcome(wk,u,nat)==='lose') out.push({wk,user:u,proj:'lose',decision:'approved'});
+      }
+    });
+  }catch(e){ console.warn('stale-approval sweep failed',e); }
+  return out;
+}
+function _allStaleDecisions(){ return _allStaleDenials().concat(_allStaleApprovals()); }
 window._allStaleDenials=_allStaleDenials;
+window._allStaleApprovals=_allStaleApprovals;
+window._allStaleDecisions=_allStaleDecisions;
 // ── Admin manual-bid validation [AUDIT 2026-07-25 #8 / #9] ────────────────────
 // The admin's own add/edit paths wrote straight to Firestore with no checks at all,
 // so a manual entry could do things no bidder could: bid a standard week during the
@@ -8677,19 +8710,56 @@ function _backupDocMap(){
 }
 // Fetch every backed-up document once. Same semantics both pathways rely on:
 // exists → data, missing → null, fetch error → 'FETCH-FAILED: …' marker + fails count.
-async function _backupFetchAll(){
+//
+// [30 Jul 2026] Two fixes for the reported "stall" when backing up before a phase transition.
+// (1) CONCURRENT, not sequential. This loop used to await 28 round trips one after another, so a
+//     backup-before-transition sat for seconds with the prompt already dismissed and nothing on
+//     screen — indistinguishable from a hang. Concurrency makes it roughly one round trip.
+// (2) A TIMEOUT per read. Firestore's getDoc retries indefinitely on a bad connection rather than
+//     failing, so the old loop could wait forever with no dialog, no spinner and no cancel. A
+//     timed-out read becomes an ordinary FETCH-FAILED, which cloudBackupNow already refuses to
+//     store and which correctly BLOCKS the transition instead of silently proceeding.
+// onProgress(done,total) is optional and is only used to drive the on-screen counter.
+// The admin works on a WEAK CONNECTION, which is what made the sequential loop look like a hang.
+// The timeout is therefore generous and every read gets ONE retry: a single blip must not fail a
+// whole backup and block a phase transition. Only a genuinely dead link runs out of both attempts,
+// and then failing honestly is correct — a transition must never proceed on an unverified backup.
+const BACKUP_FETCH_TIMEOUT_MS=20000;
+const BACKUP_COMMIT_TIMEOUT_MS=30000;
+function _withTimeout(p,ms,label){
+  let t;
+  const timer=new Promise(function(_,rej){ t=setTimeout(function(){ rej(new Error('timed out after '+Math.round(ms/1000)+'s: '+label)); },ms); });
+  return Promise.race([p,timer]).finally(function(){ clearTimeout(t); });
+}
+// Sticky on-screen counter for work that outlasts a normal toast. Returns an onProgress callback.
+function _bkProgressToast(label){
+  return function(done,total){
+    if(typeof toast==='function') toast(label+'… '+done+' of '+total+' documents','warn',true);
+  };
+}
+async function _backupFetchAll(onProgress){
   const docs=_backupDocMap();
   const out={_exportedAt:new Date().toISOString(),_build:(typeof window.BUILD!=='undefined'?window.BUILD:'?')};
-  let fails=0;
-  for(const [name,ref] of Object.entries(docs)){
-    try{ const s=await getDoc(ref); out[name]=s.exists()?s.data():null; }
+  let fails=0, done=0;
+  const entries=Object.entries(docs), total=entries.length;
+  const tick=function(){ done++; if(typeof onProgress==='function'){ try{ onProgress(done,total); }catch(_){} } };
+  if(typeof onProgress==='function'){ try{ onProgress(0,total); }catch(_){} }
+  await Promise.all(entries.map(async function(pair){
+    const name=pair[0], ref=pair[1];
+    try{
+      let s;
+      try{ s=await _withTimeout(getDoc(ref),BACKUP_FETCH_TIMEOUT_MS,name); }
+      catch(e1){ s=await _withTimeout(getDoc(ref),BACKUP_FETCH_TIMEOUT_MS,name); } // one retry
+      out[name]=s.exists()?s.data():null;
+    }
     catch(e){ out[name]='FETCH-FAILED: '+(e.code||e.message); fails++; }
-  }
+    tick();
+  }));
   return {out,fails};
 }
 window.exportBackup=async function(){
   // This file IS the complete auction state at the moment of the click.
-  const {out,fails}=await _backupFetchAll();
+  const {out,fails}=await _backupFetchAll(_bkProgressToast('💾 Reading auction data'));
   const blob=new Blob([JSON.stringify(out,null,1)],{type:'application/json'});
   // Filename in LOCAL time (the ISO/UTC stamp confused the admin — 17:58Z is 10:58 PDT)
   const _d=new Date(), _p=n=>String(n).padStart(2,'0');
@@ -8719,7 +8789,10 @@ window.cloudBackupNow=async function(){
   const btn=document.getElementById('cbNowBtn');
   if(btn){ btn.disabled=true; btn.textContent='☁️ Backing up…'; }
   try{
-    const r=await _backupFetchAll();
+    // [30 Jul 2026] The on-screen counter matters most HERE: when this runs from the
+    // backup-before-transition prompt, that dialog has already closed (openConfirm closes before
+    // awaiting) and cbNowBtn is not on screen at all, so without it the page looked frozen.
+    const r=await _backupFetchAll(_bkProgressToast('☁️ Backing up'));
     // Stricter than the local download on purpose: _doFullRestore REFUSES a partial backup
     // (H13 pre-flight), so storing one in the cloud would only be a restore that can't run.
     if(r.fails){ toast('☁️ Cloud backup NOT saved — '+r.fails+' document(s) failed to fetch. Try again.','err'); return false; }
@@ -8741,7 +8814,16 @@ window.cloudBackupNow=async function(){
       build:r.out._build, exportedAt:r.out._exportedAt, names, bytes,
       phase:Number(((r.out.phases)||{}).currentPhase||1), bids:bc.weeks, bidUsers:bc.users
     });
-    await batch.commit();
+    // [30 Jul 2026] The commit is timed out too. On a weak link Firestore queues a write and
+    // resolves only on reconnect, which parked the progress counter at 28-of-28 with no way out.
+    // A timeout here is deliberately INCONCLUSIVE, not a failure: the batch may still land later,
+    // so the message says to check the list, and we return false so the transition does NOT run.
+    try{ await _withTimeout(batch.commit(),BACKUP_COMMIT_TIMEOUT_MS,'saving the backup'); }
+    catch(ce){
+      toast('☁️ Backup did not confirm in time — your connection may be too slow. It MAY still '
+        +'have saved: check the backup list before trying again. Nothing else was changed.','err');
+      return false;
+    }
     // [build 215 audit] Everything after the commit is housekeeping: it must never convert a
     // durably-saved backup into a false "nothing was saved" report or a blocked transition.
     try{
@@ -8846,9 +8928,12 @@ window.renderCloudBackups=async function(){
 };
 // ── Toast ──
 let toastT;
-window.toast=function(msg,type="ok"){
+// sticky=true leaves the message up until the NEXT toast replaces it — for work that outlasts the
+// 3-second window (the cloud/local backup progress counter). Every existing call omits it and is
+// unchanged; a sticky message is always cleared by the success or failure toast that follows it.
+window.toast=function(msg,type="ok",sticky){
   const el=document.getElementById("toast"); el.textContent=msg; el.className=`show t-${type}`;
-  clearTimeout(toastT); toastT=setTimeout(()=>el.className="",3000);
+  clearTimeout(toastT); if(!sticky) toastT=setTimeout(()=>el.className="",3000);
 };
 </script>
 </body>
