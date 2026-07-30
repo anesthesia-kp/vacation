@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 224;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 226;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1143,26 +1143,64 @@ let signInMissesData={};
 // block, because the onSnapshot wrapper references `authReady` — which is defined further down.
 // Calling onSnapshot up here (before authReady exists) throws and freezes the page at
 // "Checking sign-in…". Do not move a listener call above the authReady definition.
-function _buildEmailToUser(){
+// [build 226] Parameterized so the RESTORE path can rebuild the map from a backup's
+// loginEmails — never trusting a stored emailToUser doc (see _doFullRestore).
+function _buildEmailToUserFrom(led){
   const map={};
-  for(const initials of Object.keys(loginEmailsData||{})){
-    const em=String(loginEmailsData[initials]||'').trim().toLowerCase();
+  for(const initials of Object.keys(led||{})){
+    const em=String(led[initials]||'').trim().toLowerCase();
     if(!em||!em.includes('@')) continue;
     (map[em]=map[em]||[]).push(initials);
   }
-  return map;
+  // COLLISIONS FAIL CLOSED. The security rules read this map to decide whose bids a signed-in
+  // Google account may write (myInitials() → writesOnlyOwnKeys). An address mapped to TWO
+  // initials therefore hands one physician server-blessed write access to the other's bids —
+  // the disputed-critical access leak. A collided address is EXCLUDED from the map entirely:
+  // that Google account can write NOTHING until the admin fixes the duplicate (missing key →
+  // myInitials() returns [] → hasOnly([]) permits no bid keys). Locked out beats crossed over.
+  const dup={};
+  for(const em of Object.keys(map)){ if(map[em].length>1){ dup[em]=map[em]; delete map[em]; } }
+  return {map,dup};
 }
+function _buildEmailToUser(){
+  // [build 225 · DUPLICATE-LOGIN-EMAIL CRITICAL] The entry guards (_loginEmailOwner) stop NEW
+  // duplicates; this builder is the backstop for data that already contains one (e.g. written
+  // by an older build or the schedule site pre-fix). _collidedLoginEmails feeds the loud
+  // warning in maybeSyncEmailToUser.
+  const r=_buildEmailToUserFrom(loginEmailsData);
+  _collidedLoginEmails=r.dup;
+  return r.map;
+}
+let _collidedLoginEmails={}; // {email: [initials,…]} — populated by every _buildEmailToUser run
+let _collisionWarned='';     // signature of the last warning shown, so snapshots don't re-toast the same state
 // Rebuild + write the reverse map only when it actually differs from what's stored, so
 // this can run on every loginEmails change (and page load) without spamming writes.
 async function maybeSyncEmailToUser(){
   try{
     const want=_buildEmailToUser();
+    // [build 225] Be LOUD about collisions, once per distinct state per page load. The affected
+    // users cannot bid at all until this is fixed, so the admin must see it, not discover it.
+    const sig=JSON.stringify(_collidedLoginEmails);
+    if(sig!=='{}'&&sig!==_collisionWarned){
+      _collisionWarned=sig;
+      const parts=Object.keys(_collidedLoginEmails).map(em=>_collidedLoginEmails[em].join(' + ')+' share '+em);
+      toast('🚨 DUPLICATE login e-mail: '+parts.join(' · ')+' — these users CANNOT BID until each has their own address (Users page).','err',true);
+    }
+    if(sig==='{}') _collisionWarned='';
     if(JSON.stringify(want)!==JSON.stringify(emailToUserData||{})){
       await setDoc(emailToUserRef, want);
       emailToUserData=want;
     }
     return true;
   }catch(e){ console.warn('emailToUser sync failed (need admin sign-in):',e); return false; }
+}
+// [build 225] Who (other than exceptUser) already holds this login address? Case-insensitive.
+function _loginEmailOwner(email,exceptUser){
+  const s=String(email||'').trim().toLowerCase(); if(!s) return null;
+  for(const k of Object.keys(loginEmailsData||{})){
+    if(k!==exceptUser&&String(loginEmailsData[k]||'').trim().toLowerCase()===s) return k;
+  }
+  return null;
 }
 // Manual trigger for the one-time initial population during deploy (and a safety button).
 window.syncEmailToUser=async function(){
@@ -3319,10 +3357,14 @@ window.toggleWelcomeEmails=async function(){
 // Phase 1 already offers to switch it off. This is NOT a sandbox: while ON, the simulator still
 // writes the real documents. The switch controls which rehearsal tools are REACHABLE, nothing more.
 window.dashboardDisarmRehearsal=async function(){
-  // [build 223] Disarm-only — the safe direction needs no confirm. Arming is deliberately NOT
-  // offered on the dashboard; it lives in the Simulation panel behind its own gate.
-  await setDoc(adminRef,{simulatorEnabled:false},{merge:true});
-  toast('🔒 Rehearsal Mode OFF — live-auction safeguards fully active','ok');
+  // Disarm-only — the safe direction needs no confirm. Arming is deliberately NOT offered on
+  // the dashboard; it lives in the Simulation panel behind its own gate. [build 226 · audit]
+  // A FAILED disarm must be said out loud — the safety-critical direction was the only write
+  // in the file whose failure was silent.
+  try{
+    await setDoc(adminRef,{simulatorEnabled:false},{merge:true});
+    toast('🔒 Rehearsal Mode OFF — live-auction safeguards fully active','ok');
+  }catch(e){ toast('⚠️ Could not turn Rehearsal Mode OFF ('+(e?.code||e?.message||e)+') — it is STILL ON. Try again.','err'); }
 };
 window.toggleSimulator=async function(){
   const cur=adminSettings.simulatorEnabled===true;
@@ -3356,13 +3398,21 @@ window.toggleSimulator=async function(){
             <div class="cmodal-warn" style="margin-top:8px">Not a sandbox — everything still writes the real auction and real e-mails still send. A red indicator stays on the dashboard while the mode is on.</div>`,
       okText:'🎭 Turn ON',
       onConfirm:async()=>{
+        // [build 226 · audit] Dialogs are paint, guards are enforcement — re-check at confirm
+        // time. If the auction went live while this pre-launch dialog sat open, do NOT arm on
+        // the strength of the milder wording; send the admin back through the toggle, which now
+        // shows the danger dialog.
+        if(phase1Started()){ toast('🚫 Not armed — the auction went LIVE while this dialog was open. Use the toggle again to see the live-auction warning.','err'); return; }
         await setDoc(adminRef,{simulatorEnabled:true},{merge:true});
         toast('🎭 Rehearsal Mode ON — simulator, skip-backup and skip-results are available. Turn it OFF before going live.','warn');
       }
     });
   } else {
-    await setDoc(adminRef,{simulatorEnabled:false},{merge:true});
-    toast('🔒 Rehearsal Mode OFF — live-auction safeguards fully active','ok');
+    // [build 226 · audit] same honest-failure handling as the dashboard disarm
+    try{
+      await setDoc(adminRef,{simulatorEnabled:false},{merge:true});
+      toast('🔒 Rehearsal Mode OFF — live-auction safeguards fully active','ok');
+    }catch(e){ toast('⚠️ Could not turn Rehearsal Mode OFF ('+(e?.code||e?.message||e)+') — it is STILL ON. Try again.','err'); }
   }
 };
 
@@ -6838,6 +6888,11 @@ window.adminSaveLoginEmail=async function(u){
   // against these values with a case-sensitive check, so normalize on save.
   const val=(document.getElementById(`lem_${u}`)?.value||"").trim().toLowerCase();
   if(!val||!val.includes("@")){toast("Invalid email","err");return;}
+  // [build 225 · DUPLICATE-LOGIN-EMAIL CRITICAL] One Google account is one person. A duplicate
+  // address would hand whoever signs in with it write access to BOTH users' bids (the rules
+  // trust the emailToUser map). Refuse outright and name the holder — never a warning-and-allow.
+  const _holder=_loginEmailOwner(val,u);
+  if(_holder){ toast('🚫 NOT saved — '+val+' is already the login e-mail for '+_holder+'. Two users can never share a Google login; fix '+_holder+"'s address first if this is a correction.",'err'); return; }
   await setDoc(loginEmailsRef,{[u]:val},{merge:true});
   await maybeSyncEmailToUser(); // don't rely on the snapshot listener — sync NOW so the user's very next bid write is permitted
   toast(`🔑 Login e-mail saved for ${u}`,"ok");
@@ -7831,6 +7886,9 @@ window.addUser=async function(){
   const loginEmail=(document.getElementById("newUserLoginEmail")?.value||'').trim().toLowerCase();
   const email2=(document.getElementById("newUserEmail2")?.value||'').trim();
   if(loginEmail && !loginEmail.includes('@')){toast("Login e-mail must be a valid address","err");return;}
+  // [build 225 · DUPLICATE-LOGIN-EMAIL CRITICAL] same refusal as adminSaveLoginEmail
+  const _lh=loginEmail?_loginEmailOwner(loginEmail,val):null;
+  if(_lh){ toast('🚫 NOT added — '+loginEmail+' is already the login e-mail for '+_lh+'. Two users can never share a Google login.','err'); return; }
   // [FTE 25 Jul 2026] FTE is now REQUIRED — no silent 1.0 for a blank field. Same rule as
   // week capacity: only admin-entered values count, so a new user can't join the roster
   // without one (which would otherwise block the next Begin Phase).
@@ -8765,6 +8823,13 @@ async function _doFullRestore(f){
     for(const [k,ref] of Object.entries(map)){
       let v=d[k];
       if(typeof v==='string'){ bad.push(k); continue; } // FETCH-FAILED placeholder in the backup
+      // [build 226 · audit HIGH] emailToUser is NEVER restored verbatim — it is REBUILT from the
+      // restored loginEmails through the collision-excluding builder, in the SAME batch. The
+      // stored doc in a pre-fix backup can contain the exact collided two-initials array this
+      // whole fix exists to prevent, and the old post-restore resync only corrected it by
+      // listener-order coincidence. Deriving it here makes the restored pair consistent by
+      // construction, whatever the backup contains.
+      if(k==='emailToUser'){ v=_buildEmailToUserFrom(d.loginEmails&&typeof d.loginEmails==='object'?d.loginEmails:{}).map; }
       // [REHEARSAL MODE · build 220] A restore always lands with Rehearsal Mode OFF. Without this,
       // restoring a pre-launch backup mid-auction would silently re-arm the simulator, the
       // skip-backup button and skip-results all at once — the backup's adminSettings are written
