@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 220;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 222;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1244,6 +1244,7 @@ function _knownRosterAddress(a){
   return false;
 }
 window._knownRosterAddress=_knownRosterAddress;
+let _phasesReady=false; // [build 222] set by the phases snapshot; gates ARMING rehearsal on a fresh load
 let changesLog=[], changesDecisionsLog=[], changesResetAt=0, adminSettings={emailNotifsEnabled:true}, timerData={enabled:false,lastChange:null};
 function getReviewThreshold(){ const raw=adminSettings?.reviewThreshold; if(raw===undefined||raw===null)return 0.5; const n=Number(raw); if(isNaN(n))return 0.5; const clamped=Math.max(0,Math.min(2,n)); return Math.round(clamped*10)/10; }
 // Returns the FTE of the lowest-FTE user in the roster. Used by the auto-lock rule.
@@ -1500,7 +1501,7 @@ onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; cons
 onSnapshot(approvalsRef, snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()?snap.data():{}); refreshAll(); });
 // (Removed a duplicate emails listener here — emailsDataAdmin is now kept in sync
 // inside the single emails listener above, mirroring the loginEmails pattern.)
-onSnapshot(phasesRef,   snap=>{ phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{},phaseHistory:{}}; _publishedCompletedPhases=phasesData.completedPhases||{}; _mergeCompletedPhasesView(); refreshAll(); }); // [H6] keep the staged+published merged view
+onSnapshot(phasesRef,   snap=>{ _phasesReady=true; phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{},phaseHistory:{}}; _publishedCompletedPhases=phasesData.completedPhases||{}; _mergeCompletedPhasesView(); refreshAll(); }); // [H6] keep the staged+published merged view
 onSnapshot(deniedRef,   snap=>{ deniedData=normalizeWkArrayMap(snap.exists()?snap.data():{}); refreshAll(); });
 onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); refreshAll(); }); // L-1: bid-phase tag changes must refresh dependent views (pending counts, projections, complete-phase gate)
 onSnapshot(slotsRef,    snap=>{ slotsData=snap.exists()?snap.data():{}; refreshAll(); });
@@ -3089,9 +3090,9 @@ function syncControls(){
   const sab=document.getElementById("simArmedBanner");
   if(sab) sab.style.display=simOn?"block":"none";
   const _rsb=document.getElementById("runSimBtn");
-  if(_rsb){ _rsb.disabled=!simOn; _rsb.style.opacity=simOn?"1":".45"; _rsb.style.cursor=simOn?"":"not-allowed"; _rsb.title=simOn?"":"Turn on Simulator Mode first"; }
+  if(_rsb){ _rsb.disabled=!simOn; _rsb.style.opacity=simOn?"1":".45"; _rsb.style.cursor=simOn?"":"not-allowed"; _rsb.title=simOn?"":"Turn on Rehearsal Mode first"; }
   const _rsab=document.getElementById("runSimApprovalsBtn");
-  if(_rsab){ _rsab.disabled=!simOn; _rsab.style.opacity=simOn?"1":".45"; _rsab.style.cursor=simOn?"":"not-allowed"; _rsab.title=simOn?"":"Turn on Simulator Mode first"; }
+  if(_rsab){ _rsab.disabled=!simOn; _rsab.style.opacity=simOn?"1":".45"; _rsab.style.cursor=simOn?"":"not-allowed"; _rsab.title=simOn?"":"Turn on Rehearsal Mode first"; }
   // Review threshold slider/textbox
   const rSl=document.getElementById("reviewThresholdSlider");
   const rTx=document.getElementById("reviewThresholdText");
@@ -3307,6 +3308,10 @@ window.toggleWelcomeEmails=async function(){
 window.toggleSimulator=async function(){
   const cur=adminSettings.simulatorEnabled===true;
   if(!cur){
+    // [build 222 · audit] The refusal below reads phasesData, which starts as a DEFAULT until the
+    // first snapshot arrives — on a slow connection the door was briefly checkable against nothing.
+    // Refuse to ARM until the real phase state has loaded (disarming is always allowed).
+    if(!_phasesReady){ toast('Still loading the auction state — try again in a few seconds.','warn'); return; }
     if(phase1Started()){
       toast('🚫 Rehearsal Mode cannot be turned ON — the auction is LIVE. Rehearsal tools (simulator, skip-backup, skip-results) are for a non-live auction only.','err');
       return;
@@ -3569,13 +3574,15 @@ function renderSimPanel(){
     banner.textContent='⛔ Global lock is on — simulator cannot run.';
   } else if(lockedCount>0){
     // Locked weeks are allowed — the simulator just won't bid on them.
-    btn.disabled=false; btn.style.opacity='1'; btn.style.cursor='pointer';
+    const _simOn=adminSettings.simulatorEnabled===true; // [build 222] never re-enable past the rehearsal gate
+    btn.disabled=!_simOn; btn.style.opacity=_simOn?'1':'.45'; btn.style.cursor=_simOn?'pointer':'not-allowed'; btn.title=_simOn?'':'Turn on Rehearsal Mode first';
     banner.style.display='block';
     banner.style.background='rgba(251,191,36,.08)'; banner.style.border='1px solid rgba(251,191,36,.3)'; banner.style.color='#946008';
     const phInfoL=cur>1?' — will also skip weeks users won in prior phases':'';
     banner.innerHTML='⚠️ Simulator ready for <strong>Phase '+cur+'</strong> — '+lockedCount+' locked week'+(lockedCount!==1?'s':'')+' will be skipped (no bids placed)'+phInfoL+topUp;
   } else {
-    btn.disabled=false; btn.style.opacity='1'; btn.style.cursor='pointer';
+    const _simOn2=adminSettings.simulatorEnabled===true; // [build 222] same gate on the ready path
+    btn.disabled=!_simOn2; btn.style.opacity=_simOn2?'1':'.45'; btn.style.cursor=_simOn2?'pointer':'not-allowed'; btn.title=_simOn2?'':'Turn on Rehearsal Mode first';
     banner.style.display='block';
     banner.style.background='rgba(52,211,153,.08)'; banner.style.border='1px solid rgba(52,211,153,.2)'; banner.style.color='#0d7a43';
     const phInfo=cur>1?' — will skip weeks users won in prior phases and priority numbers already consumed':'';
@@ -3996,6 +4003,9 @@ window.skipPhaseResults=function(cur){
           <div class="cmodal-warn" style="margin-top:8px">For testing only — users will NOT receive their results e-mail. You can still send them later from the Approvals/Denials results tools if needed.</div>`,
     okText:'Skip — don’t e-mail', danger:true,
     onConfirm:async()=>{
+      // [build 222 · audit] Re-check at the moment of action — the dialog may have outlived a
+      // rehearsal disarm from another admin's page. Skipping results in a live auction is never OK.
+      if(adminSettings.simulatorEnabled!==true){ toast('Rehearsal Mode is OFF — results were NOT skipped. Send the e-mails.','err'); return; }
       // [H6] skipping still ANNOUNCES: publish the staged snapshot with the stamp.
       // [AUDIT 2026-07-26 disputed-low] Do NOT swallow a failed publish — the batch is what
       // makes results public and stamps resultsSent. A dropped network here used to toast
@@ -6307,6 +6317,10 @@ window.runSimulationApprovals=function(){
   });
 };
 async function _execSimulationApprovals(){
+  // [build 222 · audit] Execution-time re-check, mirroring _runSimulationNow: the confirm dialog
+  // may have been open while another admin disarmed Rehearsal Mode. The dialog is paint; this is
+  // the enforcement.
+  if(adminSettings.simulatorEnabled!==true){ toast('Rehearsal Mode is OFF — auto-approve/deny did not run.','err'); return; }
   // [AUDIT 2026-07-26 H2] Formerly decided EVERY bid from ONE computeApprovals() snapshot —
   // the same stale-projection defect as the old Deny All Current Losers: denying a blocking
   // loser re-opens the week for the next group, so the bulk write denied users the engine
@@ -6653,7 +6667,7 @@ window.adminChangePriority=async function(u,wk,val){
     // [delta-audit #7, same trap] The <select> has ALREADY moved to the new value in the DOM and
     // no snapshot fires when nothing is written, so a cancel would leave the table showing a value
     // that was never saved. Redraw from live data, exactly as guardAdminBid does.
-    onCancel:()=>{ try{ refreshAll(); }catch(_){ } }
+    onCancel:()=>{ try{ if(document.activeElement&&typeof document.activeElement.blur==='function') document.activeElement.blur(); }catch(_){ } try{ refreshAll(); }catch(_){ } }
   });
 };
 window._adminChangePriorityRaw=async function(u,wk,val){
@@ -8815,7 +8829,7 @@ function _backupThen(label,fn){
     // was one of the two disputed criticals, resolved by the admin's rehearsal-mode ruling.
     body:`<div>Save a <strong>cloud backup</strong> first? It takes a few seconds, every admin can see it, and it is the auction's undo.</div>`
       +(adminSettings.simulatorEnabled===true
-        ?`<button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="closeConfirm();window._bkProceed()">⏭ Skip backup (testing)</button>`
+        ?`<button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="closeConfirm();if(adminSettings.simulatorEnabled===true)window._bkProceed();else toast('Rehearsal Mode is OFF — a verified backup is required for this step.','err')">⏭ Skip backup (testing)</button>`
         :''),
     okText:'☁️ Cloud Backup & Continue',
     onConfirm:async()=>{
@@ -8860,7 +8874,9 @@ const BACKUP_FETCH_TIMEOUT_MS=20000;
 const BACKUP_COMMIT_TIMEOUT_MS=30000;
 function _withTimeout(p,ms,label){
   let t;
-  const timer=new Promise(function(_,rej){ t=setTimeout(function(){ rej(new Error('timed out after '+Math.round(ms/1000)+'s: '+label)); },ms); });
+  // The timeout error is TAGGED so callers can tell "ran out of time" (inconclusive — the work
+  // may still land) apart from a genuine rejection (definite failure with a real error code).
+  const timer=new Promise(function(_,rej){ t=setTimeout(function(){ const e=new Error('timed out after '+Math.round(ms/1000)+'s: '+label); e._timedOut=true; rej(e); },ms); });
   return Promise.race([p,timer]).finally(function(){ clearTimeout(t); });
 }
 // Sticky on-screen counter for work that outlasts a normal toast. Returns an onProgress callback.
@@ -8952,6 +8968,13 @@ window.cloudBackupNow=async function(){
     // so the message says to check the list, and we return false so the transition does NOT run.
     try{ await _withTimeout(batch.commit(),BACKUP_COMMIT_TIMEOUT_MS,'saving the backup'); }
     catch(ce){
+      // [build 221 · audit fix] Only a TIMEOUT is inconclusive. A genuine commit rejection
+      // (permission-denied, unauthenticated, invalid-argument, …) is a DEFINITE failure — the
+      // first cut of this catch swallowed those too, told the admin "MAY still have saved —
+      // your connection may be too slow" for errors that had nothing to do with the connection,
+      // and destroyed the error code the admin needed to diagnose it. Rethrow non-timeouts to
+      // the outer catch, which reports FAILED with the real code, exactly as build 217 did.
+      if(!ce||ce._timedOut!==true) throw ce;
       toast('☁️ Backup did not confirm in time — your connection may be too slow. It MAY still '
         +'have saved: check the backup list before trying again. Nothing else was changed.','err');
       return false;
