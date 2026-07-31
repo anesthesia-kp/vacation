@@ -43,11 +43,12 @@ extracted functions, no stray `{` in comments inside them); prefer grep + ranged
 
 ## 1. CURRENT STATE (31 Jul 2026)
 
-- **Live (pushed):** staff 125 / admin 226 era. **On the user's disk, awaiting ONE push:** staff
-  **126**, admin **229**, versions.json {"index":126,"mobile":16,"admin":229}, updated tests, this
-  handoff + VERIFICATION/DISPUTED docs. Builds 227–229 were audited BEFORE deploy (adversarial
-  passes on 227 and on Batch A found the two 229 issues) — 227/228 never shipped separately.
-- **Test suite: 704 assertions, 6 suites, all green** against the workspace copy; every new test
+- **Live (pushed, verified 31 Jul):** staff 126 / admin 229 — including the live test bid
+  (place + remove) that closed the rules×writeBatch question. **On the user's disk, awaiting
+  push:** admin **232** + versions.json {"index":126,"mobile":16,"admin":232}, updated tests,
+  this handoff. Builds 230–232 (Batches B and C) were adversarially audited BEFORE deploy; the
+  audits' 8 findings were fixed as 232 (one cosmetic accepted, §6).
+- **Test suite: 760 assertions, 6 suites, all green** against the workspace copy; every new test
   proven to FAIL against a reconstructed pre-fix build. [VERIFIED]
 - Firestore rules: unchanged this session; published state as before (backups block included).
 - Schedule app: admin 48 (was 46) — duplicate-email twin fix only. Staff schedule 24 untouched.
@@ -105,14 +106,27 @@ critic leads — see VERIFICATION-2026-07-30.md for full verdicts.
    are NOT recovery (dead feed forwards nothing until a genuine server snapshot); prior-phase
    WINNERS refused in the replace path (wins are permanent); replace dialog gets adminBidIssues
    warnings; action-time `_feedsHealthyOrExplain` re-checks inside Complete Phase's onConfirm and
-   `_commitBeginPhase`; Send Phase Results gated. AFTER PUSH: one live test bid (test account,
-   timer on) to close the rules×batch-limit question — writeBatch is 2 docs, budget is 20, but
-   confirm live once.
-3. **Batch B (admin):** D9 (login-email save confirm), D10 (alerts-off confirm), D6 (prio-lock
-   toggle confirm), D8 (KP-address confirm; user ruled yes), D13 (per-week capacity diff-confirm;
-   user ruled yes), Lead 1 (`finalFteForWeek` filters orphaned live approvals like the engine).
-4. **Batch C (user ruling 30 Jul: REQUIRED pre-launch):** single-user restore from CLOUD backups.
-   Backup code → own tests + adversarial pass.
+   `_commitBeginPhase`; Send Phase Results gated. **Live test bid PASSED 31 Jul** (place + remove,
+   test account, timer restarted, Smart Lock applied) — the atomic writeBatch clears the published
+   rules on the real server. Batch A fully closed. [VERIFIED]
+3. **Batch B — DONE (build 230).** D9 login-email old→new confirm (+ 232: click-time duplicate
+   re-check), D10 alerts-OFF danger confirm (ON stays one-click), D6 prio-lock confirms both ways,
+   D8 KP-address old→new confirm (welcome moved inside confirm; no-change = no-op), D13 per-week
+   capacity diff-confirm (no-op refused; unsaved week always counts as change; + 232: Cancel
+   reverts the row inputs), Lead 1 `finalFteForWeek` orphan filter (+ 232: I2-reuse check too —
+   full mirror of completePhase's snapshot filter).
+4. **Batch C — DONE (builds 231/232, the pre-launch requirement).** "👤 One user…" button on every
+   cloud backup row → same picker/preview/danger-confirm flow as file backups (shared
+   `_restoreUserFlow`, feed-health gated). `_doUserRestore` is now ONE atomic batch (was 4
+   sequential writes) with a timed-out commit (inconclusive "may still apply — check before
+   retrying") and a wholesale-replace not-found fallback. `_cbFetchFile` (shared by full + one-user
+   cloud restore) is concurrent, timed out per read with one retry, progress-counted. M7 torn-read
+   fix: after a clean backup fetch, schedule/bidPhase/bestBids/bidTimes are re-read adjacently
+   until stable (order-insensitive compare) — a mid-fetch bid can no longer be photographed
+   without its tag/lock/timestamp. 232 also: deleted-user restore is refused with re-add-first
+   instructions (no ghost bidder at default FTE); FETCH-FAILED schedule can't junk the picker
+   roster. Accepted cosmetic: the sticky counter can sit at "28 of 28" up to ~40s during a slow
+   re-check.
 5. **Batch B2 (from the disputed-HIGH tiebreaker, 30 Jul):** adminRemove honest-failure
    handling (no false "Removed" toast/log/e-mails on a rejected delete — MEDIUM) + cumulative-cap
    warning fixes (simulate the pending override approval into capBreaches; add the advisory to the

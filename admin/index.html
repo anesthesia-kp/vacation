@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 229;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 232;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -3373,8 +3373,25 @@ window._capsChanged=function(){
 
 window.toggleEmailNotifs=async function(){
   const cur=adminSettings.emailNotifsEnabled!==false;
-  await setDoc(adminRef,{emailNotifsEnabled:!cur},{merge:true});
-  toast(!cur?"✉️ Outbid alert e-mails ON":"🔕 Outbid alert e-mails OFF",!cur?"ok":"warn");
+  // [SWEEP D10 · build 230] The OFF direction confirms — the one finding both audit skeptics
+  // upheld. While off, outbid alerts are never even QUEUED (both sites verified), so re-enabling
+  // recovers nothing: a one-click flip could permanently cost a bidder their re-bid window.
+  // Turning ON stays one-click — it risks nothing.
+  if(!cur){
+    await setDoc(adminRef,{emailNotifsEnabled:true},{merge:true});
+    toast("✉️ Outbid alert e-mails ON","ok");
+    return;
+  }
+  openConfirm({
+    title:'🔕 Turn outbid alert e-mails OFF?',
+    body:`<div>While this is off, outbid alerts are <strong>never even queued</strong> — anyone outbid during the off-window is silently un-notified, and turning alerts back on later recovers <strong>nothing</strong>.</div>
+          <div class="cmodal-warn" style="margin-top:8px">During live bidding this can cost someone their re-bid window without them ever knowing.</div>`,
+    okText:'🔕 Turn alerts OFF', danger:true,
+    onConfirm:async()=>{
+      await setDoc(adminRef,{emailNotifsEnabled:false},{merge:true});
+      toast("🔕 Outbid alert e-mails OFF","warn");
+    }
+  });
 };
 window.saveEmailCycleDay=function(){
   const el=document.getElementById('emailCycleDayInp'); if(!el) return;
@@ -5246,7 +5263,17 @@ function finalFteForWeek(wk, apPre){ // L-6: accept precomputed approvals to avo
   const win=ap[wk]?.winners;
   if(win && typeof win.forEach==='function') win.forEach(u=>users.add(u));
   const live=approvalsData?.[wk];
-  if(Array.isArray(live)) live.forEach(u=>users.add(u));
+  // [build 230 · CRITIC LEAD 1] Orphan guard, mirroring completePhase's snapshot filter: a live
+  // approval only counts if the bid still EXISTS and is scorable. Mid-phase, a user can remove
+  // an approved bid (the approvals doc is admin-only, so their removal can't touch it) — without
+  // this guard the View Report heading, print export and CSV counted FTE that no working screen
+  // counts, and could double-count against the engine's own winners.
+  // [build 232 · audit] …and the mirror is now COMPLETE: the I2 cross-week-reuse check too. An
+  // I2-disqualified bid has a valid shape (_isScorableBid passes) but the engine drops it and
+  // completePhase strips its approval — counting it here inflated the header against the very
+  // table below it.
+  const _i2dH=Array.isArray(live)&&live.length?_i2DisqualifiedSet():null;
+  if(Array.isArray(live)) live.forEach(u=>{ if(scheduleData[u]&&scheduleData[u][wk]!==undefined&&_isScorableBid(scheduleData[u][wk])&&!(_i2dH&&_i2dH.has(u+'|'+wk))) users.add(u); });
   let fte=0; users.forEach(u=>{fte+=getUserFTE(u);});
   const cap=getSlots(wk);
   return {approved:Math.round(fte*10)/10, available:Math.round((cap-fte)*10)/10, cap};
@@ -6980,15 +7007,27 @@ window.adminSaveEmail=async function(u){
   const val=document.getElementById(`em_${u}`)?.value.trim();
   if(!val||!val.includes("@")){toast("Invalid email","err");return;}
   const prev=String(emailsData?.[u]||"").trim().toLowerCase();
-  await setDoc(emailsRef,{[u]:val},{merge:true}); toast(`✉️ Saved for ${u}`,"ok");
-  // Welcome the NEW KP address once — but ONLY if the user has already logged in this
-  // cycle (their Google address is in the welcome log). No welcome is ever sent before a
-  // user's first login: if they haven't logged in yet, the KP welcome goes out then.
-  if(val.toLowerCase()!==prev){
-    const gk=_wlKey(loginEmailsData?.[u]||'');
-    const loggedIn=!!(gk && welcomeLogData.sent && welcomeLogData.sent[gk]);
-    if(loggedIn) welcomeOnce(u,val);
-  }
+  // [SWEEP D8 · build 230 — user ruled yes] Old→new confirm matching the sibling Clear button.
+  // Consistency more than safety (worst case is one welcome e-mail to a typo'd address), but a
+  // no-change save is now a no-op instead of a silent rewrite.
+  if(val.toLowerCase()===prev){ toast('No change — that is already '+u+"'s KP e-mail.",'ok'); return; }
+  const _prevDisp=prev==='__skip__'?'opted out':(prev||'none saved');
+  openConfirm({
+    title:'✉️ Save KP E-mail',
+    body:`<div>Set <strong>${esc(u)}</strong>'s KP e-mail to <strong style="font-family:var(--mono)">${esc(val)}</strong>?</div>
+          <div style="margin-top:6px;color:var(--t2);font-size:12.5px">Current: <strong style="font-family:var(--mono)">${esc(_prevDisp)}</strong></div>
+          <div class="cmodal-warn" style="margin-top:8px">Alerts CC this address, and if ${esc(u)} has already logged in, a one-time welcome e-mail goes to the new address right away — check for typos first.</div>`,
+    okText:'✉️ Save KP e-mail',
+    onConfirm:async()=>{
+      await setDoc(emailsRef,{[u]:val},{merge:true}); toast(`✉️ Saved for ${u}`,"ok");
+      // Welcome the NEW KP address once — but ONLY if the user has already logged in this
+      // cycle (their Google address is in the welcome log). No welcome is ever sent before a
+      // user's first login: if they haven't logged in yet, the KP welcome goes out then.
+      const gk=_wlKey(loginEmailsData?.[u]||'');
+      const loggedIn=!!(gk && welcomeLogData.sent && welcomeLogData.sent[gk]);
+      if(loggedIn) welcomeOnce(u,val);
+    }
+  });
 };
 window.adminClearEmail=function(u){
   openConfirm({
@@ -7014,9 +7053,29 @@ window.adminSaveLoginEmail=async function(u){
   // trust the emailToUser map). Refuse outright and name the holder — never a warning-and-allow.
   const _holder=_loginEmailOwner(val,u);
   if(_holder){ toast('🚫 NOT saved — '+val+' is already the login e-mail for '+_holder+'. Two users can never share a Google login; fix '+_holder+"'s address first if this is a correction.",'err'); return; }
-  await setDoc(loginEmailsRef,{[u]:val},{merge:true});
-  await maybeSyncEmailToUser(); // don't rely on the snapshot listener — sync NOW so the user's very next bid write is permitted
-  toast(`🔑 Login e-mail saved for ${u}`,"ok");
+  // [SWEEP D9 · build 230] Old→new confirm before the write. A typo here propagates instantly
+  // into the security map and locks the user out of BOTH sign-in and bidding — and they cannot
+  // self-diagnose a failed Google login. The 225 duplicate guard only catches duplicates, not
+  // typos; the sibling Clear button has always confirmed. A no-change save is a no-op.
+  const _prevLe=String(loginEmailsData?.[u]||'').trim().toLowerCase();
+  if(val===_prevLe){ toast('No change — that is already '+u+"'s login e-mail.",'ok'); return; }
+  openConfirm({
+    title:'🔑 Save Login E-mail',
+    body:`<div>Set <strong>${esc(u)}</strong>'s Google login e-mail to <strong style="font-family:var(--mono)">${esc(val)}</strong>?</div>
+          <div style="margin-top:6px;color:var(--t2);font-size:12.5px">Current: <strong style="font-family:var(--mono)">${_prevLe?esc(_prevLe):'none saved'}</strong></div>
+          <div class="cmodal-warn" style="margin-top:8px">This address is how ${esc(u)} signs in AND what permits their bid writes. A typo locks them out of sign-in and bidding until it is corrected — and they cannot diagnose that themselves. Check it letter by letter.</div>`,
+    okText:_prevLe?'Replace login e-mail':'Save login e-mail', danger:!!_prevLe,
+    onConfirm:async()=>{
+      // [build 232 · audit] Click-time re-check of the duplicate guard: this dialog can sit open
+      // while another admin (or another tab) claims the same address — the 225 rule is "never a
+      // warning-and-allow", so the guard must hold at the moment of the WRITE, not just at open.
+      const _h2=_loginEmailOwner(val,u);
+      if(_h2){ toast('🚫 NOT saved — '+val+' became the login e-mail for '+_h2+' while this dialog was open. Two users can never share a Google login.','err'); return; }
+      await setDoc(loginEmailsRef,{[u]:val},{merge:true});
+      await maybeSyncEmailToUser(); // don't rely on the snapshot listener — sync NOW so the user's very next bid write is permitted
+      toast(`🔑 Login e-mail saved for ${u}`,"ok");
+    }
+  });
 };
 window.adminClearLoginEmail=function(u){
   openConfirm({
@@ -8180,9 +8239,24 @@ window.deleteAllUsers=function(){
 
 // ── Priority Lock Toggle ──
 window.togglePrioLock=async function(){
+  // [SWEEP D6 · build 230] Same bare-toggle class as the already-confirmed global lock, so it
+  // gets the same treatment. Policy-not-data (stored locks survive the off-window and are still
+  // recorded), but bids placed below a committed floor while it's off are LEGAL writes that
+  // re-enabling cannot unwind.
   const cur=adminSettings.priorityLockEnabled!==false;
-  await setDoc(adminRef,{priorityLockEnabled:!cur},{merge:true});
-  toast(!cur?"🔒 Priority lock enabled":"🔓 Priority lock disabled",!cur?"ok":"warn");
+  openConfirm({
+    title:cur?'🔓 Disable the priority-lock rule?':'🔒 Enable the priority-lock rule?',
+    body:cur
+      ? `<div>Stop enforcing priority locks for <strong>everyone</strong>?</div>
+         <div class="cmodal-warn" style="margin-top:8px">Stored locks are kept and new ones still record, but any bid placed below a committed floor while this is off is a legal bid — turning the rule back on does NOT unwind it.</div>`
+      : `<div>Resume enforcing priority locks?</div>
+         <div class="cmodal-info" style="margin-top:8px">Every stored lock is enforced again immediately.</div>`,
+    okText:cur?'🔓 Disable':'🔒 Enable', danger:cur,
+    onConfirm:async()=>{
+      await setDoc(adminRef,{priorityLockEnabled:!cur},{merge:true});
+      toast(!cur?"🔒 Priority lock enabled":"🔓 Priority lock disabled",!cur?"ok":"warn");
+    }
+  });
 };
 
 // ── FTE Management ──
@@ -8326,9 +8400,36 @@ window.saveOneSlot=async function(wk){
   if(!r.ok){toast("Enter an FTE availability of 0 or higher","err");return;}
   const c=readSlcInput(wk);
   if(!c.ok){toast("Enter a Smart Lock Control between -1.0 and 1.0","err");return;}
-  await setDoc(slotsRef,{[wk]:r.value},{merge:true});
-  await setDoc(slcRef,{[wk]:c.value},{merge:true});
-  toast(`${wLabel(wkDate(wk))}: availability ${r.value}, smart lock control ${c.value}`,"ok");
+  // [SWEEP D13 · build 230 — user ruled yes] Same diff-confirm as Save All Weeks (D4). The panel
+  // deliberately refuses to refresh while the cursor is in the table, so a per-week Save is the
+  // click most likely to write a stale value the admin isn't really looking at. A no-op save is
+  // refused; a real change is named old→new before it re-decides the week's winners. An UNSAVED
+  // week always counts as a change — saving it flips live capacity from 0 to the saved value.
+  const _unsaved=(slotsData?slotsData[wk]:undefined)===undefined;
+  const _oldSlot=Number(getSlots(wk)), _oldSlc=Number(getSlc(wk));
+  const _slotCh=_unsaved||Math.abs(r.value-_oldSlot)>1e-9;
+  const _slcCh=Math.abs(c.value-_oldSlc)>1e-9;
+  if(!_slotCh&&!_slcCh){ toast('Nothing to save — this week already matches what is stored.','ok'); return; }
+  openConfirm({
+    title:'💾 Save '+wLabel(wkDate(wk))+'?',
+    body:`<div>${_slotCh?`FTE availability: <strong>${_unsaved?'not saved (live capacity 0)':_oldSlot}</strong> → <strong>${r.value}</strong>`:`FTE availability unchanged (${r.value})`}</div>
+          <div style="margin-top:4px">${_slcCh?`Smart Lock Control: <strong>${_oldSlc}</strong> → <strong>${c.value}</strong>`:`Smart Lock Control unchanged (${c.value})`}</div>
+          ${_slotCh?`<div class="cmodal-warn" style="margin-top:8px">Changing a week's availability re-decides that week's winners immediately.</div>`:''}`,
+    okText:'💾 Save', danger:_slotCh,
+    onConfirm:async()=>{
+      await setDoc(slotsRef,{[wk]:r.value},{merge:true});
+      await setDoc(slcRef,{[wk]:c.value},{merge:true});
+      toast(`${wLabel(wkDate(wk))}: availability ${r.value}, smart lock control ${c.value}`,"ok");
+    },
+    // [build 232 · audit] Cancel reverts the inputs to what is actually stored, like every other
+    // confirm-on-change in this file. The panel's H-7 guard suppresses redraws while the cursor
+    // is in the table, so a cancelled edit would otherwise sit on screen looking saved — and be
+    // silently swept into a later "Save All Weeks" as a change the admin never intended.
+    onCancel:()=>{
+      const _s=document.getElementById('slot_'+wk); if(_s) _s.value=_unsaved?getDefaultSlots(wk):_oldSlot;
+      const _c=document.getElementById('slc_'+wk); if(_c) _c.value=_oldSlc;
+    }
+  });
 };
 
 // Global Smart Lock Control: one value (−1.0 to 1.0) applied to EVERY week at once.
@@ -8997,8 +9098,20 @@ async function _doFullRestore(f){
 }
 window._restoreUser=function(i){
   const f=_restoreFiles[i]; if(!f||f.error) return;
+  _restoreUserFlow(f);
+};
+// [build 231 · BATCH C] The user-picker → preview → confirm flow, shared by FILE backups
+// (the original path) and CLOUD backups (new — cloudRestoreUser builds the same `f` shape).
+function _restoreUserFlow(f){
+  // The preview's "Current:" line is read from this page's LOCAL data — never preview (or
+  // promise a diff of) bids the page can't currently see.
+  if(!_feedsHealthyOrExplain('Restore One User')) return;
   const d=f.data;
-  const roster=[...new Set([...((d.userList||{}).users||[]),...Object.keys(d.schedule||{}),...names])].sort();
+  // [build 232 · audit] Guard both sides of the roster union: a FETCH-FAILED schedule is a
+  // STRING, whose Object.keys are junk indices ('0','1','2'…) — display-only (the restore
+  // itself is refused downstream), but never show garbage in the picker.
+  const _bkSched=(d.schedule&&typeof d.schedule==='object')?d.schedule:{};
+  const roster=[...new Set([...((d.userList||{}).users||[]),...Object.keys(_bkSched),...names])].sort();
   const when=new Date(f.ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
   openConfirm({
     title:'👤 Restore One User',
@@ -9009,7 +9122,22 @@ window._restoreUser=function(i){
     okText:'Preview restore',
     onConfirm:()=>{
       const u=document.getElementById('restoreUserSel')?.value; if(!u) return;
-      const bBids=(d.schedule||{})[u]||{}; const cBids=(scheduleData||{})[u]||{};
+      // [build 232 · audit] A user who is NOT on the live roster must be re-added FIRST. This
+      // restore recreates only their four bid documents — with no roster entry they'd compete
+      // in every allocation at default FTE 1.0 while being invisible in every roster-driven
+      // view, unable to log in, and unreachable by e-mail: a half-resurrected ghost whose FTE
+      // silently consumes capacity the admin can't see or explain.
+      if(!names.includes(u)){
+        openConfirm({
+          title:'🚫 '+esc(u)+' is not on the roster',
+          body:`<div><strong>${esc(u)}</strong> exists in this backup but is not on the live roster — they were removed after it was taken.</div>
+                <div class="cmodal-warn" style="margin-top:8px">Restoring only their bids would create an invisible bidder: competing in every week at a default FTE of 1.0, but with no login, no e-mail, and no row in any roster view.</div>
+                <div style="margin-top:8px">Re-add <strong>${esc(u)}</strong> in User Management first (initials, FTE, login e-mail), then run this restore again.</div>`,
+          okText:'OK', onConfirm:()=>{}
+        });
+        return;
+      }
+      const bBids=_bkSched[u]||{}; const cBids=(scheduleData||{})[u]||{};
       const fmt=(m)=>Object.keys(m).length?Object.keys(m).sort().map(wk=>('W'+(_wkNumByISO[wk]||'?')+': '+bidLblAdmin(m[wk]))).join(' · '):'none';
       openConfirm({
         title:'👤 Restore '+esc(u)+'?',
@@ -9036,15 +9164,48 @@ async function _doUserRestore(f,u){
     toast('🛟 Restore ABORTED — this backup could not read '+unusable.join(', ')+'. Restoring would delete '+u+"'s live data for those. Use a complete backup.",'err');
     return;
   }
+  // [build 231 · BATCH C] ATOMIC: all four documents flip in ONE batch. The old loop was four
+  // sequential writes, so a mid-restore failure could leave u's bids restored but their phase
+  // tags current — the exact torn bid/tag state Batch A exists to prevent, created by the
+  // recovery tool itself. update() with a field path replaces the user's node WHOLESALE
+  // (merge:true would keep stale weeks the backup doesn't have).
   const fails=[];
-  for(const [ref,k] of pairs){
-    const val=(d[k]||{})[u];
-    try{
-      if(val===undefined){ await updateDoc(ref,{[u]:deleteField()}); }
-      else { await updateDoc(ref,{[u]:val}); }
-    }catch(e){
-      if(val!==undefined){ try{ await setDoc(ref,{[u]:val},{merge:true}); }catch(e2){ fails.push(k); } }
-      else if(e&&e.code!=='not-found'){ fails.push(k); }
+  try{
+    const batch=writeBatch(db);
+    for(const [ref,k] of pairs){
+      const val=(d[k]||{})[u];
+      batch.update(ref,{[u]:val===undefined?deleteField():val});
+    }
+    // [build 232 · audit] Timed out like every other backup-family commit. On a weak link a
+    // commit neither resolves nor rejects — the admin would see nothing, assume failure, move
+    // on, and minutes later the queued batch could silently rewrite the user over NEWER state.
+    await _withTimeout(batch.commit(),BACKUP_COMMIT_TIMEOUT_MS,'restoring '+u);
+  }catch(e){
+    if(e&&e._timedOut===true){
+      // Inconclusive, not failed: the batch may still land when the connection recovers.
+      toast('🛟 Restore for '+u+' did not confirm in time — your connection may be too slow. It MAY '
+        +'still apply when the connection recovers: check '+u+"'s bids before assuming it failed or retrying.",'err');
+      return;
+    }
+    if(e&&e.code==='not-found'){
+      // update() requires every doc to exist. A missing doc (possible on a never-bid fresh
+      // auction) has no stale weeks to clear. [build 232 · audit] Per doc: try the wholesale
+      // field replace FIRST, and only fall to set (plain set of the user's node) when THAT doc
+      // is the missing one — a blanket set-merge would deep-merge stale live weeks into the
+      // restored node, a state that is neither the backup's nor the current one.
+      for(const [ref,k] of pairs){
+        const val=(d[k]||{})[u];
+        try{
+          await updateDoc(ref,{[u]:val===undefined?deleteField():val});
+        }catch(e2){
+          if(e2&&e2.code==='not-found'){ if(val!==undefined){ try{ await setDoc(ref,{[u]:val},{merge:true}); }catch(e3){ fails.push(k); } } }
+          else fails.push(k);
+        }
+      }
+    } else {
+      // Atomic commit rejected — NOTHING was written. Say so instead of a per-doc failure list.
+      toast('🛟 Restore for '+u+' FAILED — nothing was changed ('+(e?.code||e?.message||e)+').','err');
+      return;
     }
   }
   try{ await adminLog(u,'ALL','admin-restore-user'); }catch(_){ }
@@ -9148,6 +9309,29 @@ async function _backupFetchAll(onProgress){
     catch(e){ out[name]='FETCH-FAILED: '+(e.code||e.message); fails++; }
     tick();
   }));
+  // [build 231 · M7] TORN-READ RE-CHECK. The 28 reads land at slightly different instants, so a
+  // bid that arrives mid-fetch can be photographed in `schedule` without its `bidPhase` tag (or
+  // vice versa) — restoring that file misfiles that one bid into the wrong phase. After a clean
+  // fetch, re-read the bid-coupled docs ADJACENTLY and compare (order-insensitively — Firestore
+  // key order can differ between reads of identical data): stable means the set is consistent;
+  // changed means a bid landed, so adopt the adjacent set and verify once more. This shrinks the
+  // torn window from the whole fetch to back-to-back reads. Best-effort by design: a re-check
+  // error never fails a backup that already fetched cleanly (it keeps the original values).
+  // [build 232 · audit] Widened from the schedule/bidPhase pair to ALL FOUR bid-coupled docs:
+  // adopting a newer schedule alongside an older bestBids/bidTimes would photograph a bid
+  // without its priority-lock floor and timestamp — a half-bid state the pre-M7 code could not
+  // produce. The four move together or not at all.
+  const _m7Keys=['schedule','bidPhase','bestBids','bidTimes'];
+  if(!fails&&_m7Keys.every(k=>typeof out[k]==='object')){
+    for(let _i=0;_i<2;_i++){
+      try{
+        const _snaps=await Promise.all(_m7Keys.map(k=>_withTimeout(getDoc(docs[k]),BACKUP_FETCH_TIMEOUT_MS,k+' re-check')));
+        const _vals=_snaps.map(s=>s.exists()?s.data():null);
+        if(_m7Keys.every((k,_j)=>_stableStr(_vals[_j])===_stableStr(out[k]))) break;
+        _m7Keys.forEach((k,_j)=>{ out[k]=_vals[_j]; });
+      }catch(_){ break; }
+    }
+  }
   return {out,fails};
 }
 window.exportBackup=async function(){
@@ -9283,21 +9467,49 @@ window.cloudDeleteBackup=function(id,when){
     }
   });
 };
-window.cloudRestore=async function(id){
-  let f=null;
+// Fetch one cloud backup into the exact `f` shape a FILE restore uses ({name,data,ts}), so both
+// restore flavors run through identical downstream code. Returns null (with its own toast) on any
+// problem. [build 231] extracted from cloudRestore so the new one-user path shares it verbatim.
+async function _cbFetchFile(id){
+  // [build 232 · audit] Same weak-connection hardening as _backupFetchAll, which this code was
+  // missing: getDoc retries indefinitely on a bad link, so the old sequential, untimed loop could
+  // sit forever with NOTHING on screen. Reads are now concurrent, each timed out (one retry), and
+  // the sticky counter shows progress — a genuinely dead link fails honestly in ~40s instead of
+  // hanging until the tab is closed.
   try{
-    const m=await getDoc(doc(db,'backups',id));
-    if(!m.exists()){ toast('That cloud backup no longer exists — refreshing the list.','warn'); renderCloudBackups(); return; }
+    const m=await _withTimeout(getDoc(doc(db,'backups',id)),BACKUP_FETCH_TIMEOUT_MS,'backup manifest');
+    if(!m.exists()){ toast('That cloud backup no longer exists — refreshing the list.','warn'); renderCloudBackups(); return null; }
     const md=m.data();
     const data={_exportedAt:md.exportedAt,_build:md.build};
-    for(const n of (md.names||Object.keys(_backupDocMap()))){
-      const s=await getDoc(doc(db,'backups',id,'docs',n));
-      if(!s.exists()){ toast('☁️ This cloud backup is INCOMPLETE ('+n+' is missing) — not restoring. Use another backup.','err'); return; }
-      data[n]=JSON.parse(s.data().j);
-    }
-    f={name:'cloud backup',data,ts:md.ts};
-  }catch(e){ toast('Could not read that cloud backup ('+(e?.code||e?.message||e)+').','err'); return; }
+    const names=md.names||Object.keys(_backupDocMap());
+    const onP=_bkProgressToast('☁️ Reading backup'); let done=0;
+    onP(0,names.length);
+    let missing=null;
+    await Promise.all(names.map(async function(n){
+      let s;
+      try{ s=await _withTimeout(getDoc(doc(db,'backups',id,'docs',n)),BACKUP_FETCH_TIMEOUT_MS,n); }
+      catch(e1){ s=await _withTimeout(getDoc(doc(db,'backups',id,'docs',n)),BACKUP_FETCH_TIMEOUT_MS,n); } // one retry
+      if(!s.exists()){ missing=missing||n; }
+      else data[n]=JSON.parse(s.data().j);
+      done++; onP(done,names.length);
+    }));
+    if(missing){ toast('☁️ This cloud backup is INCOMPLETE ('+missing+' is missing) — not restoring. Use another backup.','err'); return null; }
+    return {name:'cloud backup',data,ts:md.ts};
+  }catch(e){ toast('Could not read that cloud backup ('+(e?.code||e?.message||e)+').','err'); return null; }
+}
+window.cloudRestore=async function(id){
+  const f=await _cbFetchFile(id);
+  if(!f) return;
   _confirmFullRestore(f); // same double-confirm (danger + typed RESTORE) + _doFullRestore as a file restore
+};
+// [build 231 · BATCH C — user ruling 30 Jul: REQUIRED pre-launch] Restore ONE user from a CLOUD
+// backup. Same picker → named old→new preview → danger confirm → atomic _doUserRestore as the
+// file path; only the source differs. This is the recovery tool for a single corrupted/lost
+// bidder mid-auction, without rolling every other user back.
+window.cloudRestoreUser=async function(id){
+  const f=await _cbFetchFile(id);
+  if(!f) return;
+  _restoreUserFlow(f);
 };
 // [build 215] Compact list: one line per backup, recent 3 shown, the rest behind "Show all".
 // Full detail (build, size, users, full e-mail) lives in each row's hover tooltip.
@@ -9317,6 +9529,7 @@ window.renderCloudBackups=async function(){
     const tip='build '+String(b.build||'?')+' · '+kb+' KB · '+(Number(b.bidUsers)||0)+' user'+(Number(b.bidUsers)!==1?'s':'')+' bidding · by '+String(b.by||'?');
     return `<div title="${esc(tip)}" style="display:flex;align-items:center;gap:10px;border:1px solid var(--b1);border-radius:8px;padding:5px 10px;margin-bottom:6px;font-size:12px;flex-wrap:wrap">
       <button class="btn btn-danger" style="padding:2px 8px;font-size:11px" onclick="cloudRestore('${esc(b.id)}')">🛟 Restore…</button>
+      <button class="btn btn-ghost" style="padding:2px 8px;font-size:11px;border:1px solid var(--b1)" title="Restore a single user's bids, locks, times and phase tags from this backup — nobody else is touched" onclick="cloudRestoreUser('${esc(b.id)}')">👤 One user…</button>
       <span style="font-weight:700;color:var(--t1);white-space:nowrap">☁️ ${esc(when)}</span>
       <span style="color:var(--t2);white-space:nowrap">Phase ${esc(String(b.phase||'?'))} · ${Number(b.bids)||0} bid${Number(b.bids)!==1?'s':''} · ${esc(String(b.by||'?').split('@')[0])}</span>
       <span style="margin-left:auto">
