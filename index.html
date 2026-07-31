@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 125;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 126;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -593,7 +593,7 @@ body{zoom:1.15}
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, getDoc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, increment, onSnapshot as _onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, doc, getDoc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, increment, writeBatch, onSnapshot as _onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 // ── Firebase setup ──
@@ -1682,16 +1682,34 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
   saveInProgress=true;
   const safety=setTimeout(()=>{saveInProgress=false;},8000);
   try{
+    // [build 126 · CRITIC LEAD 3] The bid and its PHASE TAG now commit in ONE atomic batch.
+    // The old code awaited the schedule write and fire-and-forgot the bidPhase write with a
+    // swallowed error — so a deadline-second re-bid on a week lost in a completed phase could
+    // land its value but LOSE its tag (rules re-evaluate per write; one round-trip later the
+    // second write can be rejected). The engine then reclassifies the untagged re-bid to the
+    // OLD phase and silently drops it from the allocation, while this function returned true,
+    // logged the change, stamped the floor, and told the user it worked. Atomic = the two can
+    // never diverge: both land or NEITHER does, and a genuine failure falls to the catch below
+    // and reports honestly.
     if(bid===null||bid===undefined){
-      // Atomic field delete — only removes this one nested key
-      await updateDoc(scheduleRef, {[`${user}.${wk}`]: deleteField()});
-      updateDoc(bidPhaseRef, {[`${user}.${wk}`]: deleteField()}).catch(()=>{});
+      const _b=writeBatch(db);
+      _b.update(scheduleRef, {[`${user}.${wk}`]: deleteField()});
+      _b.update(bidPhaseRef, {[`${user}.${wk}`]: deleteField()});
+      try{ await _b.commit(); }
+      catch(e1){
+        // The bidPhase doc may legitimately not exist yet (fresh database) — batch update on a
+        // missing doc aborts the whole batch. Fall back to the schedule delete alone; a missing
+        // bidPhase doc has no tag to remove anyway.
+        if(e1&&e1.code==='not-found'){ await updateDoc(scheduleRef, {[`${user}.${wk}`]: deleteField()}); }
+        else throw e1;
+      }
       if(bidPhaseData[user]) delete bidPhaseData[user][wk]; // keep the local phase tag in sync too
     } else {
-      // Merge write — only sets this one nested key, never touches other users' data
-      await setDoc(scheduleRef, {[user]: {[wk]: bid}}, {merge:true});
       const _ph=Number(phasesData.currentPhase||1);
-      setDoc(bidPhaseRef, {[user]: {[wk]: _ph}}, {merge:true}).catch(()=>{});
+      const _b=writeBatch(db);
+      _b.set(scheduleRef, {[user]: {[wk]: bid}}, {merge:true});
+      _b.set(bidPhaseRef, {[user]: {[wk]: _ph}}, {merge:true});
+      await _b.commit();
       // Optimistically tag the local phase too. Without this, a re-bid on a week the user
       // lost in a COMPLETED phase has no local tag, so getUserBidPhase falls back to the
       // completed-phase snapshot and the fresh bid is hidden as "prior phase" until the

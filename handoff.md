@@ -41,21 +41,19 @@ extracted functions, no stray `{` in comments inside them); prefer grep + ranged
   world-readable by design, unsecurable client-side; Google sign-in is the gate. Accepted.
 - The user always wants delivered files WRITTEN into the repo folders without asking.
 
-## 1. CURRENT STATE (30 Jul 2026)
+## 1. CURRENT STATE (31 Jul 2026)
 
-- **Live (pushed):** staff 125 / admin 224, versions.json {"index":125,"mobile":16,"admin":224}.
-  [VERIFIED at time of writing]
-- **Delivered but NOT yet on the user's disk (their Mac was offline):** vacation admin **226** +
-  versions.json, schedule admin **48** + schedule/versions.json, and updated
-  tests/test-audit-fixes.mjs, test-backup-restore.mjs, test-high-fixes.mjs. They exist in the
-  session workspace (/home/claude/work/GitHub) and as chat attachments. FIRST ACT: write them to
-  disk ("write files"), user pushes BOTH repos.
-- **Test suite: 646 assertions, 6 suites, all green** against the workspace copy. [VERIFIED]
+- **Live (pushed):** staff 125 / admin 226 era. **On the user's disk, awaiting ONE push:** staff
+  **126**, admin **229**, versions.json {"index":126,"mobile":16,"admin":229}, updated tests, this
+  handoff + VERIFICATION/DISPUTED docs. Builds 227–229 were audited BEFORE deploy (adversarial
+  passes on 227 and on Batch A found the two 229 issues) — 227/228 never shipped separately.
+- **Test suite: 704 assertions, 6 suites, all green** against the workspace copy; every new test
+  proven to FAIL against a reconstructed pre-fix build. [VERIFIED]
 - Firestore rules: unchanged this session; published state as before (backups block included).
 - Schedule app: admin 48 (was 46) — duplicate-email twin fix only. Staff schedule 24 untouched.
 - Firebase project vacation-25e8e; EmailJS service_wpprivw/template_rss3fn3, quota 2000/mo.
 
-## 2. WHAT THIS SESSION DID (admin 217→226, schedule 46→48, tests 541→646)
+## 2. WHAT THIS SESSION DID (admin 217→229, staff 125→126, schedule 46→48, tests 541→704)
 
 1. **218** — Complete Phase warning rewritten to CONTRADICTED decisions only (projected WIN but
    denied / projected LOSE but approved — new mirror check `_allStaleApprovals`). Draws/reviews
@@ -91,15 +89,25 @@ critic leads — see VERIFICATION-2026-07-30.md for full verdicts.
 
 0. **Write files to disk; user pushes vacation + schedule repos.** Then hard-refresh, confirm
    live admin 226.
-1. **Live-fire backup/restore check** — runbook delivered (LIVE-FIRE-RUNBOOK + updated steps in
-   chat): arm rehearsal → simulate bids → timer off → disarm via pill → local A → cloud backup →
-   cloud restore (type RESTORE) → local B → drag A into console expecting "same/same/identical" →
-   diff A vs B (expected: timestamp, one restore log entry, empty mailQueue, null→{} promotions,
-   NOTHING else).
-2. **Batch A:** critic Lead 3 (staff `persistScheduleChange` awaits/batches the bidPhase tag write,
-   surfaces failure — staff build 126) + Lead 2 (phase-aware Add Bid duplicate check routed through
-   the `_adminChangePriorityRaw` write-set — admin 227). They compound; Lead 3 is silent bidder
-   loss at the deadline.
+1. **Live-fire backup/restore check — PASSED 30 Jul.** [VERIFIED] Cloud backup → cloud restore
+   round-tripped the real database: A↔B diff showed ONLY the timestamp, one restore-log entry,
+   and a 57.0s timer shift that exactly matches the resume math (expired-in-place preserved).
+   The test also EXPOSED the dead-feed/lost-write incident: a network storm killed the tab's
+   listeners (stale "timer off" display) and Begin Phase 1's timer arm write was lost silently
+   (both backup files prove lastChange stayed 28 Jul). Fixed in build 227 (below).
+2. **Batch A — DONE (staff 126 / admin 228) + connection integrity (227) + audit fixes (229).**
+   227: onSnapshot auto-resubscribe with backoff, feedStaleBanner, `_feedsHealthyOrExplain` gates
+   on every phase-freezing action, VERIFIED timer arm (`_armPhaseTimer` setDoc + read-back echo,
+   both under 15s timeouts — the 30 Jul lost-write case now reports "did NOT verifiably arm").
+   228: staff atomic bid+tag writeBatch (Lead 3); admin dead-bid replacement dialog (Lead 2);
+   `_stableStr` order-insensitive settings compare + named diff keys (the "1 setting differ"
+   live-fire false positive). 229 (adversarial-audit findings on the above): fromCache snapshots
+   are NOT recovery (dead feed forwards nothing until a genuine server snapshot); prior-phase
+   WINNERS refused in the replace path (wins are permanent); replace dialog gets adminBidIssues
+   warnings; action-time `_feedsHealthyOrExplain` re-checks inside Complete Phase's onConfirm and
+   `_commitBeginPhase`; Send Phase Results gated. AFTER PUSH: one live test bid (test account,
+   timer on) to close the rules×batch-limit question — writeBatch is 2 docs, budget is 20, but
+   confirm live once.
 3. **Batch B (admin):** D9 (login-email save confirm), D10 (alerts-off confirm), D6 (prio-lock
    toggle confirm), D8 (KP-address confirm; user ruled yes), D13 (per-week capacity diff-confirm;
    user ruled yes), Lead 1 (`finalFteForWeek` filters orphaned live approvals like the engine).

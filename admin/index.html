@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 226;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 229;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -378,6 +378,13 @@ thead th{color:var(--t2)}
 </style>
 </head>
 <body>
+<!-- [build 227 · CONNECTION INTEGRITY] Shown whenever any live Firestore feed is DEAD. A dead
+     feed silently freezes the page's data (the 30 Jul incident: the timer card showed a stale
+     "off" state for an hour). The listener wrapper auto-reconnects; this banner makes the stale
+     window VISIBLE, and the phase-freezing actions refuse to run while it is up. -->
+<div id="feedStaleBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:3000;align-items:center;gap:10px;justify-content:center;padding:8px 14px;background:#b91c1c;color:#fff;font-weight:800;font-size:13px;box-shadow:0 2px 12px rgba(0,0,0,.35)">
+  ⚠️ LIVE CONNECTION LOST — this page may show STALE data (<span id="feedStaleCount">1</span> feed(s) down). Reconnecting automatically… if this stays up, reload the page. Do not make phase decisions until it clears.
+</div>
 <div id="load"><div class="spin"></div></div>
 
 <div class="shell">
@@ -1484,13 +1491,61 @@ window.removeAdminEmail=function(email){
 // auth is ready, and surfaces listener errors instead of swallowing them.
 // Returns an unsubscribe fn synchronously, so every existing call site — including
 // `unsubSchedule = onSnapshot(...)` — keeps working unchanged.
+// [build 227 · CONNECTION INTEGRITY] A Firestore listener that errors is DEAD FOREVER — the SDK
+// never re-attaches it, so the page silently renders stale data until reload (the 30 Jul
+// incident: a network storm killed the timer/phaseStaging feeds; the admin card showed "timer
+// off" for an hour while the user site showed it running). Three changes, all in this ONE
+// wrapper so every listener on the page is covered:
+//   1. A dead feed AUTO-RESUBSCRIBES with backoff until it recovers.
+//   2. While ANY feed is dead, the red feedStaleBanner is visible (and _feedsHealthyOrExplain
+//      blocks the phase-freezing actions).
+//   3. Recovery is announced, so the admin knows when the data is trustworthy again.
+const FEED_RETRY_MS=[5000,15000,30000,60000]; // backoff steps; the last repeats forever
+const _deadFeeds=new Set();
+function _syncFeedBanner(){
+  const el=document.getElementById('feedStaleBanner'); if(!el) return;
+  el.style.display=_deadFeeds.size?'flex':'none';
+  const n=document.getElementById('feedStaleCount'); if(n) n.textContent=String(_deadFeeds.size);
+}
+// Phase-freezing actions must never run on possibly-stale data: Complete Phase freezes winners
+// FROM THIS PAGE'S LOCAL STATE, so a dead schedule feed would freeze an old board permanently.
+function _feedsHealthyOrExplain(label){
+  if(_deadFeeds.size===0) return true;
+  toast('🚫 '+label+' is blocked — the live connection is broken ('+_deadFeeds.size+' data feed(s) down) and this page may be showing STALE data. Wait for the red banner to clear, or reload the page.','err');
+  return false;
+}
 function onSnapshot(ref, next, error) {
-  let unsub = null, cancelled = false;
-  authReady.then(() => {
+  let unsub = null, cancelled = false, attempt = 0;
+  const path = (ref && ref.path) || '?';
+  function attach(){
     if (cancelled) return;
-    unsub = _onSnapshot(ref, next, error || (e =>
-      console.error('[Firestore listener]', ref && ref.path, e && e.code, e && e.message)));
-  }).catch(() => {});
+    unsub = _onSnapshot(ref, snap => {
+      // [build 229 · audit HIGH] Recovery must come from the SERVER, not the cache. When the SDK
+      // goes offline it raises initial snapshots fromCache (possibly exists()===false for evicted
+      // docs) — the first cut treated those as recovery, cleared the banner, re-opened the gates
+      // and could even blank the local mirrors with empty cache snapshots, all while still
+      // offline. A dead feed now stays dead (and forwards NOTHING) until a genuine server
+      // snapshot arrives. Healthy feeds still forward cache snapshots as always — local
+      // optimistic writes legitimately arrive fromCache and must keep painting instantly.
+      const _fromCache = !!(snap && snap.metadata && snap.metadata.fromCache);
+      if (_deadFeeds.has(path)) {
+        if (_fromCache) return; // still offline — not recovery, and never let cache blank live data
+        attempt = 0;
+        _deadFeeds.delete(path); _syncFeedBanner();
+        if (_deadFeeds.size === 0) toast('✅ Live connection restored — the page is current again.','ok');
+      } else {
+        attempt = 0;
+      }
+      next(snap);
+    }, e => {
+      console.error('[Firestore listener]', path, e && e.code, e && e.message);
+      _deadFeeds.add(path); _syncFeedBanner();
+      if (error) { try { error(e); } catch(_) {} }
+      const delay = FEED_RETRY_MS[Math.min(attempt, FEED_RETRY_MS.length - 1)]; attempt++;
+      setTimeout(function(){ if (!cancelled) attach(); }, delay);
+    });
+  }
+  authReady.then(() => { if (!cancelled) attach(); }).catch(() => {});
   return () => { cancelled = true; if (unsub) unsub(); };
 }
 
@@ -3905,6 +3960,7 @@ window._runSimulationNow=async function(){
 
 
 window.clearEverything=function(){
+  if(!_feedsHealthyOrExplain('Reset Auction')) return; // [build 227] never reset from a stale page
   if(!_bkBypass){ _backupThen('resetting the auction',function(){ _bkBypass=true; try{ window.clearEverything(); } finally { _bkBypass=false; } }); return; }
   openConfirm({
     title:'⚠️ Warning: Remove ALL Data',
@@ -4220,6 +4276,7 @@ function renderPhasePanel(){
 }
 
 window.completePhase=function(){
+  if(!_feedsHealthyOrExplain('Complete Phase')) return; // [build 227] completion FREEZES this page's local state — stale data would freeze wrong winners permanently
   if(!_bkBypass){ _backupThen('completing Phase '+Number(phasesData.currentPhase||1),function(){ _bkBypass=true; try{ window.completePhase(); } finally { _bkBypass=false; } }); return; }
   const cur=Number(phasesData.currentPhase||1);
   // FAIL-SAFE: a phase can NEVER be completed while bidding is still live. Bidding must
@@ -4284,6 +4341,10 @@ window.completePhase=function(){
           </ul>${_staleHtml}`,
     okText:'Complete Phase '+cur,
     onConfirm:async()=>{
+      // [build 229] ACTION-TIME re-check: the entry gate above ran when the dialog OPENED,
+      // but this dialog can sit open while the connection dies underneath it. Completion
+      // freezes local state permanently — never freeze from data that has gone stale.
+      if(!_feedsHealthyOrExplain('Complete Phase')) return;
       const snap=JSON.parse(JSON.stringify(scheduleData));
       const apSnap=JSON.parse(JSON.stringify(approvalsData||{}));
       const denSnap=JSON.parse(JSON.stringify(deniedData||{}));
@@ -4430,6 +4491,10 @@ function blockedByMissingFte(){
 }
 window.blockedByMissingFte=blockedByMissingFte;
 async function _commitBeginPhase(next){
+  // [build 229] ACTION-TIME re-check: every route into here passes an entry gate, but each
+  // runs through at least one confirm dialog that can sit open while the connection dies.
+  // Beginning a phase writes timer + approvals-clear from local state — never from stale data.
+  if(!_feedsHealthyOrExplain('Begin Phase')) return false;
   if(blockedByMissingFte()) return false;
   if(next===1){
     // [FIX 25 Jul 2026 · integrity-audit CRITICAL] Phase 1 must clear live approvals/denials too.
@@ -4478,25 +4543,45 @@ async function _commitBeginPhase(next){
   // Beginning Phase 1 always locks FTE editing — any mid-auction change must be a
   // deliberate, confirmed re-unlock by the admin.
   if(next===1) await setDoc(adminRef,{fteEditEnabled:false},{merge:true}).catch(()=>{});
-  let _timerOk=true;
-  // With the opening window ON, EVERY phase starts its countdown at N days (continuous,
-  // no resets until the starting-reset mark); otherwise phases open with the normal
-  // starting reset from the timer rules.
-  const _ow=getTimerRules().openingWindow;
-  // [AUDIT 2026-07-25 #2] biddingClosed:false is written in the SAME merge as the timer
-  // re-arm, so a phase can never open with the server-side bidding gate still shut.
-  { const _n=Date.now(); try{ await setDoc(timerRef,{enabled:true,biddingClosed:false,durationHours:_ow?_ow.days*24:timerResetHours(_n,_n),lastChange:_n},{merge:true}); }
-    catch(e){ _timerOk=false; console.error('begin-phase timer reset failed:',e); } }
-  toast(_timerOk
-    ? (_ow ? '▶ Phase '+next+' begun — bidding is open (opening window: '+_ow.days+' days, no timer resets until '+stage0Hours()+'h remain)'
-           : '▶ Phase '+next+' begun — bidding is open (timer reset to '+stage0Hours()+'h)')
-    : '⚠️ Phase '+next+' begun, but the TIMER reset FAILED — users may see the auction as CLOSED. Open the Timer card and reset it now.',
-    _timerOk?'ok':'warn');
+  // [build 227 · LOST-WRITE FIX] The 30 Jul rehearsal proved a damaged tab can lose this write
+  // SILENTLY: the arm's promise hung (never resolved, never rejected), no error was logged, and
+  // the phase ran on a two-day-old expired timer — the rules refused every user bid while the
+  // admin believed bidding was open. The arm is now verified by reading the timer BACK from the
+  // server; only the echo counts.
+  const _t=await _armPhaseTimer(next);
+  toast(_t.ok
+    ? (_t.ow ? '▶ Phase '+next+' begun — bidding is open (opening window: '+_t.ow.days+' days, no timer resets until '+stage0Hours()+'h remain)'
+             : '▶ Phase '+next+' begun — bidding is open (timer reset to '+stage0Hours()+'h)')
+    : '🚨 Phase '+next+' begun, but the TIMER did NOT verifiably arm — users may see the auction as CLOSED and CANNOT BID. Open the Timer card and reset the countdown NOW.',
+    _t.ok?'ok':'err');
   return true;
+}
+// [build 227] Arm the phase countdown and VERIFY it landed. Write and read-back are both
+// timeout-bounded (_withTimeout, hoisted from the backup section): a hung promise — the exact
+// observed failure — becomes an honest {ok:false} instead of an eternal silent wait. With the
+// opening window ON, every phase starts its countdown at N days (continuous, no resets until
+// the starting-reset mark); otherwise the normal starting reset from the timer rules.
+// [AUDIT 2026-07-25 #2] biddingClosed:false rides in the SAME merge as the arm, so a phase can
+// never open with the server-side bidding gate still shut.
+async function _armPhaseTimer(next){
+  const _ow=getTimerRules().openingWindow;
+  const _n=Date.now();
+  try{
+    await _withTimeout(setDoc(timerRef,{enabled:true,biddingClosed:false,durationHours:_ow?_ow.days*24:timerResetHours(_n,_n),lastChange:_n},{merge:true}),15000,'arming the phase timer');
+    const s=await _withTimeout(getDoc(timerRef),15000,'verifying the phase timer');
+    const d=s.exists()?s.data():{};
+    const ok=(d.enabled===true&&d.biddingClosed===false&&typeof d.lastChange==='number'&&d.lastChange>=_n);
+    if(!ok) console.error('begin-phase timer arm did not verify — server echo:',JSON.stringify(d));
+    return {ok:ok,ow:_ow};
+  }catch(e){
+    console.error('begin-phase timer arm failed:',e&&(e.code||e.message)||e);
+    return {ok:false,ow:_ow};
+  }
 }
 // Begin Phase 1: opens bidding for the first time. Runs the same lock decision
 // (Smart Lock & Unlock) as every other phase start.
 window.beginPhase1=function(){
+  if(!_feedsHealthyOrExplain('Begin Phase 1')) return; // [build 227]
   // [REHEARSAL MODE · build 220] Going live requires Rehearsal Mode OFF — full stop. The one-way
   // door is sealed from BOTH sides: toggleSimulator refuses to arm rehearsal once live, and this
   // refuses to go live while rehearsal is on. The old "Begin Phase 1 with the simulator STILL ON
@@ -4611,6 +4696,7 @@ function _beginPhaseLockDecisionInner(next){
   });
 }
 window.beginNextPhase=function(){
+  if(!_feedsHealthyOrExplain('Begin Phase')) return; // [build 227]
   if(!_bkBypass){ _backupThen('beginning Phase '+(Number(phasesData.currentPhase||1)+1),function(){ _bkBypass=true; try{ window.beginNextPhase(); } finally { _bkBypass=false; } }); return; }
   const cur=Number(phasesData.currentPhase||1);
   const next=cur+1;
@@ -4901,6 +4987,10 @@ Thank you!`);
 
 // Send batch phase-results emails covering approvals and denials in the current phase.
 window.sendPhaseResultsEmails=function(){
+  // [build 229] entry gate: results are read from LOCAL phasesData — with a dead feed the
+  // archive here may be a phase behind (or missing a just-completed phase entirely), so the
+  // e-mails would announce the wrong phase's winners to the whole department.
+  if(!_feedsHealthyOrExplain('Send Phase Results')) return;
   // Target the most-recently COMPLETED phase and read its approvals/denials from the
   // ARCHIVED snapshot (completedPhases[N]) rather than the live docs — the live docs
   // are wiped the instant the next phase begins, which used to make results
@@ -6057,6 +6147,7 @@ function _refreshReadinessBox(){
 // accepted cost here — closing bidding for the whole department is worth interrupting a single
 // decision, and _refreshReadinessBox() already no-ops when its box is gone.
 window._fixClosePhaseBiddingConfirmed=async function(cur){
+  if(!_feedsHealthyOrExplain('Close Phase Bidding')) return; // [build 227] worker-level = covers both the dashboard and inline routes at action time
   await _lockEveryWeek();
   // Close bidding by EXPIRING the timer (not disabling it) — users see the
   // auction-closed notice; only the on/off toggle ever disables the timer.
@@ -6813,7 +6904,37 @@ window.adminRemove=function(u,wk){
 window.adminAddSelection=function(){
   const u=document.getElementById("addUser").value, wk=document.getElementById("addWeek").value, pv=document.getElementById("addPriority").value;
   if(!u||!wk){toast("Select user and week","err");return;}
-  if(scheduleData[u]?.[wk]!==undefined){toast(`${u} already has this week`,"err");return;}
+  // [build 228 · CRITIC LEAD 2] The old check was phase-blind: a DEAD prior-phase bid (lost or
+  // denied in an earlier phase, still lingering in the schedule doc) triggered "already has this
+  // week" — and Edit Selections locks that row too, so NO admin path could enter a current-phase
+  // bid on such a week. During close/approve, when only the admin can write, that was a hard
+  // dead-end (and the failure state of the staff tag-loss bug was admin-unrepairable). A
+  // current-phase bid still refuses exactly as before; a dead prior-phase bid now offers a
+  // REPLACEMENT through the same write-set the Edit Selections dropdown uses — value written,
+  // phase retagged to current, stale lock and decisions cleared, change logged, alerts queued.
+  if(scheduleData[u]?.[wk]!==undefined){
+    if(isCurrentPhaseBidAdmin(u,wk)){ toast(`${u} already has this week`,"err"); return; }
+    // [build 229 · audit HIGH] Winners' schedule entries SURVIVE phase completion, so a prior-phase
+    // entry is not necessarily dead — it can be a locked-in, permanent WIN. The first cut offered
+    // to "replace" it while asserting it "did not win." Wins are refused outright.
+    if(getPriorPhaseWinners(wk).has(u)){ toast('🏆 '+u+' WON this week in a prior phase — locked-in wins are permanent and cannot be replaced. Pick a different week.','err'); return; }
+    const _mD=wkDate(wk), _oldPh=getUserBidPhaseAdmin(u,wk), _oldVal=bidLblAdmin(scheduleData[u][wk]);
+    // [build 229 · audit] Same rule warnings as every other admin bid entry — the first cut
+    // skipped adminBidIssues entirely, so a rule-breaking replacement (reused bid number, NP off,
+    // over the cap) entered with zero warnings while both sibling paths warn.
+    const _rIss=adminBidIssues(u,wk,pv,false);
+    openConfirm({
+      title:_rIss.length?'⚠️ Replace dead bid — breaks the rules users follow':'♻️ Replace a dead prior-phase bid?',
+      body:`<div><strong>${esc(u)}</strong> has a Phase ${esc(String(_oldPh))} bid (<strong style="font-family:var(--mono)">${esc(_oldVal)}</strong>) on <strong>${esc(wLabel(_mD))}</strong> that did not win and is no longer in play.</div>
+            <div style="margin-top:8px">Replace it with a <strong>Phase ${esc(String(Number(phasesData.currentPhase||1)))}</strong> bid of <strong style="font-family:var(--mono)">${esc(String(pv))}</strong>?</div>`
+        +(_rIss.length?`<ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">${_rIss.map(i=>'<li>'+i+'</li>').join('')}</ul>
+            <div class="cmodal-danger">Admin entries bypass every check the bidding engine applies. Only continue if this override is deliberate.</div>`:'')
+        +`<div class="cmodal-warn" style="margin-top:8px">This clears ${esc(u)}'s priority lock for the week and any leftover approval/denial, and may e-mail colleagues whose projection changes.</div>`,
+      okText:_rIss.length?'Replace anyway':'♻️ Replace with current-phase bid', danger:true,
+      onConfirm:()=>{ window._adminChangePriorityRaw(u,wk,pv); }
+    });
+    return;
+  }
   const m=wkDate(wk);
   // [AUDIT #8/#9] Surface any bidder-facing rule this manual add would break, right
   // in the existing confirm — no extra click when the entry is clean.
@@ -8719,6 +8840,14 @@ window.loadRestoreFiles=function(files){
   });
 };
 window._restoreRemove=function(i){ _restoreFiles.splice(i,1); renderRestoreList(); };
+// [build 228] Deterministic stringify: objects serialize with SORTED keys at every depth, so two
+// semantically-equal values always produce the same string regardless of map key order.
+function _stableStr(v){
+  if(v===undefined) return 'undefined';
+  if(v===null||typeof v!=='object') return JSON.stringify(v);
+  if(Array.isArray(v)) return '['+v.map(_stableStr).join(',')+']';
+  return '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+_stableStr(v[k])).join(',')+'}';
+}
 function renderRestoreList(){
   const el=document.getElementById('restoreList'); if(!el) return;
   el.innerHTML=_restoreFiles.map((f,i)=>{
@@ -8732,9 +8861,14 @@ function renderRestoreList(){
     // diff vs current
     const cur=_bidCount(scheduleData); const dBids=cur.weeks-bc.weeks;
     const phNow=Number(phasesData.currentPhase||1);
-    let setDiff=0; const bs=d.adminSettings||{}, cs=adminSettings||{};
-    for(const k of new Set([...Object.keys(bs),...Object.keys(cs)])){ if(JSON.stringify(bs[k])!==JSON.stringify(cs[k])) setDiff++; }
-    const diff=`vs now: ${dBids===0?'same bid count':(dBids>0?'current has '+dBids+' more bid'+(dBids!==1?'s':''):'current has '+(-dBids)+' fewer bid'+((-dBids)!==1?'s':''))} · ${phNow===Number(ph.currentPhase||1)?'same phase':'phase differs'} · ${setDiff===0?'settings identical':setDiff+' setting'+(setDiff!==1?'s':'')+' differ'}`;
+    // [build 228 · live-fire finding] The settings compare is ORDER-INSENSITIVE now, and it NAMES
+    // what differs. The old JSON.stringify compare reported "1 setting differ" on a backup whose
+    // settings were byte-for-byte equal in VALUE — Firestore does not keep map key order stable
+    // across page sessions, so timerRules serialized in a different order and false-positived.
+    // A cost-us-an-investigation ambiguity: never say "1 setting differ" without saying which.
+    const bs=d.adminSettings||{}, cs=adminSettings||{};
+    const _difKeys=[...new Set([...Object.keys(bs),...Object.keys(cs)])].filter(k=>_stableStr(bs[k])!==_stableStr(cs[k]));
+    const diff=`vs now: ${dBids===0?'same bid count':(dBids>0?'current has '+dBids+' more bid'+(dBids!==1?'s':''):'current has '+(-dBids)+' fewer bid'+((-dBids)!==1?'s':''))} · ${phNow===Number(ph.currentPhase||1)?'same phase':'phase differs'} · ${_difKeys.length===0?'settings identical':_difKeys.length+' setting'+(_difKeys.length!==1?'s':'')+' differ: '+_difKeys.slice(0,4).join(', ')+(_difKeys.length>4?'…':'')}`;
     return `<div style="border:1px solid var(--b1);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:12.5px">
       <div style="font-weight:700;color:var(--t1)">${esc(f.name)}</div>
       <div style="color:var(--t2);margin-top:3px">Taken <strong>${new Date(f.ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'})}</strong> · ${phTxt} · ${bc.weeks} bid${bc.weeks!==1?'s':''} across ${bc.users} user${bc.users!==1?'s':''} · ${tmTxt}${simTxt}</div>
