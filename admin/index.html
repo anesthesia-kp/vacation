@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 235;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 236;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -3873,9 +3873,14 @@ window._runSimulationNow=async function(){
     }
   }
 
-  // Write all bids atomically. ALWAYS merge per-field (dotted paths) — users may
-  // already have real bids in ANY phase now that the simulator tops up instead
-  // of requiring an empty board, so a whole-doc overwrite would erase them.
+  // [L4 · build 236] Write the bids ONE USER PER WRITE — this is NOT atomic (the old comment
+  // claimed it was): a failure or closed tab midway leaves the earlier users' fake bids in
+  // place and the rest missing. That is acceptable ONLY because this code is reachable solely
+  // inside deliberately-armed Rehearsal Mode, and the catch below now says exactly what state
+  // a midway failure leaves and how to clean it (re-run tops up the rest, or Reset Auction).
+  // ALWAYS merge per-field (dotted paths) — users may already have real bids in ANY phase now
+  // that the simulator tops up instead of requiring an empty board, so a whole-doc overwrite
+  // would erase them.
   try {
     for(const user of Object.keys(newSchedule)){
       const dotted={}; for(const wk of Object.keys(newSchedule[user])) dotted[user+'.'+wk]=newSchedule[user][wk];
@@ -3973,8 +3978,11 @@ window._runSimulationNow=async function(){
     const approveBtn=document.getElementById('runSimApprovalsBtn');
     if(approveBtn) approveBtn.style.display='';
   } catch(e){
-    log.innerHTML='<div style="color:#dc2626">Error: '+e.message+'</div>';
-    toast('Simulation error: '+e.message,'warn');
+    // [L4 · build 236] Honest failure: the per-user write loop is not atomic, so a midway
+    // failure means SOME users' simulated bids are already on the board and the rest never
+    // wrote. Say so, with the two clean exits.
+    log.innerHTML='<div style="color:#dc2626">Simulation FAILED partway: '+e.message+'.<br>Some users\' simulated bids may already be on the board while others are missing. Run the simulation again to top up the rest, or use Reset Auction to clear everything.</div>';
+    toast('Simulation failed partway — some fake bids may already be placed. Re-run to finish, or Reset Auction to clear.','warn');
   }
 };
 

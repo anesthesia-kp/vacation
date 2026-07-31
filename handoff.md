@@ -44,8 +44,8 @@ extracted functions, no stray `{` in comments inside them); prefer grep + ranged
 ## 1. CURRENT STATE (31 Jul 2026)
 
 - **Live (pushed):** staff 126 / admin 232 (Batches A/B/C + audits, live test bid verified).
-  **On the user's disk, awaiting push:** staff **127**, admin **235**, versions.json
-  {"index":127,"mobile":16,"admin":235}, updated tests, this handoff. Builds 233–235
+  **On the user's disk, awaiting push:** staff **127**, admin **236**, versions.json
+  {"index":127,"mobile":16,"admin":236}, updated tests, this handoff. Builds 233–235
   (Batches B2 and D) were adversarially audited BEFORE deploy; the audit's 3 findings
   (Cancel-Bid twin of the adminRemove fix, virgin-DB not-found fallback, ledger warning on the
   success toast) were fixed as 235.
@@ -144,8 +144,16 @@ critic leads — see VERIFICATION-2026-07-30.md for full verdicts.
    are caught ("Your bid IS saved…"), the modal always closes, and local floor/timestamp mirrors
    stamp only after their writes land. L1: getUserFTE coerces string FTEs on BOTH sites. L2:
    Begin Phase failure toasts stopped claiming "nothing was changed". L3 had already shipped in
-   231. Per the same ruling: Group 1 closed (M6/M8/M3), deferrals stand (M1 post-launch engine
-   batch, L4 ride-along; M7 shipped with Batch C).
+   231. **M1 — CLOSED, user ruling 31 Jul (final): accepted as DESIGN, no fix ever.** A tied
+   group may all show DRAW even when only some members fit the remaining capacity; the admin
+   holds the override authority in exactly those situations (the approve dialog's cap warning
+   fires before any over-cap approval), so the badge is not misleading in practice. Do NOT
+   re-propose the engine change. Per the earlier 31 Jul ruling: Group 1 closed (M6/M8/M3);
+   M7 shipped with Batch C. **L4 — DONE (build 236, user go-ahead):** the simulator's false
+   "write atomically" comment corrected and a midway failure now names the half-written state
+   with both clean exits (re-run tops up / Reset Auction clears). Rehearsal-only surface.
+   **THE AUDIT QUEUE IS EMPTY — no open code items remain.** Launch items: whitelist
+   confirmations (user), KP IT allowlist (user).
 7. **Confirmed audit queue:** 28 medium, 14 low, small re-audited batches.
 8. **E-mail deliverability — user ruling 30 Jul, FINAL: no domain purchase.** EmailJS keeps
    sending via personal Gmail. Deliverability rests on (a) the Whitelist Tracker — getting all 37
