@@ -1,13 +1,13 @@
 # Handoff — KP East Bay Anesthesia Vacation Auction
 
-**Written:** 30 July 2026, replacing the 29 July handoff · **By:** the Opus/Fable session of 30 Jul
+**Written:** 30 July 2026, last updated **31 July 2026 (code freeze)** · **By:** the Fable sessions of 30–31 Jul
 **Convention unchanged:** **[VERIFIED]** = proven by a runnable test or direct observation.
 **[BELIEVED]** = reasoning. If this document conflicts with the code, the code is right — say so
 and correct the record.
 
 **Start here:**
 ```bash
-REPO_ROOT=/Users/aaronfrankel/Documents/GitHub node tests/run-all.mjs   # 6 suites, 646 assertions
+REPO_ROOT=/Users/aaronfrankel/Documents/GitHub node tests/run-all.mjs   # 6 suites, 803 assertions
 ```
 
 ---
@@ -43,20 +43,18 @@ extracted functions, no stray `{` in comments inside them); prefer grep + ranged
 
 ## 1. CURRENT STATE (31 Jul 2026)
 
-- **Live (pushed):** staff 126 / admin 232 (Batches A/B/C + audits, live test bid verified).
-  **On the user's disk, awaiting push:** staff **127**, admin **236**, versions.json
-  {"index":127,"mobile":16,"admin":236}, updated tests, this handoff. Builds 233–235
-  (Batches B2 and D) were adversarially audited BEFORE deploy; the audit's 3 findings
-  (Cancel-Bid twin of the adminRemove fix, virgin-DB not-found fallback, ledger warning on the
-  success toast) were fixed as 235.
-- **Test suite: 800 assertions, 6 suites, all green** against the workspace copy; every new
-  test carries an executed honesty check against the shipped baseline (or a reconstructed
-  pre-fix build) proving it fails there. [VERIFIED]
+- **Live (pushed AND verified by the user, 31 Jul): staff 127 / admin 236**, versions.json
+  {"index":127,"mobile":16,"admin":236}. Nothing awaits push. Everything from admin 227→236 and
+  staff 126→127 was adversarially audited BEFORE deploy; every confirmed finding fixed and
+  re-tested (Batches A/B/C findings → 229/232; B2/D findings → 235; L4 → 236).
+- **Test suite: 803 assertions, 6 suites, all green**; every new test carries an executed
+  honesty check against the shipped baseline (or a reconstructed pre-fix build) proving it
+  fails there. [VERIFIED]
 - Firestore rules: unchanged this session; published state as before (backups block included).
 - Schedule app: admin 48 (was 46) — duplicate-email twin fix only. Staff schedule 24 untouched.
 - Firebase project vacation-25e8e; EmailJS service_wpprivw/template_rss3fn3, quota 2000/mo.
 
-## 2. WHAT THIS SESSION DID (admin 217→229, staff 125→126, schedule 46→48, tests 541→704)
+## 2. WHAT THE 30–31 JUL SESSIONS DID (admin 217→236, staff 125→127, schedule 46→48, tests 541→803)
 
 1. **218** — Complete Phase warning rewritten to CONTRADICTED decisions only (projected WIN but
    denied / projected LOSE but approved — new mirror check `_allStaleApprovals`). Draws/reviews
@@ -88,10 +86,9 @@ UI wiring, rehearsal lifecycle ×2 (found the 222 and 226 issues), duplicate-ema
 restore HIGH). Two-skeptic verification (confirmer vs refuter pairs) of sweep D6–D13 and the 3
 critic leads — see VERIFICATION-2026-07-30.md for full verdicts.
 
-## 3. THE QUEUE (user-approved order; wait for go-ahead per batch)
+## 3. THE QUEUE — **ALL DONE (this section is now the historical record of what shipped)**
 
-0. **Write files to disk; user pushes vacation + schedule repos.** Then hard-refresh, confirm
-   live admin 226.
+0. Files written to disk, both repos pushed, live builds verified — done repeatedly through 236.
 1. **Live-fire backup/restore check — PASSED 30 Jul.** [VERIFIED] Cloud backup → cloud restore
    round-tripped the real database: A↔B diff showed ONLY the timestamp, one restore-log entry,
    and a 57.0s timer shift that exactly matches the resume math (expired-in-place preserved).
@@ -154,7 +151,9 @@ critic leads — see VERIFICATION-2026-07-30.md for full verdicts.
    with both clean exits (re-run tops up / Reset Auction clears). Rehearsal-only surface.
    **THE AUDIT QUEUE IS EMPTY — no open code items remain.** Launch items: whitelist
    confirmations (user), KP IT allowlist (user).
-7. **Confirmed audit queue:** 28 medium, 14 low, small re-audited batches.
+7. **The old "confirmed audit queue" (28 medium / 14 low) is CLOSED:** every item was either
+   fixed in builds 218–236, refuted by the two-skeptic verification, or explicitly accepted by
+   user ruling (lists in §3 and §6). The 31 Jul code freeze applies — nothing here is pending.
 8. **E-mail deliverability — user ruling 30 Jul, FINAL: no domain purchase.** EmailJS keeps
    sending via personal Gmail. Deliverability rests on (a) the Whitelist Tracker — getting all 37
    users confirmed is now a genuine LAUNCH item — and (b) the KP IT allowlist request, which stays
@@ -166,6 +165,23 @@ D12 saveFte (armed-mode confirm suffices; logged idea: auto-relock). Logged non-
 race warning asymmetry, staff generic permission error for duplicate-locked users, toast blanking
 progress counter, keep-15 momentary overrun after commit-timeout, saveAllSlots writes all 104
 fields while dialog counts changes.
+
+## 3b. LAUNCH CHECKLIST (agreed 31 Jul — item 1 DONE: builds 236/127 pushed and verified live)
+
+2. **Full dress rehearsal** in Rehearsal Mode, one uninterrupted pass: Reset → Begin Phase 1 →
+   simulator + one real test-account bid → close bidding → approve/deny incl. one deliberate
+   override → Complete Phase → Send Results → Begin Phase 2. Fix ONLY what this surfaces.
+3. After rehearsal: Reset Auction; confirm Rehearsal Mode OFF; confirm intended timer state;
+   take a fresh **cloud backup** as the launch-eve baseline.
+4. **Whitelist confirmations** — 34 of 37 outstanding; the likeliest launch-day complaint
+   ("I never got my alert"). Chase these. (No e-mail domain — final ruling; don't re-propose.)
+5. **KP IT allowlist request** — the user's own item (needs someone at KP).
+
+**CODE FREEZE:** the audit queue is empty; every batch was adversarially audited pre-deploy;
+803 assertions green. The one named accepted risk: the STAFF site has no auto-reconnect
+listener wrapper (admin-only, build 227) — accepted because rules guard every write server-side,
+staleness is display-only and heals on refresh, and touching the staff hot path pre-launch is
+worse than the risk. Do NOT fix good-enough items; fix only what the dress rehearsal surfaces.
 
 ## 4. ARCHITECTURE — unchanged (the 29 Jul handoff's §4 ten-line summary is still accurate)
 
