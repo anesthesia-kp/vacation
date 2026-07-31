@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 126;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 127;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -867,7 +867,9 @@ async function sha256(str){
 // [FTE 25 Jul 2026] Parity with the admin site: the hardcoded FTE_MAP fallback is GONE —
 // only admin-entered FTE counts. The 1.0 is a last-resort arithmetic guard, not a default;
 // the admin site refuses to begin a phase while any user is unset, so it stays unreachable.
-function getUserFTE(u){ return fteData[u]!==undefined?fteData[u]:1.0; }
+// [BATCH D · L1 · build 127] Twin of the admin coercion — see admin getUserFTE. A string FTE
+// from a hand-edited restored backup must not NaN the tie-fit math on either site.
+function getUserFTE(u){ const raw=fteData[u]; if(raw===undefined||raw===null||raw==='') return 1.0; const v=Number(raw); return isNaN(v)?1.0:v; }
 
 // ── Custom centered confirm ──
 function showConfirm(msg,opts){
@@ -1851,10 +1853,12 @@ async function saveBestBid(user,wk,prio){
   const userBest=bestBidsData[user]||{};
   const prevScore=userBest[wk]!==undefined?priorityScore(userBest[wk]):999;
   if(priorityScore(prio)<prevScore){
+    // SAFE: only writes this one nested key. Other users' locks and this user's other weeks are preserved.
+    // [M9 · build 127] Write FIRST, stamp the local mirror after it lands — a rejected write must
+    // not leave a phantom floor on screen that the server never stored.
+    await setDoc(bestBidsRef,{[user]:{[wk]:prio}},{merge:true});
     if(!bestBidsData[user]) bestBidsData[user]={};
     bestBidsData[user][wk]=prio;
-    // SAFE: only writes this one nested key. Other users' locks and this user's other weeks are preserved.
-    await setDoc(bestBidsRef,{[user]:{[wk]:prio}},{merge:true});
   }
 }
 
@@ -1930,12 +1934,20 @@ window.confirmPriority=async function(){
     // so a bid rejected by the timer/lock re-check leaves no phantom priority floor.
     const okSaveNP=await persistScheduleChange(user,wk,"NP",_prev);
     if(okSaveNP){
-      await saveBestBid(user,wk,"NP");
-      logOwnChange(user,wk,isNewNP?'added':'edited',"NP");
-      const nowTs=Date.now();
-      if(!bidTimesData[user]) bidTimesData[user]={};
-      bidTimesData[user][wk]=nowTs;
-      await setDoc(bidTimesRef,{[user]:{[wk]:nowTs}},{merge:true});
+      // [BATCH D · M9 · build 127] The BID is saved at this point. If any bookkeeping write
+      // (floor, log, timestamp) fails, say so honestly and still close the modal — the old code
+      // let the rejection escape, so the modal stuck open over a bid that had actually saved.
+      // The local bidTimes mirror is stamped only AFTER its write lands (no phantom timestamp).
+      try{
+        await saveBestBid(user,wk,"NP");
+        logOwnChange(user,wk,isNewNP?'added':'edited',"NP").catch(()=>{});
+        const nowTs=Date.now();
+        await setDoc(bidTimesRef,{[user]:{[wk]:nowTs}},{merge:true});
+        if(!bidTimesData[user]) bidTimesData[user]={};
+        bidTimesData[user][wk]=nowTs;
+      }catch(_bk){
+        showCenterAlert("Your bid IS saved. Some bookkeeping (bid floor or timestamp) didn't record — it will self-correct on your next change; no action needed.");
+      }
     } else {
       // L-2: write didn't land (save in flight, or a timer/lock re-check) — undo the optimistic
       // change on THIS key only. Don't restore `data` wholesale: a fresher snapshot may have
@@ -1964,13 +1976,18 @@ window.confirmPriority=async function(){
   // bid rejected by the timer/lock re-check leaves no phantom priority floor.
   const okSaveBid=await persistScheduleChange(user,wk,newPrio,_prev);
   if(okSaveBid){
-    await saveBestBid(user,wk,newPrio);
-    logOwnChange(user,wk,isNewBid?'added':'edited',newPrio);
-    // Record the timestamp this bid was placed/replaced
-    const nowTs2=Date.now();
-    if(!bidTimesData[user]) bidTimesData[user]={};
-    bidTimesData[user][wk]=nowTs2;
-    await setDoc(bidTimesRef,{[user]:{[wk]:nowTs2}},{merge:true});
+    // [BATCH D · M9 · build 127] Same honest bookkeeping guard as the NP branch above.
+    try{
+      await saveBestBid(user,wk,newPrio);
+      logOwnChange(user,wk,isNewBid?'added':'edited',newPrio).catch(()=>{});
+      // Record the timestamp this bid was placed/replaced — local mirror AFTER the write lands
+      const nowTs2=Date.now();
+      await setDoc(bidTimesRef,{[user]:{[wk]:nowTs2}},{merge:true});
+      if(!bidTimesData[user]) bidTimesData[user]={};
+      bidTimesData[user][wk]=nowTs2;
+    }catch(_bk){
+      showCenterAlert("Your bid IS saved. Some bookkeeping (bid floor or timestamp) didn't record — it will self-correct on your next change; no action needed.");
+    }
   } else {
     // L-2: write didn't land — undo the optimistic change on THIS key only (not `data` wholesale).
     if(_prev[user]?.[wk]===undefined){ if(data[user]) delete data[user][wk]; }

@@ -43,13 +43,15 @@ extracted functions, no stray `{` in comments inside them); prefer grep + ranged
 
 ## 1. CURRENT STATE (31 Jul 2026)
 
-- **Live (pushed, verified 31 Jul):** staff 126 / admin 229 — including the live test bid
-  (place + remove) that closed the rules×writeBatch question. **On the user's disk, awaiting
-  push:** admin **232** + versions.json {"index":126,"mobile":16,"admin":232}, updated tests,
-  this handoff. Builds 230–232 (Batches B and C) were adversarially audited BEFORE deploy; the
-  audits' 8 findings were fixed as 232 (one cosmetic accepted, §6).
-- **Test suite: 760 assertions, 6 suites, all green** against the workspace copy; every new test
-  proven to FAIL against a reconstructed pre-fix build. [VERIFIED]
+- **Live (pushed):** staff 126 / admin 232 (Batches A/B/C + audits, live test bid verified).
+  **On the user's disk, awaiting push:** staff **127**, admin **235**, versions.json
+  {"index":127,"mobile":16,"admin":235}, updated tests, this handoff. Builds 233–235
+  (Batches B2 and D) were adversarially audited BEFORE deploy; the audit's 3 findings
+  (Cancel-Bid twin of the adminRemove fix, virgin-DB not-found fallback, ledger warning on the
+  success toast) were fixed as 235.
+- **Test suite: 800 assertions, 6 suites, all green** against the workspace copy; every new
+  test carries an executed honesty check against the shipped baseline (or a reconstructed
+  pre-fix build) proving it fails there. [VERIFIED]
 - Firestore rules: unchanged this session; published state as before (backups block included).
 - Schedule app: admin 48 (was 46) — duplicate-email twin fix only. Staff schedule 24 untouched.
 - Firebase project vacation-25e8e; EmailJS service_wpprivw/template_rss3fn3, quota 2000/mo.
@@ -127,15 +129,23 @@ critic leads — see VERIFICATION-2026-07-30.md for full verdicts.
    instructions (no ghost bidder at default FTE); FETCH-FAILED schedule can't junk the picker
    roster. Accepted cosmetic: the sticky counter can sit at "28 of 28" up to ~40s during a slow
    re-check.
-5. **Batch B2 (from the disputed-HIGH tiebreaker, 30 Jul):** adminRemove honest-failure
-   handling (no false "Removed" toast/log/e-mails on a rejected delete — MEDIUM) + cumulative-cap
-   warning fixes (simulate the pending override approval into capBreaches; add the advisory to the
-   Complete Phase dialog — MEDIUM). Third disputed HIGH (simulator armed indicator) closed
-   RESOLVED-BY-DESIGN by the rehearsal pill; LOW logged: Begin Phase 2-4 dialog doesn't restate
-   the rehearsal reminder.
-6. **Disputed audit items (13 left):** 9 medium, 4 low — each needs a user ruling with an
-   evidence pack. Both disputed CRITICALS closed (_backupThen via rehearsal design;
-   duplicate-email fixed); all three disputed HIGHs now adjudicated (see Batch B2).
+5. **Batch B2 — DONE (build 233, audit fixes 235).** Both admin delete paths (adminRemove AND
+   Draws & Reviews' Cancel Bid) run through ONE shared atomic 5-op delete (`_adminDeleteBidAtomic`)
+   with honest failure ("NOT removed/cancelled", nothing logged or e-mailed), a virgin-database
+   not-found fallback (skips only docs that don't exist; real rejections report PARTIAL), and
+   local state touched only after the server confirms. capBreaches(sim) counts the PENDING
+   approval being confirmed (both approve dialogs pass it; the note says "includes the approval
+   you are confirming now"); Complete Phase's confirm shows the cap advisory.
+6. **Batch D — DONE (admin 234 / staff 127; user go-ahead 31 Jul = the formal Group-2 ruling).**
+   M4: the three bid-edit confirms RETURN the write promise (the "Action failed" net is
+   reconnected) and a failed save reverts the table. M2: the delivered-address ledger retries
+   once and ALL THREE outcome toasts warn about the re-send trap when it can't save. M5: addUser
+   tells the truth when the FTE save fails. M9 (staff): bookkeeping failures after a saved bid
+   are caught ("Your bid IS saved…"), the modal always closes, and local floor/timestamp mirrors
+   stamp only after their writes land. L1: getUserFTE coerces string FTEs on BOTH sites. L2:
+   Begin Phase failure toasts stopped claiming "nothing was changed". L3 had already shipped in
+   231. Per the same ruling: Group 1 closed (M6/M8/M3), deferrals stand (M1 post-launch engine
+   batch, L4 ride-along; M7 shipped with Batch C).
 7. **Confirmed audit queue:** 28 medium, 14 low, small re-audited batches.
 8. **E-mail deliverability — user ruling 30 Jul, FINAL: no domain purchase.** EmailJS keeps
    sending via personal Gmail. Deliverability rests on (a) the Whitelist Tracker — getting all 37

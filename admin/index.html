@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 232;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 235;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1821,7 +1821,11 @@ function groupByMonth(){ const g={}; mondays.forEach(d=>{ const k=mName(d); if(!
 // direction unset week capacity takes. The state is prevented instead of valued:
 // usersMissingFte() blocks Begin Phase and warns on the dashboard, and addUser refuses a
 // blank FTE, so no auction can run while anyone is unset and this line stays unreachable.
-function getUserFTE(u){ return fteData[u]!==undefined?fteData[u]:1.0; }
+// [BATCH D · L1 · build 234] Coerce: a hand-edited backup can restore FTEs as STRINGS ("0.8"),
+// which pass every !==undefined check but NaN the tie-fit and capacity math ("0.8"+1 => "0.81").
+// A parseable string becomes its number; garbage/blank falls to the same 1.0 arithmetic guard
+// as a missing entry (and usersMissingFte still flags it for the admin).
+function getUserFTE(u){ const raw=fteData[u]; if(raw===undefined||raw===null||raw==='') return 1.0; const v=Number(raw); return isNaN(v)?1.0:v; }
 // Nobody in the department works below 0.4 FTE, so anything under it is a data-entry
 // error, not a real value — 0 especially (it would make a user consume no capacity and
 // therefore win every week they bid on). Enforced on entry AND re-checked here, so a
@@ -4355,7 +4359,7 @@ window.completePhase=function(){
             <li>Users will see Phase ${cur+1} on the bidding board</li>`:`<li><strong>This is the final phase (Phase 4)</strong> — after results are sent, the auction is complete.</li>`}
             <li>Approved bid numbers cannot be reused in future phases</li>
             <li>Denied bid numbers are returned to users for future phases</li>
-          </ul>${_staleHtml}`,
+          </ul>${_staleHtml}${_capWarnHtml()}`,
     okText:'Complete Phase '+cur,
     onConfirm:async()=>{
       // [build 229] ACTION-TIME re-check: the entry gate above ran when the dialog OPENED,
@@ -4530,7 +4534,9 @@ async function _commitBeginPhase(next){
     // must not leak into the real auction (same lineage as the decision clear above).
     batch1.set(phaseStagingRef,{pendingPhaseSnapshots:{}}); // NON-merge replace (empty-map merge clears nothing)
     try{ await batch1.commit(); }
-    catch(e){ toast('Could not begin Phase 1 — nothing was changed ('+(e?.message||e)+')','err'); return false; }
+    // [BATCH D · L2 · build 234] Honest wording: week-lock writes ran BEFORE this batch, so
+    // "nothing was changed" was false — the phase did not begin, but locks may have.
+    catch(e){ toast('Could not begin Phase 1 — the phase did NOT start ('+(e?.message||e)+'). Week locks may already have changed; check the Lock Weeks panel, then try again.','err'); return false; }
   } else {
     // M-4: advance the phase AND clear the finished phase's live approvals/denials as ONE
     // atomic batch. The old code advanced the phase first, then cleared in a separate write
@@ -4551,7 +4557,8 @@ async function _commitBeginPhase(next){
     batch.set(deniedRef,{});
     batch.set(worstBidsRef,{}); // locks only mean anything within a phase — belt-and-suspenders if completePhase's clear failed
     try{ await batch.commit(); }
-    catch(e){ toast('Could not begin Phase '+next+' — nothing was changed ('+(e?.message||e)+')','err'); return false; }
+    // [BATCH D · L2 · build 234] Same honest wording as the Phase-1 path.
+    catch(e){ toast('Could not begin Phase '+next+' — the phase did NOT start ('+(e?.message||e)+'). Week locks may already have changed; check the Lock Weeks panel, then try again.','err'); return false; }
   }
   // Beginning any phase resets the countdown to a fresh 48-hour window so
   // every phase opens with the full default bidding time. [begin-phase timer fix]
@@ -5099,7 +5106,14 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
         for(const a of r.sent) sentAddrs.add(a); // record each address actually delivered to
       }
       // Persist which addresses have now been e-mailed, so a later retry can't double-send.
-      await setDoc(phasesRef,{resultsSentTo:{...(phasesData.resultsSentTo||{}),[cur]:[...sentAddrs]}},{merge:true}).catch(()=>{});
+      // [BATCH D · M2 · build 234] This ledger is what makes "click Send again" SAFE — it is the
+      // only thing preventing a retry from re-sending all ~37 results e-mails. It used to fail
+      // silently; now it retries once, and if it still fails, every retry instruction below
+      // carries the double-send warning instead of pointing the admin at the trap.
+      let _ledgerOk=true;
+      const _ledgerWrite=()=>setDoc(phasesRef,{resultsSentTo:{...(phasesData.resultsSentTo||{}),[cur]:[...sentAddrs]}},{merge:true});
+      try{ await _ledgerWrite(); }catch(_l1){ try{ await _ledgerWrite(); }catch(_l2){ _ledgerOk=false; } }
+      const _ledgerWarn=_ledgerOk?'':' ⚠️ ALSO: the delivered-address ledger could NOT be saved, so a retry may RE-SEND results to users who already have them — wait for a solid connection, then send once.';
       // H-8: mark the phase results SENT only when every address on file has received theirs.
       // If any failed (EmailJS down/over quota), leave resultsSent UNSET so the admin can
       // retry — the retry only hits the addresses still owed.
@@ -5115,13 +5129,15 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
           // stale claim (<120s, held by this _sendId) makes the very retry this toast instructs abort
           // with "another admin session is sending right now," locking the admin out of their own retry.
           await setDoc(phasesRef,{resultsSendClaim:{...(phasesData.resultsSendClaim||{}),[cur]:{by:null,at:0}}},{merge:true}).catch(()=>{});
-          toast('⚠️ Phase '+cur+' e-mails sent, but publishing the results FAILED ('+(e?.message||e)+'). Click Send again to finish publishing.','err'); return;
+          toast('⚠️ Phase '+cur+' e-mails sent, but publishing the results FAILED ('+(e?.message||e)+'). Click Send again to finish publishing.'+_ledgerWarn,'err'); return;
         }
-        toast(`📮 Phase ${cur} results: ${ok} e-mail${ok!==1?'s':''} sent${alreadyDone?`, ${alreadyDone} already sent`:''}${skipped?` (${skipped} had no e-mail)`:''}`,'ok');
+        // [build 235 · audit] The success toast carries the ledger warning too — a perfect send
+        // over a lost ledger looked clean while leaving the re-send trap armed for the next click.
+        toast(`📮 Phase ${cur} results: ${ok} e-mail${ok!==1?'s':''} sent${alreadyDone?`, ${alreadyDone} already sent`:''}${skipped?` (${skipped} had no e-mail)`:''}`+_ledgerWarn,_ledgerOk?'ok':'warn');
       } else if(fail===0 && ok===0 && alreadyDone){
         toast(`📮 Phase ${cur} results were already sent to all ${alreadyDone} user${alreadyDone!==1?'s':''} — nothing new to send.`,'ok');
       } else {
-        toast(`⚠️ Phase ${cur} results: ${ok} sent, ${fail} FAILED — NOT marked complete. Click Send again to retry just the ones still owed.`,'warn');
+        toast(`⚠️ Phase ${cur} results: ${ok} sent, ${fail} FAILED — NOT marked complete. Click Send again to retry just the ones still owed.`+_ledgerWarn,'warn');
       }
       // Release the claim so a legitimate retry (this admin or another) isn't blocked for 2 min.
       await setDoc(phasesRef,{resultsSendClaim:{...(phasesData.resultsSendClaim||{}),[cur]:{by:null,at:0}}},{merge:true}).catch(()=>{});
@@ -6059,7 +6075,7 @@ window.jumpToNextDecision=function(){
 
 // Approvals/denials should ideally only happen once bidding is closed and every
 // week is locked. This reports readiness so we can warn (but still allow override).
-function approvalReadiness(){
+function approvalReadiness(sim){
   const allWeeksLocked = !!locksData.globalLock || mondays.every(d=>!!locksData?.weeks?.[dateKey(d)]);
   // [FIX 25 Jul 2026 · delta-audit #8] The server-side flag is authoritative: when it is set,
   // users genuinely cannot bid no matter what the timer or locks say, so readiness must not
@@ -6080,7 +6096,7 @@ function approvalReadiness(){
   // gate — and the only remedy the gate offers (Close Phase Bidding) cannot change anyone's
   // win count, so a breach deadlocked phase completion with no way out. A breach is the result
   // of admin approval decisions; it must be visible, never a trap.
-  const warnings=capBreaches();
+  const warnings=capBreaches(sim); // [233] sim = pending approval to include (see capBreaches)
   return {ready:problems.length===0, problems, warnings};
 }
 // Users whose wins this phase would take them past the cumulative cap.
@@ -6092,7 +6108,10 @@ function approvalReadiness(){
 // a user with 2 prior wins breached a cap of 3 with zero current wins. This is exactly the
 // error the adApprove comment below warns about ("each counted exactly ONCE"). The winner
 // set is the single deduplicated source of truth; do not add anything to it.
-function capBreaches(){
+function capBreaches(sim){
+  // [BATCH B2 · build 233] `sim` = {user,wk}: a PENDING approval to count as if it were already
+  // confirmed. The approve dialog used to show breaches WITHOUT the approval being confirmed in
+  // it — the one click that would create the breach was exactly the one whose warning missed it.
   const out=[];
   try{
     const cur=Number(phasesData.currentPhase||1);
@@ -6106,8 +6125,14 @@ function capBreaches(){
       const wk=dateKey(d); const a=ap[wk]; if(!a||!a.winners) return;
       a.winners.forEach(u=>{ won[u]=(won[u]||0)+1; });
     });
+    let simCounted=false;
+    if(sim&&sim.user&&sim.wk){
+      const aw=ap[sim.wk]&&ap[sim.wk].winners;
+      if(!(aw&&aw.has(sim.user))){ won[sim.user]=(won[sim.user]||0)+1; simCounted=true; }
+    }
     for(const u of Object.keys(won)){
-      if(won[u]>cap) out.push('<strong>'+esc(u)+'</strong> would end Phase '+cur+' with '+won[u]+' weeks — over the cumulative cap of '+cap);
+      if(won[u]>cap) out.push('<strong>'+esc(u)+'</strong> would end Phase '+cur+' with '+won[u]+' weeks — over the cumulative cap of '+cap
+        +(simCounted&&sim.user===u?' <em>(this count includes the approval you are confirming now)</em>':''));
     }
   }catch(e){ console.warn('capBreaches failed',e); }
   return out;
@@ -6120,8 +6145,8 @@ window.approvalReadiness=approvalReadiness;
 // OUTSIDE the box that _refreshReadinessBox replaces, and that function used
 // `box.outerHTML=readinessWarnHtml()` — so every inline fix click prepended another copy of
 // the cap warning while leaving the previous one in place. Duplicates accumulated per click.
-function _capWarnHtml(){
-  const r=approvalReadiness();
+function _capWarnHtml(sim){
+  const r=approvalReadiness(sim);
   if(!(r.warnings&&r.warnings.length)) return '';
   return `<div class="cmodal-warn" style="margin-top:8px"><strong>⚠️ Cumulative cap exceeded.</strong> These users would finish the phase with more weeks than the cap allows:
        <ul style="margin:6px 0 0 16px;line-height:1.6">${r.warnings.map(w=>`<li>${w}</li>`).join('')}</ul>
@@ -6141,8 +6166,12 @@ function _readinessProblemHtml(){
     <div style="margin-top:6px">…or override and proceed by confirming below.</div></div>`;
 }
 // One wrapper, one id — the refresh rewrites its contents, so nothing can accumulate.
-function readinessWarnHtml(){
-  return `<div id="readinessWarnBox">${_capWarnHtml()}${_readinessProblemHtml()}</div>`;
+// [233] `sim` (the pending approval) is remembered so the inline-fix refresh redraws the SAME
+// simulated warning — only one confirm dialog can be open, so the latest call always owns it.
+let _readinessSim=null;
+function readinessWarnHtml(sim){
+  _readinessSim=sim||null;
+  return `<div id="readinessWarnBox">${_capWarnHtml(sim)}${_readinessProblemHtml()}</div>`;
 }
 // Inline fixes launched from the readiness warning INSIDE an approve/deny
 // dialog — they act immediately (no nested confirm, which would replace the
@@ -6160,7 +6189,7 @@ function _refreshReadinessBox(){
   // This step only stops bidding — it does NOT complete the phase. Say so explicitly here,
   // since this inline path (unlike the dashboard's "Close Phase Bidding" button) has no
   // confirm dialog to explain it up front.
-  box.innerHTML=_capWarnHtml()+(r.ready
+  box.innerHTML=_capWarnHtml(_readinessSim)+(r.ready
     ? '<div class="cmodal-info" style="margin-top:8px">✓ Bidding is now closed and all weeks are locked — safe to approve/deny. Once every bid is decided, come back to the dashboard and click <strong>Complete Phase</strong> to finish — that\'s still a separate, later step.</div>'
     : _readinessProblemHtml());
 }
@@ -6268,7 +6297,7 @@ window.adApprove=function(user,wk,currentOutcome){
     body:`<div>Approve <strong>${user}</strong> as winner for <strong>${wLabel(m)}</strong>?</div>
           <div style="margin-top:6px;font-size:12px;color:var(--t2)">Current outcome: ${currentOutcome.toUpperCase()}</div>
           ${isDrawUser?`<div class="cmodal-info" style="margin-top:8px">User was in a DRAW — they will be notified when phase results are sent (see "Send Phase Results" button).</div>`:''}
-          ${overageHtml}${readinessWarnHtml()}`,
+          ${overageHtml}${readinessWarnHtml({user,wk})}`,
     okText:'Approve',
     onConfirm:async()=>{
       await updateDoc(approvalsRef,{[wk]:arrayUnion(user)}).catch(async()=>setDoc(approvalsRef,{[wk]:[user]},{merge:true}));
@@ -6859,7 +6888,11 @@ window.adminChangePriority=async function(u,wk,val){
   // below runs unchanged once the admin has confirmed (or if nothing is wrong).
   const _issues=adminBidIssues(u,wk,val,false);
   if(_issues.length){
-    guardAdminBid(u,wk,val,false,()=>{ window._adminChangePriorityRaw(u,wk,val); });
+    // [BATCH D · M4 · build 234] RETURN the write's promise. The M-14 safety net in openConfirm
+    // awaits the onConfirm chain and toasts "Action failed" on rejection — but these arrow
+    // functions dropped the promise, so a failed bid save showed no error and the table kept the
+    // unsaved value. One word reconnects the net.
+    guardAdminBid(u,wk,val,false,()=>window._adminChangePriorityRaw(u,wk,val));
     return;
   }
   // [SWEEP D3 · 30 Jul 2026] A rule-LEGAL change used to write straight through with no dialog at
@@ -6877,7 +6910,8 @@ window.adminChangePriority=async function(u,wk,val){
             <strong style="font-family:var(--mono)">${esc(String(val))}</strong>?</div>
           <div class="cmodal-warn" style="margin-top:8px">This also clears ${esc(u)}'s priority lock for the week and removes any approval or denial already recorded, and may e-mail colleagues whose projection changes.</div>`,
     okText:'Save change', danger:true,
-    onConfirm:()=>{ window._adminChangePriorityRaw(u,wk,val); },
+    onConfirm:()=>window._adminChangePriorityRaw(u,wk,val), // [M4 · 234] promise returned → failures surface
+
     // [delta-audit #7, same trap] The <select> has ALREADY moved to the new value in the DOM and
     // no snapshot fires when nothing is written, so a cancel would leave the table showing a value
     // that was never saved. Redraw from live data, exactly as guardAdminBid does.
@@ -6890,8 +6924,12 @@ window._adminChangePriorityRaw=async function(u,wk,val){
   // silently wipes the user's OTHER weeks, which is what this used to do.
   const _prev=snapshotSchedule();
   if(!scheduleData[u])scheduleData[u]={};
+  const _hadOld=scheduleData[u][wk]!==undefined, _oldVal=scheduleData[u][wk];
   scheduleData[u][wk]=val==="NP"?"NP":val.includes(",")?val.split(",").map(Number):Number(val);
-  await mergeFields(scheduleRef,{[u+'.'+wk]:scheduleData[u][wk]});
+  // [BATCH D · M4 · build 234] A failed save must not leave the table showing the unsaved value:
+  // revert the local mirror, redraw, and RETHROW so the M-14 net toasts "Action failed".
+  try{ await mergeFields(scheduleRef,{[u+'.'+wk]:scheduleData[u][wk]}); }
+  catch(e){ if(_hadOld) scheduleData[u][wk]=_oldVal; else delete scheduleData[u][wk]; try{ refreshAll(); }catch(_){} throw e; }
   await mergeFields(bidPhaseRef,{[u+'.'+wk]:Number(phasesData.currentPhase||1)}).catch(()=>{});
   await updateDoc(worstBidsRef,{[`${u}.${wk}`]:deleteField()}).catch(()=>{});
   // Clear approval AND denial atomically — editing the bid re-opens the week for this
@@ -6902,6 +6940,33 @@ window._adminChangePriorityRaw=async function(u,wk,val){
   await adminLog(u,wk,'admin-edit',scheduleData[u][wk]); toast(`✏️ ${u} ${wk} updated · lock cleared`,"ok");
   queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
 };
+// [build 235 · audit] ONE shared atomic delete of a user's bid + phase tag + priority lock +
+// approval/denial membership — used by BOTH admin delete paths (adminRemove in Edit Selections
+// and confirmAdminCancel in Draws & Reviews), so the honest-failure invariant can never again
+// hold in one panel and not the other. Returns {ok:true} | {ok:false,partial,err}.
+// The not-found fallback mirrors the staff twin: a virgin database (no Reset ever run, no staff
+// bid ever placed) may not have all five docs yet, and batch.update aborts wholesale on the
+// first missing one. Per-doc retry skips ONLY docs that don't exist (nothing to delete there);
+// a real mid-retry rejection is reported as PARTIAL, never as success.
+async function _adminDeleteBidAtomic(u,wk){
+  const _ops=[[scheduleRef,{[`${u}.${wk}`]:deleteField()}],[bidPhaseRef,{[`${u}.${wk}`]:deleteField()}],[worstBidsRef,{[`${u}.${wk}`]:deleteField()}],[approvalsRef,{[wk]:arrayRemove(u)}],[deniedRef,{[wk]:arrayRemove(u)}]];
+  try{
+    const batch=writeBatch(db);
+    for(const [ref,upd] of _ops) batch.update(ref,upd);
+    await batch.commit();
+    return {ok:true};
+  }catch(e){
+    if(e&&e.code==='not-found'){
+      try{
+        for(const [ref,upd] of _ops){
+          try{ await updateDoc(ref,upd); }catch(e2){ if(!(e2&&e2.code==='not-found')) throw e2; }
+        }
+        return {ok:true};
+      }catch(e3){ return {ok:false,partial:true,err:String(e3?.code||e3?.message||e3)}; }
+    }
+    return {ok:false,partial:false,err:String(e?.code||e?.message||e)};
+  }
+}
 window.adminRemove=function(u,wk){
   const m=wkDate(wk);
   const cur=scheduleData[u]?.[wk]; const curLbl=Array.isArray(cur)?cur.join('/'):cur;
@@ -6915,13 +6980,20 @@ window.adminRemove=function(u,wk){
       if(!scheduleData[u])return;
       const _prev=snapshotSchedule();
       const oldBid=scheduleData[u][wk];
+      // [BATCH B2 · build 233, helper 235] HONEST failure. The old path deleted the local mirror
+      // first, ran five swallowed-error writes, then unconditionally logged, toasted "Removed"
+      // and queued outbid e-mails — a rejected delete still announced success to the admin AND
+      // the colleagues "promoted" by a removal that never happened on the server. Now: ONE
+      // atomic delete via the shared helper, local state touched only after the server
+      // confirms, and a failure says so.
+      const _r=await _adminDeleteBidAtomic(u,wk);
+      if(!_r.ok){
+        toast(_r.partial
+          ?('🗑 May be PARTIALLY removed — some deletes were rejected ('+_r.err+'). Check '+u+"'s row, then click Remove again to finish.")
+          :('🗑 NOT removed — the delete was rejected ('+_r.err+'). '+u+"'s bid is unchanged; nothing was logged or e-mailed."),'err');
+        return;
+      }
       delete scheduleData[u][wk];
-      // Atomic deletes — never touch other users' or other weeks' data
-      await updateDoc(scheduleRef,{[`${u}.${wk}`]:deleteField()}).catch(()=>{});
-      await updateDoc(bidPhaseRef,{[`${u}.${wk}`]:deleteField()}).catch(()=>{});
-      await updateDoc(worstBidsRef,{[`${u}.${wk}`]:deleteField()}).catch(()=>{});
-      await updateDoc(approvalsRef,{[wk]:arrayRemove(u)}).catch(()=>{});
-      await updateDoc(deniedRef,{[wk]:arrayRemove(u)}).catch(()=>{});
       await _reconcileStaleDenials(wk); // [H12] advisory only — warns if a denial now projects WIN/DRAW/REVIEW
       await adminLog(u,wk,'admin-remove',oldBid); toast(`🗑 Removed · lock cleared`,"warn");
       queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
@@ -6958,7 +7030,7 @@ window.adminAddSelection=function(){
             <div class="cmodal-danger">Admin entries bypass every check the bidding engine applies. Only continue if this override is deliberate.</div>`:'')
         +`<div class="cmodal-warn" style="margin-top:8px">This clears ${esc(u)}'s priority lock for the week and any leftover approval/denial, and may e-mail colleagues whose projection changes.</div>`,
       okText:_rIss.length?'Replace anyway':'♻️ Replace with current-phase bid', danger:true,
-      onConfirm:()=>{ window._adminChangePriorityRaw(u,wk,pv); }
+      onConfirm:()=>window._adminChangePriorityRaw(u,wk,pv) // [M4 · 234] promise returned → failures surface
     });
     return;
   }
@@ -8099,7 +8171,11 @@ window.addUser=async function(){
   }
   try{ await updateDoc(userListRef,{users:arrayUnion(val)}); }
   catch(e){ await setDoc(userListRef,{users:[val]},{merge:true}); } // doc doesn't exist yet
-  await setDoc(fteRef,{[val]:fte},{merge:true}).catch(()=>{}); // FTE is this site's own (not shared)
+  // [BATCH D · M5 · build 234] The FTE save's failure was swallowed and the toast below said
+  // "Added · FTE X" regardless. Three downstream gates trap the missing-FTE state loudly, but
+  // the admin deserves the truth at the moment it happens, not at the next Begin Phase.
+  let _fteOk=true;
+  try{ await setDoc(fteRef,{[val]:fte},{merge:true}); }catch(_fe){ _fteOk=false; } // FTE is this site's own (not shared)
   // Shared with the Daily Schedule (port to the other site): full name, login e-mail, secondary e-mail.
   if(fullName) await setDoc(usernamesRef,{[val]:fullName},{merge:true}).catch(()=>{});
   if(loginEmail){ await setDoc(loginEmailsRef,{[val]:loginEmail},{merge:true}).catch(()=>{}); await maybeSyncEmailToUser(); }
@@ -8109,7 +8185,10 @@ window.addUser=async function(){
   // NO welcome e-mail is sent at user creation. Welcomes only ever go out once the user
   // logs in for the first time: their Google address and (if set here) their KP address
   // are both welcomed then, and the KP prompt is skipped because it's already on file.
-  toast("👤 Added "+val+(fullName?" ("+fullName+")":"")+" · FTE "+fte,"ok");
+  toast(_fteOk
+    ?("👤 Added "+val+(fullName?" ("+fullName+")":"")+" · FTE "+fte)
+    :("👤 Added "+val+" — but saving their FTE FAILED. Set "+val+"'s FTE in FTE Management now; Begin Phase stays blocked while it is missing."),
+    _fteOk?"ok":"err");
 };
 
 window.removeUser=function(u){
@@ -8791,7 +8870,7 @@ window.confirmApprove=function(user,wk,type){
     title:'✓ Approve as Winner',
     body:`<div>Approve <strong>${user}</strong> (FTE ${ufte}) as winner for week of <strong>${wLabel(m)}</strong> (${wRange(m)})?</div>
           <div style="margin-top:8px;font-size:12px;color:var(--t2)">Current status: ${type==='draw'?'Draw':'Under Review'}</div>
-          ${overageHtml}${readinessWarnHtml()}`,
+          ${overageHtml}${readinessWarnHtml({user,wk})}`,
     okText:'Approve',
     onConfirm:async()=>{
       // Atomic array union — appends user to array without ever wiping it
@@ -8860,13 +8939,18 @@ window.confirmAdminCancel=function(user,wk){
     onConfirm:async()=>{
       const _prev=snapshotSchedule();
       const oldBid=scheduleData[user]?.[wk];
+      // [build 235 · audit] Same honest atomic delete as adminRemove — this Draws & Reviews
+      // path kept the old swallowed writes, so a rejected delete still toasted "cancelled" and
+      // e-mailed promotions for a removal that never happened (and an admin who just saw the
+      // honest refusal in Edit Selections could "succeed" here, one panel over).
+      const _r=await _adminDeleteBidAtomic(user,wk);
+      if(!_r.ok){
+        toast(_r.partial
+          ?('✕ May be PARTIALLY cancelled — some deletes were rejected ('+_r.err+'). Check '+user+"'s row, then click Cancel Bid again to finish.")
+          :('✕ NOT cancelled — the delete was rejected ('+_r.err+'). '+user+"'s bid is unchanged; nothing was logged or e-mailed."),'err');
+        return;
+      }
       if(scheduleData[user]) delete scheduleData[user][wk];
-      // Atomic deletes — only touch this one user/week, never overwrite other data
-      await updateDoc(scheduleRef,{[`${user}.${wk}`]:deleteField()}).catch(()=>{});
-      await updateDoc(worstBidsRef,{[`${user}.${wk}`]:deleteField()}).catch(()=>{});
-      await updateDoc(bidPhaseRef,{[`${user}.${wk}`]:deleteField()}).catch(()=>{}); // clear the phase tag too (parity with adminRemove)
-      await updateDoc(approvalsRef,{[wk]:arrayRemove(user)}).catch(()=>{});
-      await updateDoc(deniedRef,{[wk]:arrayRemove(user)}).catch(()=>{});
       await _reconcileStaleDenials(wk); // [H12] advisory only — warns if a denial now projects WIN/DRAW/REVIEW
       await adminLog(user,wk,'admin-remove',oldBid);
       toast(`✕ ${user} ${wk} cancelled; lock cleared`,'warn');
