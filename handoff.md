@@ -177,8 +177,38 @@ fields while dialog counts changes.
    ("I never got my alert"). Chase these. (No e-mail domain — final ruling; don't re-propose.)
 5. **KP IT allowlist request** — the user's own item (needs someone at KP).
 
-**CODE FREEZE:** the audit queue is empty; every batch was adversarially audited pre-deploy;
-803 assertions green. The one named accepted risk: the STAFF site has no auto-reconnect
+**Reset-keeps-rehearsal-armed — CLOSED, user ruling 1 Aug (final): keep as is.** Reset wipes
+auction data but deliberately leaves Rehearsal Mode ON (testing cycles reset repeatedly; the
+pill/banner keep it visible; Begin Phase 1's real-vs-rehearsal dialog blocks a live launch with
+it armed; restores DO force it off). Do not re-propose. The launch checklist's manual
+"confirm Rehearsal Mode OFF" step exists precisely because of this design.
+
+**Dress rehearsal findings #1/#2 — FIXED (builds 237/238), per-path verified.** Build 237's
+fix (below) was then proven per step: executed tests drive each of the FIVE skip paths (Reset,
+Close Bidding dashboard + inline, Complete Phase, Begin Next Phase) through the REAL onclick in
+a global-scope simulation to that step's own next dialog/write. The 237 adversarial audit
+confirmed the fix on all axes AND found one more instance of the same bug class (its AST-level
+sweep beat the original regex sweep): the cap fields' `oninput="_syncCaps()"` called a
+module-scoped function from global scope — live cap-typing behavior dead since the feature
+shipped (saves still worked via the window-attached onchange). Fixed in 238:
+`window._syncCaps=_syncCaps;`. skipPhaseResults verified as the safe window-attached pattern
+(why the admin's "skip email" button always worked) and pinned by test. Full-estate sweep
+(admin + staff + both schedule sites, template-render false positives excluded): no further
+instances. 819 assertions green.
+
+**Dress rehearsal finding #1 — FIXED (build 237).** All five "⏭ Skip backup" paths (Reset,
+Close Bidding, Complete Phase, Begin Next Phase) had been silently dead since build 222: the
+click-time re-check lived in the button's inline onclick, which runs in GLOBAL scope, while
+`adminSettings` is module-private (`<script type="module">`) — every click closed the dialog
+then died on a swallowed ReferenceError ("as if nothing happened"). Fix: the re-check moved
+into module scope as `window._bkSkip()`; the onclick calls only that; button renamed
+"⏭ Skip backup & continue (testing)". Bug-class sweep: all 122 distinct inline onclicks on all
+sites scanned — this was the ONLY handler referencing a module-scoped variable. Tests execute
+the real onclick attribute in a global-scope simulation, plus the verbatim 222–236 broken
+onclick proving the exact reported symptom. [VERIFIED]
+
+**CODE FREEZE (amended: fixes for what the dress rehearsal surfaces are in-scope):** the audit
+queue is empty; every batch was adversarially audited pre-deploy; 807 assertions green. The one named accepted risk: the STAFF site has no auto-reconnect
 listener wrapper (admin-only, build 227) — accepted because rules guard every write server-side,
 staleness is display-only and heals on refresh, and touching the staff hot path pre-launch is
 worse than the risk. Do NOT fix good-enough items; fix only what the dress rehearsal surfaces.

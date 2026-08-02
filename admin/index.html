@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 236;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 238;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -3336,6 +3336,12 @@ function _syncCaps(){
   }
   return out; // null = no limit
 }
+// [build 238 · audit of 237] Same bug class as the dead skip-backup button: the cap fields'
+// oninput="_syncCaps()" attributes run in GLOBAL scope, but _syncCaps was module-scoped and never
+// window-attached — every keystroke in a Cumulative Bid Caps field threw a silent ReferenceError,
+// so the live inherit/snap-up/disable behavior while TYPING was dead (values were still saved
+// correctly on blur/Enter via the window-attached _capsChanged). One line reconnects it.
+window._syncCaps=_syncCaps;
 function _savedCaps(){ const m=adminSettings?.maxBidsCumulative||{}; return [1,2,3,4].map(p=>{ const raw=m[p]!==undefined?m[p]:m[String(p)]; return (raw===undefined||raw===null||raw===''||raw==='none')?null:Number(raw); }); }
 // Reflect the saved caps onto both the number inputs and the No-limit checkboxes (used on
 // initial load, on the live snapshot, and to revert a cancelled change). Skips focused fields.
@@ -9310,6 +9316,19 @@ async function _doUserRestore(f,u){
 let _bkBypass=false;
 let _addUserBypass=false; // [AUDIT 2026-07-26] set only while re-running addUser past the initials-collision confirm
 window._bkProceed=null;
+// [build 237 · DRESS-REHEARSAL BUG] The skip button's click handler, in module scope.
+// The 222 click-time re-check was written INLINE in the button's onclick attribute — but this
+// page's script is type="module", so `adminSettings` is module-private, while inline onclick
+// attributes run in GLOBAL scope. Every click therefore ran closeConfirm() and then died on a
+// silent ReferenceError: the dialog vanished and nothing else happened, on ALL skip paths
+// (Reset, Close Bidding, Complete Phase, Begin Next Phase), since 222. The re-check itself was
+// correct — it just has to live HERE, where adminSettings exists; the onclick now calls only
+// this one window-attached function.
+window._bkSkip=function(){
+  closeConfirm();
+  if(adminSettings.simulatorEnabled===true){ const f=window._bkProceed; if(typeof f==='function') f(); }
+  else toast('Rehearsal Mode is OFF — a verified backup is required for this step.','err');
+};
 function _backupThen(label,fn){
   // [build 215 audit] Every path binds THIS prompt's transition at creation time. The old code
   // read window._bkProceed AFTER awaiting the backup — if the admin opened another transition's
@@ -9327,7 +9346,7 @@ function _backupThen(label,fn){
     // was one of the two disputed criticals, resolved by the admin's rehearsal-mode ruling.
     body:`<div>Save a <strong>cloud backup</strong> first? It takes a few seconds, every admin can see it, and it is the auction's undo.</div>`
       +(adminSettings.simulatorEnabled===true
-        ?`<button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="closeConfirm();if(adminSettings.simulatorEnabled===true)window._bkProceed();else toast('Rehearsal Mode is OFF — a verified backup is required for this step.','err')">⏭ Skip backup (testing)</button>`
+        ?`<button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="_bkSkip()">⏭ Skip backup &amp; continue (testing)</button>`
         :''),
     okText:'☁️ Cloud Backup & Continue',
     onConfirm:async()=>{
