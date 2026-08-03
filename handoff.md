@@ -1,13 +1,13 @@
 # Handoff — KP East Bay Anesthesia Vacation Auction
 
-**Written:** 30 July 2026, last updated **31 July 2026 (code freeze)** · **By:** the Fable sessions of 30–31 Jul
+**Written:** 30 July 2026, last updated **3 August 2026 (admin 239 — priority-inversion never-event fix)** · **By:** the Fable sessions of 30 Jul–3 Aug
 **Convention unchanged:** **[VERIFIED]** = proven by a runnable test or direct observation.
 **[BELIEVED]** = reasoning. If this document conflicts with the code, the code is right — say so
 and correct the record.
 
 **Start here:**
 ```bash
-REPO_ROOT=/Users/aaronfrankel/Documents/GitHub node tests/run-all.mjs   # 6 suites, 803 assertions
+REPO_ROOT=/Users/aaronfrankel/Documents/GitHub node tests/run-all.mjs   # 7 suites, 832 assertions
 ```
 
 ---
@@ -41,8 +41,27 @@ extracted functions, no stray `{` in comments inside them); prefer grep + ranged
   world-readable by design, unsecurable client-side; Google sign-in is the gate. Accepted.
 - The user always wants delivered files WRITTEN into the repo folders without asking.
 
-## 1. CURRENT STATE (31 Jul 2026)
+## 1. CURRENT STATE (3 Aug 2026)
 
+- **admin 239 (NOT yet pushed by user as of this writing) — PRIORITY-INVERSION NEVER-EVENT FIX.**
+  Surfaced in the live dress rehearsal: Week 7 had a bid-2 (KQ) approved while a bid-1 (AVG) was
+  denied. Root cause: denied bids are excluded from `reqs`, so once a stronger bidder is turned
+  away for capacity, the group loop "forgot" them and cascaded their freed room down to weaker
+  priorities — a weaker bid winning while a stronger one lost. This is ADMIN-ENGINE ONLY; the
+  staff twin never reads `deniedData` (security rules) and is structurally immune. Fix
+  (computeApprovals ~2114–2170): after allocation, compute `_blockFloor` = strongest pScore among
+  denied bids that are genuinely over the STRICT cap alongside natural winners, then demote any
+  winner/draw/review strictly weaker than that floor. Prior-phase winners and EXPLICIT admin
+  approvals (`approvalsData[wk]`) are never demoted — that explicit approval IS the exceptional
+  override the user chose (ruling: "strict priority unless admin CHOOSES to override"). A
+  follow-up audit found the strict-cap test could use an admin-overbook-INFLATED `fteWon`; fixed by
+  snapshotting `const _naturalFteWon=fteWon;` before the force-approve block and testing capacity
+  against that natural baseline. TWO independent extreme-care adversarial audits: first found the
+  overbook MEDIUM (fixed), second found the final engine correct and complete (no over-block, no
+  under-block, no scoping/NaN/FP defect). New suite `test-priority-inversion.mjs` (12 assertions:
+  Week-7 repro + honesty check vs pre-fix, natural-projection-untouched, staff-twin-no-deniedData,
+  admin-override-respected, policy-denial-doesn't-empty-week, overbook-doesn't-demote-natural-winner,
+  and a 5000-scenario invariant fuzzer that the pre-fix engine provably FAILS). [VERIFIED]
 - **Live (pushed AND verified by the user, 31 Jul): staff 127 / admin 236**, versions.json
   {"index":127,"mobile":16,"admin":236}. Nothing awaits push. Everything from admin 227→236 and
   staff 126→127 was adversarially audited BEFORE deploy; every confirmed finding fixed and
@@ -182,6 +201,12 @@ auction data but deliberately leaves Rehearsal Mode ON (testing cycles reset rep
 pill/banner keep it visible; Begin Phase 1's real-vs-rehearsal dialog blocks a live launch with
 it armed; restores DO force it off). Do not re-propose. The launch checklist's manual
 "confirm Rehearsal Mode OFF" step exists precisely because of this design.
+
+**Stale-banner flash during admin account-switch — CLOSED, user ruling 2 Aug: leave as is.**
+The feedStaleBanner firing briefly during a Google-account token refresh is the 227 protection
+being truthful; it self-heals in ~5–15 s via auto-resubscribe. Admin-only surface (staff site
+has no banner). The optional 8-second display-grace softening was offered and DECLINED — do
+not re-propose.
 
 **Dress rehearsal findings #1/#2 — FIXED (builds 237/238), per-path verified.** Build 237's
 fix (below) was then proven per step: executed tests drive each of the FIVE skip paths (Reset,

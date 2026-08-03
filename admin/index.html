@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 238;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 239;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -2107,6 +2107,11 @@ function computeApprovals(ignoreAdmin){
       }
     }
     for(const u of draws) reviews.delete(u);
+    // Snapshot the NATURAL fteWon (winners the priority rules produced) BEFORE the admin
+    // force-add below can inflate it via a discretionary overbook. The priority-inversion
+    // guard measures capacity scarcity against THIS baseline — an admin overbook is the
+    // admin's own call and must not make an unrelated denied bid look capacity-blocked.
+    const _naturalFteWon=fteWon;
     if(!ignoreAdmin){
       const approvedHere=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
       approvedHere.forEach(u=>{
@@ -2117,6 +2122,53 @@ function computeApprovals(ignoreAdmin){
           fteWon+=getUserFTE(u);
         }
       });
+    }
+    // [PRIORITY-INVERSION FIX · build 239 · NEVER-EVENT] A weaker-priority bid must never win,
+    // draw, or review a week where a STRICTLY-stronger-priority bid was DENIED because it could
+    // not fit. Denied bids are excluded from `reqs` above, so once (say) a priority-1 bidder is
+    // turned away in a draw, the engine "forgets" them and the group loop cascades their freed
+    // room down to priority-2 — a bid-2 winning while a bid-1 lost. Guard: find the strongest
+    // priority among denied bids that genuinely could NOT fit alongside the winners (capacity-
+    // driven denials only — a denial that still fits, e.g. a policy call with room to spare,
+    // blocks nothing, so a week with real spare capacity is never emptied). Any winner/draw/
+    // review strictly weaker than that floor is demoted to a loss. Prior-phase winners are locked
+    // and never demoted. NATURAL projection (ignoreAdmin=true) has no denials and is untouched.
+    // This runs only on the ADMIN engine: the staff twin cannot read denials (security rules),
+    // so it never sees a denial and structurally cannot produce this inversion — do NOT port a
+    // deniedData reference into the staff computeApprovals.
+    if(!ignoreAdmin){
+      const _denW=Array.isArray(deniedData?.[wk])?deniedData[wk]:[];
+      const _curPh=Number(phasesData.currentPhase||1);
+      const _scorable=p=>p==="NP"||(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10));
+      let _blockFloor=Infinity;
+      for(const u of _denW){
+        const p=scheduleData[u]?.[wk]; if(p===undefined) continue;
+        if(getUserBidPhaseAdmin(u,wk)<_curPh) continue;   // a dead prior-phase bid blocks nothing
+        if(!_scorable(p)) continue;                        // an unscorable/forged bid blocks nothing
+        if(_i2Disq.has(u+'|'+wk)) continue;                // an I2-disqualified bid blocks nothing
+        // Capacity-driven only: this denied stronger bid was over the STRICT cap alongside the
+        // winners (genuinely couldn't fit — scarce capacity it was competing for). The review
+        // THRESHOLD is a borderline-approval overage, NOT "room": a draw-loser denied at 0.7 over
+        // a 0.8 threshold still couldn't fit the cap, so it must still lock out weaker bids. A
+        // denial that fits within the strict cap (room to spare — a policy call) blocks nothing.
+        if(Math.round((_naturalFteWon+getUserFTE(u)-cap)*10)/10>0) _blockFloor=Math.min(_blockFloor,pScore(p));
+      }
+      // Admin OVERRIDE escape hatch (user ruling): strict priority is the DEFAULT — the demotion
+      // below removes any auto-elevated weaker bid so the auto-decider, Deny-All-Losers, and the
+      // draw/review buttons never promote one. But if the admin has DELIBERATELY approved a weaker
+      // bidder (an exceptional call they own), that explicit approval is respected and never
+      // demoted. The stale-approval warning still surfaces it at Complete Phase.
+      const _appW=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
+      if(_blockFloor<Infinity){
+        for(const _set of [winners,draws,reviews]){
+          for(const u of [..._set]){
+            if(priorWinners.has(u)) continue;              // locked-in prior winners are never demoted
+            if(_appW.includes(u)) continue;                // deliberate admin override — respected
+            const p=scheduleData[u]?.[wk];
+            if(p!==undefined&&pScore(p)>_blockFloor){ _set.delete(u); if(_set===winners) fteWon=Math.round((fteWon-getUserFTE(u))*10)/10; }
+          }
+        }
+      }
     }
     // NOTE: We intentionally do NOT auto-collapse a lone remaining draw into a
     // review or a loss. When the admin approves one member of a draw, every
