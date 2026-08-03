@@ -43,7 +43,7 @@ extracted functions, no stray `{` in comments inside them); prefer grep + ranged
 
 ## 1. CURRENT STATE (3 Aug 2026)
 
-- **admin 239 (NOT yet pushed by user as of this writing) — PRIORITY-INVERSION NEVER-EVENT FIX.**
+- **admin 239 (PUSHED & VERIFIED LIVE by the user, 3 Aug) — PRIORITY-INVERSION NEVER-EVENT FIX.**
   Surfaced in the live dress rehearsal: Week 7 had a bid-2 (KQ) approved while a bid-1 (AVG) was
   denied. Root cause: denied bids are excluded from `reqs`, so once a stronger bidder is turned
   away for capacity, the group loop "forgot" them and cascaded their freed room down to weaker
@@ -62,11 +62,25 @@ extracted functions, no stray `{` in comments inside them); prefer grep + ranged
   Week-7 repro + honesty check vs pre-fix, natural-projection-untouched, staff-twin-no-deniedData,
   admin-override-respected, policy-denial-doesn't-empty-week, overbook-doesn't-demote-natural-winner,
   and a 5000-scenario invariant fuzzer that the pre-fix engine provably FAILS). [VERIFIED]
-- **Live (pushed AND verified by the user, 31 Jul): staff 127 / admin 236**, versions.json
-  {"index":127,"mobile":16,"admin":236}. Nothing awaits push. Everything from admin 227→236 and
-  staff 126→127 was adversarially audited BEFORE deploy; every confirmed finding fixed and
-  re-tested (Batches A/B/C findings → 229/232; B2/D findings → 235; L4 → 236).
-- **Test suite: 803 assertions, 6 suites, all green**; every new test carries an executed
+- **3 Aug LIVE-VERIFICATION SESSION (Chrome-driven against the deployed site, admin 239) — all green.** [VERIFIED]
+  (a) Extracted the ACTUAL deployed `computeApprovals` from the live page and ran the Week-7 repro +
+  admin-overbook regression + a 2,500-scenario fuzz IN THE BROWSER: 0 inversions. (b) Reset the
+  (rehearsal) auction and ran a full 4-phase auto-decided run-through; DOM-scanned every decided week
+  (Phase 1: 6 wks, Phase 2: 45 wks, Phase 3: 14 wks): 0 never-events anywhere. (c) Fair Play Monitor
+  proven with TEETH via a Node harness on the real `_fpAnalyzePhase`: winning-bid-cancel, timer-stall,
+  and late-timer all flag; a clean bid does NOT (no false positive). (d) Staff site (build 127)
+  verified live: signs in, renders board/bid-counts/projections, places a real bid that projects
+  "Winning" — and its `computeApprovals` confirmed to NEVER read `deniedData` (structurally
+  inversion-immune). (e) Restore round-trip verified: restored the pre-reset cloud backup, original
+  data returned intact (114/114 bids, same 33 losing users), and Rehearsal Mode correctly landed OFF.
+  (f) Confirmed email sending works (Send Phase Results delivered; users w/o e-mail skipped).
+  (g) Over-cap weeks (~1.0 FTE over) explained: the **review overage is configured at 1.0** (user
+  confirmed) — by design, not a bug; a week may be approved up to a full FTE over cap via reviews/draws.
+- **Live: staff 127 / admin 239** (admin 236→239 pushed & user-verified 3 Aug), versions.json
+  {"index":127,"mobile":16,"admin":239}. Nothing awaits push. admin 227→236 was adversarially
+  audited BEFORE deploy; 236→239 is the priority-inversion fix (two audits + the live verification above).
+- **Test suite: 832 assertions, 7 suites, all green** (added `test-priority-inversion.mjs`; H2 in
+  `test-high-fixes.mjs` updated to strict-priority per user ruling); every new test carries an executed
   honesty check against the shipped baseline (or a reconstructed pre-fix build) proving it
   fails there. [VERIFIED]
 - Firestore rules: unchanged this session; published state as before (backups block included).
