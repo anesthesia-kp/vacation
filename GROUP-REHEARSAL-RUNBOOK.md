@@ -22,6 +22,8 @@ matching what users tracked · bid numbers consumed/returned correctly across ph
 3. FTE Availability panel → every week has a **saved capacity** (no yellow "NOT SAVED" rows).
 4. Check your EmailJS quota headroom (2000/mo): this rehearsal sends roughly
    (users × 4 results e-mails) + outbid alerts — budget ~200 for 37 users.
+5. **Print the half-sheet bid trackers (GROUP-REHEARSAL-BID-TRACKER) — one per user — and bring
+   pens.** Users track on paper, not their phones.
 
 ## Part A — 15 minutes before start (admin alone)
 
@@ -41,8 +43,8 @@ Announce each "ROUND" out loud (or in the meeting chat). Users act only when you
 that's what keeps this to 40 minutes.
 
 ### 0:00 — Sign-in & phones (5 min)
-- Users: guide steps 1–3 (open site on phone, Google sign-in, check "Signed in as" is THEM,
-  whitelist-confirm button, start their tracking note).
+- Hand each user a printed bid tracker and a pen. Users: guide steps 1–3 (open site on phone,
+  Google sign-in, check "Signed in as" is THEM, whitelist-confirm button).
 - **You verify:** Whitelist Tracker count climbing toward 37/37. Anyone who can't sign in →
   check their login e-mail on the roster (typo = locked out; fix and have them retry).
 - Ask: "Anyone whose screen looks broken or cut off — screenshot it and send it to me." That's
@@ -63,7 +65,7 @@ Call these out; they force every rule to fire at least once:
 3. "One volunteer: **cancel** a bid, then re-bid the same week — notice it only accepts your
    old number or STRONGER (that's your priority floor)."
 4. "Try to bid a number bigger than 4 on a high-demand week — it should refuse."
-- Everyone: **write each bid in your tracking note** as you place it.
+- Everyone: **write each bid on your tracker sheet** as you place it.
 - **You verify:** bids appearing live on your dashboard; the Popcornometer moving; a DRAW
   visible on Ski Week; outbid users report the alert e-mail arriving (may take a minute —
   this is the deliverability test).
@@ -79,18 +81,18 @@ Call these out; they force every rule to fire at least once:
 - **✓ Complete Phase 1** → confirm (note the contradicted-decision list stays empty unless you
   overrode something — read it if it shows).
 - **📮 Send Phase Results** → real e-mails go out.
-- Users: "Check your e-mail. Does it match the PROJECTED note you wrote? Winners: your board
+- Users: "Check your e-mail. Does it match the PROJECTED note on your sheet? Winners: your board
   shows the week locked in. Denied volunteer: your bid number should be back."
 
 ### 0:19 — Begin Phase 2 + ROUND 2 (7 min)
 - **Begin Phase 2** → use **⏭ Skip backup & continue** this time (tests the skip path live).
 - **You verify (and call out):** all 52 weeks now open; each user's "My Bids Remaining" row is
   missing the numbers they WON with (consumed forever) but has back the numbers they were
-  DENIED or lost with. Users check this against their notes — this is the bookkeeping test.
+  DENIED or lost with. Users check this against their sheet — this is the bookkeeping test.
 - ROUND 2: "Everyone place 1–2 bids on any standard week. Then EDIT one of them to a stronger
   number — and try to edit it WEAKER, which should refuse (the floor again)."
 - Close bidding → quick approvals (approve everything except one deliberate deny) → Complete →
-  Send Results → users check e-mail vs notes again.
+  Send Results → users check e-mail vs their sheet again.
 
 ### 0:26 — Phase 3 + NP bids (6 min)
 - **Begin Phase 3.** ROUND 3: "Everyone place ONE **NP** bid (it's now allowed) and one
@@ -103,7 +105,7 @@ Call these out; they force every rule to fire at least once:
 - Close → decide → **Complete Phase 4** (note the dialog says it's the final phase) → Send
   Results.
 - **You verify:** the auction shows complete; user boards show the final state; each user's
-  won weeks across all 4 phases match their tracking notes. Ask: "Anyone whose results don't
+  won weeks across all 4 phases match their tracker sheet. Ask: "Anyone whose results don't
   match what they tracked — speak now." That's the accuracy sign-off you wanted.
 
 ### 0:37 — Debrief & teardown (5 min)
@@ -130,7 +132,7 @@ Call these out; they force every rule to fire at least once:
 | 6 | Outbid alert e-mails ARRIVE on real phones | Round 1 |
 | 7 | Draw shown; wheel resolves it; deny works; over-cap override warns correctly | 0:13 |
 | 8 | Real cloud backup completes with progress counter | 0:13 |
-| 9 | Results e-mails match users' own projected notes | each phase |
+| 9 | Results e-mails match users' own projected sheets | each phase |
 | 10 | Won numbers consumed / denied numbers returned in Phase 2 | 0:19 |
 | 11 | Skip backup & continue works live | 0:19 |
 | 12 | NP allowed in Phase 3, refused earlier; NP loses to numbers | 0:26 |

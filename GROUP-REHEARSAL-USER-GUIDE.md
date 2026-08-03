@@ -14,25 +14,24 @@ get real e-mails and see exactly how the real auction will work.
 
 ## What to bring on rehearsal day
 
-- Your phone, signed in to the site.
-- Your **Notes app open** with this table copied in — you'll fill it in as we go:
+- **Just your phone**, signed in to the site — that's all you need to prepare.
+- We'll hand you a **paper tracking sheet and a pen** on the day. You'll fill it in as we go; it looks like this:
 
-```
-MY PRACTICE BIDS
-Week ____ | I bid ____ | Projected: ____ | Result e-mail said: ____ | Match? Y/N
-Week ____ | I bid ____ | Projected: ____ | Result e-mail said: ____ | Match? Y/N
-Week ____ | I bid ____ | Projected: ____ | Result e-mail said: ____ | Match? Y/N
-Week ____ | I bid ____ | Projected: ____ | Result e-mail said: ____ | Match? Y/N
-Week ____ | I bid ____ | Projected: ____ | Result e-mail said: ____ | Match? Y/N
-Week ____ | I bid ____ | Projected: ____ | Result e-mail said: ____ | Match? Y/N
-```
+| Week | I bid | Projected | Result e-mail said | Match? (Y/N) |
+|------|-------|-----------|--------------------|--------------|
+|      |       |           |                    |              |
+|      |       |           |                    |              |
+|      |       |           |                    |              |
+|      |       |           |                    |              |
+|      |       |           |                    |              |
+|      |       |           |                    |              |
 
 ## During the rehearsal — just follow the rounds
 
 Aaron will call out rounds ("Round 1", "Round 2"…). Only act when he calls the round. Each
 round he'll tell you exactly what to bid. The rhythm each phase is:
 
-1. **Bid** when the round is called — and write each bid in your note.
+1. **Bid** when the round is called — and write each bid on your sheet.
 2. When bidding closes: look at your board and write down what it **projects** for each bid
    (WIN / DRAW / UNDER REVIEW / losing).
 3. A few minutes later your **results e-mail** arrives — write what it says, and mark
@@ -45,7 +44,7 @@ a bid number). If the site refuses with a clear message — that's a pass, not a
 
 - **Screenshot anything that looks broken or cramped on your phone** and send it to Aaron.
 - **Say so if an e-mail doesn't arrive** (check spam first).
-- **Say so at the end if your results e-mails didn't match your notes.** Your notes are the
+- **Say so at the end if your results e-mails didn't match your sheet.** Your sheet is the
   independent record we check the system against.
 
 That's it — it's designed to be quick, and the draw wheel is genuinely fun to watch. See you
