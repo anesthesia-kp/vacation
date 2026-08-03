@@ -117,7 +117,7 @@ extracted functions, no stray `{` in comments inside them); prefer grep + ranged
 **Audits run (all "skeptical Claude" adversarial):** backup/restore changes (found the 221 issue),
 UI wiring, rehearsal lifecycle ×2 (found the 222 and 226 issues), duplicate-email fix (found the
 restore HIGH). Two-skeptic verification (confirmer vs refuter pairs) of sweep D6–D13 and the 3
-critic leads — see VERIFICATION-2026-07-30.md for full verdicts.
+critic leads — see archive/VERIFICATION-2026-07-30.md for full verdicts.
 
 ## 3. THE QUEUE — **ALL DONE (this section is now the historical record of what shipped)**
 
