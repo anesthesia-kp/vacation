@@ -219,10 +219,24 @@ service cloud.firestore {
       // welcomeLog only records which addresses have already been welcomed (no PII, no
       // control data). [L-8] Writable by a REGISTERED user or an admin — tightened from
       // "any verified Google account" so a signed-in outsider who isn't in the auction
-      // can't touch it. The "already welcomed" mark still can't be silently denied for
-      // legitimate users, so duplicate welcome e-mails stay prevented.
+      // can't touch it. [L1 · APPEND-ONLY, enforced by CONTAINMENT] A registered user may only
+      // ADD marks under the single 'sent' map (never remove keys, never touch other fields, never
+      // wipe the doc) — the legitimate staff writer is setDoc({sent:{<key>:true}},{merge:true}),
+      // whose post-image always contains the old keys, so nothing legitimate is blocked. This
+      // closes the ERASE hole (a signed-in user resetting the ledger to re-spam every welcome).
+      // Admins bypass via isAdmin() (Reset Auction clears it). The forge-half — pre-seeding one
+      // key to suppress one user's welcome — cannot be closed in rules (a key can't be tied to
+      // the caller) and is a documented, low-impact residual, mirroring the 'changes' rule.
       allow write: if (isAdminOnlyDoc(docId) && isAdmin())
-                   || (docId == 'welcomeLog' && (isRegisteredUser() || isAdmin()))
+                   || (docId == 'welcomeLog' && (isAdmin()
+                        || (isRegisteredUser()
+                             && (resource == null
+                                  ? request.resource.data.keys().hasOnly(['sent'])
+                                  : request.resource.data.diff(resource.data).affectedKeys().hasOnly(['sent']))
+                             && request.resource.data.get('sent', {}) is map
+                             && (resource == null
+                                  || !(resource.data.get('sent', null) is map)
+                                  || request.resource.data.get('sent', {}).keys().hasAll(resource.data.get('sent', {}).keys())))))
                    // Bid docs: own keys only, and never after server-clock expiry.
                    || (isBidDoc(docId) && (isAdmin()
                         || (isRegisteredUser() && writesOnlyOwnKeys() && timerNotExpired() && biddingNotClosed())))
@@ -292,7 +306,7 @@ service cloud.firestore {
                    || (docId == 'whitelistConfirm' && (isAdmin() || (isRegisteredUser() && writesOnlyOwnKeys())))
                    || (!isAdminOnlyDoc(docId) && !isBidDoc(docId) && !isRelayDoc(docId)
                         && docId != 'timer' && docId != 'signInMisses' && docId != 'emails'
-                        && docId != 'changes' && docId != 'whitelistConfirm'
+                        && docId != 'changes' && docId != 'whitelistConfirm' && docId != 'welcomeLog'
                         && (isRegisteredUser() || isAdmin()));
     }
 

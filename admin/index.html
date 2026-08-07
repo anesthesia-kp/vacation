@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 244;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 245;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -4457,6 +4457,15 @@ window.completePhase=function(){
       // but this dialog can sit open while the connection dies underneath it. Completion
       // freezes local state permanently — never freeze from data that has gone stale.
       if(!_feedsHealthyOrExplain('Complete Phase')) return;
+      // [build 245 · H2] Re-verify phase IDENTITY at action time. A second admin (or another
+      // tab) may have completed this phase and begun the next while this dialog sat open;
+      // re-running completion against a stale `cur` would relock the now-live phase, clear its
+      // priority floors, and overwrite the finished phase's archive. Only proceed if `cur` is
+      // still the current, uncompleted phase.
+      if(Number(phasesData.currentPhase||1)!==cur || phasesData.completedPhases?.[cur]){
+        toast('Phase '+cur+' is no longer the current open phase — it was completed or advanced elsewhere. Nothing was changed.','err');
+        return;
+      }
       const snap=JSON.parse(JSON.stringify(scheduleData));
       const apSnap=JSON.parse(JSON.stringify(approvalsData||{}));
       const denSnap=JSON.parse(JSON.stringify(deniedData||{}));
@@ -5112,7 +5121,14 @@ window.sendPhaseResultsEmails=function(){
   // permanently unsendable. The archive is already phase-specific, so there is no
   // need to re-filter by the current phase (and doing so would be wrong for a past one).
   const completed=phasesData.completedPhases||{};
-  const target=Object.keys(completed).map(Number).filter(n=>!isNaN(n)).sort((a,b)=>b-a)[0];
+  // [build 245 · L4] Target the OLDEST completed phase whose results have not been sent yet, so a
+  // phase whose results were skipped before advancing can still be sent later instead of being
+  // orphaned forever. Falls back to the newest completed phase when every phase's results are
+  // already sent (lets the admin re-open/preview the latest) — identical to the old behavior in
+  // the common case where only the just-completed phase is unsent.
+  const _sent=phasesData.resultsSent||{};
+  const _completedNums=Object.keys(completed).map(Number).filter(n=>!isNaN(n)).sort((a,b)=>a-b);
+  const target=_completedNums.find(n=>!_sent[n]) ?? _completedNums[_completedNums.length-1];
   if(!target){
     openConfirm({title:'📮 Send Phase Results E-mails',body:`<div>No phase has been completed yet — finish a phase before sending results.</div>`,okText:'OK',onConfirm:()=>{}});
     return;
@@ -6295,6 +6311,14 @@ function _refreshReadinessBox(){
 // decision, and _refreshReadinessBox() already no-ops when its box is gone.
 window._fixClosePhaseBiddingConfirmed=async function(cur){
   if(!_feedsHealthyOrExplain('Close Phase Bidding')) return; // [build 227] worker-level = covers both the dashboard and inline routes at action time
+  // [build 245 · H2] Only close bidding for the phase that is still CURRENT. A stale dashboard
+  // dialog ("Close Phase 2 bidding") clicked after another admin began Phase 3 would otherwise
+  // expire the new phase's timer and set biddingClosed on it. Bidding is always for the current
+  // phase, so a mismatch means the dialog outlived its phase — stand down.
+  if(Number(phasesData.currentPhase||1)!==Number(cur)){
+    toast('Phase '+cur+' is no longer the current phase — bidding was NOT changed (the auction may have advanced elsewhere).','err');
+    return;
+  }
   await _lockEveryWeek();
   // Close bidding by EXPIRING the timer (not disabling it) — users see the
   // auction-closed notice; only the on/off toggle ever disables the timer.
@@ -8338,25 +8362,26 @@ window.removeUser=function(u){
           // cleared above — that's what stops the old Google login from working.)
           updateDoc(usernamesRef,{[u]:deleteField()}).catch(()=>{}),
         ]);
-        // Remove user from each week's approvals array
+        // Remove user from each week's approvals array — arrayRemove PER WEEK, never a whole-array
+        // rewrite from the local cache. [build 245 · M2] A merge:true with a rebuilt array replaces
+        // the stored array wholesale, silently dropping any approval another admin appended to that
+        // week between our last snapshot and this write. arrayRemove touches only this user (same
+        // pattern already used for single-user revokes and the userList write above).
         if(approvalsData){
-          const updates={};
+          const _aOps=[];
           for(const wk in approvalsData){
-            if(Array.isArray(approvalsData[wk])&&approvalsData[wk].includes(u)){
-              updates[wk]=approvalsData[wk].filter(x=>x!==u);
-            }
+            if(Array.isArray(approvalsData[wk])&&approvalsData[wk].includes(u)) _aOps.push(updateDoc(approvalsRef,{[wk]:arrayRemove(u)}).catch(()=>{}));
           }
-          if(Object.keys(updates).length) await setDoc(approvalsRef,updates,{merge:true}).catch(()=>{});
+          if(_aOps.length) await Promise.all(_aOps);
         }
-        // Remove user from each week's denials array too (so they don't linger)
+        // Remove user from each week's denials array too (so they don't linger) — same arrayRemove
+        // discipline, for the same concurrent-admin reason.
         if(deniedData){
-          const dupdates={};
+          const _dOps=[];
           for(const wk in deniedData){
-            if(Array.isArray(deniedData[wk])&&deniedData[wk].includes(u)){
-              dupdates[wk]=deniedData[wk].filter(x=>x!==u);
-            }
+            if(Array.isArray(deniedData[wk])&&deniedData[wk].includes(u)) _dOps.push(updateDoc(deniedRef,{[wk]:arrayRemove(u)}).catch(()=>{}));
           }
-          if(Object.keys(dupdates).length) await setDoc(deniedRef,dupdates,{merge:true}).catch(()=>{});
+          if(_dOps.length) await Promise.all(_dOps);
         }
         try { await adminLog(u,'ALL','admin-remove-user'); } catch(_) {}
         toast("🗑 Removed "+u+" and all their data","warn");
