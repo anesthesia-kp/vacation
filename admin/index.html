@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 242;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 243;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -4272,6 +4272,16 @@ function renderNextStep(){
     <div style="font-size:12.5px;color:var(--t1);line-height:1.5">${txt}</div>${btnHtml||''}</div>`;
   const btn=(label,onclick,cls)=>`<button class="btn ${cls||'btn-primary'}" style="margin-top:8px;padding:4px 12px;font-size:12px" onclick="${onclick}">${label}</button>`;
   let html;
+  // [build 243] Cold-load guard for the WHOLE chain, not just the capacity branch. Build 242
+  // suppressed the false capacity warning during the loading beat, but an if/else chain that
+  // loses its first branch just paints its NEXT branch from the same half-loaded data (e.g. a
+  // transient "Begin Phase 1" mid-auction). Every branch below reads slots/phases/schedule/
+  // approvals/denials, so hold the quiet loading box until ALL five have reported once.
+  // Display-only: no write, gate, or engine path reads these flags.
+  if(!(_slotsReady&&_phasesReady&&_scheduleReady&&_approvalsReady&&_deniedReady)){
+    el.innerHTML=box('Loading auction state…','');
+    return;
+  }
   const missingCaps=weeksMissingCapacity().length;
   // [FTE 25 Jul 2026] Same rule as week capacity: no built-in defaults. A user with no
   // saved FTE blocks the auction from starting rather than being silently treated as 1.0.
