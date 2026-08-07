@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 129;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 130;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1333,7 +1333,11 @@ function emailCycleKey(){
 }
 function trackEmailSent(){
   const k=emailCycleKey();
-  updateDoc(mailStatsRef,{[k]:increment(1)}).catch(()=>setDoc(mailStatsRef,{[k]:1},{merge:true}).catch(()=>{}));
+  // [build 130 · E1] setDoc+merge with the increment sentinel creates-or-increments atomically.
+  // The old updateDoc(...).catch(setDoc {k:1}) fallback RESET the cycle total to 1 whenever the
+  // first write blipped (doc-missing race or transient network) — the observed under-count.
+  // The counter is advisory (quota gauge only); EmailJS's own dashboard is the source of truth.
+  setDoc(mailStatsRef,{[k]:increment(1)},{merge:true}).catch(()=>{});
 }
 onSnapshot(slotsRef,   snap=>{ slotsData=snap.exists()?snap.data():{}; applySlotOverrides(); scheduleRender(); });
 // [AUDIT 2026-07-25 #6] No top-level mailQueue listener. That doc is now readable only
