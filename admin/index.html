@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 241;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 242;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1301,6 +1301,15 @@ function _knownRosterAddress(a){
 }
 window._knownRosterAddress=_knownRosterAddress;
 let _phasesReady=false; // [build 222] set by the phases snapshot; gates ARMING rehearsal on a fresh load
+// [build 242] Dashboard load-order guard. Each is set true the first time its snapshot reports
+// (whether or not the doc exists), matching the _phasesReady/_adminMapsReady pattern. Two dashboard
+// readouts read many docs that arrive a beat apart, so on a cold load they briefly render against
+// still-empty data — "52 weeks have no saved FTE capacity" (slots not in yet) and a too-low "N of M
+// bids decided" (approvals/denials not in yet). These flags let those two lines show a quiet
+// "loading" state until their inputs have actually reported once. They gate DISPLAY only — never a
+// write, a gate, or the engine — and because they trip on first report regardless of existence, a
+// genuinely-missing value still surfaces its real warning once loaded.
+let _slotsReady=false, _approvalsReady=false, _deniedReady=false, _scheduleReady=false;
 let changesLog=[], changesDecisionsLog=[], changesResetAt=0, adminSettings={emailNotifsEnabled:true}, timerData={enabled:false,lastChange:null};
 function getReviewThreshold(){ const raw=adminSettings?.reviewThreshold; if(raw===undefined||raw===null)return 0.5; const n=Number(raw); if(isNaN(n))return 0.5; const clamped=Math.max(0,Math.min(2,n)); return Math.round(clamped*10)/10; }
 // Returns the FTE of the lowest-FTE user in the roster. Used by the auto-lock rule.
@@ -1551,7 +1560,7 @@ function onSnapshot(ref, next, error) {
 
 document.getElementById("load").classList.add("hidden");
 
-onSnapshot(scheduleRef, snap=>{ scheduleData=normalizeUserWkMap(snap.exists()?snap.data():{}); refreshAll(); });
+onSnapshot(scheduleRef, snap=>{ scheduleData=normalizeUserWkMap(snap.exists()?snap.data():{}); _scheduleReady=true; refreshAll(); });
 onSnapshot(emailToUserRef, snap=>{ emailToUserData=snap.exists()?snap.data():{}; }); // [H-3] attached here (after authReady is defined)
 onSnapshot(signInMissesRef, snap=>{ signInMissesData=snap.exists()?snap.data():{}; if(typeof renderSignInMisses==='function') renderSignInMisses(); });
 onSnapshot(locksRef,    snap=>{ locksData=snap.exists()?snap.data():{globalLock:false,weeks:{}}; if(!locksData.weeks)locksData.weeks={}; syncTimer(); refreshAll(); });
@@ -1602,13 +1611,13 @@ let whitelistConfirmData={};
 onSnapshot(whitelistConfirmRef, snap=>{ whitelistConfirmData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-whitelist'); if(p&&p.classList.contains('on')&&typeof renderWhitelistTracker==='function') renderWhitelistTracker(); if(typeof renderNextStep==='function') renderNextStep(); });
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
   onSnapshot(fteRef, snap=>{ fteData=snap.exists()?snap.data():{}; refreshAll(); });
-onSnapshot(approvalsRef, snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()?snap.data():{}); refreshAll(); });
+onSnapshot(approvalsRef, snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()?snap.data():{}); _approvalsReady=true; refreshAll(); });
 // (Removed a duplicate emails listener here — emailsDataAdmin is now kept in sync
 // inside the single emails listener above, mirroring the loginEmails pattern.)
 onSnapshot(phasesRef,   snap=>{ _phasesReady=true; phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{},phaseHistory:{}}; _publishedCompletedPhases=phasesData.completedPhases||{}; _mergeCompletedPhasesView(); refreshAll(); }); // [H6] keep the staged+published merged view
-onSnapshot(deniedRef,   snap=>{ deniedData=normalizeWkArrayMap(snap.exists()?snap.data():{}); refreshAll(); });
+onSnapshot(deniedRef,   snap=>{ deniedData=normalizeWkArrayMap(snap.exists()?snap.data():{}); _deniedReady=true; refreshAll(); });
 onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); refreshAll(); }); // L-1: bid-phase tag changes must refresh dependent views (pending counts, projections, complete-phase gate)
-onSnapshot(slotsRef,    snap=>{ slotsData=snap.exists()?snap.data():{}; refreshAll(); });
+onSnapshot(slotsRef,    snap=>{ slotsData=snap.exists()?snap.data():{}; _slotsReady=true; refreshAll(); });
 onSnapshot(mailQueueRef,snap=>{ mailQueueData=snap.exists()?snap.data():{}; updateMailQueueBadge(); scheduleMailQueueSweep(); });
 let changesArchiveData={};
 onSnapshot(changesArchiveRef,snap=>{ changesArchiveData=snap.exists()?snap.data():{}; const p=document.getElementById("panel-changelog"); if(p&&p.classList.contains("on")) renderChangelog(); });
@@ -2398,6 +2407,10 @@ function renderNoBidders(){
 // Phase progress: how many current-phase bids are decided vs. total.
 function renderPhaseProgress(){
   const el=document.getElementById('phaseProgress'); if(!el) return;
+  // [build 242] The decided count reads schedule + approvals + denials, which arrive a beat apart on
+  // a cold load. Rendering before all three are in shows a too-low "N of M decided" that then jumps
+  // up — the flash. Show a quiet placeholder until every input has reported once.
+  if(!(_scheduleReady && _approvalsReady && _deniedReady)){ el.innerHTML='<div style="font-size:12px;color:var(--t3)">Loading current-phase progress…</div>'; return; }
   let total=0, decided=0;
   for(const d of mondays){
     const wk=dateKey(d);
@@ -4271,7 +4284,9 @@ function renderNextStep(){
   const fteNote=(missingFte.length&&phase1Started())
     ? `<div style="background:rgba(234,179,8,.10);border:1px solid rgba(234,179,8,.4);border-radius:10px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:var(--t1)">⚠️ <strong>${missingFte.length}</strong> user${missingFte.length!==1?'s have':' has'} an FTE the engine can't score correctly (${missingFte.map(u=>esc(u)).join(', ')}) — ${usersTrulyMissingFte().length?'some are unset (scored with a fallback)':''}${usersTrulyMissingFte().length&&usersOffGridFte().length?'; ':''}${usersOffGridFte().length?'some are off the 0.1 grid (a real value that mis-rounds)':''}. Fix before the next phase begins — the FTE panel's set/snap tool handles both. <button class="btn btn-ghost" style="padding:2px 8px;font-size:11px;margin-left:6px" onclick="gotoUsersPanel()">👤 Open Users</button></div>`
     : '';
-  if(missingCaps>0){
+  if(_slotsReady && missingCaps>0){
+    // [build 242] Only claim weeks are uncapped once the slots doc has actually reported. On a cold
+    // load slotsData is still {} for a beat, which would make ALL weeks look uncapped — the flash.
     html=box(`<strong>${missingCaps}</strong> week${missingCaps!==1?'s have':' has'} no saved FTE capacity — those weeks are unbiddable (capacity 0) until you save a value. There are no built-in defaults.`,btn('📆 Open FTE Availability','gotoSlotsPanel()'));
   } else if(missingFte.length>0 && !phase1Started()){
     html=box(`<strong>${missingFte.length}</strong> user${missingFte.length!==1?'s have':' has'} no valid saved FTE — bidding cannot begin until every user has one between ${FTE_MIN} and 1.0. There are no built-in defaults.<div style="margin-top:6px;color:var(--t2);font-size:11.5px">${missingFte.map(u=>esc(u)).join(', ')}</div>`,btn('👤 Open Users','gotoUsersPanel()'));
