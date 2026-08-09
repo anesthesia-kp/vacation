@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 249;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 250;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -4327,8 +4327,14 @@ function renderNextStep(){
     html=box('Bidding has not begun. Begin Phase 1 to open the auction to users.',btn('▶ Begin Phase 1','beginPhase1()','btn-success'));
   } else if(phasesData.completedPhases?.[cur]){
     if(!phasesData.resultsSent?.[cur]){
-      html=box(`Phase ${cur} is complete, but users have NOT been e-mailed their results yet.`,
-        btn('📮 Send Phase '+cur+' Results','sendPhaseResultsEmails()','btn-success')
+      // [build 250] Phase 4 sends are ROUND-scoped: the round sender delivers only decisions
+      // not yet mailed in earlier rolling rounds and stamps resultsSent itself — a full-year
+      // recap of months already past would be wrong. Phases 1–3 keep the classic sender.
+      const _sendBtn=(cur===4)
+        ? btn('📮 Send Round Results','sendRoundResultsEmails()','btn-success')
+        : btn('📮 Send Phase '+cur+' Results','sendPhaseResultsEmails()','btn-success');
+      html=box(`Phase ${cur} is complete, but users have NOT been e-mailed their results yet.${cur===4?' Round results cover only decisions not yet e-mailed.':''}`,
+        _sendBtn
         // [build 220] skip is a rehearsal-only tool; the button only renders in Rehearsal Mode
         + (adminSettings.simulatorEnabled===true?'&nbsp;'+btn('⏭ Skip sending (testing)','skipPhaseResults('+cur+')','btn-ghost'):''));
     } else if(cur>=4){
@@ -4350,10 +4356,14 @@ function renderNextStep(){
     } else {
       const pending=countPendingDecisions();
       const reopen='&nbsp;'+btn('↩ Reopen bidding','reopenBidding()','btn-ghost');
+      // [build 250] Phase 4 rolling rounds: while bidding is closed mid-year, the admin can mail
+      // this round's decisions (only what's new since the last send) and then reopen the next
+      // window — Complete Phase 4 is reserved for the true end of the year.
+      const _p4round=(cur===4)?'&nbsp;'+btn('📮 Send Round Results','sendRoundResultsEmails()','btn-success'):'';
       if(pending>0){
-        html=box(`Bidding is closed. <strong>${pending}</strong> bid${pending!==1?'s':''} still need${pending===1?'s':''} an approve or deny decision before the phase can be completed.`,btn('✅ Go to Approvals/Denials','gotoAppDenials()')+reopen);
+        html=box(`Bidding is closed. <strong>${pending}</strong> bid${pending!==1?'s':''} still need${pending===1?'s':''} an approve or deny decision before the phase can be completed.`,btn('✅ Go to Approvals/Denials','gotoAppDenials()')+_p4round+reopen);
       } else {
-        html=box(`Bidding is closed and every bid is decided. Complete Phase ${cur} to lock in the results.`,btn('✓ Complete Phase '+cur,'completePhase()','btn-success')+reopen);
+        html=box(`Bidding is closed and every bid is decided. Complete Phase ${cur} to lock in the results.`,btn('✓ Complete Phase '+cur,'completePhase()','btn-success')+_p4round+reopen);
       }
     }
   }
@@ -5275,6 +5285,134 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
       }
       // Release the claim so a legitimate retry (this admin or another) isn't blocked for 2 min.
       await setDoc(phasesRef,{resultsSendClaim:{...(phasesData.resultsSendClaim||{}),[cur]:{by:null,at:0}}},{merge:true}).catch(()=>{});
+    }
+  });
+};
+
+// ── [build 250] PHASE 4 ROUND RESULTS ────────────────────────────────────────
+// Phase 4 runs as ROLLING ROUNDS through the year (open a window of months → bid →
+// close → decide → send → reopen). This sender e-mails each user only the decisions
+// NOT yet mailed in an earlier round — never a full-year recap of months already past.
+// It is ADDITIVE: the classic per-phase sender above is untouched and still serves
+// phases 1–3. Design notes:
+//   • The mailed-ledger (who was told what) lives in the phaseStaging doc — admin-only
+//     readable under the PUBLISHED rules (the phases doc is world-readable, so it must
+//     not carry per-user outcomes). phaseStaging is merge-written by Complete Phase,
+//     replaced only by Begin Phase (before any round exists) and Reset Auction (which
+//     SHOULD clear it). No rules change needed.
+//   • The ledger is read FRESH from the server at confirm time (not from a local
+//     mirror), so a stale dialog or second tab cannot compute a wrong delta.
+//   • A changed decision (approve→deny or back) is re-mailed with its new status.
+//   • Same claim pattern as the classic sender (key 'p4round') so two admin sessions
+//     cannot both send a round at once; same per-send address dedup via adminSendEmail.
+//   • When Phase 4 is already COMPLETE and every delivery succeeds, this stamps
+//     resultsSent[4] via _publishPhaseResults — the round send IS the final send.
+window.sendRoundResultsEmails=function(){
+  if(!_feedsHealthyOrExplain('Send Round Results')) return; // live decisions — never send from a stale page
+  const cur=Number(phasesData.currentPhase||1);
+  if(cur!==4){ toast('Round results are a Phase 4 tool — use Send Phase Results for phases 1–3.','warn'); return; }
+  openConfirm({
+    title:'📮 Send Phase 4 Round Results',
+    body:`<div>E-mail every user whose Phase 4 bids were decided <strong>since the last round send</strong>?</div>
+          <div class="cmodal-info" style="margin-top:8px">Each user gets one e-mail listing only their newly approved / newly denied weeks — nothing from earlier rounds is repeated. The exact list is computed fresh from the server when you confirm. Users without an e-mail address on file are skipped. Re-clicking later sends only what is new since this send.</div>`,
+    okText:'Send Round Results',
+    onConfirm:async()=>{
+      // Click-time re-checks — the dialog is paint, these are the enforcement.
+      if(!_feedsHealthyOrExplain('Send Round Results')) return;
+      if(Number(phasesData.currentPhase||1)!==4){ toast('Phase changed while the dialog was open — round results NOT sent.','warn'); return; }
+      // Cross-session claim (same pattern as the classic sender, its own key).
+      const _sendId=Date.now()+'_'+Math.floor(Math.random()*1e9);
+      let _claimed=false;
+      try{
+        await runTransaction(db, async (tx)=>{
+          const snap=await tx.get(phasesRef);
+          const d=snap.exists()?snap.data():{};
+          const claim=d.resultsSendClaim?.p4round;
+          if(claim && claim.by && claim.by!==_sendId && (Date.now()-(claim.at||0))<120000){ _claimed=false; return; }
+          tx.set(phasesRef,{resultsSendClaim:{...(d.resultsSendClaim||{}),p4round:{by:_sendId,at:Date.now()}}},{merge:true});
+          _claimed=true;
+        });
+      }catch(e){ _claimed=true; console.warn('round send claim failed (proceeding):',e); }
+      if(!_claimed){ toast('Another admin session is sending round results right now — not sending again.','warn'); return; }
+      const _releaseClaim=()=>setDoc(phasesRef,{resultsSendClaim:{...(phasesData.resultsSendClaim||{}),p4round:{by:null,at:0}}},{merge:true}).catch(()=>{});
+      // AUTHORITATIVE ledger read — server truth, not the local mirror.
+      let mailed={};
+      try{
+        const s=await getDoc(phaseStagingRef);
+        mailed=(s.exists()?(s.data().p4RoundMailed||{}):{});
+      }catch(e){ await _releaseClaim(); toast('Could not read the round-send ledger ('+(e?.message||e)+') — NOT sending, nothing was e-mailed. Try again on a solid connection.','err'); return; }
+      // Delta: every live Phase 4 decision whose outcome differs from what was last mailed.
+      const delta={}; // user → {approved:[wk], denied:[wk]}
+      const _add=(u,wk,kind)=>{ if(!delta[u]) delta[u]={approved:[],denied:[]}; delta[u][kind].push(wk); };
+      for(const wk of Object.keys(approvalsData||{})){
+        for(const u of (Array.isArray(approvalsData[wk])?approvalsData[wk]:[])){
+          if(mailed[u]?.[wk]!=='A') _add(u,wk,'approved');
+        }
+      }
+      for(const wk of Object.keys(deniedData||{})){
+        for(const u of (Array.isArray(deniedData[wk])?deniedData[wk]:[])){
+          if(mailed[u]?.[wk]!=='D') _add(u,wk,'denied');
+        }
+      }
+      const users=Object.keys(delta);
+      if(!users.length){
+        // Everything already announced. If Phase 4 is complete but unstamped (e.g. the last
+        // round was mailed BEFORE Complete was clicked), stamp it now — otherwise the
+        // dashboard would ask for a send that has nothing left to say.
+        if(phasesData.completedPhases?.[4] && !phasesData.resultsSent?.[4]){
+          try{ await _publishPhaseResults({resultsSent:{...(phasesData.resultsSent||{}),4:Date.now()}}); toast('📮 All Phase 4 decisions were already e-mailed in earlier rounds — results marked sent. 🎉','ok'); }
+          catch(e){ toast('⚠️ Nothing new to e-mail, but publishing the final results FAILED ('+(e?.message||e)+'). Click Send Round Results again.','err'); }
+          await _releaseClaim(); return;
+        }
+        await _releaseClaim(); toast('📮 No new Phase 4 decisions since the last round send — nothing to e-mail.','ok'); return;
+      }
+      let ok=0, fail=0, skipped=0;
+      const newlyMailed={}; // user → {wk:'A'|'D'} recorded ONLY after that user's e-mail succeeds
+      const sentAddrs=new Set(); // per-send address dedup (users sharing an address)
+      for(const u of users){
+        const recips=recipientsFor(u);
+        if(!recips.length){ skipped++; continue; }
+        const {approved,denied}=delta[u];
+        approved.sort(); denied.sort();
+        const appLines=approved.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(scheduleData[u]?.[wk])})`;}).join('\n');
+        const denLines=denied.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(scheduleData[u]?.[wk])})`;}).join('\n');
+        const bodyText=`Hello ${u},
+
+A Phase 4 bidding round of the Vacation Auction has been decided.
+
+Your results for this round:
+
+${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.length?`DENIED (${denied.length}):\n${denLines}\n\n`:''}Earlier rounds' results are not repeated here. Watch for the next bidding window to open.`.trimEnd();
+        const r=await adminSendEmail(u,'Vacation Auction — Phase 4 Round Results',bodyText,sentAddrs);
+        ok+=r.ok; fail+=r.fail;
+        for(const a of r.sent) sentAddrs.add(a);
+        if(r.ok>0 && r.fail===0){
+          newlyMailed[u]={...(mailed[u]||{})};
+          for(const wk of approved) newlyMailed[u][wk]='A';
+          for(const wk of denied)   newlyMailed[u][wk]='D';
+        }
+      }
+      // Persist the ledger for every user whose e-mail landed (merge preserves other users
+      // and everything else in phaseStaging). Retry once; if it still fails, WARN about the
+      // re-send trap instead of hiding it — same honesty contract as the classic sender.
+      let _ledgerOk=true;
+      if(Object.keys(newlyMailed).length){
+        const _write=()=>setDoc(phaseStagingRef,{p4RoundMailed:{...mailed,...newlyMailed}},{merge:true});
+        try{ await _write(); }catch(_1){ try{ await _write(); }catch(_2){ _ledgerOk=false; } }
+      }
+      const _rlLedgerWarn=_ledgerOk?'':' ⚠️ ALSO: the round-send ledger could NOT be saved, so the next round send may RE-SEND these results — wait for a solid connection before sending again.';
+      // If Phase 4 is complete and everyone owed a round e-mail got one, this send IS the
+      // final send — stamp resultsSent[4] so the dashboard reads "auction finished".
+      if(fail===0 && phasesData.completedPhases?.[4] && !phasesData.resultsSent?.[4]){
+        try{ await _publishPhaseResults({resultsSent:{...(phasesData.resultsSent||{}),4:Date.now()}}); }
+        catch(e){ await _releaseClaim(); toast('⚠️ Round e-mails sent, but publishing the final results FAILED ('+(e?.message||e)+'). Click Send Round Results again to finish publishing.'+_rlLedgerWarn,'err'); return; }
+      }
+      if(fail===0){
+        toast(`📮 Round results: ${ok} e-mail${ok!==1?'s':''} sent${skipped?` (${skipped} had no e-mail)`:''}`+_rlLedgerWarn,_ledgerOk?'ok':'warn');
+      } else {
+        toast(`⚠️ Round results: ${ok} sent, ${fail} FAILED — those users stay owed and will be included next send.`+_rlLedgerWarn,'warn');
+      }
+      await _releaseClaim();
     }
   });
 };
