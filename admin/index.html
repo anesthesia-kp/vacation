@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 246;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 247;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -789,7 +789,6 @@ thead th{color:var(--t2)}
         <div><div class="page-title">Controls</div><div class="page-sub">Global schedule settings.</div></div>
         <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
           <button class="btn btn-ghost" id="ctlExpandAllBtn" onclick="toggleAllControlPanels()">▾ Expand all</button>
-          <button class="btn btn-danger" style="background:rgba(220,38,38,.25);border-color:rgba(220,38,38,.6)" onclick="clearEverything()">💣 Reset Auction</button>
         </div>
       </div>
       <!-- BACKUPS & RESTORE [build 215] — one card. Cloud backups (admin-only `backups`
@@ -901,10 +900,8 @@ thead th{color:var(--t2)}
               Shapes PROJECTIONS during bidding: how far over capacity a bid can be and still become a
               DRAW (each tied user must fit within this amount) or UNDER REVIEW (single user over cap by
               this amount) instead of an automatic loss. Range 0.0–2.0, step 0.1. Default 0.5.
-              <br>It no longer affects week locking — Smart Lock uses each week's <strong>Smart Lock
-              Control</strong> (set in FTE Availability) instead.
-              <br><strong style="color:var(--green)">✨ New:</strong> you can now <strong>adjust this between phases.</strong>
-              It locks only while the <em>current</em> phase has bids; once a phase completes (and before the
+              <br>You can adjust this setting between phases.
+              It locks while the <em>current</em> phase has bids; once a phase completes (and before the
               next phase takes bids) you can change it. Past phases are unaffected — their results are frozen at
               completion — so a change only applies to the current and later phases.
             </div>
@@ -927,6 +924,20 @@ thead th{color:var(--t2)}
             <div class="trow-desc">Alerts are saved to a queue the moment a bid changes, then emailed. If the sender's browser closes first, ANY open page (user or admin) delivers them within about a minute using a claim system that prevents duplicates. The button flushes immediately from here.</div>
           </div>
           <button class="btn btn-primary" style="flex:unset" onclick="flushMailQueue()">📮 Send Pending</button>
+        </div>
+      </div>
+      <!-- RESET AUCTION [build 247] — moved from the page header into its own collapsed card at
+           the very bottom of Controls, so it cannot be clicked by accident during live operation.
+           The button and its clearEverything() flow are IDENTICAL — only the location changed.
+           initControlsCollapsibles() wraps this card automatically (collapsed by default). -->
+      <div class="card">
+        <div class="card-title">💣 Reset Auction — Danger Zone</div>
+        <div class="trow" style="align-items:flex-start">
+          <div>
+            <div class="trow-label">Wipe the entire auction</div>
+            <div class="trow-desc">Permanently deletes every bid, all approvals/denials, priority locks, bid timestamps, and all phase history for ALL users. It offers a cloud backup first, then requires two confirmations — the final one asks you to type RESET. Kept collapsed down here, out of the way of everyday controls.</div>
+          </div>
+          <button class="btn btn-danger" style="flex:unset;background:rgba(220,38,38,.25);border-color:rgba(220,38,38,.6)" onclick="clearEverything()">💣 Reset Auction</button>
         </div>
       </div>
       </div>
@@ -1329,6 +1340,11 @@ let selLockMonth=null, tickInterval=null;
 // (first run, or catastrophic deletion) these DEFAULT accounts get in and the
 // document is re-seeded with them. The security rules mirror this exactly.
 const DEFAULT_ADMIN_EMAILS=['dr.vacation.goddess@gmail.com','aaronjfrankel@gmail.com'];
+// [build 247] LEAD ADMIN: always listed first in Admin Access and cannot be removed by ANY
+// admin through this page — removeAdminEmail refuses it and the row renders no Remove button.
+// (UI-level protection against accidental removal; the database itself still accepts admin
+// writes to the list, so hard enforcement would need a firestore.rules change.)
+const LEAD_ADMIN_EMAIL='dr.vacation.goddess@gmail.com';
 // Opened from an admin "Other Systems" portal link (?portal=1): skip the one-tap Continue
 // hero when this session is ALREADY an authorized admin. It's only ever consulted after
 // checkAdminAccess() passes, so it cannot grant access — a non-admin still gets the gate.
@@ -1450,13 +1466,18 @@ onSnapshot(schedAdminAccessRef, snap=>{
 });
 function renderAdminAccess(){
   const el=document.getElementById('adminAccessList'); if(!el) return;
-  const list=adminAccessEmails.length?adminAccessEmails:DEFAULT_ADMIN_EMAILS;
+  // [build 247] Lead admin is pinned to the top; everyone else keeps stored order (sort is stable).
+  const list=(adminAccessEmails.length?adminAccessEmails:DEFAULT_ADMIN_EMAILS)
+    .slice().sort((a,b)=>(b===LEAD_ADMIN_EMAIL?1:0)-(a===LEAD_ADMIN_EMAIL?1:0));
   const last=list.length<=1;
   el.innerHTML=list.map(email=>`
     <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px dashed var(--b1)">
       <span class="mono" style="font-size:12px;color:var(--t1)">${email}</span>
+      ${email===LEAD_ADMIN_EMAIL?'<span style="font-size:10px;font-weight:700;color:#f59e0b;background:rgba(245,158,11,.12);padding:1px 8px;border-radius:8px">LEAD</span>':''}
       ${email===_currentAdminEmail?'<span style="font-size:10px;font-weight:700;color:var(--green);background:rgba(52,211,153,.12);padding:1px 8px;border-radius:8px">YOU</span>':''}
-      ${last
+      ${email===LEAD_ADMIN_EMAIL
+        ? '<span style="font-size:10px;color:var(--t3)">lead admin — cannot be removed</span>'
+        : last
         ? '<span style="font-size:10px;color:var(--t3)">last admin — cannot be removed</span>'
         : `<button class="btn btn-danger" style="padding:2px 8px;font-size:11px" onclick="removeAdminEmail('${email}')">✕ Remove</button>`}
     </div>`).join('');
@@ -1479,6 +1500,8 @@ window.addAdminEmail=function(){
   });
 };
 window.removeAdminEmail=function(email){
+  // [build 247] Safety rail: the LEAD admin can never be removed, by anyone, from any call path.
+  if(String(email).toLowerCase()===LEAD_ADMIN_EMAIL){ toast('The lead admin account cannot be removed','warn'); return; }
   // Safety rail: the admin list can never be emptied.
   if(adminAccessEmails.length<=1){ toast('Cannot remove the last admin — grant someone else access first','warn'); return; }
   const self=email===_currentAdminEmail;
