@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 131;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 132;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -2023,6 +2023,12 @@ async function removeSelection(wk){
   if(isAuctionClosed()){ showCenterAlert("The auction has closed — no more changes allowed."); return; }
   if(locksData.globalLock||locksData.weeks?.[wk]){ showCenterAlert("This week has been locked by the admin — no changes allowed."); return; }
   const user=getCurrentUser(); if(!data[user])return;
+  // [build 132 · LIVE BUG, lead admin] A WON week can never be cancelled — in rolling
+  // Phase 4 the week may be UNLOCKED for later rounds, so the lock check above no longer
+  // covers it (in phases 1–3 a won week's bid was structurally uncancellable). Without
+  // this, cancelling deleted the winning bid's data: the win survived via the archive,
+  // but the bid's numbers wrongly returned to the user's pool.
+  if(getPriorPhaseWinners(wk).has(user)){ showCenterAlert("You won this week — it's locked in and cannot be edited or cancelled."); return; }
   // (Rule removed 12 Jul 2026: users may cancel any bid, including on weeks
   // they are currently projected to win.)
   const prio=data[user][wk];
@@ -2119,11 +2125,27 @@ function getWeekUsers(wk){
 }
 
 // ── Render ──
+// [build 132] TRUE once the current phase's results are ANNOUNCED (published snapshot +
+// sent stamp) but the next phase has not begun — the between-phases window in which the
+// header and the My Bids slate must read as "this phase is over", not still live.
+function currentPhaseAnnounced(){
+  const cur=Number(phasesData.currentPhase||1);
+  return !!(phasesData.completedPhases?.[cur]&&phasesData.resultsSent?.[cur]);
+}
 function renderPhaseLabel(){
   const lbl=document.getElementById('phaseLabel');
+  if(!lbl) return;
   const cur=Number(phasesData.currentPhase||1);
-  // [build 131] Rolling Phase 4 shows its round: "Phase 4 \u00b7 Round N".
-  if(lbl) lbl.textContent='Phase '+cur+((cur===4&&Number(phasesData.p4Round||0)>=1)?' \u00b7 Round '+Number(phasesData.p4Round):'');
+  // [build 132 · lead admin] Once results are announced, the header must not claim the old
+  // phase is still running (it sat next to "View Previous Phases" listing the SAME phase).
+  // It advances to the completion state — not to "Phase N+1" outright, which would imply
+  // the next phase's bidding is open before it has begun.
+  if(currentPhaseAnnounced()){
+    lbl.textContent=cur>=4?'Auction complete':('Phase '+cur+' complete — Phase '+(cur+1)+' opens soon');
+    return;
+  }
+  // [build 131] Rolling Phase 4 shows its round: "Phase 4: Round N".
+  lbl.textContent='Phase '+cur+((cur===4&&Number(phasesData.p4Round||0)>=1)?': Round '+Number(phasesData.p4Round):'');
 }
 
 window.openPhaseHistory=function(){
@@ -2144,7 +2166,7 @@ window.openPhaseHistory=function(){
     if(!_roundSent[r]) continue;
     const k=(3+Number(r)/100).toFixed(2);
     completed[k]=_rounds[r];
-    _histLabels[k]='Phase 4 · Round '+r;
+    _histLabels[k]='Phase 4: Round '+r;
   }
   // PRIVACY RULE: a phase that is completed but whose successor has NOT begun
   // is still hidden — results only become visible once the next phase starts.
@@ -2455,7 +2477,17 @@ function renderSelections(user,ap){
   // "LOSING" bid while being absent from the board, pool, and engine.
   const uw={};
   for(const wk of myCountedWeeks(user)) uw[wk]=data[user][wk];
-  if(!Object.keys(uw).length){selectionsEl.innerHTML='<div class="empty-msg">No selections yet — click a week below.</div>';return;}
+  // [build 132 · lead admin] Once this phase's results are ANNOUNCED, the cycle is over:
+  // show a fresh slate instead of last phase's bids lingering as live-looking projections.
+  // (The bids themselves stay in the data — wins lock in, and the next phase retires the
+  // rest — this is display truth, not a data change.)
+  const _announced=currentPhaseAnnounced();
+  if(_announced||!Object.keys(uw).length){
+    // "Click a week below" is only honest while bidding is actually open.
+    const _canBid=biddingOpen()&&!isAuctionClosed()&&!_announced; // isAuctionClosed = server flag OR expired timer
+    selectionsEl.innerHTML='<div class="empty-msg">No selections yet'+(_canBid?' — click a week below.':' — bidding hasn\'t '+(_announced||!biddingOpen()?'begun':'reopened')+' yet.')+'</div>';
+    return;
+  }
   const locked=wk=>locksData.globalLock||locksData.weeks?.[wk];
   selectionsEl.innerHTML=Object.entries(uw).sort((a,b)=>new Date(a[0])-new Date(b[0])).map(([wk,p])=>{
     // PRIVACY RULE: no DENIED (or APPROVED) shown mid-phase — projections only.
@@ -2607,6 +2639,14 @@ function renderCalendar(user,ap){
           const arr=Array.isArray(phAp[wk])?phAp[wk]:[];
           if(arr.includes(user)){ wonInPhase=phNum; break; }
         }
+        // [build 132 · lead admin] A Phase 4 ROUND win names its round — never "Phase ?".
+        if(wonInPhase==='?'){
+          const _rw=phasesData.p4Rounds||{};
+          for(const r of Object.keys(_rw)){
+            const arr=_rw[r]?.approvals?.[wk];
+            if(Array.isArray(arr)&&arr.includes(user)){ wonInPhase='4: Round '+r; break; }
+          }
+        }
         const pb=document.createElement("div");
         pb.style.cssText="background:rgba(52,211,153,.2);color:#00753a;padding:3px 8px;border-radius:4px;font-size:.68rem;font-weight:700;margin-top:4px;text-align:center";
         pb.innerHTML=`🏆 Won in Phase ${wonInPhase} — Locked In`;
@@ -2635,7 +2675,7 @@ function renderCalendar(user,ap){
             row.innerHTML=`<span style="font-weight:${nameWeight};color:${nameColor}">${escH(b.user)}</span>
               <span style="color:#48607a">${escH(bidLbl(b.priority))}</span>
               <span style="font-weight:700;color:${outcomeColor(o)}">${outcomeShort(o)}</span>`;
-            if(b.isMe&&!isF&&!closed){
+            if(b.isMe&&!isF&&!closed&&!priorWon){ // [132] a won week's bid shows no ✎/✕ — locked in
               const eb=document.createElement("button"); eb.className="edit-btn"; eb.textContent="✎";
               eb.title="Edit bid";
               eb.onclick=(e)=>{e.stopPropagation();openPriorityModal(wk);};

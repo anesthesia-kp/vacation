@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 255;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 256;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -2051,6 +2051,19 @@ function getPriorPhaseWinners(wk){
   for(const u of p4RoundWinnersOn(wk)) out.add(u);
   return out;
 }
+// [build 256 · audit FINDING 3] The round (if any) whose ARCHIVE already carries a decision
+// for this user+week. An archived decision is frozen history — the archive, not the live
+// docs, is what engines and e-mails obey — so the decide/revoke buttons refuse to touch it
+// (the click would change nothing real and mislead the admin).
+function _p4ArchivedDecisionRound(u,wk){
+  if(Number(phasesData.currentPhase||1)!==4) return null;
+  const rounds=phasesData.p4Rounds||{};
+  for(const r of Object.keys(rounds)){
+    const a=rounds[r]||{};
+    if((Array.isArray(a.approvals?.[wk])&&a.approvals[wk].includes(u))||(Array.isArray(a.denials?.[wk])&&a.denials[wk].includes(u))) return Number(r);
+  }
+  return null;
+}
 function getPriorPhaseFteWon(wk){
   let total=0;
   for(const u of getPriorPhaseWinners(wk)) total+=getUserFTE(u);
@@ -2090,7 +2103,7 @@ function populatePhaseFilter(sel){
   // [build 255] Completed Phase 4 rounds filter like locked phases.
   if(cur===4){
     for(const r of Object.keys(phasesData.p4Rounds||{}).map(Number).filter(n=>!isNaN(n)).sort((a,b)=>a-b)){
-      opts.push(`<option value="p4r${r}">Phase 4 · Round ${r} (locked)</option>`);
+      opts.push(`<option value="p4r${r}">Phase 4: Round ${r} (locked)</option>`);
     }
   }
   sel.innerHTML=opts.join('');
@@ -4454,7 +4467,7 @@ function renderNextStep(){
       const reopen='&nbsp;'+btn('↩ Reopen bidding','reopenBidding()','btn-ghost');
       const _rN=Number(phasesData.p4Round||1);
       if(pending>0){
-        html=box(`Bidding is closed. <strong>${pending}</strong> bid${pending!==1?'s':''} still need${pending===1?'s':''} an approve or deny decision before the ${cur===4?`round (Phase 4 · Round ${_rN})`:'phase'} can be completed.`,btn('✅ Go to Approvals/Denials','gotoAppDenials()')+reopen);
+        html=box(`Bidding is closed. <strong>${pending}</strong> bid${pending!==1?'s':''} still need${pending===1?'s':''} an approve or deny decision before the ${cur===4?`round (Phase 4: Round ${_rN})`:'phase'} can be completed.`,btn('✅ Go to Approvals/Denials','gotoAppDenials()')+reopen);
       } else if(cur===4){
         // [build 255 · rounds-as-mini-phases] Phase 4's round workflow, each state one step:
         // ✓ Complete Round N → 📮 Send Round N Results → ▶ Start Round N+1 OR ✓ Complete
@@ -4463,15 +4476,23 @@ function renderNextStep(){
         const _archived=!!(phasesData.p4Rounds||{})[_rN];
         const _rSent=!!(phasesData.p4RoundResultsSent||{})[_rN];
         if(!_archived){
-          html=box(`Bidding is closed and every Phase 4 · Round ${_rN} bid is decided. Complete the round to freeze its results — exactly like completing a phase.`,
-            btn('✓ Complete Round '+_rN,'completeP4Round()','btn-success')+reopen);
+          // [build 256] Distinguish a round with decided bids from one that simply hasn't
+          // OPENED yet (boundary done, reopen cancelled): guide to reopen, not to complete.
+          let _rDecisions=0;
+          for(const wk of Object.keys(approvalsData||{})) _rDecisions+=(Array.isArray(approvalsData[wk])?approvalsData[wk].length:0);
+          for(const wk of Object.keys(deniedData||{}))    _rDecisions+=(Array.isArray(deniedData[wk])?deniedData[wk].length:0);
+          html=_rDecisions===0
+            ? box(`Phase 4: Round ${_rN} hasn't opened for bidding yet. Reopen bidding to start the round — or, if this window truly has no bids, complete the empty round.`,
+                btn('↩ Reopen bidding','reopenBidding()','btn-success')+'&nbsp;'+btn('✓ Complete Phase 4: Round '+_rN+' (empty)','completeP4Round()','btn-ghost'))
+            : box(`Bidding is closed and every Phase 4: Round ${_rN} bid is decided. Complete the round to freeze its results — exactly like completing a phase.`,
+                btn('✓ Complete Phase 4: Round '+_rN,'completeP4Round()','btn-success')+reopen);
         } else if(!_rSent){
-          html=box(`Phase 4 · Round ${_rN} is complete, but users have NOT been e-mailed its results yet.`,
-            btn('📮 Send Round '+_rN+' Results','sendRoundResultsEmails()','btn-success')
+          html=box(`Phase 4: Round ${_rN} is complete, but users have NOT been e-mailed its results yet.`,
+            btn('📮 Send Phase 4: Round '+_rN+' Results','sendRoundResultsEmails()','btn-success')
             + (adminSettings.simulatorEnabled===true?'&nbsp;'+btn('⏭ Skip sending (testing)','skipP4RoundResults('+_rN+')','btn-ghost'):''));
         } else {
           html=box(`Round ${_rN} results are sent. Start Round ${_rN+1} when the next bidding window opens — or, at the true end of the year, complete Phase 4. Completing Phase 4 ENDS the auction.`,
-            btn('▶ Start Round '+(_rN+1),'startNextP4Round()','btn-success')+'&nbsp;'+btn('✓ Complete Phase 4 (ends the auction)','completePhase()','btn-ghost'));
+            btn('▶ Start Phase 4: Round '+(_rN+1),'startNextP4Round()','btn-success')+'&nbsp;'+btn('✓ Complete Phase 4 (ends the auction)','completePhase()','btn-ghost'));
         }
       } else {
         html=box(`Bidding is closed and every bid is decided. Complete Phase ${cur} to lock in the results.`,btn('✓ Complete Phase '+cur,'completePhase()','btn-success')+reopen);
@@ -4543,6 +4564,24 @@ window.completePhase=function(){
     if(!(phasesData.p4Rounds||{})[_rN]){ toast('Complete Round '+_rN+' first (✓ Complete Round → 📮 Send Round Results), then Complete Phase 4.','err'); return; }
     const _un=_p4UnsentRounds();
     if(_un.length){ toast('Round'+(_un.length!==1?'s':'')+' '+_un.join(', ')+' still owe'+(_un.length===1?'s':'')+' results e-mails — send them before completing Phase 4.','err'); return; }
+    // [build 256 · audit FINDING 2] The year's permanent record is built from the ROUND
+    // archives — a live decision that never made it into one (e.g. made after its round was
+    // archived) would vanish from the record UNANNOUNCED. Refuse to complete until every
+    // live decision is covered by an archive.
+    const _orphans=[];
+    const _inArch=(u,wk)=>_p4ArchivedDecisionRound(u,wk)!==null;
+    for(const wk of Object.keys(approvalsData||{})) for(const u of (Array.isArray(approvalsData[wk])?approvalsData[wk]:[])) if(!_inArch(u,wk)) _orphans.push(u+' ('+wk+', approved)');
+    for(const wk of Object.keys(deniedData||{}))    for(const u of (Array.isArray(deniedData[wk])?deniedData[wk]:[]))    if(!_inArch(u,wk)) _orphans.push(u+' ('+wk+', denied)');
+    if(_orphans.length){
+      openConfirm({
+        title:'⚠️ Decisions outside any round',
+        body:`<div style="color:var(--red);font-weight:600">These decisions are not in any completed round's archive — completing Phase 4 now would drop them from the permanent record without ever e-mailing the users:</div>
+              <div style="max-height:150px;overflow-y:auto;font-size:12px;line-height:1.7;color:var(--t2);margin-top:8px">${_orphans.map(o=>'<div>• '+esc(o)+'</div>').join('')}</div>
+              <div class="cmodal-info" style="margin-top:8px">Run them through a round: ✓ Complete Round ${_rN+((phasesData.p4Rounds||{})[_rN]?1:0)} → 📮 Send Round Results — then Complete Phase 4.</div>`,
+        okText:'OK', onConfirm:()=>{}
+      });
+      return;
+    }
   }
   // FAIL-SAFE: a phase can NEVER be completed while bidding is still live. Bidding must
   // be closed first (timer expired AND all weeks locked). This backs up the guided flow
@@ -4600,7 +4639,6 @@ window.completePhase=function(){
             <li>All approved wins are locked in for Phase ${cur}</li>
             <li><strong>All 52 weeks will be locked automatically</strong> — no bids can change ${cur<4?'until the next phase begins':'from here on'}</li>
             ${cur<4?`<li>Phase ${cur+1} will become available to begin</li>
-            <li>Users will see Phase ${cur+1} on the bidding board</li>
             <li>Approved bid numbers cannot be reused in future phases</li>
             <li>Denied bid numbers are returned to users for future phases</li>`:`<li><strong>This is the final phase (Phase 4)</strong> — after results are sent, the auction is complete. There are no future phases.</li>`}
           </ul>${cur===4?`<div class="cmodal-danger" style="margin-top:8px"><strong>⚠️ Phase 4 runs in rounds through the year.</strong> Complete it ONLY at the true end of the auction year. Mid-year, CANCEL this dialog and follow the round cycle instead: <strong>✓ Complete Round → 📮 Send Round Results → ▶ Start the next round</strong>. This ends the auction — there is no Phase 5.</div>`:''}${_staleHtml}${_capWarnHtml()}`,
@@ -5475,17 +5513,23 @@ window.completeP4Round=function(){
   if((phasesData.p4Rounds||{})[N]){ toast('Round '+N+' is already completed — send its results, then start Round '+(N+1)+'.','warn'); return; }
   const pending=countPendingDecisions();
   if(pending>0){ toast('⚠️ '+pending+' bid'+(pending!==1?'s':'')+' still need'+(pending===1?'s':'')+' a decision before Round '+N+' can complete.','err'); return; }
-  if(!biddingIsClosedFlag()){ toast('Close Phase 4 bidding before completing Round '+N+'.','err'); return; }
+  // [build 256 · LIVE BUG] Use the SAME closed-bidding definition as Complete Phase
+  // (approvalReadiness: server flag OR expired timer, plus all weeks locked). The first cut
+  // demanded the raw biddingClosed flag alone, so a round whose bidding ended by timer
+  // expiry was wrongly told "close bidding first" — with no way to progress. Found live
+  // by the lead admin on the very first round.
+  { const _rdy=approvalReadiness();
+    if(!_rdy.ready){ toast('Phase 4: Round '+N+' can\'t complete yet — '+_rdy.problems.join('; '),'err'); return; } }
   // Count this round's decisions for the dialog (live docs hold exactly this round's
   // decisions — they were cleared when the round started).
   let _aCnt=0,_dCnt=0;
   for(const wk of Object.keys(approvalsData||{})) _aCnt+=(Array.isArray(approvalsData[wk])?approvalsData[wk].length:0);
   for(const wk of Object.keys(deniedData||{}))    _dCnt+=(Array.isArray(deniedData[wk])?deniedData[wk].length:0);
   openConfirm({
-    title:'✓ Complete Phase 4 · Round '+N,
+    title:'✓ Complete Phase 4: Round '+N,
     body:`<div>Complete <strong>Round ${N}</strong>? This freezes the round's decisions (${_aCnt} approval${_aCnt!==1?'s':''}, ${_dCnt} denial${_dCnt!==1?'s':''}) into its archive, exactly like completing a phase.</div>
           <div class="cmodal-info" style="margin-top:8px">Next: 📮 Send Round ${N} Results e-mails the decided users, then ▶ Start Round ${N+1} retires the denied bids (numbers returned) and reopens bidding. Nothing is e-mailed or deleted by this step.</div>`,
-    okText:'✓ Complete Round '+N,
+    okText:'✓ Complete Phase 4: Round '+N,
     onConfirm:async()=>{
       if(!_feedsHealthyOrExplain('Complete Round')) return;
       if(Number(phasesData.currentPhase||1)!==4||Number(phasesData.p4Round||1)!==N||(phasesData.p4Rounds||{})[N]){ toast('Round '+N+' is no longer the open round — nothing was changed.','err'); return; }
@@ -5532,7 +5576,7 @@ window.sendRoundResultsEmails=function(){
     // A round with zero decisions (nobody bid in its window) still needs its stamp so the
     // workflow can advance — same dead-end fix lineage as the classic sender [build 254].
     openConfirm({
-      title:'📮 Send Round '+N+' Results',
+      title:'📮 Send Phase 4: Round '+N+' Results',
       body:`<div>Round <strong>${N}</strong> had no approvals or denials, so there is nothing to e-mail.</div>
             <div class="cmodal-info" style="margin-top:8px">Mark Round ${N} results as sent so the workflow can continue? <strong>No e-mails will be sent</strong> — there are none to send.</div>`,
       okText:'Mark as sent — continue',
@@ -5556,11 +5600,11 @@ window.sendRoundResultsEmails=function(){
     return `<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;border-bottom:1px solid var(--b1)"><strong class="mono">${u}</strong><span>${parts.join(' · ')}</span></div>`;
   }).join('');
   openConfirm({
-    title:'📮 Send Phase 4 · Round '+N+' Results',
+    title:'📮 Send Phase 4: Round '+N+' Results',
     body:`<div>Send Round ${N} results to <strong>${users.length}</strong> user${users.length!==1?'s':''}? Each row below is one e-mail:</div>
           <div style="margin:10px 0;max-height:220px;overflow-y:auto;font-size:12px">${previewRows}</div>
           <div class="cmodal-info">Each user gets one e-mail with only this round's approved and denied weeks — earlier rounds are never repeated. Users without an e-mail address on file are skipped.</div>`,
-    okText:'Send Round '+N+' Results',
+    okText:'Send Phase 4: Round '+N+' Results',
     onConfirm:async()=>{
       if(!_feedsHealthyOrExplain('Send Round Results')) return;
       if(Number(phasesData.currentPhase||1)!==4){ toast('Phase changed while the dialog was open — round results NOT sent.','warn'); return; }
@@ -5591,12 +5635,12 @@ window.sendRoundResultsEmails=function(){
         const denLines=denied.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
         const bodyText=`Hello ${u},
 
-Phase 4 · Round ${N} of the Vacation Auction is complete.
+Phase 4: Round ${N} of the Vacation Auction is complete.
 
-Here are your Phase 4 · Round ${N} results:
+Here are your Phase 4: Round ${N} results:
 
 ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.length?`DENIED (${denied.length}):\n${denLines}\n\nDenied bid numbers become available again for you to use in the next bidding round.`:''}`.trimEnd();
-        const r=await adminSendEmail(u,`Vacation Auction — Phase 4 Round ${N} Results`,bodyText,sentAddrs);
+        const r=await adminSendEmail(u,`Vacation Auction — Phase 4: Round ${N} Results`,bodyText,sentAddrs);
         ok+=r.ok; fail+=r.fail;
         for(const a of r.sent) sentAddrs.add(a);
       }
@@ -5644,7 +5688,7 @@ window.skipP4RoundResults=function(N){
   const arch=(phasesData.p4Rounds||{})[N];
   if(!arch){ toast('Round '+N+' is not completed yet.','warn'); return; }
   openConfirm({
-    title:'⏭ Skip sending Round '+N+' results?',
+    title:'⏭ Skip sending Phase 4: Round '+N+' results?',
     body:`<div>This marks Round <strong>${N}</strong> results as sent <strong>without e-mailing anyone</strong> and publishes the round archive.</div>
           <div class="cmodal-warn" style="margin-top:8px">For testing only — users will NOT receive their results e-mail.</div>`,
     okText:'Skip — don’t e-mail', danger:true,
@@ -5673,7 +5717,7 @@ window.startNextP4Round=function(){
   const N=Number(phasesData.p4Round||1);
   if(!(phasesData.p4Rounds||{})[N]){ toast('Complete Round '+N+' first.','warn'); return; }
   if(!(phasesData.p4RoundResultsSent||{})[N]){ toast('Send (or skip) Round '+N+' results before starting Round '+(N+1)+' — users must learn their outcomes first.','err'); return; }
-  if(!_bkBypass){ _backupThen('starting Phase 4 · Round '+(N+1),function(){ _bkBypass=true; try{ window.startNextP4Round(); } finally { _bkBypass=false; } }); return; }
+  if(!_bkBypass){ _backupThen('starting Phase 4: Round '+(N+1),function(){ _bkBypass=true; try{ window.startNextP4Round(); } finally { _bkBypass=false; } }); return; }
   const arch=(phasesData.p4Rounds||{})[N]||{};
   const denials=arch.denials||{};
   let retire=0; const schedDel={}, bpDel={};
@@ -5681,7 +5725,7 @@ window.startNextP4Round=function(){
     if(scheduleData[u]?.[wk]!==undefined){ schedDel[`${u}.${wk}`]=deleteField(); bpDel[`${u}.${wk}`]=deleteField(); retire++; }
   }
   openConfirm({
-    title:'▶ Start Phase 4 · Round '+(N+1),
+    title:'▶ Start Phase 4: Round '+(N+1),
     body:`<div>Start <strong>Round ${N+1}</strong>? A round boundary works exactly like beginning a new phase:</div>
           <ul style="margin:10px 0 8px 18px;color:var(--t2);font-size:13px;line-height:1.65">
             <li>Round ${N} wins stay locked in (announced archive)</li>
@@ -5689,7 +5733,7 @@ window.startNextP4Round=function(){
             <li>The decision board clears for Round ${N+1}; priority locks reset (same rule as phases)</li>
           </ul>
           <div class="cmodal-info">Next, the reopen dialog offers Smart Lock &amp; Unlock so Round ${N+1}'s window is actually biddable.</div>`,
-    okText:'▶ Start Round '+(N+1),
+    okText:'▶ Start Phase 4: Round '+(N+1),
     onConfirm:async()=>{
       if(!_feedsHealthyOrExplain('Start Next Round')) return;
       if(Number(phasesData.currentPhase||1)!==4||Number(phasesData.p4Round||1)!==N||!(phasesData.p4RoundResultsSent||{})[N]){ toast('Round state changed while the dialog was open — nothing was done.','err'); return; }
@@ -5701,7 +5745,10 @@ window.startNextP4Round=function(){
       batch.set(phasesRef,{p4Round:N+1},{merge:true});
       try{ await batch.commit(); }
       catch(e){ toast('Could not start Round '+(N+1)+' — nothing was changed ('+(e?.message||e)+').','err'); return; }
-      toast('▶ Phase 4 · Round '+(N+1)+' — '+retire+' denied bid'+(retire!==1?'s':'')+' retired. Now unlock weeks and reopen bidding.','ok');
+      // Local-first: the batch advanced the round server-side; reflect it immediately so the
+      // reopen gate (build 256) and the dashboard see Round N+1 before the listener echoes.
+      phasesData.p4Round=N+1;
+      toast('▶ Phase 4: Round '+(N+1)+' — '+retire+' denied bid'+(retire!==1?'s':'')+' retired. Now unlock weeks and reopen bidding.','ok');
       window.reopenBidding();
     }
   });
@@ -5789,8 +5836,18 @@ function inEarlierSnapshot(cp,phN,u,wk,val){
   }
   return false;
 }
+// [build 256 · lead admin] Completed-phases map WITH Phase 4 round archives folded in under
+// fractional sort keys (3.01, 3.02, …) — same trick as the staff history. Lets every
+// Number()-ordered snapshot helper treat rounds exactly like completed phases.
+function _p4RoundKey(r){ return (3+Number(r)/100).toFixed(2); }
+function _cpWithRounds(){
+  const out={...(phasesData.completedPhases||{})};
+  const rounds=phasesData.p4Rounds||{};
+  for(const r of Object.keys(rounds)) out[_p4RoundKey(r)]=rounds[r];
+  return out;
+}
 function snapshotProjection(phN){
-  const cp=phasesData.completedPhases||{};
+  const cp=_cpWithRounds();
   const sched=cp[phN]?.schedule||{};
   const T=getReviewThreshold();
   const out={};
@@ -5950,7 +6007,10 @@ function bidsByWeekModel(scope, includeEmpty){
   const natAp=computeApprovals(true); // pre-admin projection for current-phase bids
   const snapProjCache={};             // recomputed projections for legacy snapshots
   const mm=(typeof scope==='string')&&scope.match(/^ph(\d+)$/);
+  const mr=(typeof scope==='string')&&scope.match(/^p4r(\d+)$/); // [256] Phase 4 round scope
   const lockedPhase=mm?Number(mm[1]):null;
+  const lockedRound=mr?Number(mr[1]):null;
+  const lockedKey=lockedPhase!==null?String(lockedPhase):(lockedRound!==null?_p4RoundKey(lockedRound):null);
   const groups=[];
   mondays.forEach(d=>{
     const wk=dateKey(d);
@@ -5962,23 +6022,35 @@ function bidsByWeekModel(scope, includeEmpty){
     // values, immune to later re-bids overwriting the live tag); inherited
     // entries from earlier snapshots are skipped. Live views iterate the live
     // schedule with phase tags as before.
-    const snapMode=lockedPhase!==null;
-    const cpAll=phasesData.completedPhases||{};
-    const srcSched=snapMode?((cpAll[lockedPhase]||{}).schedule||scheduleData):scheduleData;
+    const snapMode=lockedKey!==null;
+    const cpAll=_cpWithRounds(); // [256] rounds fold in under fractional keys
+    const srcSched=snapMode?((cpAll[lockedKey]||{}).schedule||scheduleData):scheduleData;
     for(const u in srcSched){
       const p=srcSched[u]?.[wk]; if(p===undefined) continue;
-      let bp;
+      let bp, bpLabel=null, _archRound=null;
       if(snapMode){
-        if((cpAll[lockedPhase]||{}).schedule&&inEarlierSnapshot(cpAll,lockedPhase,u,wk,p)) continue;
-        bp=(cpAll[lockedPhase]||{}).schedule?lockedPhase:getUserBidPhaseAdmin(u,wk);
-        if(bp!==lockedPhase) continue;
+        if((cpAll[lockedKey]||{}).schedule&&inEarlierSnapshot(cpAll,lockedKey,u,wk,p)) continue;
+        bp=(cpAll[lockedKey]||{}).schedule?Number(lockedKey):getUserBidPhaseAdmin(u,wk);
+        if(bp!==Number(lockedKey)) continue;
+        if(lockedRound!==null) bpLabel='4:R'+lockedRound; // report column reads P4:R1
       } else {
         bp=getUserBidPhaseAdmin(u,wk);
-        if(scope==='current'){ if(bp!==cur) continue; }   // 'all' keeps everything
+        // [256 · lead admin] A bid decided in an ARCHIVED round is that round's result:
+        // the 'current' view excludes it (the open round's working set only); the 'all'
+        // view shows it with its round label and its ARCHIVED outcome (the live decision
+        // docs are cleared at each round boundary, so the live view would misreport an
+        // announced APPROVED win as merely "winning").
+        _archRound=(cur===4)?_p4ArchivedDecisionRound(u,wk):null;
+        if(scope==='current'){ if(bp!==cur) continue; if(_archRound!==null) continue; }
+        if(_archRound!==null) bpLabel='4:R'+_archRound;
       }
       let outcome, projected;
-      if(bp<cur){
-        const phSnap=phasesData.completedPhases?.[bp]||{};
+      if(!snapMode&&_archRound!==null){
+        const ra=(phasesData.p4Rounds||{})[_archRound]||{};
+        outcome=(Array.isArray(ra.approvals?.[wk])&&ra.approvals[wk].includes(u))?'approved':'denied';
+        projected=natAp[wk]?.winners?.has(u)?'winning':natAp[wk]?.draws?.has(u)?'draw':natAp[wk]?.reviews?.has(u)?'review':'losing';
+      } else if(bp<cur){
+        const phSnap=cpAll[lockedRound!==null?lockedKey:bp]||{};
         const phAp=Array.isArray(phSnap.approvals?.[wk])?phSnap.approvals[wk]:[];
         const phDen=Array.isArray(phSnap.denials?.[wk])?phSnap.denials[wk]:[];
         outcome=phAp.includes(u)?'approved':(phDen.includes(u)?'denied':'losing');
@@ -6006,7 +6078,7 @@ function bidsByWeekModel(scope, includeEmpty){
       // Undecided current-phase bids show a dash in the Result column; their
       // status lives in the Projected column instead.
       const decided=bp<cur||outcome==='approved'||outcome==='denied';
-      bids.push({user:u,bid:bidLblAdmin(p),phase:bp,outcome,projected,decided,score:pScore(p)});
+      bids.push({user:u,bid:bidLblAdmin(p),phase:bpLabel||bp,outcome,projected,decided,score:pScore(p)});
     }
     // Skip weeks with no bids UNLESS includeEmpty is set (the weekly report shows every
     // week of the year for context, even empty ones — its FTE header still renders).
@@ -6022,7 +6094,8 @@ function bidsByWeekModel(scope, includeEmpty){
     // current/all → phases 1..(current-1), i.e. every COMPLETED phase (the live phase is
     // excluded here; its effect is already in the cumulative line).
     let wkFte, wkByPhase;
-    if(snapMode){ wkFte=phaseFteHeader(lockedPhase,wk).cum; wkByPhase=perPhaseApprovedList(wk,lockedPhase,false); }
+    if(snapMode&&lockedPhase!==null){ wkFte=phaseFteHeader(lockedPhase,wk).cum; wkByPhase=perPhaseApprovedList(wk,lockedPhase,false); }
+    else if(snapMode){ wkFte=finalFteForWeek(wk, ap); wkByPhase=perPhaseApprovedList(wk,Number(phasesData.currentPhase||1)-1,false); } // [256] round scope: live FTE header (rounds have no frozen header)
     else { wkFte=finalFteForWeek(wk, ap); wkByPhase=perPhaseApprovedList(wk,Number(phasesData.currentPhase||1)-1,false); } // L-6: reuse the ap computed once above
     groups.push({wk,wn,date:`${MS[d.getMonth()]} ${d.getDate()}`,type:weekTypeLabel(wk,d),bids,fte:wkFte,byPhase:wkByPhase});
   });
@@ -6032,9 +6105,13 @@ function bidsByWeekModel(scope, includeEmpty){
 function bwScopeLabel(scope){
   const cur=Number(phasesData.currentPhase||1);
   const mm=(typeof scope==='string')&&scope.match(/^ph(\d+)$/);
+  const mr=(typeof scope==='string')&&scope.match(/^p4r(\d+)$/);
   if(scope==='all') return 'All Phases';
   if(mm) return `Phase ${mm[1]} (completed)`;
-  return `Phase ${cur} (current)`;
+  if(mr) return `Phase 4: Round ${mr[1]} (completed)`; // [256] rounds report like phases
+  // [256 · lead admin] Mid-year Phase 4 reports name their ROUND — "current" alone lied
+  // once a round had closed.
+  return 'Phase '+cur+((cur===4&&Number(phasesData.p4Round||0)>=1)?': Round '+Number(phasesData.p4Round):'')+' (current)';
 }
 
 // Export current-phase approvals/denials to CSV or a printable HTML/PDF.
@@ -6846,6 +6923,8 @@ window._fixLockAllWeeksInline=function(){
   });
 };
 window.adApprove=function(user,wk,currentOutcome){
+  // [build 256 · audit FINDING 3] An archived round's decision is frozen, announced history.
+  { const _ar=_p4ArchivedDecisionRound(user,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); return; } }
   // [AUDIT 2026-07-26 medium] Refuse to approve a bid the engine will not score. An
   // unscorable value (a devtools-forged 0/-1/"1", or a shape the filter drops) is invisible
   // to every live projection and capacity total, but completePhase would otherwise snapshot
@@ -6896,6 +6975,8 @@ window.adApprove=function(user,wk,currentOutcome){
 };
 
 window.adDeny=function(user,wk,currentOutcome){
+  // [build 256 · audit FINDING 3] Same freeze rule as adApprove.
+  { const _ar=_p4ArchivedDecisionRound(user,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); return; } }
   const m=wkDate(wk);
   const isDrawUser=currentOutcome==='draw';
   openConfirm({
@@ -6915,6 +6996,9 @@ window.adDeny=function(user,wk,currentOutcome){
 };
 
 window.adRevokeApprove=function(user,wk){
+  // [build 256 · audit FINDING 3] An announced round win is locked via its archive — a revoke
+  // here would change nothing real (the engines obey the archive) and mislead the admin.
+  { const _ar=_p4ArchivedDecisionRound(user,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); return; } }
   const m=wkDate(wk);
   openConfirm({
     title:'↶ Revoke Approval',
@@ -6931,6 +7015,8 @@ window.adRevokeApprove=function(user,wk){
 };
 
 window.adRevokeDeny=function(user,wk){
+  // [build 256 · audit FINDING 3] Same freeze rule — the retired bid is gone and announced.
+  { const _ar=_p4ArchivedDecisionRound(user,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); return; } }
   const m=wkDate(wk);
   openConfirm({
     title:'↶ Revoke Denial',
@@ -8427,6 +8513,29 @@ window._reopenCommit=async function(){
 window._reopenOverride=function(){ closeConfirm(); window._reopenCommit(); };
 window.reopenBidding=function(){
   const cur=Number(phasesData.currentPhase||1);
+  // [build 256 · audit FINDING 1] Once the current Phase 4 round is ARCHIVED, a plain reopen
+  // would collect new bids and decisions into a round that is already frozen — they would
+  // belong to no archive, the round sender would find "nothing to send", and Complete
+  // Phase 4 would drop them from the permanent record. Route the admin to the real next
+  // step instead. (▶ Start Round N+1 advances the counter BEFORE it calls back in here,
+  // so its hand-off reopen passes this gate.)
+  if(cur===4){
+    const _rN=Number(phasesData.p4Round||1);
+    if((phasesData.p4Rounds||{})[_rN]){
+      if(!(phasesData.p4RoundResultsSent||{})[_rN]){
+        toast('Round '+_rN+' is completed but not announced — send (or skip) its results, then ▶ Start Round '+(_rN+1)+' to reopen bidding.','err');
+      } else {
+        openConfirm({
+          title:'▶ Use Start Phase 4: Round '+(_rN+1),
+          body:`<div>Round <strong>${_rN}</strong> is completed and announced. Reopening bidding directly would collect new bids into that frozen round — they could never be announced.</div>
+                <div class="cmodal-info" style="margin-top:8px"><strong>▶ Start Round ${_rN+1}</strong> is the right step: it retires Round ${_rN}'s denied bids, clears the decision board, and then reopens bidding.</div>`,
+          okText:'▶ Start Phase 4: Round '+(_rN+1),
+          onConfirm:()=>{ window.startNextP4Round(); }
+        });
+      }
+      return;
+    }
+  }
   // [build 254 · rolling Phase 4] Close Bidding locks ALL 52 weeks. Begin Phase used to be the
   // only step that re-ran Smart Lock — but rolling Phase 4 rounds REOPEN without a Begin, so a
   // reopened round was fully locked and unbiddable until the admin hand-unlocked weeks. Offer
@@ -9807,7 +9916,12 @@ async function _doFullRestore(f){
     // from the live mirror (best-effort: if the mirror is empty, this is exactly the old
     // behavior and the restore is never blocked). A ledger preserved into a pre-Phase-4 state
     // is harmless: _commitBeginPhase wipes staging when Phase 4 (re)begins.
-    batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_p4RoundMailedMirror).length?{p4RoundMailed:_p4RoundMailedMirror}:{}),...(Object.keys(_stagedP4Rounds).length?{pendingP4Rounds:_stagedP4Rounds}:{})});
+    // [build 256 · audit FINDING 4] A STAGED (unannounced) round archive is NOT preserved
+    // across a restore — same precedent as staged phase snapshots: it is rebuildable by
+    // re-clicking ✓ Complete Round on the restored live decisions, and preserving it could
+    // leave a ghost "future round" after restoring to an earlier point in the year. The
+    // round-send LEDGER above is different: it records e-mails that really went out.
+    batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_p4RoundMailedMirror).length?{p4RoundMailed:_p4RoundMailedMirror}:{})});
     await batch.commit();
   }catch(e){
     // [AUDIT #12] The batch is atomic, so no auction data changed — but the mail queue
