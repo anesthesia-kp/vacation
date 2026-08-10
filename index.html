@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 132;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 133;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -918,6 +918,24 @@ function p4RoundWinnersOn(wk){
 // A prior-phase win = approved in any phase < currentPhase. Once approved, that
 // user permanently owns that week — they cannot re-bid it and no later bid can
 // displace them, regardless of priority.
+// [build 133 · lead admin] The ANNOUNCED round decision (if any) that currently binds this
+// user+week. A round win binds for the rest of the year. A round denial binds only while
+// the exact denied bid is still present — Start Round retires it, and a fresh re-bid in a
+// later round (different value) is a new, live bid. Reads only the PUBLISHED archives
+// (world-readable phases doc), so nothing unannounced ever leaks through this path.
+function p4AnnouncedDecision(user,wk){
+  if(Number(phasesData.currentPhase||1)!==4) return null;
+  const rounds=phasesData.p4Rounds||{};
+  for(const r of Object.keys(rounds)){
+    const a=rounds[r]||{};
+    if(Array.isArray(a.approvals?.[wk])&&a.approvals[wk].includes(user)) return {round:r,status:'A'};
+    if(Array.isArray(a.denials?.[wk])&&a.denials[wk].includes(user)){
+      const av=a.schedule?.[user]?.[wk];
+      if(data[user]?.[wk]!==undefined&&JSON.stringify(data[user][wk])===JSON.stringify(av)) return {round:r,status:'D'};
+    }
+  }
+  return null;
+}
 function getPriorPhaseWinners(wk){
   const cur=Number(phasesData.currentPhase||1);
   const out=new Set();
@@ -1807,6 +1825,8 @@ function openPriorityModal(wk){
     showError("You already won this week in an earlier phase or Phase 4 round — it's locked in for you.");
     return;
   }
+  { const _ad=p4AnnouncedDecision(user,wk); // [133] announced denial = frozen until it retires
+    if(_ad&&_ad.status==='D'){ showError("This bid was denied in Phase 4: Round "+_ad.round+" — it clears when the next round opens."); return; } }
   const existingPrio=isVisibleBid(user,wk)?data[user]?.[wk]:undefined;
   const isRebid=existingPrio!==undefined;
   // Alert as soon as the user tries to add a NEW bid beyond the per-phase limit —
@@ -1930,6 +1950,8 @@ window.confirmPriority=async function(){
   // two-tab race (or an option list built from stale state) could otherwise submit a
   // below-floor or disallowed bid. All checks run BEFORE any write (gates-first contract).
   if(getPriorPhaseWinners(wk).has(user)){ showCenterAlert("You already won this week in an earlier phase or Phase 4 round — it's locked in for you."); window.closeModal(); return; }
+  { const _ad=p4AnnouncedDecision(user,wk); // [133] announced denial = frozen until it retires at the next round
+    if(_ad&&_ad.status==='D'){ showCenterAlert("This bid was denied in Phase 4: Round "+_ad.round+" — it clears when the next round opens, and you can place a fresh bid then."); window.closeModal(); return; } }
   // [build 131 · rolling Phase 4] Re-bidding a round-denied week is allowed — but not with the
   // EXACT bid the results e-mail already denied. Same value = same answer; the engine treats it
   // as dead, so submitting it would silently do nothing but look placed. Checked at confirm
@@ -2029,6 +2051,10 @@ async function removeSelection(wk){
   // this, cancelling deleted the winning bid's data: the win survived via the archive,
   // but the bid's numbers wrongly returned to the user's pool.
   if(getPriorPhaseWinners(wk).has(user)){ showCenterAlert("You won this week — it's locked in and cannot be edited or cancelled."); return; }
+  // [build 133] An announced round DENIAL is frozen history too — the bid clears by itself
+  // when the next round opens, and the week is then re-biddable fresh.
+  { const _ad=p4AnnouncedDecision(user,wk);
+    if(_ad&&_ad.status==='D'){ showCenterAlert("This bid was denied in Phase 4: Round "+_ad.round+" — it will clear automatically when the next round opens, and you can bid this week again then."); return; } }
   // (Rule removed 12 Jul 2026: users may cancel any bid, including on weeks
   // they are currently projected to win.)
   const prio=data[user][wk];
@@ -2143,6 +2169,16 @@ function renderPhaseLabel(){
   if(currentPhaseAnnounced()){
     lbl.textContent=cur>=4?'Auction complete':('Phase '+cur+' complete — Phase '+(cur+1)+' opens soon');
     return;
+  }
+  // [build 133 · lead admin] Same rule at ROUND boundaries: once the current round's results
+  // are announced (and until the next round opens), the header says so — it must never claim
+  // Round N is live while Prior Phase Results, right next to it, lists Round N as complete.
+  if(cur===4){
+    const _rN=Number(phasesData.p4Round||1);
+    if((phasesData.p4RoundResultsSent||{})[_rN]){
+      lbl.textContent='Phase 4: Round '+_rN+' complete — next round opens soon';
+      return;
+    }
   }
   // [build 131] Rolling Phase 4 shows its round: "Phase 4: Round N".
   lbl.textContent='Phase '+cur+((cur===4&&Number(phasesData.p4Round||0)>=1)?': Round '+Number(phasesData.p4Round):'');
@@ -2482,6 +2518,10 @@ function renderSelections(user,ap){
   // (The bids themselves stay in the data — wins lock in, and the next phase retires the
   // rest — this is display truth, not a data change.)
   const _announced=currentPhaseAnnounced();
+  // [build 133 · lead admin] A bid decided in an ANNOUNCED round is a RESULT, not a
+  // projection — it lives in Prior Phase Results now. Drop it from this list the moment
+  // the round's e-mails go out (wins stay visible as locked weeks on the board itself).
+  for(const wk of Object.keys(uw)){ if(p4AnnouncedDecision(user,wk)) delete uw[wk]; }
   if(_announced||!Object.keys(uw).length){
     // "Click a week below" is only honest while bidding is actually open.
     const _canBid=biddingOpen()&&!isAuctionClosed()&&!_announced; // isAuctionClosed = server flag OR expired timer
@@ -2675,7 +2715,7 @@ function renderCalendar(user,ap){
             row.innerHTML=`<span style="font-weight:${nameWeight};color:${nameColor}">${escH(b.user)}</span>
               <span style="color:#48607a">${escH(bidLbl(b.priority))}</span>
               <span style="font-weight:700;color:${outcomeColor(o)}">${outcomeShort(o)}</span>`;
-            if(b.isMe&&!isF&&!closed&&!priorWon){ // [132] a won week's bid shows no ✎/✕ — locked in
+            if(b.isMe&&!isF&&!closed&&!priorWon&&!p4AnnouncedDecision(user,wk)){ // [132/133] a won or announced-decided week's bid shows no ✎/✕ — it is a result, not a live bid
               const eb=document.createElement("button"); eb.className="edit-btn"; eb.textContent="✎";
               eb.title="Edit bid";
               eb.onclick=(e)=>{e.stopPropagation();openPriorityModal(wk);};

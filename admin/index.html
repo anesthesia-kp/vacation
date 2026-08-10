@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 256;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 257;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -4278,6 +4278,11 @@ function countPendingDecisions(){
     for(const u in scheduleData){
       const p=scheduleData[u]?.[wk]; if(p===undefined) continue;
       if(!isCurrentPhaseBidAdmin(u,wk)) continue;
+      // [build 257 · LIVE BUG] A bid decided in an ARCHIVED round is decided, period. Round
+      // winners' bids stay live all year, and Start Round clears the live decision docs —
+      // without this skip every earlier-round winner re-counted as PENDING in later rounds
+      // (blocking Complete Round and re-listing them on the decide panel).
+      if(_p4ArchivedDecisionRound(u,wk)!==null) continue;
       if(!approvedHere.includes(u)&&!deniedHere.includes(u)) n++;
     }
   });
@@ -4608,6 +4613,7 @@ window.completePhase=function(){
     for(const u in scheduleData){
       const p=scheduleData[u]?.[wk]; if(p===undefined) continue;
       if(!isCurrentPhaseBidAdmin(u,wk)) continue; // historical bid, skip
+      if(_p4ArchivedDecisionRound(u,wk)!==null) continue; // [257] archived round decisions are decided
       if(!approvedHere.includes(u)&&!deniedHere.includes(u)){
         pending.push(u+' ('+wLabel(wkDate(wk))+')');
       }
@@ -6584,10 +6590,21 @@ window.renderAppDenials=function(){
       // Approvals/Denials must show EVERY bid for the shown phase, including denied
       // ones (so admin can revoke a denial) — unlike the dashboard, which hides them.
       const mm=phaseFilter&&phaseFilter.match(/^ph(\d+)$/);
-      const matchesPhase = phaseFilter==='all' ? true : (mm ? bidPh===Number(mm[1]) : bidPh===cur);
+      const mr=phaseFilter&&phaseFilter.match(/^p4r(\d+)$/); // [257] completed round views
+      // [257 · LIVE BUG] Rounds are independent mini-phases here too: the CURRENT view shows
+      // only the OPEN round's working set (earlier rounds' winners re-listed forever before
+      // this); a completed round's view shows exactly that round's decisions.
+      const _arch=(cur===4)?_p4ArchivedDecisionRound(u,wk):null;
+      const matchesPhase = phaseFilter==='all' ? true
+        : (mm ? bidPh===Number(mm[1])
+        : (mr ? _arch===Number(mr[1])
+        : (bidPh===cur&&_arch===null)));
       if(!matchesPhase) continue;
       let outcome;
-      if(bidPh<cur){
+      if(_arch!==null){
+        const ra=(phasesData.p4Rounds||{})[_arch]||{};
+        outcome=(Array.isArray(ra.approvals?.[wk])&&ra.approvals[wk].includes(u))?'approved':'denied';
+      } else if(bidPh<cur){
         // Historical bid — resolve from that phase's snapshot
         const phSnap=phasesData.completedPhases?.[bidPh]||{};
         const phAp=Array.isArray(phSnap.approvals?.[wk])?phSnap.approvals[wk]:[];
@@ -6603,8 +6620,8 @@ window.renderAppDenials=function(){
         else if(a.reviews.has(u)) outcome='review';
         else outcome='lose';
       }
-      const proj=bidPh<cur?null:natOutcome(nat,wk,u);
-      entries.push({wk,user:u,priority:p,outcome,phase:bidPh,approved:approvedHere.includes(u),denied:deniedHere.includes(u),proj});
+      const proj=(bidPh<cur||_arch!==null)?null:natOutcome(nat,wk,u);
+      entries.push({wk,user:u,priority:p,outcome,phase:_arch!==null?('4:R'+_arch):bidPh,approved:_arch!==null?outcome==='approved':approvedHere.includes(u),denied:_arch!==null?outcome==='denied':deniedHere.includes(u),proj,_arch});
     }
   });
   // Filter
