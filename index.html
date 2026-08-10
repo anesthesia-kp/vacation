@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 133;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 134;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1956,6 +1956,21 @@ window.confirmPriority=async function(){
   // EXACT bid the results e-mail already denied. Same value = same answer; the engine treats it
   // as dead, so submitting it would silently do nothing but look placed. Checked at confirm
   // time (L-3 pattern) so a two-tab race can't slip it through a stale dropdown.
+  // [build 134 · AUDIT] The comment above PROMISED this block since 131, but no code ever
+  // compared the CANDIDATE value to the archived denial — p4AnnouncedDecision reads the
+  // (retired, absent) live bid, so it passed for ANY value. A same-value re-bid then saved
+  // and instantly re-froze as the old denial: uncancellable, uneditable, dropped from My
+  // Bids yet still consuming the bid number and a cap slot forever. This is the real gate.
+  { const _rounds=phasesData.p4Rounds||{};
+    const _cand=val==="NP"?"NP":(val.includes(',')?val.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n)):parseInt(val));
+    for(const _r of Object.keys(_rounds)){
+      const _a=_rounds[_r]||{};
+      if(Array.isArray(_a.denials?.[wk])&&_a.denials[wk].includes(user)){
+        const _av=_a.schedule?.[user]?.[wk];
+        if(_av!==undefined&&JSON.stringify(_cand)===JSON.stringify(_av)){ showCenterAlert("This exact bid was already denied on this week in Phase 4: Round "+_r+" — same bid, same answer. Pick a different bid value for your fresh try."); window.closeModal(); return; }
+      }
+    }
+  }
   // High-demand weeks accept only the allowed numeric set — NP is NOT allowed either.
   // (NP previously slipped past this re-check via a val!=="NP" guard.)
   if((weekMeta[wk]?.highPriorityOnly) && (val==="NP" || !HIGH_PRIORITY_ALLOWED.has(val))){ showCenterAlert("This high-demand week only accepts bids of 1, 2, 3, 4, \"1/2\", or \"1/2/3\"."); window.closeModal(); return; }

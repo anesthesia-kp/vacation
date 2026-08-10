@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 258;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 259;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1621,6 +1621,20 @@ let _publishedP4Rounds={}, _stagedP4Rounds={};
 function _mergeP4RoundsView(){
   phasesData.p4Rounds={..._publishedP4Rounds,..._stagedP4Rounds};
 }
+// [build 259 · AUDIT HIGH — PII] The delivered-address ledger (resultsSentTo) used to be
+// written onto the WORLD-READABLE phases doc — publishing every mailed staff address to any
+// anonymous reader, the exact PII the 'emails'/'mailQueue' rules exist to protect. It now
+// lives on the ADMIN-ONLY phaseStaging doc (rules unchanged — that doc is already admin-read).
+// _sentLedger mirrors it from the staging listener; senders read the mirror at confirm time
+// and, for one transition period, also union in any legacy phases.resultsSentTo entries so an
+// in-flight auction can't double-mail. Reset Auction wipes the staging doc → fresh ledger.
+let _sentLedger={};
+function _sentAddrsFor(key){
+  return new Set([...(( _sentLedger[key])||[]),...((phasesData.resultsSentTo?.[key])||[])]);
+}
+function _writeSentLedger(key,sentAddrs){
+  return setDoc(phaseStagingRef,{resultsSentTo:{[key]:[...sentAddrs]}},{merge:true});
+}
 // [build 251] Live mirror of the Phase 4 round-send ledger (who was already e-mailed what).
 // Every NON-merge replace of the staging doc that is not meant to destroy the ledger
 // (_publishPhaseResults, _doFullRestore) spreads this mirror back in, so the ledger survives
@@ -1655,6 +1669,7 @@ onSnapshot(phaseStagingRef, snap=>{
   _stagedCompletedPhases=snap.exists()?(snap.data().pendingPhaseSnapshots||{}):{};
   _p4RoundMailedMirror=snap.exists()?(snap.data().p4RoundMailed||{}):{};
   _stagedP4Rounds=snap.exists()?(snap.data().pendingP4Rounds||{}):{};
+  _sentLedger=snap.exists()?(snap.data().resultsSentTo||{}):{}; // [build 259] delivered-address ledger lives on the ADMIN-ONLY staging doc now (PII)
   _mergeCompletedPhasesView();
   _mergeP4RoundsView();
   refreshAll(); // staged snapshots drive the phase workflow (complete/send gates)
@@ -2060,7 +2075,19 @@ function _p4ArchivedDecisionRound(u,wk){
   const rounds=phasesData.p4Rounds||{};
   for(const r of Object.keys(rounds)){
     const a=rounds[r]||{};
-    if((Array.isArray(a.approvals?.[wk])&&a.approvals[wk].includes(u))||(Array.isArray(a.denials?.[wk])&&a.denials[wk].includes(u))) return Number(r);
+    if(Array.isArray(a.approvals?.[wk])&&a.approvals[wk].includes(u)) return Number(r);
+    // [build 259 · AUDIT CRITICAL] A round DENIAL binds only while the EXACT denied bid is
+    // still on the schedule — mirroring the staff twin p4AnnouncedDecision, which was always
+    // value-aware for precisely this case. Start Round retires the denied bid; a fresh
+    // re-bid in a later round is a NEW, LIVE bid. The old membership-only test made that
+    // re-bid invisible to every counter and gate (never pended, never decidable, never
+    // announced, never retired — confirmed live 10 Aug 2026): countPendingDecisions,
+    // renderPhaseProgress, the decide panel's current view and all four decision guards
+    // key on this helper, so the value check here heals every one of them at once.
+    if(Array.isArray(a.denials?.[wk])&&a.denials[wk].includes(u)){
+      const av=a.schedule?.[u]?.[wk];
+      if(scheduleData[u]?.[wk]!==undefined&&JSON.stringify(scheduleData[u][wk])===JSON.stringify(av)) return Number(r);
+    }
   }
   return null;
 }
@@ -4377,7 +4404,7 @@ async function _publishPhaseResults(fields){
     // nothing; Firestore deep-merges maps). The Phase 4 round-send ledger is spread back in from
     // its live mirror so publishing results (incl. a leftover earlier phase's, mid-rolling-year)
     // cannot silently forget who was already e-mailed what.
-    b.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_p4RoundMailedMirror).length?{p4RoundMailed:_p4RoundMailedMirror}:{}),...(Object.keys(_stagedP4Rounds).length?{pendingP4Rounds:_stagedP4Rounds}:{})});
+    b.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_p4RoundMailedMirror).length?{p4RoundMailed:_p4RoundMailedMirror}:{}),...(Object.keys(_stagedP4Rounds).length?{pendingP4Rounds:_stagedP4Rounds}:{}),...(Object.keys(_sentLedger).length?{resultsSentTo:_sentLedger}:{})}); // [259] the delivered-address ledger records e-mails that really went out — survives the publish replace
   }
   b.set(phasesRef,payload,{merge:true});
   await b.commit();
@@ -4890,9 +4917,9 @@ async function _commitBeginPhase(next){
     // engine reads prior winners from the public phases doc; no torn instant.
     if(Object.keys(_stagedCompletedPhases||{}).length){
       _phasePayload.completedPhases={..._publishedCompletedPhases,..._stagedCompletedPhases};
-      batch.set(phaseStagingRef,{pendingPhaseSnapshots:{}}); // NON-merge replace (empty-map merge clears nothing)
+      batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_sentLedger).length?{resultsSentTo:_sentLedger}:{})}); // NON-merge replace (empty-map merge clears nothing) · [259] ledger survives — it records real sends
     } else if(next===4){
-      batch.set(phaseStagingRef,{pendingPhaseSnapshots:{}}); // [build 255] stale STAGED round archives self-destruct at a fresh Phase 4 too
+      batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_sentLedger).length?{resultsSentTo:_sentLedger}:{})}); // [build 255] stale STAGED round archives self-destruct at a fresh Phase 4 too · [259] ledger survives
     }
     batch.set(phasesRef,_phasePayload,{merge:true});
     batch.set(approvalsRef,{});
@@ -5379,6 +5406,26 @@ window.sendPhaseResultsEmails=function(){
     openConfirm({title:'📮 Send Phase Results E-mails',body:`<div>No phase has been completed yet — finish a phase before sending results.</div>`,okText:'OK',onConfirm:()=>{}});
     return;
   }
+  // [build 259 · AUDIT HIGH] Rounds-mode guard for the ALWAYS-VISIBLE Messaging-Users button.
+  // When Phase 4 ran in rounds, every result was announced round by round; the phase-4 year
+  // record is the UNION of the round archives, and its resultsSentTo[4] ledger is EMPTY (round
+  // sends record under 'p4r'+N). This classic sender would therefore re-mail EVERY decided
+  // user their full-year results with zero dedup — the exact recap the lead admin ruled out.
+  // The dashboard next-step already routes rounds-mode to the round sender / finish stamp;
+  // this second entry point now follows the same rules instead of bypassing them.
+  if(Number(target)===4&&Object.keys(phasesData.p4Rounds||{}).length>0){
+    if(_p4UnsentRounds().length){ window.sendRoundResultsEmails(); return; }
+    if(completed[4]&&!_sent[4]){
+      openConfirm({title:'📮 Phase 4 ran in rounds',
+        body:`<div>Every Phase 4 round's results were already announced as they happened — a full-year recap e-mail would wrongly repeat months already past.</div>
+              <div class="cmodal-info" style="margin-top:8px">Finish the record instead so the auction reads as done. <strong>No e-mails will be sent.</strong></div>`,
+        okText:'🎉 Mark results sent (all rounds announced)',
+        onConfirm:()=>{ if(window._p4FinishStamp) window._p4FinishStamp(); }});
+      return;
+    }
+    openConfirm({title:'📮 Send Phase Results E-mails',body:`<div>Phase 4 ran in rounds and every round's results were already sent — there is nothing left to e-mail.</div>`,okText:'OK',onConfirm:()=>{}});
+    return;
+  }
   const cur=target; // downstream body text / resultsSent tracking refer to this phase
   const arch=completed[target]||{};
   const apSrc=arch.approvals||{}, denSrc=arch.denials||{}, schedSrc=arch.schedule||scheduleData;
@@ -5460,7 +5507,7 @@ window.sendPhaseResultsEmails=function(){
       // second click, those addresses are skipped inside adminSendEmail — so no address ever
       // gets a duplicate results e-mail, even when a user has two addresses and only one
       // failed the first time (the succeeded one is not re-sent).
-      const sentAddrs=new Set((phasesData.resultsSentTo?.[cur])||[]);
+      const sentAddrs=_sentAddrsFor(cur); // [259] admin-only staging ledger (+ legacy union) — never the public phases doc
       for(const u of usersWithResults){
         const recips=recipientsFor(u);
         if(!recips.length){ skipped++; continue; }
@@ -5486,7 +5533,7 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
       // silently; now it retries once, and if it still fails, every retry instruction below
       // carries the double-send warning instead of pointing the admin at the trap.
       let _ledgerOk=true;
-      const _ledgerWrite=()=>setDoc(phasesRef,{resultsSentTo:{...(phasesData.resultsSentTo||{}),[cur]:[...sentAddrs]}},{merge:true});
+      const _ledgerWrite=()=>_writeSentLedger(cur,sentAddrs); // [259 · PII] staging doc, single-key merge (no stale-spread clobber of other keys)
       try{ await _ledgerWrite(); }catch(_l1){ try{ await _ledgerWrite(); }catch(_l2){ _ledgerOk=false; } }
       const _ledgerWarn=_ledgerOk?'':' ⚠️ ALSO: the delivered-address ledger could NOT be saved, so a retry may RE-SEND results to users who already have them — wait for a solid connection, then send once.';
       // H-8: mark the phase results SENT only when every address on file has received theirs.
@@ -5651,7 +5698,7 @@ window.sendRoundResultsEmails=function(){
         });
       }catch(e){ _claimed=true; console.warn('round send claim failed (proceeding):',e); }
       if(!_claimed){ toast('Another admin session is sending Round '+N+' results right now — not sending again.','warn'); return; }
-      const sentAddrs=new Set((phasesData.resultsSentTo?.[_claimKey])||[]);
+      const sentAddrs=_sentAddrsFor(_claimKey); // [259] admin-only staging ledger (+ legacy union) — never the public phases doc
       let ok=0, fail=0, skipped=0, alreadyDone=0;
       for(const u of users){
         const recips=recipientsFor(u);
@@ -5675,7 +5722,7 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
       // Persist the delivered-address ledger (retry once; warn about the re-send trap on
       // double failure — same honesty contract as the classic sender).
       let _ledgerOk=true;
-      const _ledgerWrite=()=>setDoc(phasesRef,{resultsSentTo:{...(phasesData.resultsSentTo||{}),[_claimKey]:[...sentAddrs]}},{merge:true});
+      const _ledgerWrite=()=>_writeSentLedger(_claimKey,sentAddrs); // [259 · PII] staging doc, single-key merge (no stale-spread clobber of other keys)
       try{ await _ledgerWrite(); }catch(_l1){ try{ await _ledgerWrite(); }catch(_l2){ _ledgerOk=false; } }
       const _ledgerWarn=_ledgerOk?'':' ⚠️ ALSO: the delivered-address ledger could NOT be saved, so a retry may RE-SEND results to users who already have them — wait for a solid connection, then send once.';
       const allDelivered=users.every(u=>{ const r=recipientsFor(u); return !r.length || r.every(a=>sentAddrs.has(a)); });
@@ -9961,7 +10008,7 @@ async function _doFullRestore(f){
     // re-clicking ✓ Complete Round on the restored live decisions, and preserving it could
     // leave a ghost "future round" after restoring to an earlier point in the year. The
     // round-send LEDGER above is different: it records e-mails that really went out.
-    batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_p4RoundMailedMirror).length?{p4RoundMailed:_p4RoundMailedMirror}:{})});
+    batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_p4RoundMailedMirror).length?{p4RoundMailed:_p4RoundMailedMirror}:{}),...(Object.keys(_sentLedger).length?{resultsSentTo:_sentLedger}:{})}); // [259] same rationale as the mailed mirror: the ledger records e-mails that really went out — a restore cannot unsend them
     await batch.commit();
   }catch(e){
     // [AUDIT #12] The batch is atomic, so no auction data changed — but the mail queue
