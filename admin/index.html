@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 259;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 260;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -5382,8 +5382,15 @@ Thank you!`);
   });
 };
 
+// [build 260 · AUDIT MEDIUM E — double-send] A results send runs up to a few minutes with the
+// Send button still on screen; on a slow connection that can outlast the 120s cross-session
+// claim, so a second click could re-mail the roster. window._resultsSendInFlight is an in-memory
+// switch (set true for the whole send, released in a finally even on a partial-failure return)
+// that blocks any second Send — phase OR round — while one is running, regardless of speed.
+window._resultsSendInFlight=false;
 // Send batch phase-results emails covering approvals and denials in the current phase.
 window.sendPhaseResultsEmails=function(){
+  if(window._resultsSendInFlight){ toast('A results send is already running — let it finish before sending again.','warn'); return; } // [build 260 · AUDIT MEDIUM E] in-flight guard
   // [build 229] entry gate: results are read from LOCAL phasesData — with a dead feed the
   // archive here may be a phase behind (or missing a just-completed phase entirely), so the
   // e-mails would announce the wrong phase's winners to the whole department.
@@ -5483,6 +5490,7 @@ window.sendPhaseResultsEmails=function(){
           <div class="cmodal-info">Each user gets a single e-mail listing every approved and denied week. Users without an e-mail address on file are skipped.</div>`,
     okText:'Send Results',
     onConfirm:async()=>{
+      window._resultsSendInFlight=true; try{ // [build 260 · AUDIT MEDIUM E] guard held for the whole send; released in finally below
       let ok=0, fail=0, skipped=0, alreadyDone=0;
       // [cross-session guard] Stop two admin sessions/tabs from both sending the whole roster
       // at once. Atomically CLAIM the send on the phases doc; abort if another session claimed
@@ -5508,7 +5516,9 @@ window.sendPhaseResultsEmails=function(){
       // gets a duplicate results e-mail, even when a user has two addresses and only one
       // failed the first time (the succeeded one is not re-sent).
       const sentAddrs=_sentAddrsFor(cur); // [259] admin-only staging ledger (+ legacy union) — never the public phases doc
+      let _prog=0; // [build 260] live progress toast so a slow send visibly advances and the admin isn't tempted to re-click
       for(const u of usersWithResults){
+        toast(`📮 Sending Phase ${cur} results — ${++_prog} of ${usersWithResults.length}…`,'ok',true);
         const recips=recipientsFor(u);
         if(!recips.length){ skipped++; continue; }
         if(recips.every(a=>sentAddrs.has(a))){ alreadyDone++; continue; } // every address already got it
@@ -5563,6 +5573,7 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
       }
       // Release the claim so a legitimate retry (this admin or another) isn't blocked for 2 min.
       await setDoc(phasesRef,{resultsSendClaim:{...(phasesData.resultsSendClaim||{}),[cur]:{by:null,at:0}}},{merge:true}).catch(()=>{});
+      }finally{ window._resultsSendInFlight=false; } // [build 260 · AUDIT MEDIUM E] release even on a partial-failure early return, so a legit retry isn't blocked
     }
   });
 };
@@ -5635,6 +5646,7 @@ window.completeP4Round=function(){
 // Per-address idempotency lives in phases.resultsSentTo['p4r'+N] — a retry or double
 // click can never double-mail an address (same contract as the classic sender).
 window.sendRoundResultsEmails=function(){
+  if(window._resultsSendInFlight){ toast('A results send is already running — let it finish before sending again.','warn'); return; } // [build 260 · AUDIT MEDIUM E] in-flight guard
   if(!_feedsHealthyOrExplain('Send Round Results')) return;
   const cur=Number(phasesData.currentPhase||1);
   if(cur!==4){ toast('Round results are a Phase 4 tool — use Send Phase Results for phases 1–3.','warn'); return; }
@@ -5681,6 +5693,7 @@ window.sendRoundResultsEmails=function(){
           <div class="cmodal-info">Each user gets one e-mail with only this round's approved and denied weeks — earlier rounds are never repeated. Users without an e-mail address on file are skipped.</div>`,
     okText:'Send Phase 4: Round '+N+' Results',
     onConfirm:async()=>{
+      window._resultsSendInFlight=true; try{ // [build 260 · AUDIT MEDIUM E] guard held for the whole send; released in finally below
       if(!_feedsHealthyOrExplain('Send Round Results')) return;
       if(Number(phasesData.currentPhase||1)!==4){ toast('Phase changed while the dialog was open — round results NOT sent.','warn'); return; }
       // Cross-session claim (same pattern as the classic sender, its own per-round key).
@@ -5700,7 +5713,9 @@ window.sendRoundResultsEmails=function(){
       if(!_claimed){ toast('Another admin session is sending Round '+N+' results right now — not sending again.','warn'); return; }
       const sentAddrs=_sentAddrsFor(_claimKey); // [259] admin-only staging ledger (+ legacy union) — never the public phases doc
       let ok=0, fail=0, skipped=0, alreadyDone=0;
+      let _prog=0; // [build 260] live progress toast so a slow send visibly advances and the admin isn't tempted to re-click
       for(const u of users){
+        toast(`📮 Sending Round ${N} results — ${++_prog} of ${users.length}…`,'ok',true);
         const recips=recipientsFor(u);
         if(!recips.length){ skipped++; continue; }
         if(recips.every(a=>sentAddrs.has(a))){ alreadyDone++; continue; }
@@ -5752,6 +5767,7 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
         toast(`⚠️ Round ${N} results: ${ok} sent, ${fail} FAILED — round NOT marked announced. Click Send Round Results again to retry just the ones still owed.`+_ledgerWarn,'warn');
       }
       await setDoc(phasesRef,{resultsSendClaim:{...(phasesData.resultsSendClaim||{}),[_claimKey]:{by:null,at:0}}},{merge:true}).catch(()=>{});
+      }finally{ window._resultsSendInFlight=false; } // [build 260 · AUDIT MEDIUM E] release even on a partial-failure early return, so a legit retry isn't blocked
     }
   });
 };
