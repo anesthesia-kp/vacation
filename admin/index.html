@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 250;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 252;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1612,8 +1612,18 @@ let _publishedCompletedPhases={}, _stagedCompletedPhases={};
 function _mergeCompletedPhasesView(){
   phasesData.completedPhases={..._publishedCompletedPhases,..._stagedCompletedPhases};
 }
+// [build 251] Live mirror of the Phase 4 round-send ledger (who was already e-mailed what).
+// Every NON-merge replace of the staging doc that is not meant to destroy the ledger
+// (_publishPhaseResults, _doFullRestore) spreads this mirror back in, so the ledger survives
+// classic sends of leftover earlier-phase results and full restores. Reset Auction and
+// _commitBeginPhase deliberately do NOT preserve it — a fresh auction or a (re)begun Phase 4
+// must start with a clean ledger. The round SENDER never trusts this mirror: it reads the
+// ledger fresh from the server at confirm time; the mirror only feeds preservation and the
+// advisory dialog preview.
+let _p4RoundMailedMirror={};
 onSnapshot(phaseStagingRef, snap=>{
   _stagedCompletedPhases=snap.exists()?(snap.data().pendingPhaseSnapshots||{}):{};
+  _p4RoundMailedMirror=snap.exists()?(snap.data().p4RoundMailed||{}):{};
   _mergeCompletedPhasesView();
   refreshAll(); // staged snapshots drive the phase workflow (complete/send gates)
 });
@@ -4251,7 +4261,11 @@ async function _publishPhaseResults(fields){
   const b=writeBatch(db);
   if(hasStaged){
     payload.completedPhases={..._publishedCompletedPhases,..._stagedCompletedPhases};
-    b.set(phaseStagingRef,{pendingPhaseSnapshots:{}}); // clear staging in the SAME batch — NON-merge replace: a merge of an empty map clears nothing (Firestore deep-merges maps), and this doc holds only pendingPhaseSnapshots so a full replace is exact
+    // [build 251] Clear staging in the SAME batch — NON-merge replace (an empty-map merge clears
+    // nothing; Firestore deep-merges maps). The Phase 4 round-send ledger is spread back in from
+    // its live mirror so publishing results (incl. a leftover earlier phase's, mid-rolling-year)
+    // cannot silently forget who was already e-mailed what.
+    b.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_p4RoundMailedMirror).length?{p4RoundMailed:_p4RoundMailedMirror}:{})});
   }
   b.set(phasesRef,payload,{merge:true});
   await b.commit();
@@ -4362,6 +4376,13 @@ function renderNextStep(){
       const _p4round=(cur===4)?'&nbsp;'+btn('📮 Send Round Results','sendRoundResultsEmails()','btn-success'):'';
       if(pending>0){
         html=box(`Bidding is closed. <strong>${pending}</strong> bid${pending!==1?'s':''} still need${pending===1?'s':''} an approve or deny decision before the phase can be completed.`,btn('✅ Go to Approvals/Denials','gotoAppDenials()')+_p4round+reopen);
+      } else if(cur===4){
+        // [build 252] Phase 4 all-decided: the EVERYDAY actions (send this round's results,
+        // reopen the next window) lead, and Complete — the auction-ending act — is demoted to
+        // last position in ghost styling. Its dialog carries the rolling-round warning; this
+        // ordering keeps the year-long routine from parking the mouse over the ending button.
+        html=box(`Bidding is closed and every Phase 4 bid is decided. Mid-year: send this round's results, then reopen for the next window. Completing Phase 4 ENDS the auction — only do that at the true end of the year.`,
+          btn('📮 Send Round Results','sendRoundResultsEmails()','btn-success')+reopen+'&nbsp;'+btn('✓ Complete Phase 4 (ends the auction)','completePhase()','btn-ghost'));
       } else {
         html=box(`Bidding is closed and every bid is decided. Complete Phase ${cur} to lock in the results.`,btn('✓ Complete Phase '+cur,'completePhase()','btn-success')+_p4round+reopen);
       }
@@ -4483,7 +4504,7 @@ window.completePhase=function(){
             <li>Users will see Phase ${cur+1} on the bidding board</li>`:`<li><strong>This is the final phase (Phase 4)</strong> — after results are sent, the auction is complete.</li>`}
             <li>Approved bid numbers cannot be reused in future phases</li>
             <li>Denied bid numbers are returned to users for future phases</li>
-          </ul>${_staleHtml}${_capWarnHtml()}`,
+          </ul>${cur===4?`<div class="cmodal-danger" style="margin-top:8px"><strong>⚠️ Phase 4 runs in rolling rounds through the year.</strong> Complete it ONLY at the true end of the auction year. Mid-year, CANCEL this dialog and use <strong>📮 Send Round Results</strong> + <strong>↩ Reopen bidding</strong> for the next window instead. This ends the auction — there is no Phase 5.</div>`:''}${_staleHtml}${_capWarnHtml()}`,
     okText:'Complete Phase '+cur,
     onConfirm:async()=>{
       // [build 229] ACTION-TIME re-check: the entry gate above ran when the dialog OPENED,
@@ -5311,9 +5332,19 @@ window.sendRoundResultsEmails=function(){
   if(!_feedsHealthyOrExplain('Send Round Results')) return; // live decisions — never send from a stale page
   const cur=Number(phasesData.currentPhase||1);
   if(cur!==4){ toast('Round results are a Phase 4 tool — use Send Phase Results for phases 1–3.','warn'); return; }
+  // [build 251] ADVISORY preview from the live mirror — the sanity tripwire. If the ledger was
+  // ever lost (e.g. a restore run from an outdated cached build), this count balloons to the
+  // whole roster instead of the expected handful, and the admin can cancel before any e-mail
+  // goes out. The authoritative list is still computed from a FRESH server read at confirm.
+  let _pvUsers=0,_pvDecisions=0;
+  { const seen=new Set();
+    for(const wk of Object.keys(approvalsData||{})) for(const u of (Array.isArray(approvalsData[wk])?approvalsData[wk]:[])) if(_p4RoundMailedMirror[u]?.[wk]!=='A'){ seen.add(u); _pvDecisions++; }
+    for(const wk of Object.keys(deniedData||{}))    for(const u of (Array.isArray(deniedData[wk])?deniedData[wk]:[]))    if(_p4RoundMailedMirror[u]?.[wk]!=='D'){ seen.add(u); _pvDecisions++; }
+    _pvUsers=seen.size; }
   openConfirm({
     title:'📮 Send Phase 4 Round Results',
     body:`<div>E-mail every user whose Phase 4 bids were decided <strong>since the last round send</strong>?</div>
+          <div class="cmodal-info" style="margin-top:8px">Right now that is about <strong>${_pvUsers}</strong> user${_pvUsers!==1?'s':''} (<strong>${_pvDecisions}</strong> decision${_pvDecisions!==1?'s':''}). If this number is much larger than you expect for this round, CANCEL and investigate before sending.</div>
           <div class="cmodal-info" style="margin-top:8px">Each user gets one e-mail listing only their newly approved / newly denied weeks — nothing from earlier rounds is repeated. The exact list is computed fresh from the server when you confirm. Users without an e-mail address on file are skipped. Re-clicking later sends only what is new since this send.</div>`,
     okText:'Send Round Results',
     onConfirm:async()=>{
@@ -9457,7 +9488,12 @@ async function _doFullRestore(f){
     // from the live database. If the backup was taken mid-"completed-but-not-announced", the
     // admin simply re-clicks Complete Phase — the snapshot rebuilds from the restored live
     // approvals/denials/schedule, identical to the original.
-    batch.set(phaseStagingRef,{pendingPhaseSnapshots:{}});
+    // [build 251] The Phase 4 round-send ledger is the one thing here that is NOT rebuildable —
+    // it records e-mails that really went out, and a restore cannot unsend them. Preserve it
+    // from the live mirror (best-effort: if the mirror is empty, this is exactly the old
+    // behavior and the restore is never blocked). A ledger preserved into a pre-Phase-4 state
+    // is harmless: _commitBeginPhase wipes staging when Phase 4 (re)begins.
+    batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_p4RoundMailedMirror).length?{p4RoundMailed:_p4RoundMailedMirror}:{})});
     await batch.commit();
   }catch(e){
     // [AUDIT #12] The batch is atomic, so no auction data changed — but the mail queue
