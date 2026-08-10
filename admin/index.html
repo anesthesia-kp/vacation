@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 252;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 254;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1621,6 +1621,17 @@ function _mergeCompletedPhasesView(){
 // ledger fresh from the server at confirm time; the mirror only feeds preservation and the
 // advisory dialog preview.
 let _p4RoundMailedMirror={};
+// [build 254] Advisory count of Phase 4 decisions not yet round-mailed, from the live mirror.
+// Drives the dashboard button state ("Send Round Results" vs "Round results sent ✓") and stays
+// deliberately advisory: the round SENDER computes the real delta from a fresh server read at
+// confirm time. Mirrors the preview computation inside sendRoundResultsEmails (kept inline
+// there so the sender remains self-contained).
+function _p4RoundAdvisory(){
+  const seen=new Set(); let decisions=0;
+  for(const wk of Object.keys(approvalsData||{})) for(const u of (Array.isArray(approvalsData[wk])?approvalsData[wk]:[])) if(_p4RoundMailedMirror[u]?.[wk]!=='A'){ seen.add(u); decisions++; }
+  for(const wk of Object.keys(deniedData||{}))    for(const u of (Array.isArray(deniedData[wk])?deniedData[wk]:[]))    if(_p4RoundMailedMirror[u]?.[wk]!=='D'){ seen.add(u); decisions++; }
+  return {users:seen.size,decisions};
+}
 onSnapshot(phaseStagingRef, snap=>{
   _stagedCompletedPhases=snap.exists()?(snap.data().pendingPhaseSnapshots||{}):{};
   _p4RoundMailedMirror=snap.exists()?(snap.data().p4RoundMailed||{}):{};
@@ -4347,7 +4358,13 @@ function renderNextStep(){
       const _sendBtn=(cur===4)
         ? btn('📮 Send Round Results','sendRoundResultsEmails()','btn-success')
         : btn('📮 Send Phase '+cur+' Results','sendPhaseResultsEmails()','btn-success');
-      html=box(`Phase ${cur} is complete, but users have NOT been e-mailed their results yet.${cur===4?' Round results cover only decisions not yet e-mailed.':''}`,
+      // [build 254] After Complete Phase 4, the live mirror may show every decision already
+      // e-mailed in earlier rounds — then the send is just the confirm that stamps results
+      // sent and finishes the auction. Say that instead of claiming users were never e-mailed.
+      const _p4AllMailed=(cur===4)&&_p4RoundAdvisory().decisions===0;
+      html=box(_p4AllMailed
+          ? `Phase 4 is complete and every decision appears to have been e-mailed in earlier rounds. Click Send Round Results to confirm — nothing new is sent — and mark the auction finished.`
+          : `Phase ${cur} is complete, but users have NOT been e-mailed their results yet.${cur===4?' Round results cover only decisions not yet e-mailed.':''}`,
         _sendBtn
         // [build 220] skip is a rehearsal-only tool; the button only renders in Rehearsal Mode
         + (adminSettings.simulatorEnabled===true?'&nbsp;'+btn('⏭ Skip sending (testing)','skipPhaseResults('+cur+')','btn-ghost'):''));
@@ -4381,8 +4398,16 @@ function renderNextStep(){
         // reopen the next window) lead, and Complete — the auction-ending act — is demoted to
         // last position in ghost styling. Its dialog carries the rolling-round warning; this
         // ordering keeps the year-long routine from parking the mouse over the ending button.
-        html=box(`Bidding is closed and every Phase 4 bid is decided. Mid-year: send this round's results, then reopen for the next window. Completing Phase 4 ENDS the auction — only do that at the true end of the year.`,
-          btn('📮 Send Round Results','sendRoundResultsEmails()','btn-success')+reopen+'&nbsp;'+btn('✓ Complete Phase 4 (ends the auction)','completePhase()','btn-ghost'));
+        // [build 254] Round-aware button state: once this round's results are e-mailed (live
+        // mirror says nothing new), the send button demotes to a ghost "sent ✓" so the admin
+        // can see at a glance that the round is done. Still clickable — a click just re-checks
+        // the server and sends nothing if that's still true.
+        const _adv=_p4RoundAdvisory();
+        html=_adv.decisions===0
+          ? box(`Bidding is closed and this round's results have been e-mailed — nothing new to send. Reopen bidding when the next window starts. Completing Phase 4 ENDS the auction — save that for the end of the year.`,
+              btn('📮 Round results sent ✓','sendRoundResultsEmails()','btn-ghost')+reopen+'&nbsp;'+btn('✓ Complete Phase 4 (ends the auction)','completePhase()','btn-ghost'))
+          : box(`Bidding is closed and every Phase 4 bid is decided. Send this round's results, then reopen bidding when the next window starts. Completing Phase 4 ENDS the auction — save that for the end of the year.`,
+              btn('📮 Send Round Results','sendRoundResultsEmails()','btn-success')+reopen+'&nbsp;'+btn('✓ Complete Phase 4 (ends the auction)','completePhase()','btn-ghost'));
       } else {
         html=box(`Bidding is closed and every bid is decided. Complete Phase ${cur} to lock in the results.`,btn('✓ Complete Phase '+cur,'completePhase()','btn-success')+_p4round+reopen);
       }
@@ -4501,9 +4526,9 @@ window.completePhase=function(){
             <li>All approved wins are locked in for Phase ${cur}</li>
             <li><strong>All 52 weeks will be locked automatically</strong> — no bids can change ${cur<4?'until the next phase begins':'from here on'}</li>
             ${cur<4?`<li>Phase ${cur+1} will become available to begin</li>
-            <li>Users will see Phase ${cur+1} on the bidding board</li>`:`<li><strong>This is the final phase (Phase 4)</strong> — after results are sent, the auction is complete.</li>`}
+            <li>Users will see Phase ${cur+1} on the bidding board</li>
             <li>Approved bid numbers cannot be reused in future phases</li>
-            <li>Denied bid numbers are returned to users for future phases</li>
+            <li>Denied bid numbers are returned to users for future phases</li>`:`<li><strong>This is the final phase (Phase 4)</strong> — after results are sent, the auction is complete. There are no future phases.</li>`}
           </ul>${cur===4?`<div class="cmodal-danger" style="margin-top:8px"><strong>⚠️ Phase 4 runs in rolling rounds through the year.</strong> Complete it ONLY at the true end of the auction year. Mid-year, CANCEL this dialog and use <strong>📮 Send Round Results</strong> + <strong>↩ Reopen bidding</strong> for the next window instead. This ends the auction — there is no Phase 5.</div>`:''}${_staleHtml}${_capWarnHtml()}`,
     okText:'Complete Phase '+cur,
     onConfirm:async()=>{
@@ -5209,7 +5234,29 @@ window.sendPhaseResultsEmails=function(){
   }
   const usersWithResults=Object.keys(summary);
   if(!usersWithResults.length){
-    openConfirm({title:'📮 Send Phase Results E-mails',body:`<div>No approvals or denials recorded for Phase ${target}.</div>`,okText:'OK',onConfirm:()=>{}});
+    // [build 254] A completed phase with ZERO recorded decisions used to dead-end here: this
+    // dialog closed without stamping resultsSent, so "Begin Phase N+1" never appeared and the
+    // only way forward was the rehearsal-only Skip button — a soft-lock in a live auction.
+    // When the target phase is completed but unsent, offer to mark its results as sent (the
+    // same publish+stamp skipPhaseResults does). No rehearsal gate is needed: there are no
+    // decisions, so no user is owed an e-mail. The archived snapshot of a completed phase is
+    // frozen, so results cannot appear for it later. If results were already marked sent
+    // (the L4 newest-phase preview fallback), keep the plain informational dialog.
+    if(!phasesData.resultsSent?.[target]){
+      openConfirm({
+        title:'📮 Send Phase Results E-mails',
+        body:`<div>No approvals or denials were recorded for Phase <strong>${target}</strong>, so there is nothing to e-mail.</div>
+              <div class="cmodal-info" style="margin-top:8px">Mark Phase ${target} results as sent so the workflow can continue? <strong>No e-mails will be sent</strong> — there are none to send.</div>`,
+        okText:'Mark as sent — continue',
+        onConfirm:async()=>{
+          try{ await _publishPhaseResults({resultsSent:{...(phasesData.resultsSent||{}),[target]:Date.now()}}); }
+          catch(e){ toast('⚠️ Could not publish Phase '+target+' results — nothing was changed ('+(e?.message||e)+'). Try again.','err'); return; }
+          toast('📮 Phase '+target+' had no results to send — marked sent.','ok');
+        }
+      });
+    } else {
+      openConfirm({title:'📮 Send Phase Results E-mails',body:`<div>No approvals or denials recorded for Phase ${target}.</div>`,okText:'OK',onConfirm:()=>{}});
+    }
     return;
   }
   const previewRows=usersWithResults.sort().map(u=>{
@@ -5343,9 +5390,12 @@ window.sendRoundResultsEmails=function(){
     _pvUsers=seen.size; }
   openConfirm({
     title:'📮 Send Phase 4 Round Results',
-    body:`<div>E-mail every user whose Phase 4 bids were decided <strong>since the last round send</strong>?</div>
-          <div class="cmodal-info" style="margin-top:8px">Right now that is about <strong>${_pvUsers}</strong> user${_pvUsers!==1?'s':''} (<strong>${_pvDecisions}</strong> decision${_pvDecisions!==1?'s':''}). If this number is much larger than you expect for this round, CANCEL and investigate before sending.</div>
-          <div class="cmodal-info" style="margin-top:8px">Each user gets one e-mail listing only their newly approved / newly denied weeks — nothing from earlier rounds is repeated. The exact list is computed fresh from the server when you confirm. Users without an e-mail address on file are skipped. Re-clicking later sends only what is new since this send.</div>`,
+    body:_pvDecisions===0
+      ? `<div><strong>No new decisions to send.</strong> Every decided Phase 4 bid has already been e-mailed in an earlier round.</div>
+         <div class="cmodal-info" style="margin-top:8px">If you just approved or denied bids, wait a moment and reopen this dialog. Confirming is safe — it re-checks the server and sends nothing if there is still nothing new.</div>`
+      : `<div>E-mail round results to <strong>${_pvUsers}</strong> user${_pvUsers!==1?'s':''} (<strong>${_pvDecisions}</strong> new decision${_pvDecisions!==1?'s':''})?</div>
+         <div class="cmodal-info" style="margin-top:8px">Each user gets one e-mail with only their newly approved and denied weeks — earlier rounds are never repeated. The list is re-checked on the server when you confirm. Users without an e-mail address on file are skipped.</div>
+         <div class="cmodal-warn" style="margin-top:8px">If this count is much larger than you expect for this round, CANCEL and investigate before sending.</div>`,
     okText:'Send Round Results',
     onConfirm:async()=>{
       // Click-time re-checks — the dialog is paint, these are the enforcement.
@@ -5409,11 +5459,11 @@ window.sendRoundResultsEmails=function(){
         const denLines=denied.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(scheduleData[u]?.[wk])})`;}).join('\n');
         const bodyText=`Hello ${u},
 
-A Phase 4 bidding round of the Vacation Auction has been decided.
+A Phase 4 bidding round of the Vacation Auction is complete.
 
-Your results for this round:
+Here are your Phase 4 round results:
 
-${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.length?`DENIED (${denied.length}):\n${denLines}\n\n`:''}Earlier rounds' results are not repeated here. Watch for the next bidding window to open.`.trimEnd();
+${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.length?`DENIED (${denied.length}):\n${denLines}\n\nDenied bid numbers become available again for you to use in the next bidding round.`:''}`.trimEnd();
         const r=await adminSendEmail(u,'Vacation Auction — Phase 4 Round Results',bodyText,sentAddrs);
         ok+=r.ok; fail+=r.fail;
         for(const a of r.sent) sentAddrs.add(a);
@@ -8135,25 +8185,64 @@ window.toggleTimerEnabled=function(){
 // would wipe the current phase's approvals) or nuking the auction.
 function biddingIsClosedFlag(){ return timerData?.biddingClosed===true; }
 window.biddingIsClosedFlag=biddingIsClosedFlag;
+// [build 254] The actual reopen write, shared by every path below. Re-arming the countdown
+// matters: leaving an expired timer would keep the auction closed by the OTHER server-side
+// gate (timerNotExpired), so clearing only the flag isn't enough.
+window._reopenCommit=async function(){
+  const cur=Number(phasesData.currentPhase||1);
+  const _n=Date.now();
+  const owr=getTimerRules().openingWindow;
+  const payload={biddingClosed:false};
+  if(timerData?.enabled===true){ payload.lastChange=_n; payload.durationHours=openingWindowActive()&&owr?owr.days*24:timerResetHours(timerPhaseStartMs(),_n); }
+  try{ await setDoc(timerRef,payload,{merge:true}); toast('↩ Phase '+cur+' bidding reopened','ok'); }
+  catch(e){ toast('Could not reopen bidding — '+(e?.message||e),'err'); }
+};
+// Override path: reopen WITHOUT touching the locks (admin's explicit choice — the dialog
+// already showed exactly which weeks stay locked/unlocked wrongly).
+window._reopenOverride=function(){ closeConfirm(); window._reopenCommit(); };
 window.reopenBidding=function(){
   const cur=Number(phasesData.currentPhase||1);
+  // [build 254 · rolling Phase 4] Close Bidding locks ALL 52 weeks. Begin Phase used to be the
+  // only step that re-ran Smart Lock — but rolling Phase 4 rounds REOPEN without a Begin, so a
+  // reopened round was fully locked and unbiddable until the admin hand-unlocked weeks. Offer
+  // Smart Lock & Unlock right here, same pattern as Begin Phase: primary button fixes the locks
+  // then reopens; a ghost override reopens with locks untouched.
+  // Phase-1 rule respected: while Phase 1 is live, only the 6 high-demand weeks may auto-unlock —
+  // standard weeks stay locked until Phase 2 (same guard smartLockUnlock enforces).
+  const _p1Live=cur===1&&phase1Started()&&!phasesData.completedPhases?.[1];
+  const need=weeksNeedingLock(true).list;                                                        // unlocked but below control → lock
+  const wrongLocked=lockedWeeksWithAvailability().list.filter(w=>!_p1Live||HIGH_DEMAND_WEEKS.has(w.wk)); // locked but winnable → unlock
+  if(need.length||wrongLocked.length){
+    openConfirm({
+      title:'↩ Reopen Phase '+cur+' bidding',
+      body:`<div>Let users place and change bids again for Phase ${cur}?</div>
+            <div class="cmodal-info" style="margin-top:8px">This clears the server-side bidding-closed flag and restarts the countdown. Approvals and denials already made are <strong>not</strong> touched.</div>
+            <div class="cmodal-warn" style="margin-top:8px">⚠️ The week locks don't match the Smart Lock Controls:${wrongLocked.length?` <strong>${wrongLocked.length}</strong> winnable week${wrongLocked.length!==1?'s are':' is'} still LOCKED (users couldn't bid on them)`:''}${wrongLocked.length&&need.length?';':''}${need.length?` <strong>${need.length}</strong> effectively-full week${need.length!==1?'s are':' is'} UNLOCKED (users could waste bids)`:''}.${_p1Live?' (Phase 1: only the 6 high-demand weeks are considered.)':''}</div>
+            <div class="cmodal-info" style="margin-top:8px"><strong>Smart Lock &amp; Unlock</strong> fixes the locks first, so the reopened round is actually biddable where there's still room.</div>
+            <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="_reopenOverride()">↩ Reopen without changing locks</button>`,
+      okText:'✨ Smart Lock & Unlock, then Reopen',
+      onConfirm:async()=>{
+        const dotted={};
+        need.forEach(w=>dotted['weeks.'+w.wk]=true);
+        wrongLocked.forEach(w=>dotted['weeks.'+w.wk]=false);
+        try{ await mergeFields(locksRef,dotted); }
+        catch(e){ toast('Could not apply the lock fixes — '+(e?.message||e)+'. Bidding was NOT reopened.','err'); return; }
+        toast('✨ Locked '+need.length+', unlocked '+wrongLocked.length,'ok');
+        await window._reopenCommit();
+      }
+    });
+    return;
+  }
+  // Locks already match every control → plain reopen (previous behavior). If everything locked
+  // is genuinely below its control, that state is correct — say so instead of implying a mistake.
   const lockedCount=mondays.filter(d=>!!locksData?.weeks?.[dateKey(d)]).length;
   openConfirm({
     title:'↩ Reopen Phase '+cur+' bidding',
     body:`<div>Let users place and change bids again for Phase ${cur}?</div>
           <div class="cmodal-info" style="margin-top:8px">This clears the server-side bidding-closed flag and restarts the countdown. Approvals and denials already made are <strong>not</strong> touched.</div>
-          ${lockedCount?`<div class="cmodal-warn" style="margin-top:8px">⚠️ ${lockedCount} of ${mondays.length} weeks are still locked — users can only bid on the unlocked ones. Unlock what you want reopened.</div>`:''}`,
+          ${lockedCount?`<div class="cmodal-warn" style="margin-top:8px">⚠️ ${lockedCount} of ${mondays.length} weeks are locked — and every lock matches its Smart Lock Control (those weeks are effectively full). Users can bid only on the unlocked ones.</div>`:''}`,
     okText:'↩ Reopen bidding',
-    onConfirm:async()=>{
-      const _n=Date.now();
-      const owr=getTimerRules().openingWindow;
-      // Re-arm the countdown too: leaving an expired timer would keep the auction closed by
-      // the OTHER server-side gate (timerNotExpired), so clearing only the flag isn't enough.
-      const payload={biddingClosed:false};
-      if(timerData?.enabled===true){ payload.lastChange=_n; payload.durationHours=openingWindowActive()&&owr?owr.days*24:timerResetHours(timerPhaseStartMs(),_n); }
-      try{ await setDoc(timerRef,payload,{merge:true}); toast('↩ Phase '+cur+' bidding reopened','ok'); }
-      catch(e){ toast('Could not reopen bidding — '+(e?.message||e),'err'); }
-    }
+    onConfirm:async()=>{ await window._reopenCommit(); }
   });
 };
 window.adminResetTimer=function(){
