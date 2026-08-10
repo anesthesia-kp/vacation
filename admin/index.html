@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 260;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 261;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -218,8 +218,8 @@ tbody tr:hover td{background:rgba(255,255,255,.02)}
 .wtag.review{background:rgba(168,85,247,.1);color:#5b4fb5}
 
 /* Toast */
-#toast{position:fixed;bottom:24px;right:24px;z-index:9999;background:var(--s2);border:1px solid var(--b2);color:var(--t1);padding:10px 16px;font-size:12px;box-shadow:0 4px 20px rgba(15,23,42,.18);transform:translateY(60px);opacity:0;transition:all .25s;max-width:280px}
-#toast.show{transform:translateY(0);opacity:1}
+#toast{position:fixed;top:80px;left:50%;z-index:9999;background:var(--s2);border:1px solid var(--b2);color:var(--t1);padding:14px 22px;font-size:15px;text-align:center;box-shadow:0 8px 30px rgba(15,23,42,.28);opacity:0;transform:translate(-50%,-14px);transition:opacity .2s,transform .2s;max-width:min(440px,calc(100vw - 32px))}
+#toast.show{transform:translate(-50%,0);opacity:1}
 #toast.t-ok{border-left:3px solid var(--green)}#toast.t-err{border-left:3px solid var(--red)}#toast.t-warn{border-left:3px solid var(--yellow)}
 
 /* Slider */
@@ -5063,6 +5063,19 @@ function _beginPhaseLockDecisionInner(next){
       }
     })();
   }
+  // [build 261] Phase 4 opens ROUND 1 exactly like every later round — via the month picker, NOT
+  // whole-year Smart Lock. Lock every week first so the staff board shows nothing biddable until the
+  // admin picks month(s) (per-week locks are client-side; the phase itself opens server-side at
+  // commit, like any phase begin). Commit advances to Round 1 and arms the timer; then the picker
+  // opens the chosen month(s). Mirrors the ▶ Start Round N+1 → reopen path used for Rounds 2+.
+  if(next===4){
+    return (async()=>{
+      try{ const dotted={}; mondays.forEach(d=>{ dotted['weeks.'+dateKey(d)]=true; }); await mergeFields(locksRef,dotted); }
+      catch(e){ toast('⚠️ Could not prepare Phase 4 week locks — '+(e?.message||e)+'. Phase not started.','err'); return; }
+      const ok=await _commitBeginPhase(4);
+      if(ok){ phasesData.currentPhase=4; phasesData.p4Round=1; window._reopenRoundMonths(); }
+    })();
+  }
   const need=weeksNeedingLock(true).list;                 // should be locked
   const wrongLocked=lockedWeeksWithAvailability().list;    // should be unlocked
   if(!need.length&&!wrongLocked.length){ _commitBeginPhase(next); return; }
@@ -5823,7 +5836,7 @@ window.startNextP4Round=function(){
             <li><strong>${retire}</strong> denied bid${retire!==1?'s':''} retire${retire===1?'s':''} — bid numbers return to their users, and those weeks are re-biddable with any bid</li>
             <li>The decision board clears for Round ${N+1}; priority locks reset (same rule as phases)</li>
           </ul>
-          <div class="cmodal-info">Next, the reopen dialog offers Smart Lock &amp; Unlock so Round ${N+1}'s window is actually biddable.</div>`,
+          <div class="cmodal-info">Next, pick the month(s) to open for Round ${N+1} — every other week stays locked.</div>`,
     okText:'▶ Start Phase 4: Round '+(N+1),
     onConfirm:async()=>{
       if(!_feedsHealthyOrExplain('Start Next Round')) return;
@@ -5839,7 +5852,7 @@ window.startNextP4Round=function(){
       // Local-first: the batch advanced the round server-side; reflect it immediately so the
       // reopen gate (build 256) and the dashboard see Round N+1 before the listener echoes.
       phasesData.p4Round=N+1;
-      toast('▶ Phase 4: Round '+(N+1)+' — '+retire+' denied bid'+(retire!==1?'s':'')+' retired. Now unlock weeks and reopen bidding.','ok');
+      toast('▶ Phase 4: Round '+(N+1)+' — '+retire+' denied bid'+(retire!==1?'s':'')+' retired. Now pick the month(s) to open and reopen bidding.','ok');
       window.reopenBidding();
     }
   });
@@ -8614,6 +8627,59 @@ window._reopenCommit=async function(){
 // Override path: reopen WITHOUT touching the locks (admin's explicit choice — the dialog
 // already showed exactly which weeks stay locked/unlocked wrongly).
 window._reopenOverride=function(){ closeConfirm(); window._reopenCommit(); };
+// [build 261] Phase 4 round opener: keep every week LOCKED except the month(s) the admin picks —
+// and within those months, unlock ONLY weeks that still have room to bid on (remaining FTE at/above
+// the per-week Smart Lock Control, exactly the rule Smart Lock uses). A full or already-won week is
+// never opened (guards NE-2 auto over-cap / NE-3 reopened winner). Empty weeks (no decisions yet)
+// count as fully available. Then bidding reopens via the same _reopenCommit the other paths use.
+window._reopenRoundMonths=function(){
+  const _rN=Number(phasesData.p4Round||1);
+  const ap=computeApprovals();
+  const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const byMonth={}; let availTotal=0;
+  mondays.forEach(d=>{
+    const wk=dateKey(d);
+    const cap=getSlots(wk);
+    const fteWon=(ap[wk]&&typeof ap[wk].fteWon==='number')?ap[wk].fteWon:0;
+    const remaining=Math.round((cap-fteWon)*10)/10;
+    const avail=remaining>=getSlc(wk);
+    const mkey=wk.slice(0,7);
+    if(!byMonth[mkey]){ const p=mkey.split('-'); byMonth[mkey]={label:(MONTHS[Number(p[1])-1]||mkey)+' '+p[0], avail:0, availWeeks:[]}; }
+    if(avail){ byMonth[mkey].avail++; byMonth[mkey].availWeeks.push(wk); availTotal++; }
+  });
+  const monthsWithRoom=Object.keys(byMonth).filter(m=>byMonth[m].avail>0).sort();
+  if(!monthsWithRoom.length){
+    openConfirm({ title:'📅 Open Phase 4: Round '+_rN+' bidding',
+      body:'<div>No week has room left to bid on — every week is at or below its Smart Lock Control (effectively full).</div><div class="cmodal-info" style="margin-top:8px">There is nothing to open for this round. If you meant to reopen anyway, use the option below.</div><button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="_reopenOverride()">↩ Reopen without changing locks</button>',
+      okText:'OK', onConfirm:()=>{} });
+    return;
+  }
+  const rows=monthsWithRoom.map(m=>'<label style="display:flex;align-items:center;gap:9px;padding:6px 0;cursor:pointer;border-bottom:1px solid var(--b1)">'
+    +'<input type="checkbox" name="rmon" value="'+m+'" style="width:16px;height:16px">'
+    +'<span><strong>'+byMonth[m].label+'</strong> <span style="color:var(--t2);font-size:12px">— '+byMonth[m].avail+' week'+(byMonth[m].avail!==1?'s':'')+' open to bid</span></span></label>').join('');
+  openConfirm({
+    title:'📅 Open Phase 4: Round '+_rN+' — pick month(s)',
+    body:'<div>Choose which month(s) to open for <strong>Round '+_rN+'</strong>. Every other week stays <strong>locked</strong>.</div>'
+      +'<div style="margin:10px 0;max-height:260px;overflow-y:auto;border:1px solid var(--b1);border-radius:6px;padding:2px 12px">'+rows+'</div>'
+      +'<div class="cmodal-info">Only the still-biddable weeks in the month(s) you pick unlock; full or already-won weeks stay closed. Then bidding reopens.</div>'
+      +'<button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="_reopenOverride()">↩ Reopen without changing locks</button>',
+    okText:'📅 Open selected month(s) & reopen',
+    onConfirm:async()=>{
+      const picked=[...document.querySelectorAll('#cmBody input[name=rmon]:checked')].map(c=>c.value);
+      if(!picked.length){ toast('Pick at least one month to open — or use “Reopen without changing locks.”','warn'); return; }
+      const unlock=new Set();
+      picked.forEach(m=>byMonth[m].availWeeks.forEach(wk=>unlock.add(wk)));
+      // [261 · audit] Opening a round's months means bidding is on; clear any MANUAL global freeze too,
+      // else globalLock would silently keep every week frozen while the board reads "open".
+      const dotted={globalLock:false};
+      mondays.forEach(d=>{ const wk=dateKey(d); dotted['weeks.'+wk]=!unlock.has(wk); });
+      try{ await mergeFields(locksRef,dotted); }
+      catch(e){ toast('Could not set the week locks — '+(e&&e.message||e)+'. Bidding was NOT reopened.','err'); return; }
+      toast('📅 Opened '+unlock.size+' week'+(unlock.size!==1?'s':'')+' in '+picked.length+' month'+(picked.length!==1?'s':'')+'; all others locked.','ok');
+      await window._reopenCommit();
+    }
+  });
+};
 window.reopenBidding=function(){
   const cur=Number(phasesData.currentPhase||1);
   // [build 256 · audit FINDING 1] Once the current Phase 4 round is ARCHIVED, a plain reopen
@@ -8639,6 +8705,10 @@ window.reopenBidding=function(){
       return;
     }
   }
+  // [build 261] Phase 4 rounds open only a month or two at a time — Smart Lock (FTE-based)
+  // opens EVERY week with room, far more than a round wants. Route round reopens to a month
+  // picker that unlocks ONLY the chosen months' still-biddable weeks; every other week stays locked.
+  if(cur===4){ return window._reopenRoundMonths(); }
   // [build 254 · rolling Phase 4] Close Bidding locks ALL 52 weeks. Begin Phase used to be the
   // only step that re-ran Smart Lock — but rolling Phase 4 rounds REOPEN without a Begin, so a
   // reopened round was fully locked and unbiddable until the admin hand-unlocked weeks. Offer
