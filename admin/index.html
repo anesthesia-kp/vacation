@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 257;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 258;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1679,7 +1679,7 @@ onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; cons
 onSnapshot(approvalsRef, snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()?snap.data():{}); _approvalsReady=true; refreshAll(); });
 // (Removed a duplicate emails listener here — emailsDataAdmin is now kept in sync
 // inside the single emails listener above, mirroring the loginEmails pattern.)
-onSnapshot(phasesRef,   snap=>{ _phasesReady=true; phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{},phaseHistory:{}}; _publishedCompletedPhases=phasesData.completedPhases||{}; _mergeCompletedPhasesView(); refreshAll(); }); // [H6] keep the staged+published merged view
+onSnapshot(phasesRef,   snap=>{ _phasesReady=true; phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{},phaseHistory:{}}; _publishedCompletedPhases=phasesData.completedPhases||{}; _mergeCompletedPhasesView(); _publishedP4Rounds=phasesData.p4Rounds||{}; _mergeP4RoundsView(); refreshAll(); }); // [H6] keep the staged+published merged view · [build 258 · LIVE BUG] _publishedP4Rounds was NEVER assigned — only declared {} — so every phaseStaging snapshot rebuilt the merged view as {}∪staged, silently forgetting every PUBLISHED round archive (server data was fine; the page's memory wasn't). Announced round wins then re-counted as PENDING (blocking Complete Round / re-routing to Approvals-Denials), win-locks dropped, and a send during the wiped window could even publish an EMPTY round archive. Mirror the completedPhases pattern on this same line: refresh the published slot from every phases snapshot, then re-merge.
 onSnapshot(deniedRef,   snap=>{ deniedData=normalizeWkArrayMap(snap.exists()?snap.data():{}); _deniedReady=true; refreshAll(); });
 onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); refreshAll(); }); // L-1: bid-phase tag changes must refresh dependent views (pending counts, projections, complete-phase gate)
 onSnapshot(slotsRef,    snap=>{ slotsData=snap.exists()?snap.data():{}; _slotsReady=true; refreshAll(); });
@@ -2063,6 +2063,14 @@ function _p4ArchivedDecisionRound(u,wk){
     if((Array.isArray(a.approvals?.[wk])&&a.approvals[wk].includes(u))||(Array.isArray(a.denials?.[wk])&&a.denials[wk].includes(u))) return Number(r);
   }
   return null;
+}
+// [build 258] Human label for the OPEN bidding window. Rounds are mini-phases (lead admin
+// design), so every surface that names the window an action closes/reopens must say
+// 'Phase 4: Round N', never a bare 'Phase 4' — the admin is acting on the round, and the
+// round number is what reports, history and the decide panel's locked views key on.
+function _phaseWindowLabel(cur){
+  const c=Number(cur||phasesData.currentPhase||1);
+  return (c===4&&Number(phasesData.p4Round||0)>=1)?('Phase 4: Round '+Number(phasesData.p4Round)):('Phase '+c);
 }
 function getPriorPhaseFteWon(wk){
   let total=0;
@@ -2529,6 +2537,7 @@ function renderPhaseProgress(){
   // a cold load. Rendering before all three are in shows a too-low "N of M decided" that then jumps
   // up — the flash. Show a quiet placeholder until every input has reported once.
   if(!(_scheduleReady && _approvalsReady && _deniedReady)){ el.innerHTML='<div style="font-size:12px;color:var(--t3)">Loading current-phase progress…</div>'; return; }
+  const _ppCur=Number(phasesData.currentPhase||1), _ppRounds=_ppCur===4;
   let total=0, decided=0;
   for(const d of mondays){
     const wk=dateKey(d);
@@ -2537,6 +2546,12 @@ function renderPhaseProgress(){
     for(const u in scheduleData){
       if(scheduleData[u]?.[wk]===undefined) continue;
       if(!isCurrentPhaseBidAdmin(u,wk)) continue;
+      // [build 258 · LIVE BUG] Same skip countPendingDecisions gained in 257, missed here: a bid
+      // decided in an ARCHIVED round is settled history, not part of the open round's working
+      // set. Round winners' bids stay live all year while Start Round clears the live decision
+      // docs — without this skip every earlier-round winner re-rendered as forever-undecided
+      // ("0 of 2 bids decided") and the card claimed the phase could never complete.
+      if(_p4ArchivedDecisionRound(u,wk)!==null) continue;
       total++;
       if(ap2.includes(u)||dn.includes(u)) decided++;
     }
@@ -2544,10 +2559,10 @@ function renderPhaseProgress(){
   const pct=total?Math.round(decided/total*100):0;
   const remaining=total-decided;
   el.innerHTML=total===0
-    ? '<div style="font-size:12px;color:var(--t3)">No bids placed in this phase yet.</div>'
+    ? `<div style="font-size:12px;color:var(--t3)">No bids placed in this ${_ppRounds?'round':'phase'} yet.</div>`
     : `<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px">
          <span style="font-weight:700;color:var(--t1)">${decided} of ${total} bids decided</span>
-         <span style="color:${remaining?'var(--t2)':'var(--green)'};font-weight:700">${remaining?remaining+' remaining before phase can complete':'✓ ready to complete'}</span>
+         <span style="color:${remaining?'var(--t2)':'var(--green)'};font-weight:700">${remaining?remaining+' remaining before '+(_ppRounds?'round':'phase')+' can complete':'✓ ready to complete'}</span>
        </div>
        <div style="height:10px;border-radius:999px;background:var(--s3);overflow:hidden">
          <div style="height:100%;width:${pct}%;border-radius:999px;background:${remaining?'var(--blue)':'var(--green)'};transition:width .3s"></div>
@@ -3900,6 +3915,10 @@ function simHasUndecidedBids(){
     for(const u in scheduleData){
       if(scheduleData[u]?.[wk]===undefined) continue;
       if(!isCurrentPhaseBidAdmin(u,wk)) continue;
+      // [build 258] Archived-round decisions are decided (same skip as countPendingDecisions /
+      // renderPhaseProgress) — without it, earlier-round winners kept this returning true and
+      // the Auto-Approve/Deny button offered work its own loop would then (correctly) refuse.
+      if(_p4ArchivedDecisionRound(u,wk)!==null) continue;
       if(!approvedHere.includes(u)&&!deniedHere.includes(u)) return true;
     }
   }
@@ -4292,14 +4311,17 @@ window.gotoAppDenials=function(){ nav('appdenials',document.querySelector('[oncl
 // Every state-changing step in the workflow guide confirms first. Closing
 // bidding expires the timer AND locks all 52 weeks — never silently.
 window.closePhaseBidding=function(cur){
-  if(!_bkBypass){ _backupThen('closing Phase '+cur+' bidding',function(){ _bkBypass=true; try{ window.closePhaseBidding(cur); } finally { _bkBypass=false; } }); return; }
+  // [build 258] Every naming of the window this closes goes through _phaseWindowLabel so a
+  // Phase 4 round reads 'Phase 4: Round N' — the round IS the phase-sized unit being closed.
+  const _wl=_phaseWindowLabel(cur);
+  if(!_bkBypass){ _backupThen('closing '+_wl+' bidding',function(){ _bkBypass=true; try{ window.closePhaseBidding(cur); } finally { _bkBypass=false; } }); return; }
   openConfirm({
-    title:'⏱ Close Phase '+cur+' bidding',
-    body:`<div>End bidding for Phase <strong>${cur}</strong> now?</div>
+    title:'⏱ Close '+_wl+' bidding',
+    body:`<div>End bidding for <strong>${_wl}</strong> now?</div>
           <ul style="margin:10px 0 8px 18px;color:var(--t2);font-size:13px;line-height:1.65">
             <li>The countdown timer expires immediately — users see the auction-closed notice</li>
             <li>All 52 weeks are locked — no bids can be added, edited, or removed</li>
-            <li>Next you'll decide approvals/denials, then complete the phase</li>
+            <li>Next you'll decide approvals/denials, then complete the ${Number(cur)===4?'round':'phase'}</li>
           </ul>`,
     okText:'⏱ Close Bidding', danger:true,
     // [SWEEP D2] Call the CONFIRMED worker, not the entry point — the entry point now opens its own
@@ -4463,10 +4485,10 @@ function renderNextStep(){
       // biddingClosed flag is set — users would be told they can bid and then hit a raw
       // permissions error. Name the real state and offer the way back.
       html=biddingIsClosedFlag()
-        ? box(`Phase ${cur} bidding is <strong>CLOSED</strong> (server-side), but the timer or week locks were changed afterwards, so this screen looks half-open. Users cannot bid until you reopen it.`,
-            btn('↩ Reopen Phase '+cur+' bidding','reopenBidding()','btn-ghost')
+        ? box(`${_phaseWindowLabel(cur)} bidding is <strong>CLOSED</strong> (server-side), but the timer or week locks were changed afterwards, so this screen looks half-open. Users cannot bid until you reopen it.`,
+            btn('↩ Reopen '+_phaseWindowLabel(cur)+' bidding','reopenBidding()','btn-ghost')
             + '&nbsp;' + btn('⏱ Re-close it properly','closePhaseBidding('+cur+')'))
-        : box(`Phase ${cur} bidding is OPEN — users can place and change bids. When bidding should end, close it (expires the timer and locks all weeks).`,btn('⏱ Close Phase '+cur+' bidding','closePhaseBidding('+cur+')'));
+        : box(`${_phaseWindowLabel(cur)} bidding is OPEN — users can place and change bids. When bidding should end, close it (expires the timer and locks all weeks).`,btn('⏱ Close '+_phaseWindowLabel(cur)+' bidding','closePhaseBidding('+cur+')'));
     } else {
       const pending=countPendingDecisions();
       const reopen='&nbsp;'+btn('↩ Reopen bidding','reopenBidding()','btn-ghost');
@@ -4595,10 +4617,10 @@ window.completePhase=function(){
   if(!rdy.ready){
     openConfirm({
       title:'⚠️ Close bidding first',
-      body:`<div style="color:var(--red);font-weight:600;margin-bottom:8px">Phase ${cur} bidding is still open — it must be closed before the phase can be completed.</div>
+      body:`<div style="color:var(--red);font-weight:600;margin-bottom:8px">${_phaseWindowLabel(cur)} bidding is still open — it must be closed before the phase can be completed.</div>
             <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:13px;line-height:1.6">${rdy.problems.map(p=>'<li>'+p+'</li>').join('')}</ul>
             <div style="color:var(--t2);font-size:12px">Closing bidding expires the timer and locks all 52 weeks. You can then decide bids and complete the phase.</div>`,
-      okText:'⏱ Close Phase '+cur+' bidding', danger:true,
+      okText:'⏱ Close '+_phaseWindowLabel(cur)+' bidding', danger:true,
       onConfirm:()=>{ if(typeof closePhaseBidding==='function'){ _bkBypass=true; try{ closePhaseBidding(cur); } finally { _bkBypass=false; } } } // backup was already offered when Complete Phase was clicked — don't prompt twice in one gesture
     });
     return;
@@ -6862,7 +6884,7 @@ function _refreshReadinessBox(){
   // since this inline path (unlike the dashboard's "Close Phase Bidding" button) has no
   // confirm dialog to explain it up front.
   box.innerHTML=_capWarnHtml(_readinessSim)+(r.ready
-    ? '<div class="cmodal-info" style="margin-top:8px">✓ Bidding is now closed and all weeks are locked — safe to approve/deny. Once every bid is decided, come back to the dashboard and click <strong>Complete Phase</strong> to finish — that\'s still a separate, later step.</div>'
+    ? ('<div class="cmodal-info" style="margin-top:8px">✓ Bidding is now closed and all weeks are locked — safe to approve/deny. Once every bid is decided, come back to the dashboard and click <strong>'+(Number(phasesData.currentPhase||1)===4?'Complete Round':'Complete Phase')+'</strong> to finish — that\'s still a separate, later step.</div>')
     : _readinessProblemHtml());
 }
 // [SWEEP D2 · 30 Jul 2026] This inline route had NO confirmation of its own — the only gate was
@@ -6898,25 +6920,26 @@ window._fixClosePhaseBiddingConfirmed=async function(cur){
   // timerWriteSane() confines user timer writes to lastChange/durationHours, so a user
   // cannot clear it. Begin Phase and Reset Auction clear it again.
   await setDoc(timerRef,{biddingClosed:true},{merge:true}).catch(e=>console.error('biddingClosed set failed:',e));
-  toast('⏱ Phase '+cur+' bidding closed. This does NOT complete the phase — decide the bids below, then use Complete Phase on the dashboard.','ok');
+  toast('⏱ '+_phaseWindowLabel(cur)+' bidding closed. This does NOT complete the '+(Number(cur)===4?'round':'phase')+' — decide the bids below, then use '+(Number(cur)===4?'Complete Round':'Complete Phase')+' on the dashboard.','ok');
   _refreshReadinessBox();
 };
 window._fixClosePhaseBidding=function(cur){
+  const _wl=_phaseWindowLabel(cur); // [build 258] rounds read 'Phase 4: Round N' on every close surface
   openConfirm({
-    title:'⏱ Stop Phase '+cur+' bidding now?',
-    body:`<div>End bidding for Phase <strong>${esc(String(cur))}</strong> immediately?</div>
+    title:'⏱ Stop '+_wl+' bidding now?',
+    body:`<div>End bidding for <strong>${esc(_wl)}</strong> immediately?</div>
           <ul style="margin:10px 0 8px 18px;color:var(--t2);font-size:13px;line-height:1.65">
             <li>All 52 weeks are locked — no bid can be added, edited or removed</li>
             <li>The countdown expires — users see the auction-closed notice</li>
             <li>Bidding is closed on the SERVER, so it cannot be bypassed from a browser</li>
-            <li>This does NOT complete the phase — you still decide the bids, then Complete Phase</li>
+            <li>This does NOT complete the ${Number(cur)===4?'round':'phase'} — you still decide the bids, then ${Number(cur)===4?'Complete Round':'Complete Phase'}</li>
           </ul>
           <div class="cmodal-warn" style="margin-top:6px">This closes the dialog you are in. Reopen the decision afterwards.</div>`,
     okText:'⏱ Stop bidding & lock all weeks', danger:true,
     onConfirm:async()=>{
       // The backup prompt stays INSIDE the confirmed path: the admin has now agreed to the action
       // itself, so the backup question is the second gate rather than the only one.
-      if(!_bkBypass){ _backupThen('closing Phase '+cur+' bidding',function(){ _bkBypass=true; try{ window._fixClosePhaseBiddingConfirmed(cur); } finally { _bkBypass=false; } }); return; }
+      if(!_bkBypass){ _backupThen('closing '+_wl+' bidding',function(){ _bkBypass=true; try{ window._fixClosePhaseBiddingConfirmed(cur); } finally { _bkBypass=false; } }); return; }
       await window._fixClosePhaseBiddingConfirmed(cur);
     }
   });
