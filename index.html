@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 130;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 131;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -894,6 +894,26 @@ function escH(v){ return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;'
 function bidLbl(p){ return p==="NP"?"NP":""+(Array.isArray(p)?p.join('/'):p); }
 
 // ── Approvals (single implementation) ──
+// [build 131 · ROLLING PHASE 4 = ROUNDS AS MINI-PHASES] Phase 4 runs in rounds all year:
+// close → decide → ✓ Complete Round N → 📮 Send Round N Results → ▶ Start Round N+1 (or
+// ✓ Complete Phase 4 at the true end). Completing a round works EXACTLY like a phase
+// boundary: the admin site archives that round's {approvals, denials, schedule} into the
+// world-readable `phases` doc under p4Rounds[N], removes the DENIED bids from the live
+// schedule (numbers returned, weeks re-biddable with any value — phase parity), and clears
+// the live decision docs. This site needs only ONE change: announced round APPROVALS are
+// locked-in winners, folded in via getPriorPhaseWinners below. Approved bids stay in the
+// live schedule (consuming their numbers and cap slot, exactly like a mid-phase win), and
+// denied bids simply no longer exist — the same absence a new phase would give them.
+function p4RoundWinnersOn(wk){
+  if(Number(phasesData.currentPhase||1)!==4) return [];
+  const out=[];
+  const rounds=phasesData.p4Rounds||{};
+  for(const r of Object.keys(rounds)){
+    const arr=rounds[r]?.approvals?.[wk];
+    if(Array.isArray(arr)) out.push(...arr);
+  }
+  return out;
+}
 // Returns the set of users who have a locked-in prior-phase win on `wk`.
 // A prior-phase win = approved in any phase < currentPhase. Once approved, that
 // user permanently owns that week — they cannot re-bid it and no later bid can
@@ -908,6 +928,8 @@ function getPriorPhaseWinners(wk){
     const arr=Array.isArray(phAp[wk])?phAp[wk]:[];
     arr.forEach(u=>out.add(u));
   }
+  // [build 131] Announced Phase 4 round wins are locked in exactly like prior-phase wins.
+  for(const u of p4RoundWinnersOn(wk)) out.add(u);
   return out;
 }
 
@@ -1782,7 +1804,7 @@ function openPriorityModal(wk){
   const user=getCurrentUser();
   // Block bidding on weeks user has already won via admin approval in a previous phase
   if(getPriorPhaseWinners(wk).has(user)){
-    showError("You already won this week in a previous phase — it's locked in for you.");
+    showError("You already won this week in an earlier phase or Phase 4 round — it's locked in for you.");
     return;
   }
   const existingPrio=isVisibleBid(user,wk)?data[user]?.[wk]:undefined;
@@ -1907,7 +1929,11 @@ window.confirmPriority=async function(){
   // FLOOR at confirm time — not just via disabled dropdown options set at modal-open. A
   // two-tab race (or an option list built from stale state) could otherwise submit a
   // below-floor or disallowed bid. All checks run BEFORE any write (gates-first contract).
-  if(getPriorPhaseWinners(wk).has(user)){ showCenterAlert("You already won this week in a previous phase — it's locked in for you."); window.closeModal(); return; }
+  if(getPriorPhaseWinners(wk).has(user)){ showCenterAlert("You already won this week in an earlier phase or Phase 4 round — it's locked in for you."); window.closeModal(); return; }
+  // [build 131 · rolling Phase 4] Re-bidding a round-denied week is allowed — but not with the
+  // EXACT bid the results e-mail already denied. Same value = same answer; the engine treats it
+  // as dead, so submitting it would silently do nothing but look placed. Checked at confirm
+  // time (L-3 pattern) so a two-tab race can't slip it through a stale dropdown.
   // High-demand weeks accept only the allowed numeric set — NP is NOT allowed either.
   // (NP previously slipped past this re-check via a val!=="NP" guard.)
   if((weekMeta[wk]?.highPriorityOnly) && (val==="NP" || !HIGH_PRIORITY_ALLOWED.has(val))){ showCenterAlert("This high-demand week only accepts bids of 1, 2, 3, 4, \"1/2\", or \"1/2/3\"."); window.closeModal(); return; }
@@ -2056,6 +2082,9 @@ function myActiveWeeks(user){ return Object.keys(data[user]||{}).filter(wk=>isVi
 // Current-phase bids INCLUDING admin-denied ones. A denied bid was still PLACED —
 // it counts against the per-phase limit and its number stays consumed until the
 // phase closes (denials only return bid numbers for the NEXT phase).
+// [build 131 · rolling Phase 4] Round-denied bids need no special case here: Complete Round
+// REMOVES them from the live schedule (after archiving), so their numbers and cap slots free
+// by absence — the same mechanism a new phase gives prior denials.
 function myCountedWeeks(user){
   return Object.keys(data[user]||{}).filter(wk=>data[user]?.[wk]!==undefined && isCurrentPhaseBid(user,wk));
 }
@@ -2092,12 +2121,31 @@ function getWeekUsers(wk){
 // ── Render ──
 function renderPhaseLabel(){
   const lbl=document.getElementById('phaseLabel');
-  if(lbl) lbl.textContent='Phase '+(Number(phasesData.currentPhase||1));
+  const cur=Number(phasesData.currentPhase||1);
+  // [build 131] Rolling Phase 4 shows its round: "Phase 4 \u00b7 Round N".
+  if(lbl) lbl.textContent='Phase '+cur+((cur===4&&Number(phasesData.p4Round||0)>=1)?' \u00b7 Round '+Number(phasesData.p4Round):'');
 }
 
 window.openPhaseHistory=function(){
   const user=getCurrentUser(); if(!user) return;
-  const completed=phasesData.completedPhases||{};
+  // [build 131 · rolling Phase 4] Completed ROUNDS join the history exactly like phases.
+  // Each announced round archive is inserted under a fractional sort key between Phase 3
+  // and Phase 4 (3.01, 3.02, …) so every Number()-ordered comparison in this function —
+  // visibility, sorting, bid attribution — works unchanged. A round becomes visible the
+  // moment its results are SENT (announced results are public by definition). Once rounds
+  // exist, the merged completedPhases[4] entry (written at Complete Phase 4) is skipped
+  // here — the rounds already tell Phase 4's whole story bid by bid.
+  const _rounds=phasesData.p4Rounds||{};
+  const _roundSent=phasesData.p4RoundResultsSent||{};
+  const _histLabels={};
+  const completed={...(phasesData.completedPhases||{})};
+  if(Object.keys(_rounds).length&&completed['4']!==undefined) delete completed['4'];
+  for(const r of Object.keys(_rounds)){
+    if(!_roundSent[r]) continue;
+    const k=(3+Number(r)/100).toFixed(2);
+    completed[k]=_rounds[r];
+    _histLabels[k]='Phase 4 · Round '+r;
+  }
   // PRIVACY RULE: a phase that is completed but whose successor has NOT begun
   // is still hidden — results only become visible once the next phase starts.
   // [AUDIT 2026-07-26 H3] …OR once its results e-mails have been SENT. Phase 4 has no
@@ -2145,11 +2193,11 @@ window.openPhaseHistory=function(){
       if(!inEarlierHist(user,wk,allBids[wk],ph)) userBids[wk]=allBids[wk];
     }
     if(!Object.keys(userBids).length){
-      html+=`<div style="margin-bottom:16px"><div style="font-weight:700;color:#132f49;margin-bottom:6px">Phase ${ph}</div><div style="color:#5a7186;font-size:.8rem">No bids placed in this phase.</div></div>`;
+      html+=`<div style="margin-bottom:16px"><div style="font-weight:700;color:#132f49;margin-bottom:6px">${_histLabels[ph]||('Phase '+ph)}</div><div style="color:#5a7186;font-size:.8rem">No bids placed in this ${_histLabels[ph]?'round':'phase'}.</div></div>`;
       return;
     }
     html+=`<div style="margin-bottom:18px;padding:14px;background:rgba(255,255,255,.85);border:1px solid #c2cfdb;border-radius:10px">
-      <div style="font-weight:700;color:#132f49;margin-bottom:10px;font-size:.95rem">Phase ${ph}</div>`;
+      <div style="font-weight:700;color:#132f49;margin-bottom:10px;font-size:.95rem">${_histLabels[ph]||('Phase '+ph)}</div>`;
     Object.entries(userBids).sort(([a],[b])=>a.localeCompare(b)).forEach(([wk,prio])=>{
       const meta=weekMeta[wk];
       const approvedHere=Array.isArray(phApprovals[wk])?phApprovals[wk]:[];
