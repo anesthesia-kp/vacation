@@ -10,7 +10,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 262;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 263;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -5010,18 +5010,8 @@ function _beginPhase1Confirm(){
 // is the quiet secondary, and the dashboard banner keeps the armed state visible for as long as
 // it lasts — visibility replaces unreachability, because only the human knows real from rehearsal.
 window._beginPhase1KeepRehearsal=function(){ closeConfirm(); _beginPhase1Confirm(); };
-// Override path: begin the phase WITHOUT applying lock fixes (admin's explicit choice).
-window._beginPhaseOverride=function(next){
-  closeConfirm();
-  // Extra warning: starting a phase without the recommended lock fixes can hurt users.
-  openConfirm({
-    title:'⚠️ Begin without fixing week locks?',
-    body:`<div>You're about to begin Phase ${next} <strong>without</strong> applying the recommended Smart Lock &amp; Unlock fixes.</div>
-          <div class="cmodal-danger" style="margin-top:8px">⚠️ This could cause problems for users entering bids — they may waste bids on full weeks that should be locked, or be blocked from weeks that still have availability and should be open.</div>`,
-    okText:'Begin Phase '+next+' anyway', danger:true,
-    onConfirm:async()=>{ await _commitBeginPhase(next); }
-  });
-};
+// [build 263] The "begin without lock fixes" override was removed. Smart Lock (or the per-week
+// Smart Lock Controls) is the single path — no lock-bypass button to mis-click into wrong weeks.
 // Forced pre-phase lock decision: the phase does NOT start until the admin picks
 // Fix All & Begin, or explicitly overrides. Cancel aborts entirely.
 function _beginPhaseLockDecision(next){
@@ -5087,8 +5077,7 @@ function _beginPhaseLockDecisionInner(next){
     title:'⚠️ Lock decision required before Phase '+next,
     body:`<div style="margin-bottom:6px"><strong>Phase ${next} has not started yet.</strong> Decide how to handle these weeks first:</div>
           ${secNeed}${secWrong}
-          <div class="cmodal-info"><strong>Smart Lock &amp; Unlock</strong> applies each week's Smart Lock Control: lock when remaining FTE is below the control, unlock when at or above it — then begins Phase ${next}.</div>
-          <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="_beginPhaseOverride(${next})">▶ Begin Phase ${next} without changes (override)</button>`,
+          <div class="cmodal-info"><strong>Smart Lock &amp; Unlock</strong> applies each week's Smart Lock Control: lock when remaining FTE is below the control, unlock when at or above it — then begins Phase ${next}.</div>`,
     okText:'✨ Smart Lock & Unlock, then Begin Phase '+next, danger:true,
     onConfirm:async()=>{
       const dotted={};
@@ -8624,9 +8613,8 @@ window._reopenCommit=async function(){
   try{ await setDoc(timerRef,payload,{merge:true}); toast('↩ Phase '+cur+' bidding reopened','ok'); }
   catch(e){ toast('Could not reopen bidding — '+(e?.message||e),'err'); }
 };
-// Override path: reopen WITHOUT touching the locks (admin's explicit choice — the dialog
-// already showed exactly which weeks stay locked/unlocked wrongly).
-window._reopenOverride=function(){ closeConfirm(); window._reopenCommit(); };
+// [build 263] The "reopen without changing locks" override was removed. Smart Lock (phases 1-3)
+// or the month picker (phase 4) is the single reopen path — no lock-bypass button to mis-click.
 // [build 261] Phase 4 round opener: keep every week LOCKED except the month(s) the admin picks —
 // and within those months, unlock ONLY weeks that still have room to bid on (remaining FTE at/above
 // the per-week Smart Lock Control, exactly the rule Smart Lock uses). A full or already-won week is
@@ -8650,7 +8638,7 @@ window._reopenRoundMonths=function(){
   const monthsWithRoom=Object.keys(byMonth).filter(m=>byMonth[m].avail>0).sort();
   if(!monthsWithRoom.length){
     openConfirm({ title:'📅 Open Phase 4: Round '+_rN+' bidding',
-      body:'<div>No week has room left to bid on — every week is at or below its Smart Lock Control (effectively full).</div><div class="cmodal-info" style="margin-top:8px">There is nothing to open for this round. If you meant to reopen anyway, use the option below.</div><button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="_reopenOverride()">↩ Reopen without changing locks</button>',
+      body:'<div>No week has room left to bid on — every week is at or below its Smart Lock Control (effectively full).</div><div class="cmodal-info" style="margin-top:8px">There is nothing to open for this round.</div>',
       okText:'OK', onConfirm:()=>{} });
     return;
   }
@@ -8661,12 +8649,11 @@ window._reopenRoundMonths=function(){
     title:'📅 Open Phase 4: Round '+_rN+' — pick month(s)',
     body:'<div>Choose which month(s) to open for <strong>Round '+_rN+'</strong>. Every other week stays <strong>locked</strong>.</div>'
       +'<div style="margin:10px 0;max-height:260px;overflow-y:auto;border:1px solid var(--b1);border-radius:6px;padding:2px 12px">'+rows+'</div>'
-      +'<div class="cmodal-info">Only the still-biddable weeks in the month(s) you pick unlock; full or already-won weeks stay closed. Then bidding reopens.</div>'
-      +'<button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="_reopenOverride()">↩ Reopen without changing locks</button>',
+      +'<div class="cmodal-info">Only the still-biddable weeks in the month(s) you pick unlock; full or already-won weeks stay closed. Then bidding reopens.</div>',
     okText:'📅 Open selected month(s) & reopen',
     onConfirm:async()=>{
       const picked=[...document.querySelectorAll('#cmBody input[name=rmon]:checked')].map(c=>c.value);
-      if(!picked.length){ toast('Pick at least one month to open — or use “Reopen without changing locks.”','warn'); return; }
+      if(!picked.length){ toast('Pick at least one month to open.','warn'); return; }
       const unlock=new Set();
       picked.forEach(m=>byMonth[m].availWeeks.forEach(wk=>unlock.add(wk)));
       // [261 · audit] Opening a round's months means bidding is on; clear any MANUAL global freeze too,
@@ -8725,8 +8712,7 @@ window.reopenBidding=function(){
       body:`<div>Let users place and change bids again for Phase ${cur}?</div>
             <div class="cmodal-info" style="margin-top:8px">This clears the server-side bidding-closed flag and restarts the countdown. Approvals and denials already made are <strong>not</strong> touched.</div>
             <div class="cmodal-warn" style="margin-top:8px">⚠️ The week locks don't match the Smart Lock Controls:${wrongLocked.length?` <strong>${wrongLocked.length}</strong> winnable week${wrongLocked.length!==1?'s are':' is'} still LOCKED (users couldn't bid on them)`:''}${wrongLocked.length&&need.length?';':''}${need.length?` <strong>${need.length}</strong> effectively-full week${need.length!==1?'s are':' is'} UNLOCKED (users could waste bids)`:''}.${_p1Live?' (Phase 1: only the 6 high-demand weeks are considered.)':''}</div>
-            <div class="cmodal-info" style="margin-top:8px"><strong>Smart Lock &amp; Unlock</strong> fixes the locks first, so the reopened round is actually biddable where there's still room.</div>
-            <button class="btn btn-ghost" style="margin-top:10px;width:100%;justify-content:center;border:1px dashed var(--b1)" onclick="_reopenOverride()">↩ Reopen without changing locks</button>`,
+            <div class="cmodal-info" style="margin-top:8px"><strong>Smart Lock &amp; Unlock</strong> fixes the locks first, so the reopened round is actually biddable where there's still room.</div>`,
       okText:'✨ Smart Lock & Unlock, then Reopen',
       onConfirm:async()=>{
         const dotted={};
