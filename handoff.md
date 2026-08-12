@@ -1,6 +1,7 @@
 # Handoff — KP East Bay Anesthesia Vacation Auction
 
-**Written:** 30 July 2026, last updated **3 August 2026 (admin 239 — priority-inversion never-event fix)** · **By:** the Fable sessions of 30 Jul–3 Aug
+**Written:** 30 July 2026, last updated **11 August 2026 (admin 264 — F1 Begin-Phase-4 local-first fix; FIRST LIVE REHEARSAL complete)** · **By:** the Fable sessions of 30 Jul–3 Aug, then the Opus session of 10–11 Aug
+**READ THE ⭐ BACKLOG BLOCK BELOW FIRST — it is the current truth. Sections dated 3 Aug (admin 239) are stale on build/test numbers; trust the code.**
 **Convention unchanged:** **[VERIFIED]** = proven by a runnable test or direct observation.
 **[BELIEVED]** = reasoning. If this document conflicts with the code, the code is right — say so
 and correct the record.
