@@ -12,6 +12,62 @@ REPO_ROOT=/Users/aaronfrankel/Documents/GitHub node tests/run-all.mjs   # 7 suit
 
 ---
 
+## ⭐ BACKLOG — pending updates (added 11 Aug 2026, after the first live rehearsal)
+
+**Live state right now [VERIFIED]:** admin **264** (F1 fix: Begin-Phase-4 clears the round
+mirrors locally before the Round-1 month picker reads them), staff index **135**, mobile **17**;
+versions.json matches. First live rehearsal with real users ran clean. The only real issue was a
+data-entry typo — a user's corrupted KP e-mail (`...Bielinski.kp@org`, `@` misplaced) made EmailJS
+return `422 "recipients address is corrupted"`, so that mailQueue entry looped forever (~every 90s
+via claim expiry) and held the red "outbid alerts queued" flash lit. Fixed by correcting the roster
+address; no code change. That episode surfaced items 2–4 below.
+
+**Do these as ONE batched build AFTER the rehearsal is fully done** — full gate on all, user
+pushes, code-freeze discipline (propose → user go → smallest change). Items 1–4 are small and
+self-contained; **item 5 is behavioral/fairness-critical and needs the read-only touchpoint map
+FIRST**, for the user to sign off on before any edit.
+
+1. **noindex tag** — keep the site out of Google. Today there is no `noindex` meta and no honored
+   robots.txt (a robots.txt under `/vacation/` is ignored — robots.txt must live at the host root,
+   which is the *separate* `anesthesia-kp.github.io` repo). Fix = add
+   `<meta name="robots" content="noindex">` to the `<head>` of admin/index.html AND staff
+   index.html. ~2 lines. The site is NOT currently indexed (a `site:` search returns nothing), so
+   no urgency.
+
+2. **Mail-queue hardening** — a permanently-rejected address is retried forever, never quarantined,
+   so one bad e-mail can hold the queue's red flash hostage (see the rehearsal issue above). Fix =
+   after N failed sends, drop/park the entry with an admin-visible flag instead of looping. See
+   `processMailQueue` (admin ~line 1742, staff ~line 1452) and the
+   `console.warn('Queue send failed for', e.user, err)` catch.
+
+3. **Relabel the queue counter** — the dashboard "Outbid alerts — N queued" counts the WHOLE
+   mailQueue outbox (welcome + results + outbid), so a stuck welcome shows up as an "outbid alert."
+   Rename to e.g. "Queued e-mails." Cosmetic; see `updateMailQueueBadge` (~line 1714).
+
+4. **EmailJS sent-counter undercount** — RECURRING; a prior fix did NOT hold. User reset it from
+   ~280 to ~390 (dropped ~a third of sends). [BELIEVED] cause = lost concurrent increments: a
+   read-modify-write in `trackEmailSent()` gets clobbered when multiple sends/tabs fire at once.
+   Fix = atomic Firestore `increment(1)`, not read-then-set. DIAGNOSE `trackEmailSent` + its
+   persistence path and CONFIRM the mechanism before changing anything (same discipline we used on
+   the queue). Meanwhile the EmailJS account dashboard is the true count.
+
+5. **Make holiday weeks + auction year admin-configurable (with guardrails)** — REPLACES the
+   one-off "move spring break to weeks 14 & 15." Goal: no annual code rewrite — designate holiday
+   weeks and set the auction year from the controls section (same stored-config pattern as
+   timerRules / FTE caps / Smart Lock Controls in `adminSettings`). This is BEHAVIORAL and
+   fairness-critical: it feeds `HIGH_DEMAND_WEEKS` → Phase-1 Smart Lock, FTE caps/slots, holiday
+   labels, reports, and the never-event guards. **REQUIRED FIRST STEP = a read-only touchpoint map
+   of EVERY place spring break / weeks 14-15 / high-demand weeks / FTE caps / holiday labels are
+   defined or referenced, for the USER to sign off on before ANY edit.** Then wire those reads to
+   config, add validation + a lock so the values can't change once an auction is underway, full
+   gate + targeted fairness tests. The map is safe to build anytime (it changes nothing).
+
+> NOTE: the sections below (dated 3 Aug 2026, admin 239) predate this rehearsal and are STALE on
+> build numbers and suite counts. Trust the live state above; refresh §1 and the "Start here"
+> command when the batch build lands.
+
+---
+
 ## 0. STANDING RULES — binding, unchanged from the previous handoff
 
 The user's eight rules verbatim (never rewrite whole files; read → edit → `node --check` every
