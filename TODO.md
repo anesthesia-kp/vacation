@@ -5,14 +5,21 @@
 
 - [x] **Build 265/136 DEPLOYED (13 Aug).** All gates green pre-push; post-deploy audit clean
   (full lifecycle run-through, 0 errors, 0 never-event findings). See GATE-REPORT + POST-DEPLOY-AUDIT.
-- [ ] **Build 266/137 — Bid Floors by Week Category — STAGED in `build266-staged/`, ALL GATES GREEN, awaiting owner push.**
+- [x] **Build 266/137 — Bid Floors by Week Category — DEPLOYED 13 Aug (owner push), live verified (`versions.json` = 137/17/266).**
   One rule: a bid must be at least as strong as the week category's floor (HD default 4,
   Summer default No floor, all other weeks always No floor). Engine-enforced on both sites
   (closes the NE-4 below-floor/forged-NP soft spot); locked once Phase 1 begins; behavioral
   no-op until a floor is changed (test-proven: 44/44 + honesty 0/30 + adversarial 11/11).
-  Placement per the table in `build266-staged/BUILD-NOTES.md`; commit message prepared.
-  Owner deploy timing: owner chose "as soon as gates pass"; recommendation on record is the
-  next between-phases pause. Owner pushes personally, as always.
+  NOTE: the Bid Floors card shows LOCKED while the auction runs (Phase 1 has begun) — by
+  design; floors become editable after Reset Auction, for the next auction setup.
+- [ ] **Build 267/138 — Calendar redesign (fixed 6 HD weeks) + e-mail link dedup — STAGED in `build267-staged/`, ALL GATES GREEN, awaiting owner placement + push.**
+  Fixed identity for the six HD weeks (no rename/delete/HD-toggle); ✨ Suggest fills
+  Thanksgiving/Christmas/New Year's; Ski + Spring Breaks have no default and clear on year
+  change; 5 federal holidays auto-label from the year; a holiday landing on a chosen HD week
+  rides as a dual label ("⛷️ Ski Week · 🏛️ Presidents' Day") — display only. Reminder +
+  contacts e-mails now point at the footer link. Behavioral no-op until a calendar is saved.
+  TWO STEPS to deploy: ask Claude to file into the working tree, then commit + push.
+  Gates: 26/26 · honesty 24-fail · sweep clean · editor browser test 13/13.
 
 ## E-mail / EmailJS
 
@@ -31,15 +38,21 @@
   duplication is harmless. If removed later: fold into a future real build, with the usual
   tests + honesty check. Never a standalone deploy.
 
+- [x] **Known interaction (13 Aug, verified in code — by design, not a bug): Reset Auction
+  clears the welcome-e-mail log ("new cycle = fresh welcomes"), and Restore deliberately does
+  NOT restore it. So a reset-then-restore re-welcomes every user on their next sign-in — one
+  duplicate welcome each, self-limiting. Costs a little EmailJS quota; the Controls welcome
+  toggle can silence it if ever needed.**
+
 ## Test-suite maintenance (false reds, not build bugs)
 
-- [ ] `tests/test-backup-restore.mjs` + `tests/test-p4-rounds.mjs`: sandboxes for
+- [x] `tests/test-backup-restore.mjs` + `tests/test-p4-rounds.mjs`: FIXED + FILED 13 Aug — sandboxes for
   `closePhaseBidding` need a `mondays` stub (B5 made lock/close dialogs use
   `${mondays.length}`; the real page has it in module scope — verified, production fine).
-  Working patched copies exist (verified: both suites then match baseline totals 176/9 and
-  154/3 on builds 265 AND 266) — ask Claude to file them into `tests/` when convenient.
-- [ ] `tests/test-lead-admin.mjs`: the "Reset card is last on Controls" check greps for the
-  old card name "Outbid Alert Queue"; B3 renamed it "E-mail Queue". Update the search string.
+  Patched copies verified (176/9 and 154/3 vs the live-equivalent build; remaining reds are
+  honesty-baseline artifacts) and filed into `tests/`. Owner commits/pushes the tests repo whenever.
+- [x] `tests/test-lead-admin.mjs`: FIXED + FILED 13 Aug — search string updated to "E-mail Queue"
+  (16/4 = clean baseline; remaining reds are honesty artifacts).
   (Actual card order verified correct: … → E-mail Queue → 📅 Auction Calendar → Reset/danger last.)
 - [ ] After 266 ships: copy `tests-build266.mjs` into `tests/` (it's in `build266-staged/`;
   `--pre` honesty mode needs pristine 265/136 copies at `/tmp/admin.html` + `/tmp/staff.html`).
