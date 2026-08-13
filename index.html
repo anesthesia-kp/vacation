@@ -11,7 +11,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 136;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 137;    // bump this AND versions.json[PAGE] on each deploy of this file
   try {
     fetch("versions.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -519,7 +519,7 @@ body{zoom:1.15}
         <li>Each number can only be used once, numbers from weeks you won in earlier phases are unavailable to be used again</li>
         <li id="ruleNpPhases">NP bids may only be used during the phases for which admin has turned them on</li>
         <li>Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better</li>
-        <li>On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1/2, or 1/2/3 may be used</li>
+        <li id="ruleBidFloors">On the highest demand weeks, only bids of 1, 2, 3, 4, 1/2, or 1/2/3 may be used</li>
         <li>Only bid for the number of weeks your accrued vacation and ATO will allow for</li>
         <li>To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week</li>
         <li>Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly</li>
@@ -860,9 +860,60 @@ AC.holidays.forEach(h=>{
   if(h.highDemand){ entry.slots=5; entry.highPriorityOnly=true; }
   SPECIAL_WEEKS[h.wk]=entry;
 });
-// High-priority-only bids: 1, 2, 3, 4, "1,2", "1,2,3"
-const HIGH_PRIORITY_ALLOWED=new Set(["1","2","3","4","1,2","1,2,3"]);
-// (Summer bid restriction removed 12 Jul 2026 — all bids allowed on summer weeks.)
+// [build 137 · BF] Bid floors by week category — admin-controlled (adminSettings.bidFloors).
+// ONE RULE: a bid may be placed on a week only if it is at least as strong as the week
+// category's floor, on the ladder 1/2/3 › 1/2 › 1 › 2 › … › 10 › NP. NP is the weakest
+// bid, so ANY numeric floor blocks NP automatically. 'none' = No floor — all bids allowed.
+// Categories: highDemand (config HD weeks; wins on overlap) · summer (config summer window)
+// · all other weeks are ALWAYS 'none' (fixed by design). Defaults reproduce the former
+// hardwired behavior EXACTLY (HD='4' ≡ the old {1,2,3,4,"1,2","1,2,3"} set; summer
+// unrestricted — its hardwired restriction was removed 12 Jul 2026). Floors are read LIVE
+// from adminSettings (no cache, no reload machinery). Editor lock lives on the admin site.
+const BF_DEFAULTS={highDemand:'4',summer:'none'};
+function _bfNormalize(raw){
+  try{
+    if(!raw||typeof raw!=='object') return null;
+    const ok=v=>v==='none'||/^([3-9]|10)$/.test(String(v));
+    if(!ok(raw.highDemand)||!ok(raw.summer)) return null;
+    return {highDemand:String(raw.highDemand),summer:String(raw.summer)};
+  }catch(_){ return null; }
+}
+function bfFloors(){ return _bfNormalize(adminSettings?adminSettings.bidFloors:null)||BF_DEFAULTS; }
+function bfFloorFor(wk){
+  const m=weekMeta[wk];
+  if(m&&m.highPriorityOnly) return bfFloors().highDemand;
+  if(m&&m.summerOnly) return bfFloors().summer;
+  return 'none';
+}
+function _bfParse(v){ return v==="NP"?"NP":(String(v).includes(',')?String(v).split(',').map(n=>parseInt(n,10)):parseInt(v,10)); }
+function bfAllows(p,floor){
+  if(floor==='none') return true;
+  if(p==="NP") return false; // weakest bid on the ladder — below every numeric floor
+  return priorityScore(p)<=priorityScore(parseInt(floor,10));
+}
+function bfAllowedText(floor){
+  if(floor==='none') return 'any bid';
+  return Array.from({length:parseInt(floor,10)},(_,i)=>i+1).join(', ')+', 1/2, or 1/2/3';
+}
+// Engine-side eligibility (twin: admin 266). A below-floor bid on a restricted week, or an
+// NP bid whose PLACEMENT phase had NP toggled off, is not a legal competitor — it can
+// neither win nor block. Legally placed NP bids keep competing if a toggle later flips
+// (placement-phase rule, owner ruling 13 Aug 2026).
+function _bfEngineFilter(u,wk,p){
+  if(!bfAllows(p,bfFloorFor(wk))) return false;
+  if(p==="NP"&&!npAllowedForPhase(getUserBidPhase(u,wk))) return false;
+  return true;
+}
+// Rules/welcome-e-mail wording, driven by the live floors.
+function bfRulesBullets(){
+  const f=bfFloors(); const out=[];
+  const names=AC.holidays.filter(h=>h.highDemand).map(h=>h.label).filter((v,i,a)=>a.indexOf(v)===i).join(', ');
+  out.push(f.highDemand==='none'
+    ?`High-demand weeks (${names}) currently have no bid floor — all bids may be used`
+    :`On the highest demand weeks (${names}), only bids of ${bfAllowedText(f.highDemand)} may be used`);
+  if(f.summer!=='none') out.push(`On summer weeks, only bids of ${bfAllowedText(f.summer)} may be used`);
+  return out;
+}
 const summerStart=new Date(AC.summerStartWk+'T00:00:00'); // [build 136 · B5] from config
 const summerEnd  =new Date(AC.summerEndWk+'T00:00:00');   // [build 136 · B5] from config
 const fmt={month:'short',day:'numeric'};
@@ -1075,6 +1126,10 @@ function computeApprovals(src){
       // bid (which this site can't see was denied) would pollute phase-2
       // projections and outbid e-mails.
       if(getUserBidPhase(u,wk)<Number(phasesData.currentPhase||1)) continue;
+      // [build 137 · BF] Floors + NP-by-phase, ENGINE-enforced (twin: admin 266). The typeof
+      // guard exists ONLY for extracted-code test sandboxes that assemble this function with
+      // legacy scope — in the real page _bfEngineFilter always exists (same module).
+      if(typeof _bfEngineFilter==='function' && !_bfEngineFilter(u,wk,p)) continue;
       reqs.push({user:u,score:priorityScore(p),fte:getUserFTE(u)});
     }
     reqs.sort((x,y)=>x.score-y.score);
@@ -1331,6 +1386,7 @@ function updateBidLimitRule(){
   const el=document.getElementById('ruleMaxBids'); if(!el) return;
   el.textContent=cumulativeCapDescription();
   const np=document.getElementById('ruleNpPhases'); if(np) np.textContent=npPhasesDescription();
+  const bf=document.getElementById('ruleBidFloors'); if(bf) bf.textContent=bfRulesBullets().join(' · '); // [build 137 · BF]
   if(typeof renderBidPool==='function'){ const u=getCurrentUser?.(); if(u) renderBidPool(u); }
 }
 
@@ -1939,9 +1995,11 @@ function openPriorityModal(wk){
   sel.querySelectorAll("option").forEach(opt=>{
     const v=opt.value;
     if(!v){opt.disabled=false;return;}
-    // High-priority-only weeks: only allow 1, 2, 3, 1,2, 1,2,3
-    if(isHighPrioOnly&&v!=="NP"&&!HIGH_PRIORITY_ALLOWED.has(v)){opt.disabled=true;return;}
-    if(v==="NP"){opt.disabled=hasCap||isHighPrioOnly||!npAllowedNow();return;} // NP only in admin-enabled phases
+    // [build 137 · BF] Week-category floor (admin-controlled): the bid must be at least as
+    // strong as the floor. NP is the weakest bid, so any numeric floor disables it too.
+    const _bfF=bfFloorFor(wk);
+    if(v!=="NP"&&!bfAllows(_bfParse(v),_bfF)){opt.disabled=true;return;}
+    if(v==="NP"){opt.disabled=hasCap||_bfF!=='none'||!npAllowedNow();return;} // NP: below any numeric floor; and only in admin-enabled phases
     if(v==="1,2"||v==="1,2,3"){
       const nums=v.split(',').map(Number);
       opt.disabled=nums.some(n=>used.includes(n))||(hasCap&&priorityScore(nums)>capScore);
@@ -2044,9 +2102,10 @@ window.confirmPriority=async function(){
       }
     }
   }
-  // High-demand weeks accept only the allowed numeric set — NP is NOT allowed either.
-  // (NP previously slipped past this re-check via a val!=="NP" guard.)
-  if((weekMeta[wk]?.highPriorityOnly) && (val==="NP" || !HIGH_PRIORITY_ALLOWED.has(val))){ showCenterAlert("This high-demand week only accepts bids of 1, 2, 3, 4, \"1/2\", or \"1/2/3\"."); window.closeModal(); return; }
+  // [build 137 · BF] Week-category floor re-check at confirm time (L-3 pattern) — the floor
+  // comes from admin settings; NP is the weakest bid so any numeric floor blocks it here too.
+  { const _bfF=bfFloorFor(wk);
+    if(!bfAllows(_bfParse(val),_bfF)){ showCenterAlert("This "+(weekMeta[wk]?.highPriorityOnly?"high-demand":"summer")+" week only accepts bids of "+bfAllowedText(_bfF)+"."); window.closeModal(); return; } }
   // Priority-lock FLOOR re-check now also covers NP: NP (score 99) is weaker than any
   // numbered floor, so submitting NP under a numeric floor is a below-floor bid and is blocked.
   if(adminSettings.priorityLockEnabled!==false){
@@ -3318,7 +3377,7 @@ ${bullets([
   `Each number can only be used once, numbers from weeks you won in earlier phases are unavailable to be used again`,
   npPhasesDescription(),
   `Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better`,
-  `On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1/2, or 1/2/3 may be used`,
+  ...bfRulesBullets(),
   `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
   `To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
   `Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly`

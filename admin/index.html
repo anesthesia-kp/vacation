@@ -11,7 +11,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 265;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 266;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -874,6 +874,23 @@ thead th{color:var(--t2)}
             <div class="trow-desc">Allow or block NP (no-preference) bids per phase. Users may only place NP bids during phases toggled ON. Changing a toggle affects NEW bids only — existing NP bids stay as placed.</div>
           </div>
           <div id="npPhaseToggles" style="display:flex;gap:22px;flex-wrap:wrap"></div>
+        </div>
+      </div>
+      <!-- BID FLOORS [build 266 · BF] — minimum bid strength per week category. One rule: a
+           bid may be placed only if it is at least as strong as the week's floor. Locked once
+           Phase 1 begins (rehearsal included); values survive Reset Auction (merge-write). -->
+      <div class="card">
+        <div class="card-title">🎚 Bid Floors by Week Category</div>
+        <div class="trow" style="align-items:flex-start;flex-direction:column;gap:8px">
+          <div>
+            <div class="trow-desc">The minimum bid strength allowed per week category — a bid may be placed only if it is <strong>at least as strong</strong> as the week's floor (strength order: 1/2/3 › 1/2 › 1 › 2 › … › 10 › NP). NP is the weakest bid, so any numeric floor blocks NP on those weeks; where "No floor" is set, NP still follows the per-phase toggles above. Enforced in the bid picker AND the decision engine on both sites. Changing a floor affects NEW bids only — existing bids stay as placed. <strong>Locked once Phase 1 begins; unlocks only via Reset Auction; values survive reset.</strong></div>
+          </div>
+          <div id="bfControls" style="display:grid;grid-template-columns:auto auto;gap:8px 14px;align-items:center">
+            <label style="font-size:12px;color:var(--t2);font-weight:600">High demand weeks</label><select id="bfHd" class="inp" style="width:236px" onchange="_bfChanged()"></select>
+            <label style="font-size:12px;color:var(--t2);font-weight:600">Summer weeks</label><select id="bfSummer" class="inp" style="width:236px" onchange="_bfChanged()"></select>
+            <label style="font-size:12px;color:var(--t2);font-weight:600">All other weeks</label><div style="font-size:12px;color:var(--t2)">No floor — all bids allowed · <i>always</i></div>
+          </div>
+          <div id="bfLockNote" style="font-size:11.5px;color:var(--yellow);display:none">🔒 Locked while the auction is underway — Reset Auction to unlock.</div>
         </div>
       </div>
 
@@ -1998,6 +2015,67 @@ function _acCheckRemote(settings){
   }catch(_){}
 }
 // ═════ end AUCTION CONFIG core ═════
+// [build 266 · BF] Bid floors by week category — admin-controlled (adminSettings.bidFloors).
+// ONE RULE: a bid may be placed on a week only if it is at least as strong as the week
+// category's floor (ladder: 1/2/3 › 1/2 › 1 › 2 › … › 10 › NP; NP is the weakest bid, so any
+// numeric floor blocks NP automatically). 'none' = No floor — all bids allowed. Categories:
+// highDemand (HD weeks; wins on overlap) · summer (config summer window) · all other weeks
+// ALWAYS 'none' (fixed). Defaults reproduce the former hardwired behavior EXACTLY. Read LIVE
+// from adminSettings (no cache/reload). Locked once Phase 1 begins (editor below); values
+// survive Reset Auction (merge-write). Twin: staff 137 carries the same core.
+const BF_DEFAULTS={highDemand:'4',summer:'none'};
+function _bfNormalize(raw){
+  try{
+    if(!raw||typeof raw!=='object') return null;
+    const ok=v=>v==='none'||/^([3-9]|10)$/.test(String(v));
+    if(!ok(raw.highDemand)||!ok(raw.summer)) return null;
+    return {highDemand:String(raw.highDemand),summer:String(raw.summer)};
+  }catch(_){ return null; }
+}
+function bfFloors(){ return _bfNormalize(adminSettings?adminSettings.bidFloors:null)||BF_DEFAULTS; }
+function bfFloorFor(wk){
+  if(HIGH_DEMAND_WEEKS.has(wk)) return bfFloors().highDemand;
+  const d=new Date(wk+'T00:00:00');
+  if(d>=AC_SUMMER_START&&d<=AC_SUMMER_END) return bfFloors().summer;
+  return 'none';
+}
+function _bfParse(v){ return v==="NP"?"NP":(String(v).includes(',')?String(v).split(',').map(n=>parseInt(n,10)):parseInt(v,10)); }
+function bfAllows(p,floor){
+  if(floor==='none') return true;
+  if(p==="NP") return false; // weakest bid on the ladder — below every numeric floor
+  return pScore(p)<=pScore(parseInt(floor,10));
+}
+function bfAllowedText(floor){
+  if(floor==='none') return 'any bid';
+  return Array.from({length:parseInt(floor,10)},(_,i)=>i+1).join(', ')+', 1/2, or 1/2/3';
+}
+// Engine-side eligibility (twin: staff 137). Placement-phase NP rule per owner, 13 Aug 2026.
+function _bfEngineFilter(u,wk,p){
+  if(!bfAllows(p,bfFloorFor(wk))) return false;
+  if(p==="NP"&&!npAllowedForPhase(getUserBidPhaseAdmin(u,wk))) return false;
+  return true;
+}
+// An explicit admin approval of a floor-filtered bid is the SANCTIONED override path (admin
+// authority, never-events philosophy): eligible only when the floor/NP-phase filter is the
+// ONE reason the bid left the competition — unscorable, I2-reused and dead prior-phase bids
+// stay refused exactly as before.
+function _bfOverrideEligible(u,wk){
+  const p=scheduleData[u]?scheduleData[u][wk]:undefined;
+  if(p===undefined||!_isScorableBid(p)) return false;
+  if(getUserBidPhaseAdmin(u,wk)<Number(phasesData.currentPhase||1)) return false;
+  if(_i2DisqualifiedSet().has(u+'|'+wk)) return false;
+  return !_bfEngineFilter(u,wk,p);
+}
+// Rules/welcome-e-mail wording, driven by the live floors (twin: staff 137).
+function bfRulesBullets(){
+  const f=bfFloors(); const out=[];
+  const names=AC.holidays.filter(h=>h.highDemand).map(h=>h.label).filter((v,i,a)=>a.indexOf(v)===i).join(', ');
+  out.push(f.highDemand==='none'
+    ?`High-demand weeks (${names}) currently have no bid floor — all bids may be used`
+    :`On the highest demand weeks (${names}), only bids of ${bfAllowedText(f.highDemand)} may be used`);
+  if(f.summer!=='none') out.push(`On summer weeks, only bids of ${bfAllowedText(f.summer)} may be used`);
+  return out;
+}
 // ── [build 265 · B5] Auction Calendar card + editor ─────────────────────────────
 // Editing is REFUSED while phase1Started() (rehearsal included) and unlocks only after
 // Reset Auction. Saving writes adminSettings.auctionConfig (admin-only by rules) and the
@@ -2524,6 +2602,10 @@ function computeApprovals(ignoreAdmin){
       // numbers returned to the user). Without this filter a phase-1 denied bid
       // would silently compete in phase-2 projections.
       if(getUserBidPhaseAdmin(u,wk)<Number(phasesData.currentPhase||1)) continue;
+      // [build 266 · BF] Floors + NP-by-phase, ENGINE-enforced (twin: staff 137). The typeof
+      // guard exists ONLY for extracted-code test sandboxes that assemble this function with
+      // legacy scope — in the real page _bfEngineFilter always exists (same module).
+      if(typeof _bfEngineFilter==='function' && !_bfEngineFilter(u,wk,p)) continue;
       reqs.push({user:u,score:pScore(p),fte:getUserFTE(u)});
     }
     reqs.sort((a,b)=>a.score-b.score);
@@ -2563,7 +2645,11 @@ function computeApprovals(ignoreAdmin){
     if(!ignoreAdmin){
       const approvedHere=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
       approvedHere.forEach(u=>{
-        if(!reqs.some(r=>r.user===u)) return;
+        // [build 266 · BF] An explicit admin approval of a floor-filtered bid is the sanctioned
+        // override — honor it here (counted once, FTE included) even though the bid was excluded
+        // from reqs as a competitor. Everything else that isn't in reqs stays refused, exactly
+        // as before (unscorable, I2-reused, dead prior-phase).
+        if(!reqs.some(r=>r.user===u) && !(typeof _bfOverrideEligible==='function'&&_bfOverrideEligible(u,wk))) return;
         if(!winners.has(u)){
           draws.delete(u); reviews.delete(u);
           winners.add(u);
@@ -2594,6 +2680,9 @@ function computeApprovals(ignoreAdmin){
         if(getUserBidPhaseAdmin(u,wk)<_curPh) continue;   // a dead prior-phase bid blocks nothing
         if(!_scorable(p)) continue;                        // an unscorable/forged bid blocks nothing
         if(_i2Disq.has(u+'|'+wk)) continue;                // an I2-disqualified bid blocks nothing
+        // [build 266 · BF] a below-floor bid (or an NP bid forged into an NP-off phase) was
+        // never a legal competitor — it blocks nothing. typeof: extracted-test sandbox scope.
+        if(typeof _bfEngineFilter==='function' && !_bfEngineFilter(u,wk,p)) continue;
         // Capacity-driven only: this denied stronger bid was over the STRICT cap alongside the
         // winners (genuinely couldn't fit — scarce capacity it was competing for). The review
         // THRESHOLD is a borderline-approval overage, NOT "room": a draw-loser denied at 0.7 over
@@ -3690,6 +3779,7 @@ function syncControls(){
   // Cumulative bid caps (Phase 1 · through P2 · through P3 · through P4). Null/blank = no limit.
   if(typeof _populateCapsFromSaved==='function') _populateCapsFromSaved();
   renderNpToggles();
+  renderBidFloorsCard(); // [build 266 · BF]
   const gl=document.getElementById("globalLockToggle");
   if(gl) gl.className="tog"+(locksData.globalLock?" on":"");
   const et=document.getElementById("emailNotifsToggle");
@@ -4180,7 +4270,6 @@ window.lockAllExceptHighDemand=function(){
 
 
 // ── Simulator ──
-const SIM_HIGH_PRIORITY_ALLOWED=["1","2","3","4","1,2","1,2,3"];
 const SIM_ALL_BIDS=["1","2","3","4","5","6","7","8","9","10","NP","1,2","1,2,3"];
 const SIM_SUMMER_START=AC_SUMMER_START; // [build 265 · B5] from config
 const SIM_SUMMER_END  =AC_SUMMER_END;   // [build 265 · B5] from config
@@ -4188,13 +4277,12 @@ const SIM_SUMMER_END  =AC_SUMMER_END;   // [build 265 · B5] from config
 function simRandItem(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
 
 function simGetAllowedBids(wk){
-  if(HIGH_DEMAND_WEEKS.has(wk)) return SIM_HIGH_PRIORITY_ALLOWED; // never includes NP — matches the real per-user rule that high-priority-only weeks disable NP regardless of phase
-  // Summer restriction removed 12 Jul 2026 — all bids allowed on summer weeks.
-  // NP must follow the SAME admin-controlled per-phase toggle a real user's UI
-  // enforces (npAllowedForPhase) — otherwise the simulator can produce NP bids
-  // in phases where the admin has explicitly turned NP off.
+  // [build 266 · BF] Allowed bids derive from the admin-controlled week-category floors
+  // (defaults = the old hardwired behavior). NP additionally follows the SAME per-phase
+  // toggle a real user's UI enforces — and is blocked outright by any numeric floor.
+  const f=bfFloorFor(wk);
   const cur=Number(phasesData.currentPhase||1);
-  return npAllowedForPhase(cur)?SIM_ALL_BIDS:SIM_ALL_BIDS.filter(b=>b!=='NP');
+  return SIM_ALL_BIDS.filter(b=>b==="NP"?(f==='none'&&npAllowedForPhase(cur)):bfAllows(_bfParse(b),f));
 }
 
 function simHasBids(){
@@ -4677,6 +4765,37 @@ function renderNpToggles(){
     <span style="font-size:12px;color:var(--t1);font-weight:700">Phase ${p}</span>
     <div class="tog${npAllowedForPhase(p)?' on':''}" id="npTog${p}" onclick="toggleNpPhase(${p})"></div></div>`).join('');
 }
+// ── Bid Floors card [build 266 · BF] ──
+function renderBidFloorsCard(){
+  const hd=document.getElementById('bfHd'), su=document.getElementById('bfSummer'); if(!hd||!su) return;
+  const f=bfFloors(), locked=phase1Started();
+  const opts=['3','4','5','6','7','8','9','10','none'];
+  const lbl=v=>v==='none'?'No floor — all bids allowed':v;
+  for(const [el,val] of [[hd,f.highDemand],[su,f.summer]]){
+    el.innerHTML=opts.map(o=>`<option value="${o}"${o===val?' selected':''}>${lbl(o)}</option>`).join('');
+    el.disabled=locked;
+  }
+  const note=document.getElementById('bfLockNote'); if(note) note.style.display=locked?'':'none';
+}
+window._bfChanged=function(){
+  // Click-time guard is the enforcement (NE-11 pattern); the disabled selects are paint.
+  if(phase1Started()){ toast('🔒 Bid floors are locked once Phase 1 has begun — Reset Auction to unlock.','err'); renderBidFloorsCard(); return; }
+  const hd=document.getElementById('bfHd'), su=document.getElementById('bfSummer'); if(!hd||!su) return;
+  const cfg=_bfNormalize({highDemand:hd.value,summer:su.value});
+  if(!cfg){ toast('⚠️ Invalid floor selection — nothing saved.','err'); renderBidFloorsCard(); return; }
+  const show=v=>v==='none'?'No floor — all bids allowed':'bids '+bfAllowedText(v);
+  openConfirm({
+    title:'🎚 Save bid floors?',
+    body:`<div>High demand weeks: <strong>${show(cfg.highDemand)}</strong><br>Summer weeks: <strong>${show(cfg.summer)}</strong><br>All other weeks: no floor (always).</div><div class="cmodal-info" style="margin-top:8px">Applies to NEW bids on both sites and to the decision engine. Existing bids stay as placed. Locks when Phase 1 begins.</div>`,
+    okText:'💾 Save floors',
+    onConfirm:async()=>{
+      try{ await setDoc(adminRef,{bidFloors:cfg},{merge:true}); toast('🎚 Bid floors saved','ok'); }
+      catch(e){ toast('⚠️ Bid floors NOT saved — nothing changed ('+(e?.message||e)+'). Try again.','err'); }
+      renderBidFloorsCard();
+    },
+    onCancel:()=>renderBidFloorsCard()
+  });
+};
 window.toggleNpPhase=async function(p){
   const next=!npAllowedForPhase(p);
   const cur={}; [1,2,3,4].forEach(x=>cur[x]=npAllowedForPhase(x));
@@ -5562,7 +5681,7 @@ ${bullets([
   `Each number can only be used once, numbers from weeks you won in earlier phases are unavailable to be used again`,
   npPhasesDescription(),
   `Bid priorities can only stay the same or increase, never decrease — once you bid 5 on a week, you can re-bid only 5 or better`,
-  `On the highest demand weeks (Ski Week, Spring Break, Thanksgiving, Christmas, New Year's), only bids of 1, 2, 3, 4, 1/2, or 1/2/3 may be used`,
+  ...bfRulesBullets(),
   `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
   `To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
   `Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly`
@@ -7367,13 +7486,20 @@ window.adApprove=function(user,wk,currentOutcome){
   const total=a.winners?.has(user)?usedFte:usedFte+ufte;
   const overage=Math.round((total-cap)*10)/10;
   const overageHtml=overage>0?`<div class="cmodal-warn">⚠️ FTE will exceed cap by ${overage} — counting locked-in winners, approved bids, and projected wins (admin override allowed).</div>`:'';
+  // [build 266 · BF] Approving a below-floor bid (or an NP bid placed in an NP-off phase) is
+  // the explicit admin override path — allowed, but never silent.
+  const _bfP=scheduleData[user]?.[wk]; const _bfF=bfFloorFor(wk);
+  const _bfWarnHtml=(!bfAllows(_bfP,_bfF))
+    ?`<div class="cmodal-warn">⚠️ This bid is BELOW this week's bid floor (${_bfF==='none'?'no floor':'floor '+_bfF}) — the engine does not score it as a competitor. Approving it is an explicit admin override.</div>`
+    :((_bfP==="NP"&&!npAllowedForPhase(getUserBidPhaseAdmin(user,wk)))
+      ?`<div class="cmodal-warn">⚠️ This NP bid was placed in a phase where NP bids were toggled OFF — the engine does not score it. Approving it is an explicit admin override.</div>`:'');
   const isDrawUser=currentOutcome==='draw';
   openConfirm({
     title:'✓ Approve '+user,
     body:`<div>Approve <strong>${user}</strong> as winner for <strong>${wLabel(m)}</strong>?</div>
           <div style="margin-top:6px;font-size:12px;color:var(--t2)">Current outcome: ${currentOutcome.toUpperCase()}</div>
           ${isDrawUser?`<div class="cmodal-info" style="margin-top:8px">User was in a DRAW — they will be notified when phase results are sent (see "Send Phase Results" button).</div>`:''}
-          ${overageHtml}${readinessWarnHtml({user,wk})}`,
+          ${overageHtml}${_bfWarnHtml}${readinessWarnHtml({user,wk})}`,
     okText:'Approve',
     onConfirm:async()=>{
       await updateDoc(approvalsRef,{[wk]:arrayUnion(user)}).catch(async()=>setDoc(approvalsRef,{[wk]:[user]},{merge:true}));
