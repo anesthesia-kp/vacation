@@ -11,7 +11,7 @@
    and it can reload at most once per published version. */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 266;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 267;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   try {
     fetch("../versions.json?t=" + Date.now(), { cache: "no-store" })
@@ -1286,7 +1286,6 @@ const whitelistConfirmRef = doc(db,"vacations","whitelistConfirm");
 const WHITELIST_SENDER = "dr.vacation.goddess@gmail.com";
 // The staff auction site users sign into (used in the whitelist ask e-mail — it's the first e-mail
 // users get from us, so it links them straight to the site to confirm).
-const AUCTION_SITE_URL = "https://anesthesia-kp.github.io/vacation/";
 
 // Safely write ONLY specific nested fields (dotted paths like "weeks.2027-01-10"
 // or "AD.2027-01-10") without disturbing sibling data. updateDoc() is the
@@ -1981,10 +1980,12 @@ function _acNormalize(raw){
       if(!h||typeof h!=='object') return null;
       if(typeof h.wk!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(h.wk)) return null;
       if(typeof h.label!=='string'||!h.label.trim()) return null;
-      holidays.push({wk:h.wk,label:h.label.trim(),emoji:String(h.emoji||'').trim(),
+      const _e={wk:h.wk,label:h.label.trim(),emoji:String(h.emoji||'').trim(),
         short:String(h.short||h.label.trim().split(/\s+/)[0]).slice(0,14),
         highDemand:h.highDemand===true,
-        color:(h.color&&typeof h.color==='object'&&h.color.fg)?{fg:String(h.color.fg),bg:String(h.color.bg||AC_NEUTRAL_COLOR.bg),border:String(h.color.border||AC_NEUTRAL_COLOR.border)}:null});
+        color:(h.color&&typeof h.color==='object'&&h.color.fg)?{fg:String(h.color.fg),bg:String(h.color.bg||AC_NEUTRAL_COLOR.bg),border:String(h.color.border||AC_NEUTRAL_COLOR.border)}:null};
+      if(typeof h.note==='string'&&h.note.trim()) _e.note=h.note.trim().slice(0,60); // [267/138] informational dual label (e.g. Presidents' Day on Ski Week)
+      holidays.push(_e);
     }
     return {year:y,summerStartWk:raw.summerStartWk,summerEndWk:raw.summerEndWk,holidays};
   }catch(_){ return null; }
@@ -2096,11 +2097,51 @@ function renderAuctionConfigCard(){
   if(btn){ btn.disabled=locked; btn.title=locked?'Locked once Phase 1 has begun (rehearsal included). Reset Auction to unlock.':''; }
 }
 let _acDraft=null;
+// [build 267 · CAL2] The SIX high-demand weeks are FIXED IDENTITY — the same names, icons
+// and colors every year (owner ruling 13 Aug): Ski Week, two Spring Breaks, Thanksgiving,
+// Christmas, New Year's. They define Phase 1. Only their WEEK PLACEMENT is chosen per
+// year; they cannot be renamed, re-iconed, un-flagged, added to, or deleted.
+// Thanksgiving/Christmas/New Year's are computable (✨ button); Ski + the Spring Breaks
+// are school-calendar dates the admin must set explicitly — NO default, and they clear
+// when the year changes (school calendars do not carry across years).
+const AC_HD_FIXED=[
+  {key:'ski',    label:'Ski Week',     emoji:'⛷️', short:'Ski',    auto:false},
+  {key:'spring1',label:'Spring Break', emoji:'🌸', short:'Spring', auto:false},
+  {key:'spring2',label:'Spring Break', emoji:'🌸', short:'Spring', auto:false},
+  {key:'thanks', label:'Thanksgiving', emoji:'🦃', short:'Thanks', auto:true},
+  {key:'xmas',   label:'Christmas',    emoji:'🎄', short:'Xmas',   auto:true},
+  {key:'nye',    label:"New Year's",   emoji:'🎆', short:'NYE',    auto:true},
+];
+// Auto-labeled (non-high-demand) federal holidays — computed entirely from the year, no
+// admin input, purely decorative: 🕊️ MLK · 🇺🇸 Memorial Day · 🎇 July 4th · 🛠️ Labor Day.
+function _acAutoHolidays(year){
+  const list=computeSuggestedHolidays(year).filter(h=>!h.hd);
+  // Presidents' Day (3rd Monday of February) — added here, NOT in computeSuggestedHolidays,
+  // whose output is pinned by the build-265 test suite. Usually coincides with Ski Week —
+  // then it rides along as an informational NOTE on the Ski Week entry (owner ruling 13 Aug).
+  const sunds=getSundays(year), n=sunds.length;
+  const d=new Date(year,1,1); let c=0; for(;;){ if(d.getDay()===1){ c++; if(c===3) break; } d.setDate(d.getDate()+1); }
+  d.setDate(d.getDate()-d.getDay());
+  const key=dateKey(d); for(let i=0;i<n;i++){ if(dateKey(sunds[i])===key){ list.push({idx:i+1,label:"Presidents' Day",emoji:'🏛️',short:'Pres',hd:false}); break; } }
+  return list.sort((a,b)=>a.idx-b.idx);
+}
+// The three computable HD weeks, mapped to their fixed slots.
+function _acSuggestedHd(year){ const m={};
+  computeSuggestedHolidays(year).filter(h=>h.hd).forEach(h=>{
+    if(/Thanks/i.test(h.label)) m.thanks=h.idx;
+    else if(/Christmas/i.test(h.label)) m.xmas=h.idx;
+    else m.nye=h.idx; });
+  return m; }
 function _acDraftFromAC(){
-  const idxOf=wk=>_wkNumByISO[wk]||1;
+  const idxOf=wk=>_wkNumByISO[wk]||0;
+  const hds=AC.holidays.filter(h=>h.highDemand).slice();
+  const take=lbl=>{ const i=hds.findIndex(h=>h.label.toLowerCase()===String(lbl).toLowerCase()); return i>=0?hds.splice(i,1)[0]:null; };
+  const ski=take('Ski Week'), s1=take('Spring Break'), s2=take('Spring Break'),
+        th=take('Thanksgiving'), xm=take('Christmas'), ny=take("New Year's");
   return {year:AC_YEAR,
-    summerStartIdx:idxOf(AC.summerStartWk), summerEndIdx:idxOf(AC.summerEndWk),
-    holidays:AC.holidays.map(h=>({idx:idxOf(h.wk),label:h.label,emoji:h.emoji,short:h.short,hd:h.highDemand}))};
+    summerStartIdx:idxOf(AC.summerStartWk)||1, summerEndIdx:idxOf(AC.summerEndWk)||1,
+    hd:{ski:ski?idxOf(ski.wk):0, spring1:s1?idxOf(s1.wk):0, spring2:s2?idxOf(s2.wk):0,
+        thanks:th?idxOf(th.wk):0, xmas:xm?idxOf(xm.wk):0, nye:ny?idxOf(ny.wk):0}};
 }
 function _acColorFor(label){
   const all=[...AC.holidays,...AC_DEFAULTS.holidays];
@@ -2129,37 +2170,40 @@ function computeSuggestedHolidays(year){
 }
 function _acWkOption(sunds,i,sel){ const d=sunds[i-1];
   return `<option value="${i}"${i===sel?' selected':''}>Wk ${i} · ${_acFmtWkShort(dateKey(d))}</option>`; }
-function _acWkSelect(id,sunds,sel,onch){
-  let o=''; for(let i=1;i<=sunds.length;i++) o+=_acWkOption(sunds,i,sel);
+function _acWkSelect(id,sunds,sel,onch,allowUnset){
+  let o=allowUnset?`<option value="0"${!sel?' selected':''}>— choose week —</option>`:'';
+  for(let i=1;i<=sunds.length;i++) o+=_acWkOption(sunds,i,sel);
   return `<select class="inp" id="${id}" style="width:auto" ${onch?`onchange="${onch}"`:''}>${o}</select>`;
 }
 function _acEditorBody(){
-  const d=_acDraft, sunds=getSundays(d.year), esc=v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const d=_acDraft, sunds=getSundays(d.year);
   const yearNow=new Date().getFullYear();
   let years=[]; for(let y=yearNow;y<=yearNow+15;y++) years.push(y);
   if(!years.includes(d.year)) years.unshift(d.year);
-  const rows=d.holidays.map((h,i)=>`<div style="display:flex;gap:6px;align-items:center;margin:3px 0">
-      ${_acWkSelect('acHolWk'+i,sunds,h.idx)}
-      <input class="inp" id="acHolEmoji${i}" value="${esc(h.emoji)}" style="width:44px" title="emoji">
-      <input class="inp" id="acHolLabel${i}" value="${esc(h.label)}" style="flex:1" placeholder="Holiday name">
-      <input class="inp" id="acHolShort${i}" value="${esc(h.short)}" style="width:74px" title="short tag (calendar cells)">
-      <label style="font-size:11px;display:flex;align-items:center;gap:3px;white-space:nowrap"><input type="checkbox" id="acHolHd${i}"${h.hd?' checked':''}> High demand</label>
-      <button class="btn" style="flex:unset;padding:2px 7px" onclick="_acDelHolRow(${i})">✕</button>
+  // [build 267 · CAL2] Six FIXED high-demand rows — name/icon are plain text (not editable),
+  // no High-demand checkbox (always on), no delete, no add. Only the week is chosen.
+  const rows=AC_HD_FIXED.map(f=>`<div style="display:flex;gap:8px;align-items:center;margin:3px 0">
+      <span style="width:150px;font-weight:600">${f.emoji} ${f.label}</span>
+      ${_acWkSelect('acHd_'+f.key,sunds,d.hd[f.key],null,true)}
+      <span style="font-size:10.5px;color:var(--t2)">${f.auto?'✨ computable':'set from the school calendar'}</span>
     </div>`).join('');
+  const autoH=_acAutoHolidays(d.year);
+  const _hdIdxs=new Set(Object.values(d.hd).filter(Boolean));
+  const autoLine=autoH.map(h=>`${h.emoji} ${h.label} (Wk ${h.idx}${_hdIdxs.has(h.idx)?' — shares a high-demand week; will show as a dual label':''})`).join(' · ');
   const w53=sunds.length===53?`<div class="cmodal-info" style="margin-top:6px">ℹ️ ${d.year} has 53 Sunday-anchored weeks (this happens about 5 years in 28). Week 53 is an ordinary standard week; nothing else changes.</div>`:'';
   return `<div style="font-size:13px;max-height:60vh;overflow:auto">
-    <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px">
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
       <b>Auction year</b>
       <select class="inp" id="acYearSel" style="width:auto" onchange="_acYearChanged()">${years.map(y=>`<option value="${y}"${y===d.year?' selected':''}>${y}</option>`).join('')}</select>
-      <button class="btn" style="flex:unset" onclick="_acSuggest()">✨ Suggest holidays</button>
-      <button class="btn" style="flex:unset" onclick="_acAddHolRow()">➕ Add</button>
+      <button class="btn" style="flex:unset" onclick="_acSuggest()">✨ Suggest Thanksgiving / Christmas / New Year's</button>
     </div>
-    <div style="font-size:11px;color:var(--t2);margin-bottom:4px">Suggestions cover the computable holidays (Christmas &amp; New Year's are always the last two weeks); add ski week and spring breaks manually from the school calendars. High-demand weeks are the Phase-1 weeks (5 default slots).</div>
-    <div id="acHolRows">${rows||'<i style="color:var(--t2)">No holidays defined</i>'}</div>
-    <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+    <div style="font-size:11px;color:var(--t2);margin-bottom:4px"><b>High-demand weeks — always these six; they define Phase 1 (5 default slots).</b> Thanksgiving, Christmas &amp; New Year's are computable (✨). Ski week and the two Spring Breaks come from the school calendars — choose them each year; they have no default.</div>
+    <div id="acHolRows">${rows}</div>
+    <div style="font-size:11px;color:var(--t2);margin:8px 0 2px">Auto-labeled holidays (fixed by the year, nothing to choose): ${autoLine||'<i>none in range</i>'}</div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
       <b>Summer</b> ${_acWkSelect('acSummerS',sunds,d.summerStartIdx)} → ${_acWkSelect('acSummerE',sunds,d.summerEndIdx)}
-      <span style="font-size:11px;color:var(--t2)">(4 default slots per summer week)</span>
     </div>
+    <div style="font-size:11px;color:var(--t2);margin-top:3px">4 default slots per summer week</div>
     ${w53}
     <div class="cmodal-warn" style="margin-top:8px">Saving reloads both sites' pages. Settings lock when Phase 1 begins and survive Reset Auction.</div>
   </div>`;
@@ -2167,32 +2211,34 @@ function _acEditorBody(){
 function _acReadDraftFromDom(){
   const d=_acDraft; if(!d) return;
   const y=document.getElementById('acYearSel'); if(y) d.year=Number(y.value)||d.year;
-  d.holidays.forEach((h,i)=>{
-    const g=id=>document.getElementById(id+i);
-    if(g('acHolWk')) h.idx=Number(g('acHolWk').value)||h.idx;
-    if(g('acHolEmoji')) h.emoji=g('acHolEmoji').value.trim();
-    if(g('acHolLabel')) h.label=g('acHolLabel').value.trim();
-    if(g('acHolShort')) h.short=g('acHolShort').value.trim();
-    if(g('acHolHd')) h.hd=g('acHolHd').checked;
-  });
+  for(const f of AC_HD_FIXED){
+    const el=document.getElementById('acHd_'+f.key);
+    if(el) d.hd[f.key]=Number(el.value)||0; // 0 = not chosen yet
+  }
   const ss=document.getElementById('acSummerS'), se=document.getElementById('acSummerE');
   if(ss) d.summerStartIdx=Number(ss.value)||d.summerStartIdx;
   if(se) d.summerEndIdx=Number(se.value)||d.summerEndIdx;
 }
 function _acRefreshEditor(){ document.getElementById('cmBody').innerHTML=_acEditorBody(); }
-window._acYearChanged=function(){ _acReadDraftFromDom(); const y=Number(document.getElementById('acYearSel').value);
-  const oldN=getSundays(_acDraft.year).length; _acDraft.year=y; const n=getSundays(y).length;
-  // Week numbers are kept across a year change (the user thinks in week numbers); clamp to the new length.
-  _acDraft.holidays.forEach(h=>{ if(h.idx>n) h.idx=n; });
+window._acYearChanged=function(){ _acReadDraftFromDom(); const y=Number(document.getElementById('acYearSel').value)||_acDraft.year;
+  const wasSet={thanks:!!_acDraft.hd.thanks,xmas:!!_acDraft.hd.xmas,nye:!!_acDraft.hd.nye};
+  _acDraft.year=y; const n=getSundays(y).length;
+  // [build 267 · CAL2] School-calendar weeks do NOT carry across years — clear, no default.
+  _acDraft.hd.ski=0; _acDraft.hd.spring1=0; _acDraft.hd.spring2=0;
+  // Computable weeks track the year automatically (only if they were already set).
+  const sug=_acSuggestedHd(y);
+  _acDraft.hd.thanks=wasSet.thanks?(sug.thanks||0):0;
+  _acDraft.hd.xmas=wasSet.xmas?(sug.xmas||0):0;
+  _acDraft.hd.nye=wasSet.nye?(sug.nye||0):0;
   if(_acDraft.summerStartIdx>n) _acDraft.summerStartIdx=n;
   if(_acDraft.summerEndIdx>n) _acDraft.summerEndIdx=n;
-  if(oldN===53&&n===52){ /* dropped week 53 handled by clamps above */ }
-  _acRefreshEditor(); };
-window._acAddHolRow=function(){ _acReadDraftFromDom(); _acDraft.holidays.push({idx:1,label:'',emoji:'',short:'',hd:false}); _acRefreshEditor(); };
-window._acDelHolRow=function(i){ _acReadDraftFromDom(); _acDraft.holidays.splice(i,1); _acRefreshEditor(); };
+  _acRefreshEditor();
+  toast('Year changed — set ski week and the spring breaks from the '+y+' school calendars','warn'); };
 window._acSuggest=function(){ _acReadDraftFromDom();
-  _acDraft.holidays=computeSuggestedHolidays(_acDraft.year); _acRefreshEditor();
-  toast('✨ Suggested holidays filled in — review each one, then add ski week and spring breaks manually','ok'); };
+  const sug=_acSuggestedHd(_acDraft.year);
+  _acDraft.hd.thanks=sug.thanks||0; _acDraft.hd.xmas=sug.xmas||0; _acDraft.hd.nye=sug.nye||0;
+  _acRefreshEditor();
+  toast('✨ Thanksgiving, Christmas & New Year\'s filled in — now set ski week and the spring breaks','ok'); };
 window.openAuctionCalendarEditor=function(){
   if(phase1Started()){ toast('🔒 The auction calendar is locked once Phase 1 has begun — Reset Auction to unlock','warn'); return; }
   _acDraft=_acDraftFromAC();
@@ -2206,14 +2252,31 @@ async function saveAuctionCalendar(){
   if(phase1Started()){ toast('🔒 Locked — Phase 1 has begun','warn'); return; }
   if(!d) return;
   const sunds=getSundays(d.year), n=sunds.length;
-  for(const h of d.holidays){ if(!h.label){ return reopen('Every holiday needs a name'); } if(!(h.idx>=1&&h.idx<=n)){ return reopen('Holiday week number out of range'); } }
-  const seen=new Set();
-  for(const h of d.holidays){ if(seen.has(h.idx)) return reopen('Two holidays are on the same week — merge them into one label'); seen.add(h.idx); }
-  if(!d.holidays.some(h=>h.hd)) return reopen('At least one high-demand holiday is required — Phase 1 is the high-demand phase');
+  // [build 267 · CAL2] EXACTLY the six fixed high-demand weeks — all must be chosen.
+  for(const f of AC_HD_FIXED){ const i=d.hd[f.key];
+    if(!(i>=1&&i<=n)) return reopen('Choose a week for '+f.emoji+' '+f.label+' — all six high-demand weeks must be set (they define Phase 1)'); }
+  const idxs=AC_HD_FIXED.map(f=>d.hd[f.key]);
+  if(new Set(idxs).size!==AC_HD_FIXED.length) return reopen('Two high-demand weeks are set to the same week — all six must be different weeks');
   if(d.summerStartIdx>d.summerEndIdx) return reopen('Summer start week is after the end week');
   const wkOf=i=>dateKey(sunds[i-1]);
+  const hdWkSet=new Set(idxs.map(wkOf));
+  // Decorative federal holidays, computed from the year. One landing ON a chosen HD week
+  // becomes an informational NOTE on that week (dual label — e.g. "⛷️ Ski Week ·
+  // 🏛️ Presidents' Day"); the HD identity alone drives every rule. Others get their own
+  // non-HD entry.
+  const autosAll=_acAutoHolidays(d.year);
+  const notes={}; // wk -> 'emoji label · …'
+  for(const h of autosAll){ const wk=wkOf(h.idx);
+    if(hdWkSet.has(wk)) notes[wk]=(notes[wk]?notes[wk]+' · ':'')+((h.emoji?h.emoji+' ':'')+h.label); }
+  const autos=autosAll.filter(h=>!hdWkSet.has(wkOf(h.idx)));
   const cfg={year:d.year,summerStartWk:wkOf(d.summerStartIdx),summerEndWk:wkOf(d.summerEndIdx),
-    holidays:d.holidays.map(h=>({wk:wkOf(h.idx),label:h.label,emoji:h.emoji,short:h.short||h.label.split(/\s+/)[0].slice(0,14),highDemand:!!h.hd,color:_acColorFor(h.label)}))};
+    holidays:[
+      ...AC_HD_FIXED.map(f=>{ const wk=wkOf(d.hd[f.key]);
+        const e={wk,label:f.label,emoji:f.emoji,short:f.short,highDemand:true,color:_acColorFor(f.label)};
+        if(notes[wk]) e.note=notes[wk];
+        return e; }),
+      ...autos.map(h=>({wk:wkOf(h.idx),label:h.label,emoji:h.emoji,short:h.short,highDemand:false,color:null})),
+    ].sort((a,b)=>a.wk<b.wk?-1:1)};
   if(!_acNormalize(cfg)){ return reopen('Config failed validation — nothing saved'); }
   try{
     await setDoc(adminRef,{auctionConfig:cfg},{merge:true});
@@ -5797,7 +5860,7 @@ You have not yet placed any bids in Phase ${cur} of the vacation auction. Please
 
 Placing bids early benefits everyone — it moves the process along more quickly for the whole department.
 
-Place your bids here: https://anesthesia-kp.github.io/vacation/
+Place your bids using the site link at the bottom of this e-mail.
 
 Thank you!`);
         ok+=r.ok; fail+=r.fail;
@@ -9381,7 +9444,7 @@ Please sign in to the auction site and click the blue "I've added the contact
 Thank you!
 KP East Bay Anesthesia — Vacation Auction
 
-Sign in here: ${AUCTION_SITE_URL}`;
+Sign in using the site link at the bottom of this e-mail.`;
 }
 // [BUILD 212] The whitelist ask is a GMAIL exercise (add the sender to Google Contacts), so it
 // goes ONLY to each user's Google login address. KP (@kp.org) inboxes are deliberately excluded —
