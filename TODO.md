@@ -12,14 +12,14 @@
   no-op until a floor is changed (test-proven: 44/44 + honesty 0/30 + adversarial 11/11).
   NOTE: the Bid Floors card shows LOCKED while the auction runs (Phase 1 has begun) — by
   design; floors become editable after Reset Auction, for the next auction setup.
-- [ ] **Build 267/138 — Calendar redesign (fixed 6 HD weeks) + e-mail link dedup — STAGED in `build267-staged/`, ALL GATES GREEN, awaiting owner placement + push.**
+- [x] **Build 267/138 — Calendar redesign (fixed 6 HD weeks) + e-mail link dedup — DEPLOYED 13 Aug (owner push, mid-Phase-2; engines byte-identical = zero behavior change), live verified (`versions.json` = 138/17/267).**
   Fixed identity for the six HD weeks (no rename/delete/HD-toggle); ✨ Suggest fills
   Thanksgiving/Christmas/New Year's; Ski + Spring Breaks have no default and clear on year
   change; 5 federal holidays auto-label from the year; a holiday landing on a chosen HD week
   rides as a dual label ("⛷️ Ski Week · 🏛️ Presidents' Day") — display only. Reminder +
   contacts e-mails now point at the footer link. Behavioral no-op until a calendar is saved.
-  TWO STEPS to deploy: ask Claude to file into the working tree, then commit + push.
-  Gates: 26/26 · honesty 24-fail · sweep clean · editor browser test 13/13.
+  Gates were 26/26 · honesty 24-fail · sweep clean · editor browser test 13/13. E-mails now
+  carry a single (footer) link; EmailJS footer URL fixed to trailing-slash form by owner.
 
 ## E-mail / EmailJS
 
