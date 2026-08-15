@@ -1,3 +1,5 @@
+> **SUPERSEDED 15 Aug 2026** — this document is historical. The current, complete handoff is `NEXT-CHAT-START-PROMPT.md` (repo root). Start there.
+
 # Handoff — KP East Bay Anesthesia Vacation Auction
 
 **Written:** 30 July 2026, last updated **11 August 2026 (admin 264 — F1 Begin-Phase-4 local-first fix; FIRST LIVE REHEARSAL complete)** · **By:** the Fable sessions of 30 Jul–3 Aug, then the Opus session of 10–11 Aug
