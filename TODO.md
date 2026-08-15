@@ -45,6 +45,25 @@
   reproduces the bug live against the pristine 138 fixture), 4-pass sweep clean, runthrough
   0 errors, mega-fuzz 100k ZERO, era suites 25/46/44/26, engines byte-identical to 267
   (32 fns) + twin generators identical.
+  PUSHED + rules PUBLISHED by owner 15 Aug (live checks 1-4 green; Playground sims partially
+  done — batch 1 was pending when the incident below took priority).
+
+- [ ] **Build 269 (admin only) — BUILT + FULLY AUDITED 15 Aug, AWAITING OWNER PUSH.
+  NO Firebase console step (rules unchanged).**
+  Same-day hardening after a REAL incident: restore + re-send during the live rehearsal
+  e-mailed all 31 users duplicate Phase 2 results. Root cause (reproduced in the browser
+  harness, confirmed against the owner's own backup file): critical actions trusted
+  possibly-stale in-page mirrors — a feed blip during the send erased the delivered-address
+  ledger and left the server torn (sent-but-not-complete); the phase-2 change log was also
+  reset without being archived (stale-mirror archive). 269 = server-truth reads
+  (getDocFromServer) at every such moment (both senders, publish, begin-phase, Full Restore
+  pre-flight + its previously-missing feed-health gate, change-log archive with union+dedup)
+  with plain-language fail-closed refusals. Owner's e-mail-freeze request resolved WITHOUT
+  new code: Rehearsal Mode's "⏭ Skip sending (testing)" covers advance-without-mailing
+  (verified staff-invisible). Gates: tests-build269 40/40 + honesty vs pushed-268 fixture;
+  resend-repro 12/12 on 269 AND reproduces 4/4 duplicates on 268 (teeth); full battery
+  green on final bytes (see build269-staged/BUILD-NOTES-269.md + ADVERSARIAL-AUDIT-269.md).
+  After push: verify live versions.json = {"index":139,"mobile":17,"admin":269}.
 
 ## E-mail / EmailJS
 

@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 269;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 268;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1195,7 +1195,7 @@ thead th{color:var(--t2)}
 
 <script type="module">
 import { initializeApp }    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, getDoc, getDocFromServer, increment, writeBatch, runTransaction, collection, getDocs, onSnapshot as _onSnapshot }
+import { getFirestore, doc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, getDoc, increment, writeBatch, runTransaction, collection, getDocs, onSnapshot as _onSnapshot }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
@@ -1716,20 +1716,6 @@ function _sentAddrsFor(key){
 }
 function _writeSentLedger(key,sentAddrs){
   return setDoc(phaseStagingRef,{resultsSentTo:{[key]:[...sentAddrs]}},{merge:true});
-}
-// [build 269 · LEDG] SERVER-fresh ledger read for send-time decisions. The delivered-address
-// ledger is the only thing standing between a retry / post-restore resend and a duplicate
-// mass e-mail, so no sender may trust the in-page mirror alone: on 15 Aug a stale mirror
-// let the publish replace erase the just-written ledger, and the resend after a restore
-// re-mailed all 31 users. getDocFromServer either proves the true ledger or throws (a
-// cached copy is NOT proof) — callers refuse to send on failure, in plain language.
-// The legacy phases.resultsSentTo union matches _sentAddrsFor exactly.
-async function _ledgerFresh(key){
-  try{
-    const s=await getDocFromServer(phaseStagingRef);
-    const led=(s.exists()?(s.data()||{}):{}).resultsSentTo||{};
-    return {ok:true, sentSet:new Set([...(led[key]||[]),...((phasesData.resultsSentTo?.[key])||[])])};
-  }catch(e){ return {ok:false, error:e}; }
 }
 // [build 251] Live mirror of the Phase 4 round-send ledger (who was already e-mailed what).
 // Every NON-merge replace of the staging doc that is not meant to destroy the ledger
@@ -5138,30 +5124,16 @@ window.toggleNpPhase=async function(p){
 // in the same batch. Used by Send Results, Skip Results; Begin Next Phase inlines the
 // same publish into its own phase-advance batch.
 async function _publishPhaseResults(fields){
-  // [build 269 · LEDG] Publish from SERVER truth, never from the tab mirrors. On 15 Aug a
-  // stale staging mirror made this function (a) stamp resultsSent while never publishing
-  // completedPhases — the torn sent-but-not-complete state captured in the owner's 12:15
-  // backup — and (b) REPLACE the staging doc from the stale mirror, erasing the delivered-
-  // address ledger the send had written seconds earlier (→ 31 duplicate e-mails after a
-  // restore). A server read either proves the true staged/ledger state or throws — and
-  // every caller already treats a publish failure as "nothing changed, retry".
-  // typeof = sandbox convention: legacy extracted scope has no getDocFromServer and falls
-  // back to EXACTLY the pre-269 mirror behavior; production always takes the server read.
-  let _d=null;
-  if(typeof getDocFromServer==='function'){ const _srv=await getDocFromServer(phaseStagingRef); _d=_srv.exists()?(_srv.data()||{}):{}; }
-  const _staged=_d?(_d.pendingPhaseSnapshots||{}):(_stagedCompletedPhases||{});
-  const _p4m=_d?(_d.p4RoundMailed||{}):(_p4RoundMailedMirror||{});
-  const _p4p=_d?(_d.pendingP4Rounds||{}):(_stagedP4Rounds||{});
-  const _led=_d?(_d.resultsSentTo||{}):(_sentLedger||{});
-  const hasStaged=Object.keys(_staged).length>0;
+  const hasStaged=Object.keys(_stagedCompletedPhases||{}).length>0;
   const payload={...(fields||{})};
   const b=writeBatch(db);
   if(hasStaged){
-    payload.completedPhases={..._publishedCompletedPhases,..._staged};
+    payload.completedPhases={..._publishedCompletedPhases,..._stagedCompletedPhases};
     // [build 251] Clear staging in the SAME batch — NON-merge replace (an empty-map merge clears
-    // nothing; Firestore deep-merges maps). [269] Every preserved field now comes from the
-    // server read above — a stale tab can no longer erase what it cannot see.
-    b.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_p4m).length?{p4RoundMailed:_p4m}:{}),...(Object.keys(_p4p).length?{pendingP4Rounds:_p4p}:{}),...(Object.keys(_led).length?{resultsSentTo:_led}:{})}); // [259] the delivered-address ledger records e-mails that really went out — survives the publish replace
+    // nothing; Firestore deep-merges maps). The Phase 4 round-send ledger is spread back in from
+    // its live mirror so publishing results (incl. a leftover earlier phase's, mid-rolling-year)
+    // cannot silently forget who was already e-mailed what.
+    b.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_p4RoundMailedMirror).length?{p4RoundMailed:_p4RoundMailedMirror}:{}),...(Object.keys(_stagedP4Rounds).length?{pendingP4Rounds:_stagedP4Rounds}:{}),...(Object.keys(_sentLedger).length?{resultsSentTo:_sentLedger}:{})}); // [259] the delivered-address ledger records e-mails that really went out — survives the publish replace
   }
   b.set(phasesRef,payload,{merge:true});
   await b.commit();
@@ -5587,41 +5559,15 @@ window.completePhase=function(){
       // [AUDIT #3] Archive the MERGED log (bids + decisions) so the phase-history Change
       // Log is unchanged from before the split. Safe: the phase is complete, results are
       // going out, and Fair Play filters decision entries out of the archive regardless.
-      // [build 269 · LOGA] Archive from a SERVER read, and NEVER reset an unarchived log.
-      // The merged log used to come from the tab mirrors — with a stale changes feed the
-      // archive step saw an empty log, skipped the write, and the resets below then
-      // destroyed the phase's audit trail (found in the owner's 15 Aug backup: phase 2
-      // reset with no phase-2 archive — the trail Fair Play reads). Now: a failed read or
-      // a failed archive write leaves the logs UNRESET, so the trail survives for a retry
-      // (the next completion attempt, or the counters simply stay up until then).
-      let _mergedLog=null;
-      if(typeof getDocFromServer==='function'){ // typeof = sandbox convention (legacy scope ⇒ pre-269 mirror merge)
-        try{
-          const _c=await getDocFromServer(changesRef);
-          const _cd=await getDocFromServer(changesDecisionsRef);
-          // [269 self-audit] UNION of server + tab mirrors, deduped by entry id: the server
-          // read defeats a stale mirror (the owner's lost phase-2 trail), while the mirrors
-          // cover an entry logged milliseconds ago whose write hasn't reached the server yet —
-          // neither failure mode can lose trail entries. Entries without an id can only come
-          // from the same doc on both sides, so first-wins dedup keeps exactly one copy.
-          const _seen=new Set();
-          _mergedLog=[...((_c.exists()?(_c.data()||{}).log:null)||[]),...((_cd.exists()?(_cd.data()||{}).log:null)||[]),...changesLog,...changesDecisionsLog]
-            .filter(en=>{ const k=en&&en.id?String(en.id):JSON.stringify(en); if(_seen.has(k)) return false; _seen.add(k); return true; });
-        }catch(e){ resetOk=false; console.error('completePhase change-log server read failed (logs left unreset):',e); }
-      } else {
-        _mergedLog=[...changesLog,...changesDecisionsLog];
-      }
-      let _archOk=_mergedLog!==null;
-      if(_archOk&&_mergedLog.length){
+      const _mergedLog=[...changesLog,...changesDecisionsLog];
+      if(_mergedLog.length){
         try{ await setDoc(changesArchiveRef,{[cur]:_mergedLog},{merge:true}); }
-        catch(e){ _archOk=false; resetOk=false; console.error('completePhase change-archive failed (logs left unreset):',e); }
+        catch(e){ resetOk=false; console.error('completePhase change-archive failed:',e); }
       }
-      if(_archOk){
-        try{ await setDoc(changesRef,{log:[],resetAt:Date.now()}); }
-        catch(e){ resetOk=false; console.error('completePhase change-reset failed:',e); }
-        try{ await setDoc(changesDecisionsRef,{log:[],resetAt:Date.now()}); }
-        catch(e){ resetOk=false; console.error('completePhase decision-log reset failed:',e); }
-      }
+      try{ await setDoc(changesRef,{log:[],resetAt:Date.now()}); }
+      catch(e){ resetOk=false; console.error('completePhase change-reset failed:',e); }
+      try{ await setDoc(changesDecisionsRef,{log:[],resetAt:Date.now()}); }
+      catch(e){ resetOk=false; console.error('completePhase decision-log reset failed:',e); }
       if(lockOk && lockClearOk && resetOk){
         toast('✓ Phase '+cur+' completed — all weeks locked, priority locks released','ok');
       } else if(!lockOk){
@@ -5691,17 +5637,6 @@ async function _commitBeginPhase(next){
     // stale denials that silently auto-deny a fresh re-bid on the same week next phase. A
     // batch is all-or-nothing server-side, so a failure leaves the old phase fully intact.
     if(Object.keys(worstBidsData||{}).length) toast('⚠️ Priority locks were still set from the last phase — clearing them as part of beginning Phase '+next,'warn');
-    // [build 269 · LEDG] The staging replaces below preserve the delivered-address ledger —
-    // that preservation must come from SERVER truth, not the tab mirror (15 Aug incident
-    // class: a stale mirror silently erases the ledger and re-arms a duplicate mass-mail).
-    // Unverifiable → the phase does NOT begin (earlier lock writes may stand — the toast says so).
-    let _srvStg=null;
-    if(typeof getDocFromServer==='function'){ // typeof = sandbox convention (legacy scope ⇒ pre-269 mirror behavior)
-      try{ const _s=await getDocFromServer(phaseStagingRef); _srvStg=_s.exists()?(_s.data()||{}):{}; }
-      catch(e){ toast('🚫 Could not verify the results-e-mail ledger on the server (connection problem) — Phase '+next+' did NOT begin. Week locks may already have changed; check the Lock Weeks panel, then try again.','err'); return false; } // [234 · L2] honest wording: lock writes can precede this point
-    }
-    const _srvLedger=(_srvStg?_srvStg.resultsSentTo:_sentLedger)||{};
-    const _srvStaged=(_srvStg?_srvStg.pendingPhaseSnapshots:_stagedCompletedPhases)||{};
     const batch=writeBatch(db);
     const _phasePayload={currentPhase:next,phaseBeganAt:{...(phasesData.phaseBeganAt||{}),[next]:Date.now()}};
     // [build 255] (Re)beginning Phase 4 starts the round machinery fresh: Round 1, no
@@ -5710,11 +5645,11 @@ async function _commitBeginPhase(next){
     if(next===4){ _phasePayload.p4Round=1; _phasePayload.p4Rounds=deleteField(); _phasePayload.p4RoundResultsSent=deleteField(); }
     // [H6] Publish any staged snapshot in the SAME batch as the advance — the staff
     // engine reads prior winners from the public phases doc; no torn instant.
-    if(Object.keys(_srvStaged).length){ // [269] staged snapshot judged from the SERVER read (a stale-empty mirror can no longer wipe a real staged snapshot unpublished)
-      _phasePayload.completedPhases={..._publishedCompletedPhases,..._srvStaged};
-      batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_srvLedger).length?{resultsSentTo:_srvLedger}:{})}); // NON-merge replace (empty-map merge clears nothing) · [259] ledger survives — it records real sends · [269] from the server read
+    if(Object.keys(_stagedCompletedPhases||{}).length){
+      _phasePayload.completedPhases={..._publishedCompletedPhases,..._stagedCompletedPhases};
+      batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_sentLedger).length?{resultsSentTo:_sentLedger}:{})}); // NON-merge replace (empty-map merge clears nothing) · [259] ledger survives — it records real sends
     } else if(next===4){
-      batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_srvLedger).length?{resultsSentTo:_srvLedger}:{})}); // [build 255] stale STAGED round archives self-destruct at a fresh Phase 4 too · [259] ledger survives · [269] from the server read
+      batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_sentLedger).length?{resultsSentTo:_sentLedger}:{})}); // [build 255] stale STAGED round archives self-destruct at a fresh Phase 4 too · [259] ledger survives
     }
     batch.set(phasesRef,_phasePayload,{merge:true});
     batch.set(approvalsRef,{});
@@ -6349,13 +6284,7 @@ window.sendPhaseResultsEmails=function(){
       // second click, those addresses are skipped inside adminSendEmail — so no address ever
       // gets a duplicate results e-mail, even when a user has two addresses and only one
       // failed the first time (the succeeded one is not re-sent).
-      // [build 269 · LEDG] The skip-list is read fresh from the SERVER at the moment of
-      // sending — never from the tab mirror (15 Aug: stale mirror → 31 duplicate e-mails
-      // after a restore). Unverifiable ledger → NO send: nobody can be double-mailed.
-      // typeof = sandbox convention (legacy scope ⇒ the pre-269 mirror read, exactly).
-      const _lf=(typeof _ledgerFresh==='function')?await _ledgerFresh(cur):{ok:true,sentSet:_sentAddrsFor(cur)};
-      if(!_lf.ok){ toast('🚫 Could not verify on the server who already received Phase '+cur+' results (connection problem) — NOT sending, so nobody gets a duplicate e-mail. Try again in a moment.','err'); return; }
-      const sentAddrs=_lf.sentSet;
+      const sentAddrs=_sentAddrsFor(cur); // [259] admin-only staging ledger (+ legacy union) — never the public phases doc
       let _prog=0; // [build 260] live progress toast so a slow send visibly advances and the admin isn't tempted to re-click
       for(const u of usersWithResults){
         toast(`📮 Sending Phase ${cur} results — ${++_prog} of ${usersWithResults.length}…`,'ok',true);
@@ -6551,11 +6480,7 @@ window.sendRoundResultsEmails=function(){
         });
       }catch(e){ _claimed=true; console.warn('round send claim failed (proceeding):',e); }
       if(!_claimed){ toast('Another admin session is sending Round '+N+' results right now — not sending again.','warn'); return; }
-      // [build 269 · LEDG] Same server-fresh skip-list as the classic sender (see _ledgerFresh).
-      // typeof = sandbox convention (legacy scope ⇒ the pre-269 mirror read, exactly).
-      const _lf=(typeof _ledgerFresh==='function')?await _ledgerFresh(_claimKey):{ok:true,sentSet:_sentAddrsFor(_claimKey)};
-      if(!_lf.ok){ toast('🚫 Could not verify on the server who already received Round '+N+' results (connection problem) — NOT sending, so nobody gets a duplicate e-mail. Try again in a moment.','err'); return; }
-      const sentAddrs=_lf.sentSet;
+      const sentAddrs=_sentAddrsFor(_claimKey); // [259] admin-only staging ledger (+ legacy union) — never the public phases doc
       let ok=0, fail=0, skipped=0, alreadyDone=0;
       let _prog=0; // [build 260] live progress toast so a slow send visibly advances and the admin isn't tempted to re-click
       for(const u of users){
@@ -10937,11 +10862,6 @@ function _confirmFullRestore(f){
   });
 };
 async function _doFullRestore(f){
-  // [build 269] Full Restore now carries the SAME feed-health gate as Restore One User —
-  // it was the one destructive workflow missing it, so a page with dead feeds (whose
-  // mirrors are exactly the stale state the 15 Aug incident rode in on) could restore blind.
-  // typeof = sandbox convention.
-  if(typeof _feedsHealthyOrExplain==='function'&&!_feedsHealthyOrExplain('Full Restore')) return;
   const d=f.data;
   const map={schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesDecisions:changesDecisionsRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,slcMap:slcRef,signInMisses:signInMissesRef,slots:doc(db,'vacations','slots'),passcodes:doc(db,'vacations','passcodes'),...(typeof bidLoweringsRef!=='undefined'?{bidLowerings:bidLoweringsRef,bidLoweringsArchive:bidLoweringsArchiveRef}:{})}; // [build 268 · BL] spread-guard = extracted-code sandbox convention (production always has the refs; a pin test fails if removed)
   // [AUDIT 2026-07-26 H13] PRE-FLIGHT: refuse a knowingly-partial restore. A backup with
@@ -10981,18 +10901,6 @@ async function _doFullRestore(f){
         +_cfgDiff.join(', ')+') and the auction is already underway. Restoring it would mix two '
         +'different auctions. Nothing was changed. Reset the auction first, or use a backup '
         +'from this auction.','err');
-      return;
-    }
-  }
-  // [build 269 · LEDG] PRE-FLIGHT 3: verify the delivered-address ledger on the SERVER before
-  // any side effect. The restore preserves the ledger across its staging replace — preserving
-  // from the tab MIRROR was how a stale tab could erase it (and re-arm a duplicate mass-mail
-  // at the next send). Read fails → abort with nothing changed (H13 precedent).
-  let _srvStg269=null;
-  if(typeof getDocFromServer==='function'){ // typeof = sandbox convention (legacy scope ⇒ pre-269 mirror preserve)
-    try{ const _s=await getDocFromServer(phaseStagingRef); _srvStg269=_s.exists()?(_s.data()||{}):{}; }
-    catch(e){
-      toast('🛟 Restore ABORTED — could not verify the results-e-mail ledger on the server ('+(e?.message||e)+'). Nothing was changed. Try again in a moment.','err');
       return;
     }
   }
@@ -11055,11 +10963,7 @@ async function _doFullRestore(f){
     // re-clicking ✓ Complete Round on the restored live decisions, and preserving it could
     // leave a ghost "future round" after restoring to an earlier point in the year. The
     // round-send LEDGER above is different: it records e-mails that really went out.
-    { // [269] preserve from the PRE-FLIGHT 3 server read — never the tab mirrors (legacy sandbox scope: mirrors, pre-269 exact)
-      const _p4m=(_srvStg269?_srvStg269.p4RoundMailed:_p4RoundMailedMirror)||{};
-      const _led=(_srvStg269?_srvStg269.resultsSentTo:_sentLedger)||{};
-      batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_p4m).length?{p4RoundMailed:_p4m}:{}),...(Object.keys(_led).length?{resultsSentTo:_led}:{})}); // [259] same rationale as the mailed mirror: the ledger records e-mails that really went out — a restore cannot unsend them
-    }
+    batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_p4RoundMailedMirror).length?{p4RoundMailed:_p4RoundMailedMirror}:{}),...(Object.keys(_sentLedger).length?{resultsSentTo:_sentLedger}:{})}); // [259] same rationale as the mailed mirror: the ledger records e-mails that really went out — a restore cannot unsend them
     await batch.commit();
   }catch(e){
     // [AUDIT #12] The batch is atomic, so no auction data changed — but the mail queue
