@@ -21,6 +21,31 @@
   Gates were 26/26 · honesty 24-fail · sweep clean · editor browser test 13/13. E-mails now
   carry a single (footer) link; EmailJS footer URL fixed to trailing-slash form by owner.
 
+- [ ] **Build 268/139 + rules — BUILT + FULLY RE-AUDITED 15 Aug (incl. late owner items: Fall/Rolling title, BETWEEN-PHASES unlock w/ year carve-out + live-auction warnings, KP-prompt race fix), AWAITING OWNER PUSH + rules publish (17-case Playground checklist).**
+  All ten plan items: 7-key server config freeze (+passcodes fix, restore pre-flight,
+  plain-language denials, freeze pin), stale-build gate (cache-busted + refocus + push-driven
+  overlay), HD checkboxes (default all-checked ≡ 267), Bid Lowerings (default 0 ≡ no-op),
+  smart-copy auto-collapse. Adversarial audit: 2 findings, both fixed pre-ship. Gates:
+  tests-build268 156/156 + honesty 12-fail, browser E2E 36/36, mega-fuzz 100k ZERO, engines
+  byte-identical to 267. See BUILD-268-PLAN.md + build268-staged/ (notes, audit, RULES-PUBLISH
+  checklist). After push: verify live versions.json = 139/17/268, then the console rules
+  publish per checklist. FULL battery COMPLETED 15 Aug after re-auth: delta 91/91,
+  audit-fixes 333 real green, 4-pass sweep clean (0 errors), phase-runthrough 0 errors,
+  cal-editor 14/14 + bf-card 10/10 (both updated to the 268 contract), mobile sweeps clean
+  (one pre-existing advisory: rememberMe tap target <32px), era suites 25/46/44/26 all
+  green vs git-reconstructed era fixtures — zero regressions. Remaining reds everywhere are
+  the documented honesty-baseline artifact class only.
+  KPFIX (owner report 15 Aug, folded in pre-push): the intermittent "add your KP e-mail"
+  prompt re-appearing for users who had already declined was a sign-in race — the saved
+  answers were checked against a not-yet-loaded (empty) map whenever the post-sign-in read
+  transiently failed. Fixed in staff 139 only (decision inside the 300ms timeout on fresh
+  data; gated on a genuinely-loaded flag, fail-quiet ≡ Remind-later; a late-arriving answer
+  auto-closes an open prompt). Full battery re-run on final bytes at the owner's request:
+  tests-build268 197/197 + honesty 12-fail+abort, browser E2E 41/41 (new section F also
+  reproduces the bug live against the pristine 138 fixture), 4-pass sweep clean, runthrough
+  0 errors, mega-fuzz 100k ZERO, era suites 25/46/44/26, engines byte-identical to 267
+  (32 fns) + twin generators identical.
+
 ## E-mail / EmailJS
 
 - [x] **EmailJS template footer added (13 Aug 2026, DONE — lives OUTSIDE the repo).**
