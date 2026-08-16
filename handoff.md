@@ -130,10 +130,21 @@ concise, just so i recognize them, nothing more."*
    Detail: BUILD-LOG.md.
    ```
 
-4. **Where it goes:** `<repo>/.claude-commit-msg.txt`, one per repo, overwritten each
-   build. It is gitignored, so it never appears in GitHub Desktop's changed-files list —
-   open it from Finder. **Copy from THAT file**, not from a source or test file; pasting
-   a test file is exactly how builds 59's and seven of the tests repo's messages were lost.
+4. **Where it goes — THREE places, every build, no exceptions.** The owner could not find
+   the summaries when they lived in only one, and two of those places had hidden them:
+
+   a. **The outputs column in Claude desktop.** Deliver each repo's summary with
+      `SendUserFile`, named `COMMIT-<repo>.txt`. This is the one the owner actually reads —
+      it is right there in the conversation, nothing to hunt for. **Do this every build.**
+   b. **`<repo>/COMMIT-MESSAGE.txt`** — on disk, one per repo, overwritten each build.
+      ⚠️ **NOT a dotfile.** It used to be `.claude-commit-msg.txt`, and the leading dot made
+      macOS Finder hide it; gitignoring it then hid it from GitHub Desktop as well, so it
+      was invisible in both places at once. The current name is gitignored but visible.
+   c. **A row in `BUILD-LOG.md`**, committed, so the record survives regardless.
+
+   **Copy from the outputs column or from `COMMIT-MESSAGE.txt`** — never from a source or
+   test file. Pasting a test file is exactly how build 59's message and seven of the tests
+   repo's were lost.
 
 5. **`BUILD-LOG.md` gets its row in the same breath as the code**, so that even a
    mis-pasted commit message costs nothing. That file is the durable record; the commit

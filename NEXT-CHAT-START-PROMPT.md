@@ -113,5 +113,7 @@ summaries, not one. Keep them **SHORT**: a recognisable subject line plus two to
 lines. The reasoning goes in `BUILD-LOG.md` / `DECISIONS.md` / `HANDOFF.md`, which are
 committed and cannot be lost.
 
-Write it to `<repo>/.claude-commit-msg.txt` (gitignored — open it from Finder) and add the
-build's row to `BUILD-LOG.md` at the same time. Full procedure in the handoff.
+Deliver each one to the **outputs column** with `SendUserFile` as `COMMIT-<repo>.txt`
+(this is the copy the owner actually uses), write it to `<repo>/COMMIT-MESSAGE.txt`
+(gitignored, and NOT a dotfile — a dot makes Finder hide it), and add the build's row to
+`BUILD-LOG.md`. All three, every build. Full procedure in the handoff.
