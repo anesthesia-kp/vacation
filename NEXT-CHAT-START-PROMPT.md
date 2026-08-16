@@ -57,3 +57,61 @@ Owner commits/pushes the `tests` repo whenever (currently modified/new: tests-bu
 - The exhausted-lowering refusal never mentions the admin override. Results-send "already sent — nothing new to send" after a restore is CORRECT behavior, not a bug.
 
 **First moves for the new session**: read this file, `TODO.md`, `build269-staged/BUILD-NOTES-269.md`, `NEVER-EVENTS.md`; verify live builds (versions.json, cache-busted); ask the owner where the rehearsal stands; get 269 pushed and live-verified; then open the Daily Schedule survey. The standard: every claim executed, every fix honesty-proven, every fairness change adversarially attacked, the owner's authority absolute — and no reassurance without reproduction.
+
+---
+
+## FILE HYGIENE — a STANDING RULE, not a one-off tidy-up
+
+The owner's instruction, 16 Aug 2026: *"As files in my github folder pile up, I would like
+to remain organized and remove old files. Please ensure that all obsolete files are placed
+into a to delete folder or archive folder for when a file might be useful in the future."*
+
+That applies to **every future session, in every repo.** It is not a task that was done
+once; it is how this folder is kept.
+
+**Where things go.** The main folders hold only what is live or in flight. Anything
+outdated moves to `~/Documents/GitHub/_archive/<repo>/<category>/`, which sits OUTSIDE
+every repo — so GitHub never serves it and GitHub Desktop never shows it, while every byte
+stays on disk. True junk (`.DS_Store` and the like) goes to `_to_delete/`. **Nothing is
+ever deleted.** "Archive" is the default; "delete" is only for machine-generated litter.
+
+**The test, before moving anything.** Grep the WHOLE GitHub folder and move a file only
+after confirming that no live page, no test suite, and no current handoff/TODO reads it.
+**If you are unsure, it stays.** Being wrong costs a broken URL or a red battery; leaving
+one extra file costs nothing.
+
+**Never move** anything the live site serves. Be careful with files whose names look like
+junk hashes — `0c0fd0a8….html` (schedule), `2nd-admin-page-234asld.html` and
+`a5696c46….html` (auction) are **live redirects for old admin URLs**, not litter. Open one
+and read its `<title>` before assuming. That guess was made wrong once already.
+
+**Record every move** in `_archive/README.md`: what moved, where to, why, and — just as
+important — what was deliberately KEPT and the reason. That file is the inventory; this
+rule is the procedure. Do not duplicate one into the other.
+
+**Scratch files must be gitignored, never committed.** `.claude-commit-msg*.txt`,
+`.DS_Store`, staged build folders. ⚠️ **`.gitignore` does NOT apply to files git already
+tracks.** Adding the rule is not enough: the tracked path must be **absent** in that commit
+for the removal to land, so write that build's message to a name that is not yet tracked
+(e.g. `.claude-commit-msg-hk.txt`). Writing the usual name recreates the tracked file and
+turns a clean deletion into a modification — the cleanup then silently does not happen.
+Verify with `git --no-optional-locks -C <repo> check-ignore -v <file>`; it prints the rule
+and line that matched, and silence means NOT ignored.
+
+**Housekeeping is its own commit**, never mixed into a build, so the diff stays readable.
+Prove it before handing it over: `git diff --stat` should show ~1 insertion and no modified
+application code, and every deleted file should hash-match its archived copy.
+
+**The device bridge cannot delete** — `rm` fails with "Operation not permitted". Use `mv`.
+
+---
+
+## COMMIT SUMMARIES — binding
+
+**Every repo** touched by a push gets its **own** summary — schedule and tests are two
+summaries, not one. Keep them **SHORT**: a recognisable subject line plus two to four
+lines. The reasoning goes in `BUILD-LOG.md` / `DECISIONS.md` / `HANDOFF.md`, which are
+committed and cannot be lost.
+
+Write it to `<repo>/.claude-commit-msg.txt` (gitignored — open it from Finder) and add the
+build's row to `BUILD-LOG.md` at the same time. Full procedure in the handoff.

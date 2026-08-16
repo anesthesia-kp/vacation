@@ -100,6 +100,89 @@ extracted functions, no stray `{` in comments inside them); prefer grep + ranged
   world-readable by design, unsecurable client-side; Google sign-in is the gate. Accepted.
 - The user always wants delivered files WRITTEN into the repo folders without asking.
 
+## COMMIT SUMMARIES — one per build, PER REPO, and SHORT
+
+Owner ruling, 16 Aug 2026, after finding several commits had lost their message:
+*"ensure going forward and in the handoff docs that commit summaries are always provided
+for every build and for every repo. These summaries would be better to be short and
+concise, just so i recognize them, nothing more."*
+
+**Binding, both sites:**
+
+1. **Every repo touched by a push gets its own summary.** If a build changes `schedule/`
+   and `tests/`, that is TWO summaries, not one. Same for the auction and its tests.
+   A repo with no message is not ready to hand over.
+
+2. **SHORT.** A subject line the owner can recognise at a glance, then two to four lines
+   of plain description. Not the essay. The reasoning belongs in `BUILD-LOG.md`,
+   `DECISIONS.md` and `HANDOFF.md` — all committed, none of them lost to a mis-paste.
+
+3. **The shape:**
+
+   ```
+   Build 61 (admin) — approval now runs the same checks as hand-editing
+
+   Request and swap approval were writing assignments with no eligibility,
+   capacity, vacation or collision check. They now use the same checker the
+   cell editor uses: it warns, you can override, the override is logged.
+
+   Closes defect 1. DECISIONS §51. Battery: 13 suites, 542 assertions, green.
+   Detail: BUILD-LOG.md.
+   ```
+
+4. **Where it goes:** `<repo>/.claude-commit-msg.txt`, one per repo, overwritten each
+   build. It is gitignored, so it never appears in GitHub Desktop's changed-files list —
+   open it from Finder. **Copy from THAT file**, not from a source or test file; pasting
+   a test file is exactly how builds 59's and seven of the tests repo's messages were lost.
+
+5. **`BUILD-LOG.md` gets its row in the same breath as the code**, so that even a
+   mis-pasted commit message costs nothing. That file is the durable record; the commit
+   message only has to be recognisable.
+
+## FILE HYGIENE — a STANDING RULE, not a one-off tidy-up
+
+The owner's instruction, 16 Aug 2026: *"As files in my github folder pile up, I would like
+to remain organized and remove old files. Please ensure that all obsolete files are placed
+into a to delete folder or archive folder for when a file might be useful in the future."*
+
+That applies to **every future session, in every repo.** It is not a task that was done
+once; it is how this folder is kept.
+
+**Where things go.** The main folders hold only what is live or in flight. Anything
+outdated moves to `~/Documents/GitHub/_archive/<repo>/<category>/`, which sits OUTSIDE
+every repo — so GitHub never serves it and GitHub Desktop never shows it, while every byte
+stays on disk. True junk (`.DS_Store` and the like) goes to `_to_delete/`. **Nothing is
+ever deleted.** "Archive" is the default; "delete" is only for machine-generated litter.
+
+**The test, before moving anything.** Grep the WHOLE GitHub folder and move a file only
+after confirming that no live page, no test suite, and no current handoff/TODO reads it.
+**If you are unsure, it stays.** Being wrong costs a broken URL or a red battery; leaving
+one extra file costs nothing.
+
+**Never move** anything the live site serves. Be careful with files whose names look like
+junk hashes — `0c0fd0a8….html` (schedule), `2nd-admin-page-234asld.html` and
+`a5696c46….html` (auction) are **live redirects for old admin URLs**, not litter. Open one
+and read its `<title>` before assuming. That guess was made wrong once already.
+
+**Record every move** in `_archive/README.md`: what moved, where to, why, and — just as
+important — what was deliberately KEPT and the reason. That file is the inventory; this
+rule is the procedure. Do not duplicate one into the other.
+
+**Scratch files must be gitignored, never committed.** `.claude-commit-msg*.txt`,
+`.DS_Store`, staged build folders. ⚠️ **`.gitignore` does NOT apply to files git already
+tracks.** Adding the rule is not enough: the tracked path must be **absent** in that commit
+for the removal to land, so write that build's message to a name that is not yet tracked
+(e.g. `.claude-commit-msg-hk.txt`). Writing the usual name recreates the tracked file and
+turns a clean deletion into a modification — the cleanup then silently does not happen.
+Verify with `git --no-optional-locks -C <repo> check-ignore -v <file>`; it prints the rule
+and line that matched, and silence means NOT ignored.
+
+**Housekeeping is its own commit**, never mixed into a build, so the diff stays readable.
+Prove it before handing it over: `git diff --stat` should show ~1 insertion and no modified
+application code, and every deleted file should hash-match its archived copy.
+
+**The device bridge cannot delete** — `rm` fails with "Operation not permitted". Use `mv`.
+
 ## 1. CURRENT STATE (3 Aug 2026)
 
 - **admin 239 (PUSHED & VERIFIED LIVE by the user, 3 Aug) — PRIORITY-INVERSION NEVER-EVENT FIX.**
