@@ -7,14 +7,14 @@ No build step, no dependencies.
 |---|---|
 | `index.html` | Desktop user site |
 | `mobile.html` | Mobile user site |
-| `a5696c46...html` | Admin panel (obscure filename is deliberate — do not rename) |
+| `a5696c46...html` | **A REDIRECT STUB, not the admin panel** — old bookmarks land here and are forwarded to `admin/index.html`, which is the real app. Do not rename, do not edit, and do not go looking for admin logic in it |
 | `versions.json` | Auto-refresh version numbers (see below) |
 | `.nojekyll` | Empty file — tells GitHub Pages to serve files as-is. Keep it. |
 | `netlify.toml` | Legacy — only matters if we ever move back to Netlify |
 
 ## Current hosting: GitHub Pages
 
-Live at **https://vacation-kp.github.io/** — served from this private repo
+Live at **https://anesthesia-kp.github.io/vacation/** — served from this private repo
 (`vacation-kp/vacation-kp.github.io`, GitHub Pro account).
 
 **Every push to `main` deploys automatically** (rebuild takes ~60 seconds).
