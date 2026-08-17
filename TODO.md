@@ -107,3 +107,24 @@
   Phase-1 lock is client-side; editor is the only sanctioned write path).
 - [ ] Version auto-refresh on tab re-focus (today: page-load only; idle tabs keep the old
   build until next visit — acceptable, documented).
+
+## WATCH ITEMS — dated facts about the live site, not defects
+
+- [ ] **The `phases` document grows ~20KB per Phase-4 round, against Firestore's 1MB cap.**
+  On the growth rate observed in Aug 2026 that becomes a problem around **late 2027**. Not
+  urgent; not theoretical. Recorded 16 Aug 2026 after it was found to exist in exactly one
+  place — a superseded start prompt — and nowhere else. Detail: `HANDOFF.md` D3.
+
+## OPEN DEFECTS ON THE LIVE SITE
+
+**One home, and it is not this file:** `tests/docs/OPEN-RESIDUALS.md`. It carries M1, M3, L2,
+L3 and L4 with the mitigation for each. Do not restate them here.
+
+Two worth knowing without opening it:
+
+- **M3 reproduces on the live build (verified 16 Aug 2026).** The two sites disagree about a
+  doctor's e-mail address whenever that address contains a capital letter. Whether it has ever
+  actually fired is a **data** question — check the KP e-mail column on the admin Users page
+  for any capital letter.
+- **M1 and L3 are neutralised by operating habits, not by code:** one admin runs the auction;
+  after a Reset, Global Lock ON until Begin Phase 1.
