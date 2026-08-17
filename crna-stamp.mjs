@@ -124,6 +124,21 @@ rep('staff', 'https://anesthesia-kp.github.io/vacation/admin/?portal=1',
 rep('admin', 'https://anesthesia-kp.github.io/vacation/?portal=1',
              'https://anesthesia-kp.github.io/vacation/crna/?portal=1', 1);
 
+// ── 2b · BAKED-IN DATA: the MD roster is hardcoded as `names`' starting value in BOTH
+// pages. On the MD site the database overwrites it instantly; on the CRNA site an empty
+// database means the page KEEPS it (the missing-doc guard) — so the MD roster appeared on
+// the live CRNA site on release day, 17 Aug. The CRNA copies start EMPTY: their roster
+// comes only from the crna-vacation database, entered by the admin.
+for (const page of ['staff', 'admin']) {
+  const m = src[page].match(/let names\s*=\s*\[[^\]]*\];/);
+  if (!m) fail('could not find the hardcoded names array in ' + page);
+  src[page] = src[page].replace(m[0], 'let names=[]; // [CRNA] no baked-in roster — the crna-vacation database is the only source');
+}
+{ // canary: no trace of the MD initials list may survive
+  const probe = '"AD","ADG","AF"';
+  for (const page of ['staff', 'admin']) if (src[page].includes(probe)) fail('MD roster initials survived in crna ' + page);
+}
+
 // ── GENERIC STORAGE GUARD (owner: "paramount that the sites never contaminate each
 // other", 17 Aug). The named-key list above covers every key that exists TODAY. This scan
 // covers every key that exists EVER: any literal storage key in the CRNA output that does
