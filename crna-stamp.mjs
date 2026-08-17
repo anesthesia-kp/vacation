@@ -124,6 +124,35 @@ rep('staff', 'https://anesthesia-kp.github.io/vacation/admin/?portal=1',
 rep('admin', 'https://anesthesia-kp.github.io/vacation/?portal=1',
              'https://anesthesia-kp.github.io/vacation/crna/?portal=1', 1);
 
+// ── GENERIC STORAGE GUARD (owner: "paramount that the sites never contaminate each
+// other", 17 Aug). The named-key list above covers every key that exists TODAY. This scan
+// covers every key that exists EVER: any literal storage key in the CRNA output that does
+// not start with "crna" ABORTS the stamp. A future MD build that adds a new storage key
+// cannot silently reopen the shared-origin collision — the stamp refuses until the new
+// key is added to the rename table above, deliberately.
+for (const page of ['staff', 'admin']) {
+  const calls = src[page].match(/(?:localStorage|sessionStorage)\.(?:getItem|setItem|removeItem)\(\s*(['"])((?:(?!\1).)*)\1/g) || [];
+  for (const c of calls) {
+    const key = c.match(/\(\s*['"]([^'"]*)['"]/)[1];
+    if (!/^crna/i.test(key)) fail(`generic storage guard: literal key "${key}" in crna ${page} is not crna-prefixed — a NEW storage key was added to the MD pages; add it to the rename table.`);
+  }
+  // keys built from a prefix string (e.g. "crna-vrl-" + PAGE) — every prefix literal that
+  // feeds a storage call via a variable must also be crna-prefixed; the named table
+  // handles the two known ones ("vrl-", "rbgate-") and this assertion pins them:
+  if (/['"]vrl-['"]/.test(src[page]) || /['"]rbgate-['"]/.test(src[page]))
+    fail('generic storage guard: an un-renamed storage-key prefix survived in ' + page);
+}
+
+// ── GENERIC LINK GUARD: no CRNA page may link to an MD auction page. Any absolute
+// /vacation/ URL in the CRNA output must be /vacation/crna/… — a future MD build that
+// adds a new self-link cannot silently point CRNAs at the MD site.
+for (const page of ['staff', 'admin']) {
+  const links = src[page].match(/https:\/\/anesthesia-kp\.github\.io\/vacation\/[^"'\s)]*/g) || [];
+  for (const u of links) {
+    if (!u.startsWith('https://anesthesia-kp.github.io/vacation/crna')) fail(`generic link guard: CRNA ${page} links to the MD site: ${u} — add a transform.`);
+  }
+}
+
 // ── CANARY: nothing MD-only may survive in the CRNA output ──
 const FORBIDDEN = [MD_FB.projectId, MD_FB.appId,
   "'auctionConfigV1'", '"vk_lastUser"', "'adminRemembered'", "'insightsView'",
