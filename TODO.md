@@ -122,6 +122,10 @@ L3 and L4 with the mitigation for each. Do not restate them here.
 
 Two worth knowing without opening it:
 
+- **M3 is CONFIRMED LIVE-EXPOSED (owner checked 17 Aug: some KP addresses have uppercase).**
+  Fix approved with frozen scope, DEFERRED until Phase 3 closes; deploy between phases only.
+  Scope: `anesthesia-kp.github.io/MASTER-TODO.md` B2. During Phase 3: if anyone receives the
+  same e-mail twice, note WHICH address — that is the confirmation for the record.
 - **M3 reproduces on the live build (verified 16 Aug 2026).** The two sites disagree about a
   doctor's e-mail address whenever that address contains a capital letter. Whether it has ever
   actually fired is a **data** question — check the KP e-mail column on the admin Users page
