@@ -436,6 +436,24 @@ service cloud.firestore {
                    || (!isSchedAdminOnlyDoc(docId) && (isRegisteredUser() || isSchedAdmin()));
     }
 
+    // [schedule 59/63/68] SUBCOLLECTIONS under dailysched documents:
+    //   sched_YYYY-MM/days/{dd}    — one doc per day of the month            [59]
+    //   auditLog/entries/{id}      — one doc per audit entry                 [63]
+    //   requests/items/{id} · swaps/items/{id} · openShifts/items/{id}       [68]
+    // The flat match above does NOT reach these — Firestore matches are not
+    // recursive — so without this block the catch-all at the bottom denies every
+    // subcollection read and write. Policy mirrors the parent document exactly:
+    // world-readable (the anonymous bootstrap), and the write split keyed on the
+    // PARENT doc id, so days under a sched_* month and items under openShifts stay
+    // admin-only while requests/swaps items accept registered users — the same
+    // people who could write those parent docs before. (H-5's per-author
+    // validation remains deferred, unchanged in scope by this block.)
+    match /dailysched/{docId}/{sub}/{itemId} {
+      allow read: if true;
+      allow write: if (isSchedAdminOnlyDoc(docId) && isSchedAdmin())
+                   || (!isSchedAdminOnlyDoc(docId) && (isRegisteredUser() || isSchedAdmin()));
+    }
+
     // ── Cloud Backups [admin build 213] ───────────────────────────────────────
     // Admin-only snapshot store. backups/{backupId} holds a manifest (when / who /
     // build / counts / the list of piece names), and backups/{backupId}/docs/{docName}
