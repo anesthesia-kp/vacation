@@ -108,14 +108,15 @@ for (const [lit, ns, na, to] of KEYS) {
 }
 
 // ── 3 · Labels — the owner's exact spec ──
-rep('staff',
-  '<h1 class="header-top" id="headerTitle">Fall Vacation Auction</h1>',
-  '<h1 class="header-top" id="headerTitle">Fall Vacation Auction</h1>\n    <p class="header-sub" style="margin:2px 0 0">CRNA</p>', 1);
-rep('staff', '<title>Department of Anesthesia Scheduler</title>',
+// [build 274 · C7] The MD pages now carry their own labels (owner's deferred "MD site
+// label"), so these rules SWAP MD → CRNA instead of inserting from unlabeled pages.
+rep('staff', '<p class="header-sub" style="margin:2px 0 0">MD</p>',
+             '<p class="header-sub" style="margin:2px 0 0">CRNA</p>', 1);
+rep('staff', '<title>MD Vacation Auction — Department of Anesthesia</title>',
              '<title>CRNA Vacation Auction — Department of Anesthesia</title>', 1);
-rep('admin', '<div class="page-title" style="margin:0">Dashboard</div>',
+rep('admin', '<div class="page-title" style="margin:0">Dashboard MD Vacation Auction — 2027</div>',
              '<div class="page-title" style="margin:0">Dashboard CRNA Vacation Auction — 2027</div>', 1);
-rep('admin', '<title>Vacation Auction Admin</title>',
+rep('admin', '<title>MD Vacation Auction Admin</title>',
              '<title>CRNA Vacation Auction Admin</title>', 1);
 
 // ── 4 · Cross-links between the two CRNA pages ──

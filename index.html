@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 140;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 141;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -86,7 +86,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>Department of Anesthesia Scheduler</title>
+<title>MD Vacation Auction — Department of Anesthesia</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='10' width='52' height='48' rx='10' fill='%23ffffff' stroke='%230e3a5c' stroke-width='4'/%3E%3Cpath d='M6 20a10 10 0 0 1 10-10h32a10 10 0 0 1 10 10v8H6z' fill='%23006ba6'/%3E%3Crect x='16' y='2' width='6' height='14' rx='3' fill='%230e3a5c'/%3E%3Crect x='42' y='2' width='6' height='14' rx='3' fill='%230e3a5c'/%3E%3Ccircle cx='20' cy='38' r='3.5' fill='%23b5cede'/%3E%3Ccircle cx='32' cy='38' r='3.5' fill='%23b5cede'/%3E%3Ccircle cx='44' cy='38' r='3.5' fill='%23b5cede'/%3E%3Ccircle cx='20' cy='49' r='3.5' fill='%23b5cede'/%3E%3Cpath d='M28 48l5 5 9-10' stroke='%230d7a43' stroke-width='5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -490,6 +490,7 @@ body{zoom:1.15}
   <div id="whitelistBanner"></div>
   <header style="position:relative">
     <h1 class="header-top" id="headerTitle">Fall Vacation Auction</h1> <!-- [build 139 · TITLE] phase-derived: Fall (1-3) / Rolling (4) — set by renderPhaseLabel -->
+    <p class="header-sub" style="margin:2px 0 0">MD</p> <!-- [build 274 · C7] site label, mirroring the CRNA site's (stamper swaps it) -->
     <p class="header-sub">Department of Anesthesia &nbsp;·&nbsp; <span id="acYearSub">2027</span></p>
     <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-top:6px">
       <span id="phaseLabel" style="font-size:.72rem;font-weight:800;color:#fff;background:linear-gradient(135deg,#3b82f6,#006ba6);padding:3px 12px;border-radius:12px;letter-spacing:.03em">Phase 1</span>
@@ -542,7 +543,7 @@ body{zoom:1.15}
         <li id="rulePrioLock">Bid priorities can only stay the same or get stronger — bid a 5 on a week, and any re-bid there must be 5 or better.</li>
         <li id="ruleBidFloors">On the highest demand weeks, only bids of 1, 2, 3, 4, 1/2, or 1/2/3 may be used</li>
         <li>Only bid for the number of weeks your accrued vacation and ATO will allow for</li>
-        <li>To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week</li>
+        <li>Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week</li>
         <li>Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly</li>
       </ul>
       <div style="margin-top:12px;color:#2c4257;font-weight:600">⏱ Timer Rules</div>
@@ -789,7 +790,10 @@ let countdownInterval=null;
 let renderScheduled=false;
 
 // ── Constants ──
-let names=["AD","ADG","AF","AN","AQ","AS","BC","CC","CZ","DNS","DR","EC","GL","GV","HR","JLO","KN","KQ","LF","LO","LP","MA","MCL","MG","MK","MKA","MTN","MW","NG","RL","SC","SFI","SL","SMJ","SYK","TL","XJ"];
+// [build 274 · C7] No baked-in roster — the database is the only source. The old
+// hardcoded starting list served nothing since the database took over, and its ghost
+// is what appeared on the CRNA site on its release day.
+let names=[];
 
 // Precompute all Sunday-anchored weeks for 2027
 // Weeks are Sunday-anchored (Jan 3 = week 1). Every stored weekKey and every
@@ -985,6 +989,9 @@ function prioLockBullets(){
   const base="Bid priorities can only stay the same or get stronger — bid a 5 on a week, and any re-bid there must be 5 or better.";
   const a=[1,2,3,4].map(p=>blAllowance(p));
   if(a.every(x=>x===0)) return [base];
+  // [build 274 · V1] Unlimited in EVERY phase collapses the whole rule to the owner's
+  // wording (18 Aug, verbatim) — no counting language, no floor mechanics.
+  if(a.every(x=>x===Infinity)) return ["Ideally, bid priorities would not be decreased once they are set. However, it is okay to reduce bid priorities as needed."];
   const seg=(label,x)=>x===Infinity?('freely '+label):(x===0?('not at all '+label):('up to '+(x===1?'1 time ':x+' times ')+label));
   if(a.every(x=>x===a[0])){
     return [base+(a[0]===Infinity
@@ -992,6 +999,46 @@ function prioLockBullets(){
       :' To fix a mistake, you may lower a bid '+seg('per phase (and per round of Phase 4)',a[0]).replace(/ $/,'')+'.')];
   }
   return [base+' To fix a mistake, you may lower a bid '+seg('in Phase 1',a[0])+', '+seg('in Phase 2',a[1])+', '+seg('in Phase 3',a[2])+', and '+seg('in each round of Phase 4',a[3])+'.'];
+}
+// ── [build 274 · V3] Timer reset MODE ────────────────────────────────────────
+// The admin-selected rule for WHICH bid activity restarts the countdown.
+//   1 — classic (default): any substantive placed/changed/canceled bid resets.
+//   2 — affects-others only: resets ONLY when the action changes another user's
+//       projected outcome — the exact event that sends an outbid alert. A first
+//       bid on an empty week deliberately does NOT reset here (owner, 18 Aug:
+//       "why should first bids be different?" — wanting them to reset IS mode 3).
+//   3 — new bids always reset; changes and cancels only when they affect someone.
+// Unset/unknown is mode 1 — behaviour never changes until the admin deliberately
+// picks a mode (confirmed + audited on the admin site). Stage lengths, the opening
+// window, the same-value no-op, the extend-only server rule, and the expired-timer
+// never-reset guard all stand ABOVE the mode, unchanged, in every mode.
+function _timerResetMode(){
+  const raw=(typeof adminSettings!=='undefined'&&adminSettings)?adminSettings.timerResetMode:undefined;
+  const n=parseInt(raw,10);
+  return (n===2||n===3)?n:1;
+}
+// Does this change alter any OTHER user's projected outcome? This is the outbid
+// predicate — the same comparison sendEmailNotifications makes — factored so the
+// timer gate and the alerts can never disagree about what "affects someone" means.
+function _changeAffectsOthers(prevSnap,afterSnap,actor){
+  const prevAp=computeApprovals(prevSnap), newAp=computeApprovals(afterSnap);
+  for(const user of new Set([...Object.keys(prevSnap),...Object.keys(afterSnap)])){
+    if(user===actor) continue;
+    const pu=(prevSnap[user]&&typeof prevSnap[user]==='object')?prevSnap[user]:{};
+    const nu=(afterSnap[user]&&typeof afterSnap[user]==='object')?afterSnap[user]:{};
+    for(const wk of new Set([...Object.keys(pu),...Object.keys(nu)])){
+      if(getOutcome(wk,user,prevAp)!==getOutcome(wk,user,newAp)) return true;
+    }
+  }
+  return false;
+}
+// The mode gate. Missing snapshots fail OPEN to the classic reset — the timer must
+// never silently starve because a caller had no before-picture to judge by.
+function _timerModeAllowsReset(mode,isNewBid,prevSnap,afterSnap,actor){
+  if(mode===1) return true;
+  if(mode===3&&isNewBid) return true;
+  if(!prevSnap||!afterSnap) return true;
+  return _changeAffectsOthers(prevSnap,afterSnap,actor);
 }
 // Consume one lowering — called ONLY after the lowered bid's write has landed.
 // [adversarial audit 268] increment() (atomic, server-side) — a plain used:n+1 write
@@ -1357,9 +1404,19 @@ function renderTimerRulesInfo(){
   if(r.quietEnabled){ quiet=`<p style="margin:8px 0 0">Once the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between <strong>${fmtHour12(r.quietStart)}</strong> and <strong>${fmtHour12(r.quietEnd)}</strong> Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.</p>`; }
   let owHtml='';
   if(r.openingWindow){ owHtml=`<p style="margin:0 0 6px"><strong>Each phase opens with a ${r.openingWindow.days}-day window:</strong> the timer counts down continuously (bids do NOT reset it) until <strong>${(st[0]||{}).hours||48} hours</strong> remain — then the reset rules below take over.</p>`; }
+  // [build 274 · V3] The reset sentence follows the admin-selected mode, so bidders
+  // always see the rule actually in force. Mode 1 keeps the classic wording exactly.
+  const resetSentence=(function(){
+    const m=_timerResetMode();
+    if(m===2) return 'The countdown resets when a bid, change, or cancel changes the projected outcome for another user — moves that affect only your own bids do not reset it';
+    if(m===3) return 'Every NEW bid resets the countdown; changes and cancels reset it only when they change the projected outcome for another user';
+    return 'Every time anyone places or changes a bid, the countdown resets';
+  })();
   const endLine=`<p style="margin:0 0 6px"><strong>Each phase ends when the countdown timer gets to 0.</strong></p>`;
-  if(st.length<=1){ el.innerHTML=endLine+owHtml+`<p style="margin:0 0 6px">Every time anyone places or changes a bid, the countdown resets to <strong>${(st[0]||{}).hours||48} hours</strong>.</p>${quiet}`; return; }
-  el.innerHTML=endLine+owHtml+`<p style="margin:0 0 6px">Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:</p><ul style="margin:0 0 0 18px;padding:0">${items}</ul>${quiet}`;
+  if(st.length<=1){ el.innerHTML=endLine+owHtml+(_timerResetMode()===1
+    ?`<p style="margin:0 0 6px">Every time anyone places or changes a bid, the countdown resets to <strong>${(st[0]||{}).hours||48} hours</strong>.</p>`
+    :`<p style="margin:0 0 6px">${resetSentence}. Each qualifying reset returns the countdown to <strong>${(st[0]||{}).hours||48} hours</strong>.</p>`)+quiet; return; }
+  el.innerHTML=endLine+owHtml+`<p style="margin:0 0 6px">${resetSentence}. How long it resets to gets shorter as the round goes on:</p><ul style="margin:0 0 0 18px;padding:0">${items}</ul>${quiet}`;
 }
 function isAuctionClosed(){
   // [FIX 25 Jul 2026 · delta-audit #8] The admin's explicit "close bidding" flag is
@@ -2018,8 +2075,23 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
     // (the countdown runs continuously until the starting-reset mark).
     const _prevVal=prevSnapshot?.[user]?.[wk];
     const _sameVal=bid!==null&&bid!==undefined&&_prevVal!==undefined&&JSON.stringify(bid)===JSON.stringify(_prevVal);
+    // [build 274 · V3] The AFTER snapshot is built ONCE, up front: the timer-mode gate
+    // and the outbid notifications below must judge the exact same change model (owner:
+    // "use the same event that triggers an outbid e-mail"). Built from prevSnapshot +
+    // THIS exact change rather than the live `data` — on the REMOVE path `data` still
+    // holds the bid at this point (deleted only after persist returns), so comparing
+    // against it made a cancel look like "no change" and never told the competitors who
+    // just moved to winning. Deriving the after-state here makes every path correct.
+    let _afterSnap=null;
+    if(prevSnapshot){
+      _afterSnap=JSON.parse(JSON.stringify(prevSnapshot));
+      if(bid===null||bid===undefined){ if(_afterSnap[user]) delete _afterSnap[user][wk]; }
+      else { (_afterSnap[user]=_afterSnap[user]||{})[wk]=bid; }
+    }
+    const _isNewBid=bid!==null&&bid!==undefined&&_prevVal===undefined;
     const _remBefore=timerData.lastChange?(((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)):1;
-    if(timerData.enabled&&_remBefore>0&&!_sameVal&&!openingWindowActive()){
+    if(timerData.enabled&&_remBefore>0&&!_sameVal&&!openingWindowActive()
+       &&_timerModeAllowsReset(_timerResetMode(),_isNewBid,prevSnapshot,_afterSnap,user)){
       const _n=Date.now(); const _resetH=timerResetHours(timerPhaseStartMs(),_n);
       // [AUDIT 2026-07-26 H5/H8] Extend-only: firestore.rules now REJECT any user timer
       // write whose deadline lands earlier than the current one, so a bidder can no longer
@@ -2029,17 +2101,10 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
       if(_n+_resetH*3600000>=_curDeadline){ setDoc(timerRef,{lastChange:_n,durationHours:_resetH},{merge:true}).catch(()=>{}); }
     }
     if(prevSnapshot&&adminSettings.emailNotifsEnabled!==false){
-      // Build the authoritative AFTER snapshot from prevSnapshot + THIS exact change,
-      // rather than reading the live `data`. On the REMOVE path `data` still holds the
-      // bid at this point (it's deleted only after persist returns), so comparing against
-      // it made a cancel look like "no change" and never told the competitors who just
-      // moved to winning. Deriving the after-state here makes every path correct: any
-      // change to another user's outcome — lose/draw/review -> win as well as win -> lose
-      // -> draw -> review — is now detected and notified.
-      const afterSnap=JSON.parse(JSON.stringify(prevSnapshot));
-      if(bid===null||bid===undefined){ if(afterSnap[user]) delete afterSnap[user][wk]; }
-      else { (afterSnap[user]=afterSnap[user]||{})[wk]=bid; }
-      sendEmailNotifications(prevSnapshot,afterSnap,user).catch(()=>{});
+      // Any change to another user's outcome — lose/draw/review -> win as well as
+      // win -> lose -> draw -> review — is detected and notified. (_afterSnap built
+      // above, shared with the timer-mode gate.)
+      sendEmailNotifications(prevSnapshot,_afterSnap,user).catch(()=>{});
     }
     return true;
   }catch(e){
@@ -3577,7 +3642,7 @@ ${bullets([
   ...prioLockBullets(), // [build 139 · BL/COPY] Option A wording, allowance-derived
   ...bfRulesBullets(),
   `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
-  `To maximize your own benefit, consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
+  `Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
   `Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly`
 ])}
 
