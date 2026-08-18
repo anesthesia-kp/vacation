@@ -114,8 +114,8 @@ rep('staff', '<p class="header-sub" style="margin:2px 0 0">MD</p>',
              '<p class="header-sub" style="margin:2px 0 0">CRNA</p>', 1);
 rep('staff', '<title>MD Vacation Auction — Department of Anesthesia</title>',
              '<title>CRNA Vacation Auction — Department of Anesthesia</title>', 1);
-rep('admin', '<div class="page-title" style="margin:0">Dashboard MD Vacation Auction — 2027</div>',
-             '<div class="page-title" style="margin:0">Dashboard CRNA Vacation Auction — 2027</div>', 1);
+rep('admin', '<div class="page-title" style="margin:0">Dashboard MD Vacation Auction — <span id="acYearHdr">2027</span></div>',
+             '<div class="page-title" style="margin:0">Dashboard CRNA Vacation Auction — <span id="acYearHdr">2027</span></div>', 1);
 rep('admin', '<title>MD Vacation Auction Admin</title>',
              '<title>CRNA Vacation Auction Admin</title>', 1);
 
