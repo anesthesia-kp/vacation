@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 271;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 272;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -7741,7 +7741,7 @@ window.renderAppDenials=function(){
     // A "decision" is any current-phase bid still awaiting Approve/Deny — used
     // by "Jump to Next Decision" to find and scroll to the next one in DOM order.
     const needsDecision=!isHistorical&&!e.approved&&!e.denied;
-    return `<tr class="dr-row" id="drrow_${e.wk}_${e.user}"${needsDecision?' data-undecided="1"':''}>
+    return `<tr class="dr-row" id="drrow_${e.wk}_${e.user}" data-outcome="${e.outcome}"${needsDecision?' data-undecided="1"':''}>
       ${wkHtml}
       <td class="dr-user">${phaseBadge}${esc(e.user)}</td>
       <td class="dr-bid">${esc(lbl)} · FTE ${getUserFTE(e.user)}</td>
@@ -7806,6 +7806,7 @@ window.renderAppDenials=function(){
     });
   }
   body.innerHTML=html||'<div style="text-align:center;color:var(--t2);padding:20px">No bids.</div>';
+  _placeJumpInline(); // [build 272 · V7b] re-anchor the inline Next Decision button on every render
 };
 
 // "Jump to Next Decision" — scrolls to the next current-phase bid still
@@ -7828,47 +7829,49 @@ window.jumpToNextDecision=function(){
   next.style.boxShadow='0 0 0 1.5px rgba(0,107,166,.5), 0 4px 14px rgba(0,107,166,.2)';
   setTimeout(()=>{ next.style.boxShadow=prevShadow; setTimeout(()=>{ next.style.transition=prevTransition; },300); },1600);
 };
-// [build 271 · V7] The Jump button FLOATS with the admin — owner spec 18 Aug 2026, verbatim
-// in TODO: it "should float down in the page to where the next decision is made so that
-// admin doesn't have to keep scrolling up to access it", "in roughly the same position left
-// to right", "ideally not overlying other text and easily visible". While the toolbar
-// original is out of view — scrolled past, or tucked under the sticky header, same 120px
-// margin jumpToNextDecision itself uses — a fixed copy shows at the BOTTOM of the window at
-// the original's left-to-right position, solid-backed and shadowed so it reads as a button,
-// never text-over-text. Pure UI: same jumpToNextDecision handler, no new state; it hides the
-// moment the Approvals panel does. The heartbeat exists because switching panels fires no
-// scroll event. Returns its internals for the test harness only.
-function _initJumpFloat(){
-  const btn=document.createElement('button');
-  btn.id='jumpFloatBtn'; btn.className='btn btn-primary'; btn.type='button';
-  btn.textContent='⏭ Jump to Next Decision';
-  btn.style.cssText='display:none;position:fixed;bottom:18px;left:24px;z-index:80;font-size:12px;padding:8px 14px;box-shadow:0 6px 18px rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.28)';
-  btn.onclick=function(){ window.jumpToNextDecision(); };
-  document.body.appendChild(btn);
-  let _raf=null;
-  const update=function(){
-    _raf=null;
-    const orig=document.querySelector('#panel-appdenials button[onclick="jumpToNextDecision()"]');
-    let show=false, left=24;
-    if(orig && orig.offsetParent!==null){
-      const r=orig.getBoundingClientRect();
-      if(r.bottom<120){ show=true; left=r.left; }
-    }
-    if(show){
-      btn.style.display='';
-      const bw=btn.offsetWidth||180;
-      btn.style.left=Math.max(12,Math.min(left,(window.innerWidth||1200)-bw-12))+'px';
-    } else {
-      btn.style.display='none';
-    }
-  };
-  const sched=function(){ if(_raf===null) _raf=requestAnimationFrame(update); };
-  window.addEventListener('scroll',sched,{passive:true});
-  window.addEventListener('resize',sched,{passive:true});
-  setInterval(sched,800);
-  return {btn:btn,update:update,sched:sched};
+// [build 272 · V7b] REVISED per owner feedback, 18 Aug 2026 (verbatim in TODO): NOT a
+// bottom-of-window float — the button sits INLINE, in the row of the TOPMOST draw/review
+// still awaiting a decision, immediately to the right of that row's Approve/Deny buttons.
+// Exactly one button, and it exists ONLY while a draw/review decision is pending — the
+// owner: "IT SHOULD ONLY BE PRESENT next to draws/reviews since that is where it's
+// needed... There should only be 1 floating button at a time... The key is to facilitate
+// rapid decision making." Clicking ADVANCES: the next pending draw/review after this row
+// scrolls into view, center + highlight (same visual as the toolbar jump); from the last
+// one it wraps to the first; a lone last decision says so instead of scrolling nowhere.
+// Every adBody render re-anchors the button, so deciding a row walks it down the page by
+// itself. The toolbar "⏭ Jump to Next Decision" is unchanged (it covers win/lose
+// stragglers too); this button is the draw/review fast path.
+function _jumpTargetRows(){
+  return [...document.querySelectorAll('#adBody .dr-row[data-undecided="1"]')]
+    .filter(function(r){ return r.dataset.outcome==='draw'||r.dataset.outcome==='review'; });
 }
-_initJumpFloat();
+function _placeJumpInline(){
+  const rows=_jumpTargetRows();
+  let btn=document.getElementById('jumpInlineBtn');
+  if(!rows.length){ if(btn) btn.remove(); return; }
+  if(!btn){
+    btn=document.createElement('button');
+    btn.id='jumpInlineBtn'; btn.className='btn btn-primary'; btn.type='button';
+    btn.style.cssText='padding:3px 10px;font-size:11px;margin-left:18px;white-space:nowrap';
+    btn.textContent='⏭ Next Decision';
+    btn.title='Scroll to the next draw/review still awaiting a decision';
+    btn.onclick=function(){
+      const list=_jumpTargetRows();
+      if(!list.length) return;
+      const own=btn.closest('tr');
+      const i=list.indexOf(own);
+      const next=(i>=0&&i<list.length-1)?list[i+1]:list[0];
+      if(next===own){ toast('✓ This is the last draw/review awaiting a decision.','ok'); return; }
+      next.scrollIntoView({behavior:'smooth',block:'center'});
+      const prevShadow=next.style.boxShadow, prevTransition=next.style.transition;
+      next.style.transition='box-shadow .25s';
+      next.style.boxShadow='0 0 0 1.5px rgba(0,107,166,.5), 0 4px 14px rgba(0,107,166,.2)';
+      setTimeout(function(){ next.style.boxShadow=prevShadow; setTimeout(function(){ next.style.transition=prevTransition; },300); },1600);
+    };
+  }
+  const cell=rows[0].querySelector('.dr-actions');
+  if(cell && btn.parentElement!==cell) cell.appendChild(btn);
+}
 
 // Approvals/denials should ideally only happen once bidding is closed and every
 // week is locked. This reports readiness so we can warn (but still allow override).
