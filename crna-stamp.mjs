@@ -158,6 +158,18 @@ for (const page of ['staff', 'admin']) {
     fail('generic storage guard: an un-renamed storage-key prefix survived in ' + page);
 }
 
+// ── 4b · NO SCHEDULING LINKS on the CRNA site (owner, 18 Aug 2026: "for now, they do
+// not belong there" — the Daily Schedule is an MD tool; revisit if/when a CRNA schedule
+// exists, tracked in TODO). Both entries in the admin's Other Systems card are removed;
+// the guard below then refuses ANY /schedule/ link that ever tries to ride back in.
+rep('admin', '      <a href="https://anesthesia-kp.github.io/schedule/?portal=1" target="_blank" rel="noopener">📅 User Scheduling →</a>\n', '', 1);
+{
+  const i = src.admin.indexOf('<a id="otherSysSchedAdmin"');
+  if (i < 0) fail('scheduling-admin link anchor not found');
+  const j = src.admin.indexOf('</a>', i);
+  src.admin = src.admin.slice(0, i) + '<!-- [CRNA] Scheduling Admin link removed — MD tool -->' + src.admin.slice(j + 4);
+}
+
 // ── GENERIC LINK GUARD: no CRNA page may link to an MD auction page. Any absolute
 // /vacation/ URL in the CRNA output must be /vacation/crna/… — a future MD build that
 // adds a new self-link cannot silently point CRNAs at the MD site.
@@ -166,6 +178,8 @@ for (const page of ['staff', 'admin']) {
   for (const u of links) {
     if (!u.startsWith('https://anesthesia-kp.github.io/vacation/crna')) fail(`generic link guard: CRNA ${page} links to the MD site: ${u} — add a transform.`);
   }
+  if (/href="https:\/\/anesthesia-kp\.github\.io\/schedule\//.test(src[page]))
+    fail(`generic link guard: CRNA ${page} links to the Daily Schedule — removed by owner ruling 18 Aug; add a transform if this is ever reversed deliberately.`);
 }
 
 // ── CANARY: nothing MD-only may survive in the CRNA output ──
