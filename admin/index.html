@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 272;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 273;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -7772,7 +7772,7 @@ window.renderAppDenials=function(){
       const spinBtn=drawUsers.length>=2?`<button class="btn btn-primary" style="padding:3px 10px;font-size:11px;margin-top:6px" onclick='openWheel("${wk}",${JSON.stringify(drawUsers)})'>🎡 Spin Randomizer (${drawUsers.length} in draw)</button>`:'';
       // Week-view table: 5 columns (user, bid, status, actions, history) — no
       // leading week-label column. Header colspan = 4 (info) + 1 (button).
-      html+=`<div class="dr-card">
+      html+=`<div class="dr-card" data-card="${wk}">
         <div class="dr-table-wrap"><table class="dr-table">
           <tr class="dr-head-row">
             <td colspan="4">
@@ -7795,7 +7795,7 @@ window.renderAppDenials=function(){
       byUser[u].sort((a,b)=>outcomeRank(a.outcome)-outcomeRank(b.outcome)||a.wk.localeCompare(b.wk));
       // User-view table: 6 columns (weeklabel, user, bid, status, actions,
       // history). Header colspan = 5 (info) + 1 (button).
-      html+=`<div class="dr-card">
+      html+=`<div class="dr-card" data-card="${u}">
         <div class="dr-table-wrap"><table class="dr-table">
           <tr class="dr-head-row">
             <td colspan="5"><div class="dr-card-head-info"><div class="dr-week">${u}</div><div style="font-size:11px;color:var(--t2)">FTE ${getUserFTE(u)}</div></div></td>
@@ -7807,7 +7807,7 @@ window.renderAppDenials=function(){
     });
   }
   body.innerHTML=html||'<div style="text-align:center;color:var(--t2);padding:20px">No bids.</div>';
-  _placeJumpInline(); // [build 272 · V7b] re-anchor the inline Next Decision button on every render
+  _placeJumpInline(); // [build 273 · V7c] re-place the sticky Next Decision button after every render
 };
 
 // "Jump to Next Decision" — scrolls to the next current-phase bid still
@@ -7830,48 +7830,76 @@ window.jumpToNextDecision=function(){
   next.style.boxShadow='0 0 0 1.5px rgba(0,107,166,.5), 0 4px 14px rgba(0,107,166,.2)';
   setTimeout(()=>{ next.style.boxShadow=prevShadow; setTimeout(()=>{ next.style.transition=prevTransition; },300); },1600);
 };
-// [build 272 · V7b] REVISED per owner feedback, 18 Aug 2026 (verbatim in TODO): NOT a
-// bottom-of-window float — the button sits INLINE, in the row of the TOPMOST draw/review
-// still awaiting a decision, immediately to the right of that row's Approve/Deny buttons.
-// Exactly one button, and it exists ONLY while a draw/review decision is pending — the
-// owner: "IT SHOULD ONLY BE PRESENT next to draws/reviews since that is where it's
-// needed... There should only be 1 floating button at a time... The key is to facilitate
-// rapid decision making." Clicking ADVANCES: the next pending draw/review after this row
-// scrolls into view, center + highlight (same visual as the toolbar jump); from the last
-// one it wraps to the first; a lone last decision says so instead of scrolling nowhere.
-// Every adBody render re-anchors the button, so deciding a row walks it down the page by
-// itself. The toolbar "⏭ Jump to Next Decision" is unchanged (it covers win/lose
-// stragglers too); this button is the draw/review fast path.
+// [build 273 · V7c] REVISED AGAIN per owner feedback, 18 Aug 2026 (verbatim in TODO): the
+// button anchors in the CARD HEADER, immediately RIGHT of "📋 Prior Phase Results" (which
+// "must stay where it is"), and it is STICKY: "it should remain at the top most decision
+// until it is clicked by admin. once it's clicked, the page should scroll and the button
+// should appear by the next decision. if admin scrolls and the next decision button
+// leaves the view, it should then auto-relocate to the next decision." So: it never moves
+// just because a decision was made (272's auto-jump made it unclickable — the exact
+// complaint); it moves ONLY on click (scroll + highlight the topmost pending draw/review,
+// then re-anchor to that card) or when it leaves the viewport (quietly re-anchor to the
+// first pending draw/review below the reader's position — no page scroll). One button,
+// existing only while a draw/review is pending. Toolbar jump unchanged.
+let _jumpAnchorCard=null;   // data-card key of the card header currently holding the button
+let _jumpClickAt=0;         // a click-scroll is in flight — auto-relocate stands down briefly
+let _jumpScrollWatchOn=false;
 function _jumpTargetRows(){
   return [...document.querySelectorAll('#adBody .dr-row[data-undecided="1"]')]
     .filter(function(r){ return r.dataset.outcome==='draw'||r.dataset.outcome==='review'; });
 }
+function _jumpCardOf(row){ const c=row.closest('.dr-card'); return c&&c.dataset?c.dataset.card:null; }
+function _jumpHighlight(next){
+  next.scrollIntoView({behavior:'smooth',block:'center'});
+  const prevShadow=next.style.boxShadow, prevTransition=next.style.transition;
+  next.style.transition='box-shadow .25s';
+  next.style.boxShadow='0 0 0 1.5px rgba(0,107,166,.5), 0 4px 14px rgba(0,107,166,.2)';
+  setTimeout(function(){ next.style.boxShadow=prevShadow; setTimeout(function(){ next.style.transition=prevTransition; },300); },1600);
+}
 function _placeJumpInline(){
   const rows=_jumpTargetRows();
   let btn=document.getElementById('jumpInlineBtn');
-  if(!rows.length){ if(btn) btn.remove(); return; }
+  if(!rows.length){ if(btn) btn.remove(); _jumpAnchorCard=null; return; }
   if(!btn){
     btn=document.createElement('button');
     btn.id='jumpInlineBtn'; btn.className='btn btn-primary'; btn.type='button';
-    btn.style.cssText='padding:3px 10px;font-size:11px;margin-left:18px;white-space:nowrap';
+    btn.style.cssText='padding:2px 10px;font-size:10px;margin-left:8px;white-space:nowrap;vertical-align:middle';
     btn.textContent='⏭ Next Decision';
-    btn.title='Scroll to the next draw/review still awaiting a decision';
+    btn.title='Scroll to the topmost draw/review still awaiting a decision';
     btn.onclick=function(){
       const list=_jumpTargetRows();
-      if(!list.length) return;
-      const own=btn.closest('tr');
-      const i=list.indexOf(own);
-      const next=(i>=0&&i<list.length-1)?list[i+1]:list[0];
-      if(next===own){ toast('✓ This is the last draw/review awaiting a decision.','ok'); return; }
-      next.scrollIntoView({behavior:'smooth',block:'center'});
-      const prevShadow=next.style.boxShadow, prevTransition=next.style.transition;
-      next.style.transition='box-shadow .25s';
-      next.style.boxShadow='0 0 0 1.5px rgba(0,107,166,.5), 0 4px 14px rgba(0,107,166,.2)';
-      setTimeout(function(){ next.style.boxShadow=prevShadow; setTimeout(function(){ next.style.transition=prevTransition; },300); },1600);
+      if(!list.length){ _placeJumpInline(); return; }
+      const next=list[0]; // ALWAYS the topmost pending draw/review — everything above is done
+      _jumpClickAt=Date.now();
+      _jumpHighlight(next);
+      _jumpAnchorCard=_jumpCardOf(next);
+      _placeJumpInline();
     };
   }
-  const cell=rows[0].querySelector('.dr-actions');
+  if(!_jumpScrollWatchOn){
+    _jumpScrollWatchOn=true;
+    let raf=null;
+    window.addEventListener('scroll',function(){ if(raf===null) raf=requestAnimationFrame(function(){ raf=null; _jumpAutoRelocate(); }); },{passive:true});
+  }
+  // STICKY: keep the button in its current card header until clicked (or until it leaves
+  // the view) — even after every decision beside it is made. Only when the remembered
+  // card is no longer rendered (filter/view change) fall back to the topmost pending.
+  let card=_jumpAnchorCard?document.querySelector('.dr-card[data-card="'+_jumpAnchorCard+'"]'):null;
+  if(!card){ _jumpAnchorCard=_jumpCardOf(rows[0]); card=_jumpAnchorCard?document.querySelector('.dr-card[data-card="'+_jumpAnchorCard+'"]'):null; }
+  if(!card) return;
+  const cell=card.querySelector('.dr-head-row td:last-child'); // the Prior Phase Results cell — that button stays put, ours lands to its RIGHT
   if(cell && btn.parentElement!==cell) cell.appendChild(btn);
+}
+function _jumpAutoRelocate(){
+  const btn=document.getElementById('jumpInlineBtn');
+  if(!btn || Date.now()-_jumpClickAt<1200) return; // click-scroll in flight — don't fight it
+  const r=btn.getBoundingClientRect();
+  const vh=window.innerHeight||800;
+  if(r.bottom>=0 && r.top<=vh) return; // still visible — sticky until clicked
+  const rows=_jumpTargetRows(); if(!rows.length) return;
+  const next=rows.find(function(x){ return x.getBoundingClientRect().top>120; })||rows[0];
+  const key=_jumpCardOf(next);
+  if(key && key!==_jumpAnchorCard){ _jumpAnchorCard=key; _placeJumpInline(); }
 }
 
 // Approvals/denials should ideally only happen once bidding is closed and every
