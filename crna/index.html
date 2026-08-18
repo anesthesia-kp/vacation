@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 139;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 140;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -1718,7 +1718,7 @@ async function relayMailQueue(){
       if(isWelcome && _welcomed(wkey)){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
       let recips=isWelcome ? [String(e.to).trim().toLowerCase()] : recipientsFor(e.user);
       // M-7: skip addresses this entry already reached, so a partial failure never re-sends.
-      { const done=Array.isArray(e.sentTo)?e.sentTo:[]; recips=recips.filter(to=>!done.includes(to)); }
+      { const done=(Array.isArray(e.sentTo)?e.sentTo:[]).map(a=>String(a).trim().toLowerCase()); recips=recips.filter(to=>!done.includes(to)); } // [build 140 · M3] case-blind — pre-270 sentTo entries may carry typed case
       if(!recips.length){
         // Only a fully-delivered or welcome entry may be discarded here. An ALERT entry
         // with no resolvable recipients is left alone — this tab's maps may simply not
@@ -3639,9 +3639,25 @@ async function welcomeOnce(user,email){
   try{ const s=await getDoc(welcomeLogRef); const d=s.exists()?s.data():{}; welcomeLogData=d; if(d.sent&&d.sent[key]) return; }catch(_){}
   await sendWelcomeEmail(user,email,key).catch(()=>{});
 }
+// [build 140 · M3] KP-address save hygiene — the same _normKpEmail as the admin site (270):
+// trim + lower-case on save so stored case can never differ from what either site returns.
+// Rejects ONLY the unarguable (owner ruling 17 Aug 2026 — scope frozen): whitespace inside ·
+// more than one @ · domain without a dot · a leading/trailing dot in the local part or the
+// domain. NO domain policy of any kind (settled July 2026 — HANDOFF D5).
+function _normKpEmail(raw){
+  const v=String(raw==null?'':raw).trim().toLowerCase();
+  if(!v||!v.includes('@')) return null;           // same floor the old check enforced
+  if(/\s/.test(v)) return null;                   // whitespace inside
+  const at=v.indexOf('@');
+  if(v.indexOf('@',at+1)!==-1) return null;       // more than one @
+  const local=v.slice(0,at), dom=v.slice(at+1);
+  if(!dom.includes('.')) return null;             // domain without a dot
+  if(local.startsWith('.')||local.endsWith('.')||dom.startsWith('.')||dom.endsWith('.')) return null; // leading/trailing dot
+  return v;
+}
 window.saveEmail=async function(){
-  const val=document.getElementById("emailInput").value.trim();
-  if(!val||!val.includes("@")){showError("Please enter a valid email.");return;}
+  const val=_normKpEmail(document.getElementById("emailInput").value); // [build 140 · M3] trimmed + lower-cased, unarguable-only rejections
+  if(!val){showError("Please enter a valid email.");return;}
   const user=getCurrentUser();
   try{ await setDoc(emailsRef,{[user]:val},{merge:true}); }
   catch(e){ showError("Could not save your e-mail ("+(e.code||'error')+") — please try again or tell your admin."); return; } // modal stays open

@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 269;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 270;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1374,12 +1374,32 @@ let _adminMapsReady=false; // true once the loginEmails snapshot has delivered �
 // Recipients for any alert to a user: the primary (Google login) e-mail always,
 // plus the secondary e-mail when one is set. "__skip__" on the secondary means
 // "no secondary" — the primary still receives alerts. De-duped, lower-cased.
+// [build 270 · M3] out.push(k) not out.push(v): return the LOWER-CASED address, which is
+// what this comment always claimed and what the staff site has always done — so the two
+// sites agree on a user's addresses regardless of the case stored in the roster.
 function recipientsFor(user){
   const out=[]; const seen=new Set();
-  const add=(e)=>{ if(!e||typeof e!=='string') return; const v=e.trim(); if(!v||v==='__skip__'||!v.includes('@')) return; const k=v.toLowerCase(); if(seen.has(k)) return; seen.add(k); out.push(v); };
+  const add=(e)=>{ if(!e||typeof e!=='string') return; const v=e.trim(); if(!v||v==='__skip__'||!v.includes('@')) return; const k=v.toLowerCase(); if(seen.has(k)) return; seen.add(k); out.push(k); };
   add(loginEmailsDataAdmin[user]);
   add(emailsDataAdmin[user]);
   return out;
+}
+// [build 270 · M3] KP-address save hygiene, shared by the Users-page save and Add User:
+// trim + lower-case on save so stored case can never again differ from what either site
+// returns. Rejects ONLY the unarguable (owner ruling 17 Aug 2026 — scope frozen):
+// whitespace inside · more than one @ · domain without a dot · a leading/trailing dot in
+// the local part or the domain. NO domain policy of any kind, not even a warning
+// (settled July 2026 — HANDOFF D5). Returns the normalised address, or null to refuse.
+function _normKpEmail(raw){
+  const v=String(raw==null?'':raw).trim().toLowerCase();
+  if(!v||!v.includes('@')) return null;           // same floor the old check enforced
+  if(/\s/.test(v)) return null;                   // whitespace inside
+  const at=v.indexOf('@');
+  if(v.indexOf('@',at+1)!==-1) return null;       // more than one @
+  const local=v.slice(0,at), dom=v.slice(at+1);
+  if(!dom.includes('.')) return null;             // domain without a dot
+  if(local.startsWith('.')||local.endsWith('.')||dom.startsWith('.')||dom.endsWith('.')) return null; // leading/trailing dot
+  return v;
 }
 // [AUDIT 2026-07-25 #6] Is this address one the roster actually knows? Guards the
 // relay against a mailQueue entry naming an arbitrary external recipient.
@@ -1711,7 +1731,11 @@ function _mergeP4RoundsView(){
 // in-flight auction can't double-mail. Reset Auction wipes the staging doc → fresh ledger.
 let _sentLedger={};
 function _sentAddrsFor(key){
-  return new Set([...(( _sentLedger[key])||[]),...((phasesData.resultsSentTo?.[key])||[])]);
+  // [build 270 · M3] Membership is CASE-BLIND: ledger entries written before 270 carry the
+  // address's typed case, while recipientsFor now returns lower-case. Without this map, a
+  // retry of an already-sent phase would miss the mixed-case entries and RE-SEND to exactly
+  // the addresses the M3 fix is about — the duplicate-mass-e-mail never-event.
+  return new Set([...(( _sentLedger[key])||[]),...((phasesData.resultsSentTo?.[key])||[])].map(a=>String(a).trim().toLowerCase()));
 }
 function _writeSentLedger(key,sentAddrs){
   return setDoc(phaseStagingRef,{resultsSentTo:{[key]:[...sentAddrs]}},{merge:true});
@@ -1727,7 +1751,8 @@ async function _ledgerFresh(key){
   try{
     const s=await getDocFromServer(phaseStagingRef);
     const led=(s.exists()?(s.data()||{}):{}).resultsSentTo||{};
-    return {ok:true, sentSet:new Set([...(led[key]||[]),...((phasesData.resultsSentTo?.[key])||[])])};
+    // [build 270 · M3] Same case-blind membership as _sentAddrsFor, same reason.
+    return {ok:true, sentSet:new Set([...(led[key]||[]),...((phasesData.resultsSentTo?.[key])||[])].map(a=>String(a).trim().toLowerCase()))};
   }catch(e){ return {ok:false, error:e}; }
 }
 // [build 251] Live mirror of the Phase 4 round-send ledger (who was already e-mailed what).
@@ -1933,7 +1958,7 @@ async function processMailQueue(minAgeMs){
       }
       // M-7: don't re-send to an address this entry already reached — a 2nd-recipient
       // failure must never re-deliver the 1st on a later retry. sentTo grows per success.
-      { const done=Array.isArray(e.sentTo)?e.sentTo:[]; recips=recips.filter(to=>!done.includes(to)); }
+      { const done=(Array.isArray(e.sentTo)?e.sentTo:[]).map(a=>String(a).trim().toLowerCase()); recips=recips.filter(to=>!done.includes(to)); } // [build 270 · M3] case-blind — pre-270 sentTo entries may carry typed case
       if(!recips.length){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
       if(!_canSend) continue; // [H14 low] cleanup above still ran; skip claim+send with no mailer
       try{
@@ -8705,8 +8730,9 @@ function renderEmailsPanel(){
   }).join('');
 }
 window.adminSaveEmail=async function(u){
-  const val=document.getElementById(`em_${u}`)?.value.trim();
-  if(!val||!val.includes("@")){toast("Invalid email","err");return;}
+  // [build 270 · M3] saves go through _normKpEmail: trimmed + lower-cased, unarguable-only rejections
+  const val=_normKpEmail(document.getElementById(`em_${u}`)?.value);
+  if(!val){toast("Invalid email","err");return;}
   const prev=String(emailsData?.[u]||"").trim().toLowerCase();
   // [SWEEP D8 · build 230 — user ruled yes] Old→new confirm matching the sibling Clear button.
   // Consistency more than safety (worst case is one welcome e-mail to a typo'd address), but a
@@ -10012,7 +10038,9 @@ window.addUser=async function(){
   // Shared with the Daily Schedule (port to the other site): full name, login e-mail, secondary e-mail.
   if(fullName) await setDoc(usernamesRef,{[val]:fullName},{merge:true}).catch(()=>{});
   if(loginEmail){ await setDoc(loginEmailsRef,{[val]:loginEmail},{merge:true}).catch(()=>{}); await maybeSyncEmailToUser(); }
-  if(email2 && email2.includes('@')) await setDoc(emailsRef,{[val]:email2},{merge:true}).catch(()=>{});
+  // [build 270 · M3] same _normKpEmail hygiene as the Users-page save. A refused address no
+  // longer disappears silently — the admin is told the user was still added without it.
+  if(email2){ const _e2=_normKpEmail(email2); if(_e2) await setDoc(emailsRef,{[val]:_e2},{merge:true}).catch(()=>{}); else toast('KP e-mail NOT saved for '+val+' — that address is not valid. The user was still added; set the KP e-mail on the Users page.','warn'); }
   ['newUserInput','newUserFullName','newUserLoginEmail','newUserEmail2'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
   if(fteEl) fteEl.value="";   // blank, not 1.0 — the next user's FTE must be typed too
   // NO welcome e-mail is sent at user creation. Welcomes only ever go out once the user
