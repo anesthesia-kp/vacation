@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 270;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 271;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -547,6 +547,19 @@ thead th{color:var(--t2)}
               <button class="btn btn-primary" onclick="exportUserSummary('view',document.getElementById('repPhaseFilter').value)">👁 View Report</button>
               <button class="btn" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportUserSummary('pdf',document.getElementById('repPhaseFilter').value)">📄 Export PDF</button>
               <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportUserSummary('xlsx',document.getElementById('repPhaseFilter').value)">📊 Export Excel</button>
+            </div>
+          </div>
+          <!-- [build 271 · B4] Available capacity by week — owner request 17 Aug 2026, beneath the
+               user summary reports. The phase filter above does NOT apply: "taken" is cumulative
+               (approved winners across all completed phases + announced rounds + current-phase
+               approvals). Definition repeated in the report header by owner ruling. -->
+          <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
+            <div style="font-size:13px;font-weight:700;color:var(--t1);margin-bottom:8px">Available capacity by week</div>
+            <div class="trow-desc" style="margin-bottom:8px">Every week of the year — capacity, taken, available. Available = capacity minus approved winners; pending bids not counted. Exact between phases; mid-phase it shows more available than will survive the round.</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn btn-primary" onclick="exportCapacityByWeek('view')">👁 View Report</button>
+              <button class="btn" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportCapacityByWeek('pdf')">📄 Export PDF</button>
+              <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportCapacityByWeek('xlsx')">📊 Export Excel</button>
             </div>
           </div>
         </div>
@@ -7397,6 +7410,120 @@ window.exportUserSummary=function(format,scopeOverride){
   if(ok) toast(isView?'👁 User Summary opened in a new tab':'📄 Preview opened — use browser "Print → Save as PDF"','ok');
 };
 
+// ── [build 271 · B4] Available capacity by week ──────────────────────────────
+// Owner request 17 Aug 2026, verbatim in TODO §1 B4. One row per Monday, whole
+// year. "Taken" counts APPROVED WINNERS ONLY (owner ruling 17 Aug): every
+// completed phase's approvals + announced Phase-4 round wins + the current
+// phase's own admin approvals — de-duped per user, valued at getUserFTE (the
+// same live-FTE valuation the engine's capacity math uses). LIVE undecided
+// bids do NOT count, which is why the definition is stated in the report
+// header (owner: "specify that in the header"): between phases the number is
+// exact; mid-phase it shows more available than will survive the round.
+// Deliberately NOT finalFteForWeek — that header includes projected winners.
+const CAPACITY_DEF_TEXT='Available = capacity minus approved winners; pending bids not counted';
+function _capacityWeekRows(){
+  const R=function(x){ return Math.round(x*10)/10; };
+  const rows=[];
+  mondays.forEach(function(d){
+    const wk=dateKey(d);
+    const winners=new Set();
+    const cp=phasesData.completedPhases||{};
+    for(const ph of Object.keys(cp)){
+      const a=cp[ph]&&cp[ph].approvals?cp[ph].approvals[wk]:undefined;
+      if(Array.isArray(a)) a.forEach(function(u){ winners.add(u); });
+    }
+    if(typeof p4RoundWinnersOn==='function') for(const u of p4RoundWinnersOn(wk)) winners.add(u);
+    const la=approvalsData?approvalsData[wk]:undefined;
+    if(Array.isArray(la)) la.forEach(function(u){ winners.add(u); });
+    let taken=0; winners.forEach(function(u){ taken+=getUserFTE(u); });
+    const cap=getSlots(wk);
+    rows.push({wk,wn:_wkNumByISO[wk]||'?',date:MS[d.getMonth()]+' '+d.getDate(),type:weekTypeLabel(wk,d),
+      cap:R(cap),taken:R(taken),avail:R(cap-taken),winners:[...winners].sort()});
+  });
+  return rows;
+}
+window.exportCapacityByWeek=function(format){
+  const rows=_capacityWeekRows();
+  const now=new Date();
+  const stamp=now.toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
+  const totTaken=Math.round(rows.reduce(function(s,r){ return s+r.taken; },0)*10)/10;
+  const totCap=Math.round(rows.reduce(function(s,r){ return s+r.cap; },0)*10)/10;
+  if(format==='csv'||format==='xlsx'){
+    const fname='vacation-capacity-'+now.toISOString().slice(0,10);
+    if(typeof XLSX!=='undefined'){
+      const BORDER={top:{style:'thin',color:{rgb:'D7DEE6'}},bottom:{style:'thin',color:{rgb:'D7DEE6'}},left:{style:'thin',color:{rgb:'D7DEE6'}},right:{style:'thin',color:{rgb:'D7DEE6'}}};
+      const S_TITLE={font:{bold:true,sz:15,color:{rgb:'0F172A'}}};
+      const S_DEF={fill:{fgColor:{rgb:'1D4ED8'}},font:{bold:true,sz:11,color:{rgb:'FFFFFF'}},alignment:{horizontal:'center',vertical:'center'}};
+      const S_STAMP={font:{sz:10,color:{rgb:'587690'}}};
+      const S_COLHEAD={fill:{fgColor:{rgb:'F1F5F9'}},font:{bold:true,sz:10,color:{rgb:'334155'}},border:BORDER};
+      const S_CELL={font:{sz:10,color:{rgb:'0F172A'}},border:BORDER};
+      const S_WKCELL={font:{bold:true,sz:10,color:{rgb:'0F172A'}},border:BORDER};
+      const availStyle=function(a){ return {font:{bold:true,sz:10,color:{rgb:a>0?'047857':(a<0?'B91C1C':'64748B')}},alignment:{horizontal:'center'},border:BORDER}; };
+      const S_NUM={font:{sz:10,color:{rgb:'0F172A'}},alignment:{horizontal:'center'},border:BORDER};
+      const cols=['Week #','Date','Type','Capacity','Taken (FTE)','Available','Approved winners'];
+      const aoa=[]; const styles=[]; const merges=[]; const rowHts=[];
+      const push=function(cells,cellStyles,ht){ aoa.push(cells); styles.push(cellStyles||[]); rowHts.push(ht||null); };
+      push(['Vacation Auction — Available Capacity by Week'],[S_TITLE],22);
+      merges.push({s:{r:0,c:0},e:{r:0,c:cols.length-1}});
+      push([CAPACITY_DEF_TEXT.toUpperCase()],[S_DEF],20);
+      merges.push({s:{r:1,c:0},e:{r:1,c:cols.length-1}});
+      push(['Exported '+stamp+' · '+rows.length+' weeks · taken '+totTaken+' of '+totCap+' FTE-weeks'],[S_STAMP]);
+      merges.push({s:{r:2,c:0},e:{r:2,c:cols.length-1}});
+      push([]);
+      push(cols,cols.map(function(){ return S_COLHEAD; }));
+      rows.forEach(function(r){
+        push(['W'+r.wn,r.date,r.type||'',String(r.cap),String(r.taken),String(r.avail),r.winners.map(fteName).join(', ')],
+             [S_WKCELL,S_CELL,S_CELL,S_NUM,S_NUM,availStyle(r.avail),S_CELL]);
+      });
+      const ws=XLSX.utils.aoa_to_sheet(aoa);
+      styles.forEach(function(rowSt,r){ rowSt.forEach(function(s,c){
+        if(!s) return;
+        const addr=XLSX.utils.encode_cell({r:r,c:c});
+        if(!ws[addr]) ws[addr]={t:'s',v:''};
+        ws[addr].s=s;
+      }); });
+      ws['!merges']=merges;
+      ws['!cols']=[{wch:7},{wch:9},{wch:14},{wch:9},{wch:11},{wch:10},{wch:60}];
+      ws['!rows']=rowHts.map(function(h){ return h?{hpt:h}:{}; });
+      const wb=XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb,ws,'Capacity by Week');
+      XLSX.writeFile(wb,fname+'.xlsx');
+      toast('📊 Excel exported','ok');
+      return;
+    }
+    // CSV fallback (flat — no styling possible)
+    const header=['Week #','Date','Type','Capacity','Taken (FTE)','Available','Approved winners'];
+    const csvEsc=function(v){ const s=String(v); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+    const csv='# Vacation Auction — Available Capacity by Week — '+CAPACITY_DEF_TEXT+' — exported '+stamp+'\n'
+      +[header].concat(rows.map(function(r){ return ['W'+r.wn,r.date,r.type||'',r.cap,r.taken,r.avail,r.winners.map(fteName).join(', ')]; }))
+        .map(function(r){ return r.map(csvEsc).join(','); }).join('\n');
+    const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=fname+'.csv'; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    toast('📊 Excel library unavailable — exported CSV instead','warn');
+    return;
+  }
+  // view / pdf — one table, every week of the year, same pop-up styling as the
+  // other reports. The definition rides the badge AND the subtitle: it is the
+  // one line that stops a mid-phase reading from being taken as exact.
+  const isView=format==='view';
+  const availCell=function(a){
+    const color=a>0?'#047857':(a<0?'#b91c1c':'#94a3b8');
+    return '<td style="text-align:center"><strong style="color:'+color+'">'+a+'</strong></td>';
+  };
+  const body='<div class="wk"><div class="wk-head">Available capacity by week<span class="fte">'+CAPACITY_DEF_TEXT+'</span></div>'
+    +'<table><thead><tr><th>Week</th><th>Date</th><th>Type</th><th>Capacity</th><th>Taken (FTE)</th><th>Available</th><th>Approved winners</th></tr></thead><tbody>'
+    +rows.map(function(r){
+      return '<tr><td><strong>W'+r.wn+'</strong></td><td>'+r.date+'</td><td>'+(r.type||'')+'</td>'
+        +'<td style="text-align:center">'+r.cap+'</td><td style="text-align:center">'+r.taken+'</td>'
+        +availCell(r.avail)
+        +'<td style="white-space:normal">'+(r.winners.length?r.winners.map(fteName).join(', '):'<span style="color:#94a3b8">—</span>')+'</td></tr>';
+    }).join('')
+    +'</tbody></table></div>';
+  const ok=openReportTab('Vacation Auction — Available Capacity by Week', 'Capacity',
+    'Exported '+stamp+' · '+rows.length+' weeks · taken '+totTaken+' of '+totCap+' FTE-weeks · '+CAPACITY_DEF_TEXT+' — exact between phases; mid-phase, pending bids may still take more',
+    body, !isView);
+  if(ok) toast(isView?'👁 Capacity report opened in a new tab':'📄 Preview opened — use browser "Print → Save as PDF"','ok');
+};
+
 // ── Dashboard export (weekly summary as a table → Excel or PDF) ──
 // Mirrors the Weekly Summary's data selection, honoring the dashboard's phase
 // dropdown (current / all / locked phase with snapshot + live fallback).
@@ -7701,6 +7828,47 @@ window.jumpToNextDecision=function(){
   next.style.boxShadow='0 0 0 1.5px rgba(0,107,166,.5), 0 4px 14px rgba(0,107,166,.2)';
   setTimeout(()=>{ next.style.boxShadow=prevShadow; setTimeout(()=>{ next.style.transition=prevTransition; },300); },1600);
 };
+// [build 271 · V7] The Jump button FLOATS with the admin — owner spec 18 Aug 2026, verbatim
+// in TODO: it "should float down in the page to where the next decision is made so that
+// admin doesn't have to keep scrolling up to access it", "in roughly the same position left
+// to right", "ideally not overlying other text and easily visible". While the toolbar
+// original is out of view — scrolled past, or tucked under the sticky header, same 120px
+// margin jumpToNextDecision itself uses — a fixed copy shows at the BOTTOM of the window at
+// the original's left-to-right position, solid-backed and shadowed so it reads as a button,
+// never text-over-text. Pure UI: same jumpToNextDecision handler, no new state; it hides the
+// moment the Approvals panel does. The heartbeat exists because switching panels fires no
+// scroll event. Returns its internals for the test harness only.
+function _initJumpFloat(){
+  const btn=document.createElement('button');
+  btn.id='jumpFloatBtn'; btn.className='btn btn-primary'; btn.type='button';
+  btn.textContent='⏭ Jump to Next Decision';
+  btn.style.cssText='display:none;position:fixed;bottom:18px;left:24px;z-index:80;font-size:12px;padding:8px 14px;box-shadow:0 6px 18px rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.28)';
+  btn.onclick=function(){ window.jumpToNextDecision(); };
+  document.body.appendChild(btn);
+  let _raf=null;
+  const update=function(){
+    _raf=null;
+    const orig=document.querySelector('#panel-appdenials button[onclick="jumpToNextDecision()"]');
+    let show=false, left=24;
+    if(orig && orig.offsetParent!==null){
+      const r=orig.getBoundingClientRect();
+      if(r.bottom<120){ show=true; left=r.left; }
+    }
+    if(show){
+      btn.style.display='';
+      const bw=btn.offsetWidth||180;
+      btn.style.left=Math.max(12,Math.min(left,(window.innerWidth||1200)-bw-12))+'px';
+    } else {
+      btn.style.display='none';
+    }
+  };
+  const sched=function(){ if(_raf===null) _raf=requestAnimationFrame(update); };
+  window.addEventListener('scroll',sched,{passive:true});
+  window.addEventListener('resize',sched,{passive:true});
+  setInterval(sched,800);
+  return {btn:btn,update:update,sched:sched};
+}
+_initJumpFloat();
 
 // Approvals/denials should ideally only happen once bidding is closed and every
 // week is locked. This reports readiness so we can warn (but still allow override).
