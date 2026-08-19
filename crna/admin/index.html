@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 276;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 277;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -835,6 +835,7 @@ thead th{color:var(--t2)}
           <option value="approved">Approved</option>
           <option value="denied">Denied</option>
           <option value="revoked">Revoked</option>
+          <option value="system">System (admin actions)</option>
         </select>
         <label style="font-size:11px;color:var(--t2);margin-left:10px">User:</label>
         <select id="cl_user" class="sel" onchange="setClFilter('user',this.value)"><option value="">All Users</option></select>
@@ -3356,11 +3357,21 @@ function isDecisionEntry(e){
   const a=String((e&&(e.action||e.type))||'');
   return /approve|deny|denied|revoke/i.test(a);
 }
+// [CL-1/CL-2] A SYSTEM entry is an admin action that is not a bid change at all — a timer
+// mode change, a restore, a user removal, an FTE edit. adminLog has always written these
+// into the same log as bid changes with 'ALL' in the week slot, which no real bid ever has;
+// entries written from build 277 also carry scope:'system'. BOTH shapes are recognised, so
+// the entries already sitting in the live log are read correctly too.
+function isSystemEntry(e){
+  if(!e) return false;
+  if(e.scope==='system') return true;
+  return String(e.weekKey||'')==='ALL';
+}
 function changeEvents24h(){
   // resetAt fences off everything from before the last phase close — the
   // counters read 0 the moment a phase completes.
   const cutoff=Math.max(Date.now()-86400000, changesResetAt||0);
-  const log=(changesLog||[]).filter(e=>e&&typeof e.ts==='number'&&e.ts>=cutoff&&!isDecisionEntry(e));
+  const log=(changesLog||[]).filter(e=>e&&typeof e.ts==='number'&&e.ts>=cutoff&&!isDecisionEntry(e)&&!isSystemEntry(e));
   const logged=new Set(log.map(e=>(e.user||'')+'|'+(e.weekKey||'')));
   const extras=[];
   for(const u in bidTimesData){ const m=bidTimesData[u]||{}; for(const wk in m){ const t=m[wk]; if(typeof t==='number'&&t>=cutoff&&!logged.has(u+'|'+wk)) extras.push({id:'bt_'+u+'_'+wk,user:u,weekKey:wk,action:'added',actor:'sim',ts:t}); } }
@@ -3753,7 +3764,7 @@ function renderBidChart(){
   const cv=document.getElementById('bidChart'); if(!cv) return;
   const cur=Number(phasesData.currentPhase||1);
   const ph=document.getElementById('bcPhase'); if(ph) ph.textContent=cur;
-  const events=(changesLog||[]).filter(e=>e&&typeof e.ts==='number'&&!isDecisionEntry(e)&&e.ts>=(changesResetAt||0));
+  const events=(changesLog||[]).filter(e=>e&&typeof e.ts==='number'&&!isDecisionEntry(e)&&!isSystemEntry(e)&&e.ts>=(changesResetAt||0));
   const began=phasesData.phaseBeganAt?.[cur]
     || (events.length?Math.min(...events.map(e=>e.ts)):Date.now()-3600000);
   const now=Date.now();
@@ -9258,7 +9269,11 @@ function normalizeEntry(c){
   else if(raw==='admin-deny'||raw==='denied') action='denied';
   else if(raw==='admin-revoke'||raw==='revoked') action='revoked';
   else action=raw||'edited';
-  return { actor, action, user:c.user||'—', weekKey:c.weekKey, bidValue:c.bidValue, ts:c.ts };
+  // [CL-1] A system action is not a bid verb. Give it its own action so the filter and the
+  // pill can treat it as its own kind, and keep the raw type so the row can be worded.
+  const system=isSystemEntry(c);
+  if(system) action='system';
+  return { actor, action, system, type:raw, user:c.user||'—', weekKey:c.weekKey, bidValue:c.bidValue, ts:c.ts };
 }
 
 function fmtRelative(ts){
@@ -9276,6 +9291,23 @@ function fmtAbsTime(ts){
   return d.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
 }
 
+// [CL-1] Plain English for a system admin action. The raw type is the only thing that
+// carries the meaning, so each known one gets a sentence; anything new falls back to a
+// readable version of its own name rather than to the bid template.
+function systemActionText(e){
+  const t=String(e&&e.type||'');
+  const who=esc(e&&e.user&&e.user!=='ALL'?e.user:'');
+  const mode=t.match(/^admin-timer-mode-(\d+)$/);
+  if(mode) return `Admin set the bidding timer reset mode to <strong>${esc(mode[1])}</strong>`;
+  if(t==='admin-delete-all-users') return 'Admin deleted <strong>ALL users</strong>';
+  if(t==='admin-remove-user') return who?`Admin removed the user <strong>${who}</strong>`:'Admin removed a user';
+  if(t==='admin-restore-full') return 'Admin restored a <strong>full backup</strong>';
+  if(t==='admin-restore-user') return who?`Admin restored <strong>${who}</strong> from a backup`:'Admin restored a user from a backup';
+  if(t==='admin-fte-snap') return 'Admin snapped FTE values to the 0.1 grid';
+  if(t==='admin-fte-bulk') return 'Admin bulk-set an FTE value';
+  const words=t.replace(/^admin-/,'').replace(/-/g,' ');
+  return `Admin — ${esc(words||'system action')}`;
+}
 window.renderChangelog=renderChangelog; // inline onchange on #cl_phase needs it global
 function renderChangelog(){
   const host=document.getElementById("changelogBody"); if(!host) return;
@@ -9346,7 +9378,8 @@ function renderChangelog(){
       removed:  {label:'REMOVED',  bg:'rgba(239,68,68,.15)',  color:'#dc2626'},
       approved: {label:'APPROVED', bg:'rgba(34,197,94,.18)',  color:'#0d7a43'},
       denied:   {label:'DENIED',   bg:'rgba(239,68,68,.18)',  color:'#dc2626'},
-      revoked:  {label:'REVOKED',  bg:'rgba(251,191,36,.18)', color:'#946008'}
+      revoked:  {label:'REVOKED',  bg:'rgba(251,191,36,.18)', color:'#946008'},
+      system:   {label:'SYSTEM',   bg:'rgba(148,163,184,.18)',color:'#38566e'}
     };
     const m=map[a]||{label:a.toUpperCase(), bg:'rgba(148,163,184,.15)', color:'#38566e'};
     return `<span class="cl-pill" style="background:${m.bg};color:${m.color}">${esc(m.label)}</span>`;
@@ -9366,6 +9399,16 @@ function renderChangelog(){
 
   host.innerHTML = groups.map(g=>{
     const items = g.entries.map(e=>{
+      // [CL-1] A system action has no user and no week, so it gets its own sentence and no
+      // week column. Rendering it through the bid template is what produced rows reading
+      // "Admin admin-timer-mode-1 bid for ALL on Wk 0 · undefined undefined NaN".
+      if(e.system){
+        return `<div class="cl-row">
+        <div class="cl-time" title="${fmtAbsTime(e.ts)}">${fmtRelative(e.ts)}</div>
+        <div class="cl-pills">${actorPill(e)} ${actionPill('system')}</div>
+        <div class="cl-text">${systemActionText(e)}${bidLabel(e.bidValue)}</div>
+      </div>`;
+      }
       const wkStr = e.weekKey ? (()=>{try{return wLabel(wkDate(e.weekKey));}catch(_){return e.weekKey;}})() : '—';
       const actionText = e.actor==='admin'
         ? `Admin ${esc(e.action)} ${e.action==='approved'||e.action==='denied'||e.action==='revoked'?'':'bid for '}<strong>${esc(e.user)}</strong>`
@@ -9389,6 +9432,10 @@ async function adminLog(u,wk,type,bidValue){
   // id field guarantees uniqueness — arrayUnion deduplicates by value equality,
   // so two entries with identical fields (same ms timestamp) would silently drop one.
   const entry={id:Math.random().toString(36).slice(2),user:u, weekKey:wk, action, actor:'admin', type, ts:Date.now()};
+  // [CL-1] System-level admin actions carry no real user or week — adminLog has always
+  // passed 'ALL' for the week. Stamp them so every reader can tell them from a bid change
+  // without having to guess from the filler values.
+  if(String(wk||'')==='ALL') entry.scope='system';
   if(bidValue!==undefined) entry.bidValue=bidValue;
   // [AUDIT 2026-07-25 #3] Approve/deny/revoke entries go to an ADMIN-ONLY doc, never to
   // vacations/changes. `changes` is world-readable and already sits in every staff
