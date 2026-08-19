@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 149;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 150;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -668,7 +668,18 @@ const emailsRef   = doc(db,"vacations","emails");
 const bestBidsRef = doc(db,"vacations","bestBids");
 const adminRef      = doc(db,"vacations","adminSettings");
 const bidTimesRef   = doc(db,"vacations","bidTimes");
-const passcodesRef  = doc(db,"vacations","passcodes");
+// ── [build 150 · FB-5 prep] THE PASSCODES LISTENER IS GONE ────────────────────
+// Passcodes are retired (START-HERE §3 rule 5). This page still held a live listener on
+// vacations/passcodes whose data was WRITTEN into passcodesData and then never read by
+// anything — verified by grep across the whole file before removing it. Worse, the
+// sign-in screen BLOCKED on it: signinReady() waited for a document belonging to a dead
+// feature before the Continue button would light up.
+// Removing it does three things: one fewer document read on EVERY page load for EVERY
+// client (see TODO FB-1's arithmetic), a marginally faster sign-in, and — the reason it
+// was done now — vacations/passcodes drops off the "must stay world-readable" list in
+// TODO FB-5, because no pre-sign-in code reads it any more.
+// NOT touched: the ADMIN page still uses this document (clear one password, clear all,
+// Reset Auction) and adminSettings.passcodesEnabled stays as a stored field.
 const bidLoweringsRef = doc(db,"vacations","bidLowerings"); // [build 139 · BL] {USER:{used:n}} — current phase/round lowering usage
 const usernamesRef  = doc(db,"vacations","usernames"); // {initials: customDisplayName}
 const loginEmailsRef = doc(db,"vacations","loginEmails"); // {INITIALS: google-email} — Google login mapping
@@ -703,7 +714,7 @@ let data={}, locksData={globalLock:false,weeks:{}};
 let changesData={log:[]}, unsubSchedule=null;
 // Default passcodesEnabled:false so a password prompt NEVER appears before the real
 // admin setting loads (prevents the spurious password box when passwords are off).
-let emailsData={}, bestBidsData={}, fteData={}, adminSettings={emailNotifsEnabled:true,passcodesEnabled:false}, bidTimesData={}, passcodesData={}, approvalsData={}, usernamesData={};
+let emailsData={}, bestBidsData={}, fteData={}, adminSettings={emailNotifsEnabled:true,passcodesEnabled:false}, bidTimesData={}, approvalsData={}, usernamesData={};
 let bidLoweringsData={}; // [build 139 · BL]
 let loginEmailsData={}; // {INITIALS: google-email} shared doc mapping Google accounts to accounts
 
@@ -737,12 +748,13 @@ function applySlotOverrides(){
   }
 }
 // Track whether security-critical collections have loaded from Firestore.
-// Defaults assume passcodes ON / email prompt ON — but until snapshots fire we
-// don't actually know the admin's settings. Confirm button waits for both.
+// Until the adminSettings snapshot fires we don't know the admin's settings, so the
+// Confirm button waits for it. [build 150] The passcodes flag was removed from this set —
+// see the note at the old listener site; it gated sign-in on a retired feature.
 // _emailsReady starts TRUE: the secondary-email doc is not needed to render the
 // login screen (it's read after sign-in), so the Continue button must not wait on
 // it — this also keeps sign-in unblocked when the rules forbid anonymous email reads.
-let _adminSettingsReady=false, _passcodesReady=false, _emailsReady=true, _usernamesReady=false;
+let _adminSettingsReady=false, _emailsReady=true, _usernamesReady=false;
 // [build 139 · KPFIX] TRUE only once the secondary-emails doc has GENUINELY loaded
 // (post-sign-in getDoc success OR the authenticated snapshot). Distinct from
 // _emailsReady, which deliberately starts true so the Continue button never waits
@@ -761,9 +773,9 @@ let _emLoadedOk=false;
 // warning below now names which document was missing so it is diagnosable from the
 // console. Re-derive this number against measured timings if App Check is ever removed.
 setTimeout(()=>{
-  if(!_adminSettingsReady||!_passcodesReady||!_emailsReady||!_usernamesReady){
-    console.warn('[Sign-in] Firestore did not respond in 3s — unlocking. Missing:',{adminSettings:!_adminSettingsReady,passcodes:!_passcodesReady,emails:!_emailsReady,usernames:!_usernamesReady});
-    _adminSettingsReady=true; _passcodesReady=true; _emailsReady=true; _usernamesReady=true;
+  if(!_adminSettingsReady||!_emailsReady||!_usernamesReady){
+    console.warn('[Sign-in] Firestore did not respond in 3s — unlocking. Missing:',{adminSettings:!_adminSettingsReady,emails:!_emailsReady,usernames:!_usernamesReady});
+    _adminSettingsReady=true; _emailsReady=true; _usernamesReady=true;
     if(typeof _updateSignInBtnState==='function') _updateSignInBtnState();
     if(typeof refreshLoginUsers==='function') refreshLoginUsers();
   }
@@ -1714,7 +1726,6 @@ function _wlOnSnap(snap){
   if(typeof renderWhitelistBanner==='function') renderWhitelistBanner();
 }
 onSnapshot(whitelistConfirmRef, _wlOnSnap);
-onSnapshot(passcodesRef,snap=>{ passcodesData=snap.exists()?snap.data():{}; _passcodesReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); });
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; _usernamesReady=true; if(typeof refreshLoginUsers==='function') refreshLoginUsers(); });
 // L-5: no top-level loginEmailsRef listener either — same reason; the signed-in path re-subscribes.
 // Read-only: same rule as the user list — the user site never seeds/overwrites
@@ -3333,7 +3344,7 @@ let _pendingLogin=null, _rememberedName=null;
 // Google" — lets a fresh sign-in go straight in rather than bouncing to "Continue".
 let _userJustSignedIn=false;
 const REMEMBER_KEY="vk_lastUser";
-function signinReady(){ return _adminSettingsReady&&_passcodesReady&&_emailsReady; }
+function signinReady(){ return _adminSettingsReady&&_emailsReady; }
 
 // Display name = custom username if the user set one, else their initials.
 function displayName(initials){ return usernamesData[initials]||initials; }
