@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 275;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 276;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -4114,7 +4114,8 @@ function renderOverview(){
 // ── Controls ──
 function syncControls(){
   // Rebuild the Timer Rules editor from saved settings, but not while the admin is
-  // mid-edit in one of its fields (ids start with "tr_").
+  // mid-edit in one of its fields (ids start with "tr_"). renderTimerRules itself also
+  // refuses to rebuild while there are UNSAVED batched edits (TR-4).
   if(typeof renderTimerRules==='function' && !(document.activeElement && /^tr_/.test(document.activeElement.id||''))) renderTimerRules();
   // Cumulative bid caps (Phase 1 · through P2 · through P3 · through P4). Null/blank = no limit.
   if(typeof _populateCapsFromSaved==='function') _populateCapsFromSaved();
@@ -9468,7 +9469,7 @@ window.currentStageHours=currentStageHours; window.updatePhaseOpen=updatePhaseOp
 function fmtHour12(h){ h=((h%24)+24)%24; const ap=h<12?'AM':'PM'; let hh=h%12; if(hh===0) hh=12; return hh+' '+ap; }
 const TIMER_HOUR_OPTS=[48,24,12,6,3];
 function renderTimerRules(){
-  if(window._trEditing) return; // M-13: a save-confirm dialog is open holding a pending edit — don't rebuild (and revert) the editor from a snapshot
+  if(window._trEditing) return; // M-13 / TR-4: unsaved edits are open — never rebuild (and silently discard) them from a live snapshot
   const el=document.getElementById('timerRulesBody'); if(!el) return;
   const r=getTimerRules();
   const hoursSel=(id,val)=>`<select id="${id}" class="sel" style="width:78px">${TIMER_HOUR_OPTS.map(h=>`<option value="${h}"${h===val?' selected':''}>${h} h</option>`).join('')}</select>`;
@@ -9477,8 +9478,11 @@ function renderTimerRules(){
   // Editor rows render from the RAW saved stages (including switched-off ones) so a
   // disabled step keeps its values and can be re-enabled; the engine (getTimerRules)
   // only ever sees the enabled steps.
+  // TR-1: rows render in the SAVED order and are NOT re-sorted for display. getTimerRules
+  // does its own sort for the engine, so sorting here was redundant — and it was what moved
+  // an edited rule onto a line the admin had not typed on. Rows now stay put.
   const rawR=(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.timerRules&&Array.isArray(adminSettings.timerRules.stages)&&adminSettings.timerRules.stages.length)
-    ? adminSettings.timerRules.stages.slice().filter(s=>s&&typeof s.hours==='number').sort((a,b)=>(a.days||0)-(b.days||0))
+    ? adminSettings.timerRules.stages.slice().filter(s=>s&&typeof s.hours==='number')
     : DEFAULT_TIMER_RULES.stages;
   const st=rawR;
   const row=(inner)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;font-size:13px;color:var(--t1)">${inner}</div>`;
@@ -9491,7 +9495,10 @@ function renderTimerRules(){
     <div class="tog${masterOn?' on-blue':''}" id="trMasterTog" onclick="toggleTimerEnabled()"></div>
   </div>`;
   rows+=row(`<span style="color:var(--t2);min-width:150px">At the start of a round</span><span>reset to</span> ${hoursSel('tr_h0',(st[0]||{}).hours||48)}`);
-  for(let i=1;i<=4;i++){ const s=st[i]||{days:[7,10,12,14][i-1],hours:[24,12,6,3][i-1]}; const on=s.enabled!==false; rows+=row(`<label style="display:flex;align-items:center;gap:5px;cursor:pointer;color:var(--t2)" title="Untick to skip this step — the countdown then keeps the previous step's reset length"><input type="checkbox" id="tr_e${i}" ${on?'checked':''}></label><span style="color:var(--t2)${on?'':';opacity:.5'}">After</span> ${dayInp('tr_d'+i,s.days)} <span style="color:var(--t2)${on?'':';opacity:.5'}">days,</span><span${on?'':' style="opacity:.5"'}>reset to</span> ${hoursSel('tr_h'+i,s.hours)}${on?'':' <span style="font-size:11px;color:var(--t3)">(off)</span>'}`); }
+  // TR-3: a line with no saved stage behind it renders SWITCHED OFF with placeholder
+  // numbers — never as if it were a configured rule. Saving stores it as enabled:false,
+  // which getTimerRules drops, so nothing the admin never set can reach the engine.
+  for(let i=1;i<=4;i++){ const s=st[i]||{days:[7,10,12,14][i-1],hours:[24,12,6,3][i-1],enabled:false}; const on=s.enabled!==false; rows+=row(`<label style="display:flex;align-items:center;gap:5px;cursor:pointer;color:var(--t2)" title="Untick to skip this step — the countdown then keeps the previous step's reset length"><input type="checkbox" id="tr_e${i}" ${on?'checked':''}></label><span style="color:var(--t2)${on?'':';opacity:.5'}">After</span> ${dayInp('tr_d'+i,s.days)} <span style="color:var(--t2)${on?'':';opacity:.5'}">days,</span><span${on?'':' style="opacity:.5"'}>reset to</span> ${hoursSel('tr_h'+i,s.hours)}${on?'':' <span style="font-size:11px;color:var(--t3)">(off)</span>'}`); }
   const ow=r.openingWindow;
   const owRow=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
     <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t1);font-weight:600;cursor:pointer"><input type="checkbox" id="tr_ow" ${ow?'checked':''}> Opening window (every phase)</label>
@@ -9502,24 +9509,77 @@ function renderTimerRules(){
     <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t1);font-weight:600;cursor:pointer"><input type="checkbox" id="tr_quiet" ${r.quietEnabled?'checked':''}> Don't let bidding close overnight</label>
     <div style="font-size:12.5px;color:var(--t2);margin-top:8px;line-height:1.7">When the reset is ${hoursSel('tr_qle',r.quietWhenHoursLE)} <span>or less, bidding won't close between</span> ${hourSel('tr_qs',r.quietStart)} <span>and</span> ${hourSel('tr_qe',r.quietEnd)} <strong>Pacific time</strong>. If it would, the countdown is extended to the ${fmtHour12(r.quietEnd)} instead.</div>
   </div>`;
-  el.innerHTML=rows+owRow+quiet;
-  // Every change asks for confirmation and, on OK, saves immediately. On Cancel
-  // we re-render from the saved rules, which reverts the field the admin touched.
+  // TR-4 · BATCHED SAVE. Editing a field no longer writes anything: it marks the editor
+  // dirty and re-checks the ladder. Nothing reaches the database until the admin presses
+  // Save, which is still guarded by one confirm dialog (working rule 5). This also makes a
+  // multi-field edit ATOMIC — the old per-field save wrote half-finished ladders that were
+  // briefly the live rule.
+  const foot=`<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--b1)">
+    <div id="tr_msg" style="font-size:12.5px;line-height:1.65;margin-bottom:8px"></div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <button id="tr_save" class="btn btn-blue" onclick="saveTimerRulesBatch()" disabled>💾 Save timer rules</button>
+      <button id="tr_cancel" class="btn" onclick="cancelTimerRules()" disabled>Cancel</button>
+      <span id="tr_dirty" style="font-size:12.5px;color:var(--t3)">No unsaved changes</span>
+    </div>
+  </div>`;
+  el.innerHTML=rows+owRow+quiet+foot;
   el.querySelectorAll('select,input').forEach(f=>{
-    f.addEventListener('change',()=>{
-      if(typeof openConfirm!=='function'){ saveTimerRules(); return; }
-      const pending=buildTimerRulesFromDOM(); // M-13: capture the edit NOW — once the modal opens, a user's bid snapshot could revert the DOM before Save reads it
-      window._trEditing=true;
-      openConfirm({
-        title:'⏱ Save timer rule change?',
-        body:'Save this change to the timer rules? It applies from now on. Only the starting reset takes effect right away (at the start of each phase); the other reset lengths kick in later — once the auction has been open the number of days you set for each one.',
-        okText:'Save change',
-        onConfirm:async()=>{ window._trEditing=false; await saveTimerRules(pending); },
-        onCancel:()=>{ window._trEditing=false; renderTimerRules(); }, // discard the edit, restore saved values
-      });
-    });
+    f.addEventListener('change',_trOnEdit);
+    f.addEventListener('input',_trOnEdit);
   });
+  _trRefreshFoot();
 }
+// TR-2 · the ladder is only meaningful if it TIGHTENS as the round ages. Nothing used to
+// check that, so a mis-ordered ladder saved silently and then went out to every bidder in
+// the welcome e-mail. Checked top-to-bottom over the switched-ON lines only; a switched-off
+// line is skipped entirely so an admin can park a rule. Returns plain-English problems.
+function _trValidate(rules){
+  const out=[];
+  const st=(rules&&Array.isArray(rules.stages))?rules.stages:[];
+  const start=st[0]||{hours:48};
+  let prevDays=0, prevHours=start.hours, prevLabel='the starting reset';
+  for(let i=1;i<st.length;i++){
+    const s=st[i];
+    if(!s||s.enabled===false) continue;
+    const label='Line '+i+' (After '+s.days+' days)';
+    if(!(s.days>0)){ out.push(label+' needs a day count of at least 1 — or switch that line off.'); continue; }
+    if(!(s.days>prevDays)){ out.push(label+' sits below '+prevLabel+' but its day count is not larger. Put the steps in order, fewest days at the top.'); }
+    if(!(s.hours<prevHours)){ out.push(label+' resets to '+s.hours+' hours, which is not shorter than '+prevLabel+' ('+prevHours+' hours). Each step has to be shorter than the one above it.'); }
+    prevDays=s.days; prevHours=s.hours; prevLabel=label;
+  }
+  return out;
+}
+function _trOnEdit(){ window._trEditing=true; _trRefreshFoot(); }
+function _trRefreshFoot(){
+  const sv=document.getElementById('tr_save'); if(!sv) return;
+  const cx=document.getElementById('tr_cancel'), msg=document.getElementById('tr_msg'), dz=document.getElementById('tr_dirty');
+  const problems=_trValidate(buildTimerRulesFromDOM());
+  const dirty=!!window._trEditing;
+  if(msg) msg.innerHTML=problems.length?('<span style="color:var(--red)">⚠️ '+problems.join('<br>⚠️ ')+'</span>'):'';
+  sv.disabled=!dirty||problems.length>0;
+  if(cx) cx.disabled=!dirty;
+  if(dz){
+    dz.textContent=dirty?(problems.length?'Fix the warning above to save':'Unsaved changes — press Save'):'No unsaved changes';
+    dz.style.color=dirty?'var(--red)':'var(--t3)';
+  }
+}
+window.saveTimerRulesBatch=function(){
+  const pending=buildTimerRulesFromDOM(); // capture BEFORE the modal opens — a live snapshot must not be able to change what gets written
+  const problems=_trValidate(pending);
+  if(problems.length){ toast('⚠️ Fix the timer-rule warnings first','warn'); _trRefreshFoot(); return; }
+  if(typeof openConfirm!=='function'){ window._trEditing=false; saveTimerRules(pending); return; }
+  openConfirm({
+    title:'⏱ Save timer rule changes?',
+    body:'Save these timer rules? They apply from now on. Only the starting reset takes effect right away (at the start of each phase); the other reset lengths kick in later — once the auction has been open the number of days you set for each one.',
+    okText:'Save changes',
+    onConfirm:async()=>{ window._trEditing=false; await saveTimerRules(pending); renderTimerRules(); },
+    onCancel:()=>{ _trRefreshFoot(); }, // keep the edits — the admin only backed out of the dialog
+  });
+};
+window.cancelTimerRules=function(){ window._trEditing=false; renderTimerRules(); };
+// TR-4 · a Save button can lose work in a way save-on-change never could, so a page that is
+// closed with unsaved timer edits asks first. Scoped to this editor's dirty flag only.
+try{ window.addEventListener('beforeunload',function(e){ if(window._trEditing){ e.preventDefault(); e.returnValue=''; } }); }catch(e){}
 window.toggleTimerRules=function(){
   const w=document.getElementById('timerRulesWrap'), c=document.getElementById('trChevron');
   if(!w) return;
@@ -9535,7 +9595,8 @@ function buildTimerRulesFromDOM(){
   const getD=id=>{ let v=parseInt(document.getElementById(id)?.value,10); if(isNaN(v)||v<0) v=0; return v; };
   const stages=[{days:0,hours:getH('tr_h0')||48}];
   for(let i=1;i<=4;i++){ const h=getH('tr_h'+i); if(h!=null) stages.push({days:getD('tr_d'+i),hours:h,enabled:document.getElementById('tr_e'+i)?.checked!==false}); }
-  stages.sort((a,b)=>a.days-b.days);
+  // TR-1: no sort here either — the saved order IS the on-screen order. getTimerRules
+  // sorts for the engine, so the stored order never affects how the timer behaves.
   let qs=parseInt(document.getElementById('tr_qs')?.value,10); if(isNaN(qs)) qs=21;
   let qe=parseInt(document.getElementById('tr_qe')?.value,10); if(isNaN(qe)) qe=9;
   let owDays=parseInt(document.getElementById('tr_owd')?.value,10); if(isNaN(owDays)||owDays<1) owDays=7; if(owDays>60) owDays=60;
