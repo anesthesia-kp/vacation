@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 277;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 278;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -2271,13 +2271,23 @@ function bfRulesBullets(){
   const f=bfFloors(); const out=[];
   const names=AC.holidays.filter(h=>h.highDemand).map(h=>h.label).filter((v,i,a)=>a.indexOf(v)===i).join(', ');
   // [build 268 · COPY] Equal floors merge into ONE sentence (owner-approved collapse).
+  // [COPY-2 · owner wording, 19 Aug 2026] State the RULE, not a list of every allowed value.
+  // The old enumeration got LONGER as the floor got STRONGER, which reads backwards. "or
+  // better" is the same ranking the priority-lock sentence above already uses — and by that
+  // ranking the 1/2 and 1/2/3 combinations beat every single number, so they stay allowed at
+  // every floor without needing to be spelled out. bfAllowedText still serves the admin
+  // floors card and the rejection alert, where the explicit list is the useful form.
   if(f.highDemand!=='none'&&f.highDemand===f.summer){
-    return [`On the highest demand weeks (${names}) and all summer weeks, only bids of ${bfAllowedText(f.highDemand)} may be used`];
+    return [`On the highest demand weeks (${names}) and all summer weeks, your bid must be ${f.highDemand} or better`];
   }
   out.push(f.highDemand==='none'
     ?`High-demand weeks (${names}) currently have no bid floor — all bids may be used`
-    :`On the highest demand weeks (${names}), only bids of ${bfAllowedText(f.highDemand)} may be used`);
-  if(f.summer!=='none') out.push(`On summer weeks, only bids of ${bfAllowedText(f.summer)} may be used`);
+    :`On the highest demand weeks (${names}), your bid must be ${f.highDemand} or better`);
+  // "it must be" only reads right after the high-demand sentence; if that one says there is
+  // no floor, the summer sentence has to stand on its own.
+  if(f.summer!=='none') out.push(f.highDemand==='none'
+    ?`On summer weeks, your bid must be ${f.summer} or better`
+    :`On summer weeks it must be ${f.summer} or better`);
   return out;
 }
 // ── [build 265 · B5] Auction Calendar card + editor ─────────────────────────────
@@ -10153,7 +10163,24 @@ function prioLockBullets(){
       ?' To fix a mistake, you may lower a bid freely in any phase (and any round of Phase 4).'
       :' To fix a mistake, you may lower a bid '+seg('per phase (and per round of Phase 4)',a[0]).replace(/ $/,'')+'.')];
   }
-  return [base+' To fix a mistake, you may lower a bid '+seg('in Phase 1',a[0])+', '+seg('in Phase 2',a[1])+', '+seg('in Phase 3',a[2])+', and '+seg('in each round of Phase 4',a[3])+'.'];
+  // [COPY-1 · owner, 19 Aug 2026] Adjacent phases that share an allowance merge into one
+  // clause, and "up to" is said once instead of once per clause. Phase 4 always stays its
+  // own clause — its count is per ROUND, so folding it into a whole-phase count would say
+  // something untrue. Falls back to the per-clause wording whenever any phase is 0 or
+  // unlimited, because "not at all" and "freely" cannot sit under a shared "up to".
+  const groups=[];
+  for(let i=0;i<3;i++){
+    const last=groups[groups.length-1];
+    if(last&&last.v===a[i]) last.ph.push(i+1); else groups.push({v:a[i],ph:[i+1]});
+  }
+  const phLabel=ph=>ph.length===1?('Phase '+ph[0]):('Phases '+ph.slice(0,-1).join(', ')+' and '+ph[ph.length-1]);
+  const parts=groups.map(g=>({v:g.v,label:'in '+phLabel(g.ph)}));
+  parts.push({v:a[3],label:'in each round of Phase 4'});
+  const times=x=>x===1?'1 time':x+' times';
+  const join=list=>list.length<2?(list[0]||''):(list.slice(0,-1).join(', ')+', and '+list[list.length-1]);
+  const simple=parts.every(p=>p.v!==0&&p.v!==Infinity);
+  const body=simple?('up to '+join(parts.map(p=>times(p.v)+' '+p.label))):join(parts.map(p=>seg(p.label,p.v)));
+  return [base+' To fix a mistake, you may lower a bid '+body+'.'];
 }
 function _blSel(id,cur){
   const opts=['0','1','2','3','4','5','6','7','8','9','unlimited'];
