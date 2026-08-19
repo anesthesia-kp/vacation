@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 150;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 151;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -1566,14 +1566,23 @@ function _rbGateCheck(){
     _rbShowGate(req);
   }catch(_){}
 }
+// ── [build 151 · FB-5 stage 2, batch 1] SIX LISTENERS MOVED BEHIND SIGN-IN ──────
+// changes · bestBids · bidLowerings · bidTimes · whitelistConfirm · welcomeLog now attach
+// in _subscribeSensitiveOnce(), i.e. only after a real Google sign-in, alongside the PII
+// docs that already lived there. They used to attach at module load, during the ANONYMOUS
+// bootstrap.
+// WHY: every one of them feeds ONLY the bidding board, which is hidden until sign-in —
+// verified by reading every use of each variable before moving it. Attaching them
+// anonymously bought nothing and forced their documents to stay world-readable, which is
+// what TODO FB-5 is unwinding. Nothing is GATED by this build; it removes the obstacle so
+// the rules can be tightened one document at a time afterwards, each proven separately.
+// The teardown in _unsubscribeSensitive() drops their caches on sign-out — a rejected
+// snapshot listener NEVER retries on this page, so stale data must not survive a session.
 onSnapshot(locksRef,  snap=>{ locksData=snap.exists()?snap.data():{globalLock:false,weeks:{}}; if(!locksData.weeks)locksData.weeks={}; scheduleRender(); });
-onSnapshot(changesRef,snap=>{ changesData=snap.exists()?snap.data():{log:[]}; if(!changesData.log)changesData.log=[]; scheduleRender(); });
 // L-5: no top-level emailsRef listener — this doc is admin/self-only in firestore.rules, so
 // during the anonymous bootstrap it was rejected permission-denied (a dead, error-logging
 // listener that never recovers). The signed-in path (_subscribeSensitiveOnce + a getDoc)
 // covers it after login; _emailsReady already initializes true so sign-in never waits on it.
-onSnapshot(bestBidsRef,snap=>{ bestBidsData=snap.exists()?snap.data():{}; });
-onSnapshot(bidLoweringsRef,snap=>{ bidLoweringsData=snap.exists()?snap.data():{}; }); // [build 139 · BL]
 onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _acCheckRemote(adminSettings); _rbGateCheck(); _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); }); // [build 136 · B5] config check first · [build 139 · GATE]
 
 // ── Maximum bids per phase (admin-set; 'none' = no limit) ──
@@ -1708,7 +1717,6 @@ function renderBidPool(user){
     </div>
 `;
 }
-onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; if(typeof popcornRefresh==='function') popcornRefresh(); scheduleRender(); });
 // [WHITELIST TRACKER 2026-07-26] Public read (initials→timestamp only). Drives the confirm banner.
 // _whitelistLoaded gates the banner so it can't FLASH on before the confirmation state has loaded
 // (without it, a confirmed user briefly sees the banner on sign-in until the first snapshot arrives).
@@ -1725,7 +1733,6 @@ function _wlOnSnap(snap){
   if(!fromCache) _whitelistLoaded=true;               // banner may only appear on server truth
   if(typeof renderWhitelistBanner==='function') renderWhitelistBanner();
 }
-onSnapshot(whitelistConfirmRef, _wlOnSnap);
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; _usernamesReady=true; if(typeof refreshLoginUsers==='function') refreshLoginUsers(); });
 // L-5: no top-level loginEmailsRef listener either — same reason; the signed-in path re-subscribes.
 // Read-only: same rule as the user list — the user site never seeds/overwrites
@@ -3410,6 +3417,14 @@ function _subscribeSensitiveOnce(){
   // [AUDIT 2026-07-25 #6] mailQueue moved here from the top level — it is registered-user
   // -only in firestore.rules now, so it must not be subscribed during anonymous bootstrap.
   _sensitiveUnsubs.push(onSnapshot(mailQueueRef, snap=>{ mailQueueData=snap.exists()?snap.data():{}; scheduleMailQueueRelay(); }));
+  // [build 151 · FB-5 stage 2] Board data — moved here from module load. Same one-shot
+  // latch, same teardown. See the note at the old attach site for why each is safe.
+  _sensitiveUnsubs.push(onSnapshot(changesRef,snap=>{ changesData=snap.exists()?snap.data():{log:[]}; if(!changesData.log)changesData.log=[]; scheduleRender(); }));
+  _sensitiveUnsubs.push(onSnapshot(bestBidsRef,snap=>{ bestBidsData=snap.exists()?snap.data():{}; }));
+  _sensitiveUnsubs.push(onSnapshot(bidLoweringsRef,snap=>{ bidLoweringsData=snap.exists()?snap.data():{}; }));
+  _sensitiveUnsubs.push(onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; if(typeof popcornRefresh==='function') popcornRefresh(); scheduleRender(); }));
+  _sensitiveUnsubs.push(onSnapshot(whitelistConfirmRef, _wlOnSnap));
+  _sensitiveUnsubs.push(onSnapshot(welcomeLogRef, snap=>{ welcomeLogData=snap.exists()?snap.data():{}; }));
 }
 // [FIX 25 Jul 2026 · delta-audit #10] Tear these down when the Google session ends. The latch
 // above is one-shot and was never reset, while "Sign in as someone else" / "Sign out" drop the
@@ -3420,6 +3435,11 @@ function _subscribeSensitiveOnce(){
 function _unsubscribeSensitive(){
   try{ _sensitiveUnsubs.forEach(fn=>{ try{ fn(); }catch(_){} }); } finally { _sensitiveUnsubs=[]; _sensitiveSubbed=false; }
   mailQueueData={};              // never relay or re-claim from a stale cache
+  // [build 151 · FB-5 stage 2] Same reasoning for the board caches now torn down above:
+  // the board is hidden while signed out, and a listener rejected under the anonymous
+  // session never retries — so nothing may survive on stale data into the next session.
+  changesData={log:[]}; bestBidsData={}; bidLoweringsData={}; bidTimesData={};
+  welcomeLogData={}; whitelistConfirmData={}; _whitelistLoaded=false;
   _recipMapsLoaded=false;        // the relay's own gate — re-armed by the next sign-in
   if(_mqTimer){ try{ clearTimeout(_mqTimer); }catch(_){} _mqTimer=null; }
 }
@@ -3774,7 +3794,6 @@ async function sendWelcomeEmail(user,email,key){
 // confirms. Reset Auction wipes it. Keyed by the address itself.
 let welcomeLogData={};
 const _welcomeInFlight=new Set(); // addresses being welcomed in THIS session (pre-persist guard)
-onSnapshot(welcomeLogRef, snap=>{ welcomeLogData=snap.exists()?snap.data():{}; });
 function _wlKey(email){ return String(email||"").trim().toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_|_$/g,""); }
 function _welcomed(key){ return !!(key && welcomeLogData && welcomeLogData.sent && welcomeLogData.sent[key]); }
 async function welcomeOnce(user,email){
