@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 278;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 280;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -2245,10 +2245,6 @@ function bfAllows(p,floor){
   if(p==="NP") return false; // weakest bid on the ladder — below every numeric floor
   return pScore(p)<=pScore(parseInt(floor,10));
 }
-function bfAllowedText(floor){
-  if(floor==='none') return 'any bid';
-  return Array.from({length:parseInt(floor,10)},(_,i)=>i+1).join(', ')+', 1/2, or 1/2/3';
-}
 // Engine-side eligibility (twin: staff 137). Placement-phase NP rule per owner, 13 Aug 2026.
 function _bfEngineFilter(u,wk,p){
   if(!bfAllows(p,bfFloorFor(wk))) return false;
@@ -2275,8 +2271,8 @@ function bfRulesBullets(){
   // The old enumeration got LONGER as the floor got STRONGER, which reads backwards. "or
   // better" is the same ranking the priority-lock sentence above already uses — and by that
   // ranking the 1/2 and 1/2/3 combinations beat every single number, so they stay allowed at
-  // every floor without needing to be spelled out. bfAllowedText still serves the admin
-  // floors card and the rejection alert, where the explicit list is the useful form.
+  // every floor without needing to be spelled out. [COPY-5 · owner, 19 Aug 2026: this type of
+  // wording is not wanted ANYWHERE, so the helper that generated it has been deleted outright.]
   // Each sentence STANDS ALONE — no "it must be" leaning on the sentence above. The rules
   // list joins these with a separator, but the welcome e-mail prints them as separate
   // bullets, where a leading pronoun has nothing to refer to.
@@ -5216,10 +5212,15 @@ window._bfChanged=function(){
   const hd=document.getElementById('bfHd'), su=document.getElementById('bfSummer'); if(!hd||!su) return;
   const cfg=_bfNormalize({highDemand:hd.value,summer:su.value});
   if(!cfg){ toast('⚠️ Invalid floor selection — nothing saved.','err'); renderBidFloorsCard(); return; }
-  const show=v=>v==='none'?'No floor — all bids allowed':'bids '+bfAllowedText(v);
+  // [COPY-4 · owner, 19 Aug 2026] The confirm dialog states the RULE, in the same words the
+  // bidders are given ('4 or better'), so the admin can see at a glance that the setting and
+  // what people are told match. The enumerated list lived here before and was 13 items long
+  // at a floor of 10. The strength order and the fact that ANY numeric floor blocks NP are
+  // spelled out in the card description directly above these controls.
+  const show=v=>v==='none'?'no floor — every bid allowed':v+' or better';
   openConfirm({
     title:'🎚 Save bid floors?',
-    body:`<div>High demand weeks: <strong>${show(cfg.highDemand)}</strong><br>Summer weeks: <strong>${show(cfg.summer)}</strong><br>All other weeks: no floor (always).</div><div class="cmodal-info" style="margin-top:8px">Applies to NEW bids on both sites and to the decision engine. Existing bids stay as placed. Editable before Phase 1 and between phases.</div>`+(phase1Started()?'<div class="cmodal-warn" style="margin-top:8px">⚠️ You are changing this BETWEEN PHASES of a LIVE auction. It takes effect for the next phase the moment you save.</div>':'')+``+(phase1Started()?_cfgStrandedWarn(_cfgStrandedBids(cfg,HIGH_DEMAND_WEEKS,null)):''),
+    body:`<div>High demand weeks: <strong>${show(cfg.highDemand)}</strong>.<br>Summer weeks: <strong>${show(cfg.summer)}</strong>.<br>All other weeks: no floor — every bid allowed.</div><div class="cmodal-info" style="margin-top:8px">Applies to NEW bids on both sites and to the decision engine. Existing bids stay as placed. Editable before Phase 1 and between phases.</div>`+(phase1Started()?'<div class="cmodal-warn" style="margin-top:8px">⚠️ You are changing this BETWEEN PHASES of a LIVE auction. It takes effect for the next phase the moment you save.</div>':'')+``+(phase1Started()?_cfgStrandedWarn(_cfgStrandedBids(cfg,HIGH_DEMAND_WEEKS,null)):''),
     okText:'💾 Save floors',
     onConfirm:async()=>{
       try{ await setDoc(adminRef,{bidFloors:cfg},{merge:true}); toast('🎚 Bid floors saved','ok'); }
