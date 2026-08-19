@@ -58,6 +58,32 @@ service cloud.firestore {
       return docId in ['loginEmails', 'emails', 'adminAccess', 'emailToUser', 'signInMisses'];
     }
 
+    // ── Bid data [FB-5 stage 1, 19 Aug 2026] ──────────────────────────────────
+    // vacations/schedule holds EVERY participant's complete bid list for every week. It
+    // fell through to the world-readable default below, so anyone holding the (public,
+    // by-design) Firebase config could read the entire live auction WITHOUT SIGNING IN.
+    // Nothing on our side depended on that, verified before changing it:
+    //   · staff page  — its bids listener is attached only inside startListening(),
+    //                   which is called on the post-Google-sign-in path.
+    //   · admin pages — every listener is deferred behind authReady, which is resolved
+    //                   only inside _enterAdmin(), i.e. after a verified admin sign-in.
+    //   · mobile.html — carries no Firebase at all.
+    //   · Daily Schedule site — never references this document (grep + isolation test).
+    //
+    // isVerifiedAccount, NOT isRegisteredUser, DELIBERATELY — this is a cost decision as
+    // much as a security one. isRegisteredUser costs an exists() + a get() on loginEmails,
+    // and rules document-accesses are BILLED AS READS. This is the most frequently
+    // delivered document in the auction, so that would add a recurring per-delivery cost
+    // to every bidder's session (see TODO FB-1's arithmetic). isVerifiedAccount reads only
+    // the auth token: zero lookups, zero cost. It is also exactly the bar the sensitive
+    // PII documents above already use, so this is consistent rather than novel.
+    // What it buys: the anonymous-stranger hole is closed. What it does NOT buy: a
+    // determined person with any Google account. That case is App Check's job (FB-4), not
+    // this rule's. Tightening to isRegisteredUser later is a one-word change.
+    function isBidDataDoc(docId) {
+      return docId == 'schedule';
+    }
+
     // ── Outbound mail relay [AUDIT 2026-07-25 #6] ─────────────────────────────
     // mailQueue holds pending alert/welcome entries — each carrying a staff e-mail
     // address and the message body. It used to fall through to the world-readable
@@ -307,7 +333,7 @@ service cloud.firestore {
       // schedule, …) stays public for the anonymous login screen.
       allow read: if isAdminReadDoc(docId) ? isAdmin()
                    : (isRelayDoc(docId) ? (isRegisteredUser() || isAdmin())
-                   : (isSensitiveDoc(docId) ? isVerifiedAccount() : true));
+                   : ((isSensitiveDoc(docId) || isBidDataDoc(docId)) ? isVerifiedAccount() : true));
       // welcomeLog only records which addresses have already been welcomed (no PII, no
       // control data). [L-8] Writable by a REGISTERED user or an admin — tightened from
       // "any verified Google account" so a signed-in outsider who isn't in the auction
