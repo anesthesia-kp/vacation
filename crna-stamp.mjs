@@ -54,6 +54,7 @@ if (placeholder) {
   console.log('   working tree, but DO NOT PUSH crna/ until the real Firebase config is in.');
 }
 
+let MD_APPCHECK = null;
 // ── transform machinery: every replacement states how many times it MUST hit ──
 let src = {};
 const fail = m => { console.error('⛔ STAMP ABORTED: ' + m); process.exit(1); };
@@ -80,13 +81,29 @@ for (const k of REQUIRED) {
   rep('admin', `${k}:"${MD_FB[k]}"`, `${k}:"${to}"`, 1);
 }
 
-// ── 1b · The sign-in help note quotes the auth domain VERBATIM to teach users which
-// Google screen is safe. On the CRNA site Google shows the CRNA domain — the note must
-// say that one, or it trains CRNAs to trust the wrong screen. (Found by the canary.)
+// ── 1b · App Check site key ────────────────────────────────────────────────────────
+// CRNA is a SEPARATE Firebase project, so it needs its OWN reCAPTCHA key — an MD key
+// would simply fail to attest there. Read the MD key out of the page rather than
+// hardcoding it, so this cannot silently drift from what the page actually ships.
+//
+// HISTORY, so nobody re-adds the old transform: until build 281/146 this slot swapped
+// the auth domain quoted in the sign-in help note ("Google will show a screen that says
+// …firebaseapp.com"), because naming the MD screen on the CRNA site would train CRNAs
+// to trust the wrong screen. The owner REPLACED that note with a security line on
+// 19 Aug 2026 (DECISIONS §64), so there is no domain left in the copy to swap. The
+// protection did NOT go away: MD_FB.authDomain is now a FORBIDDEN token below, which
+// is strictly stronger — the old code repaired a leak, the canary refuses to ship one.
 {
-  const to = FB.authDomain || 'REPLACE_ME_authDomain';
-  rep('staff', '“' + MD_FB.authDomain + '.”', '“' + to + '.”', 1);
-  rep('admin', '“' + MD_FB.authDomain + '.”', '“' + to + '.”', 1);
+  const m = src.staff.match(/APPCHECK_SITE_KEY\s*=\s*"([^"]+)"/);
+  if (!m) fail('could not read the MD App Check site key (APPCHECK_SITE_KEY) from index.html');
+  MD_APPCHECK = m[1];
+  const to = CFG.appCheckSiteKey || 'REPLACE_ME_appCheckSiteKey';
+  if (to.startsWith('REPLACE_ME')) {
+    console.log('\u26a0\ufe0f  crna-config.json has no appCheckSiteKey — stamping a placeholder.');
+    console.log('   DO NOT PUSH crna/ until the real CRNA reCAPTCHA site key is in.');
+  }
+  rep('staff', '"' + MD_APPCHECK + '"', '"' + to + '"', 1);
+  rep('admin', '"' + MD_APPCHECK + '"', '"' + to + '"', 1);
 }
 
 // ── 2 · Browser-storage keys: rename EVERY one (shared origin!) ──
@@ -184,10 +201,10 @@ for (const page of ['staff', 'admin']) {
 }
 
 // ── CANARY: nothing MD-only may survive in the CRNA output ──
-const FORBIDDEN = [MD_FB.projectId, MD_FB.appId,
+const FORBIDDEN = [MD_FB.projectId, MD_FB.appId, MD_FB.authDomain, MD_APPCHECK,
   "'auctionConfigV1'", '"vk_lastUser"', "'adminRemembered'", "'insightsView'",
   "'acReloadedFor'", '"vrl-"', "'rbgate-'"];
-for (const bad of FORBIDDEN) {
+for (const bad of FORBIDDEN.filter(Boolean)) {
   for (const page of ['staff', 'admin']) {
     if (src[page].includes(bad)) fail(`canary: MD-only token ${bad} survived in crna ${page}`);
   }
