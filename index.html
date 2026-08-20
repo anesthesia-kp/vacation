@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 151;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 152;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -1569,7 +1569,12 @@ function _rbGateCheck(){
 // ── [build 151 · FB-5 stage 2, batch 1] SIX LISTENERS MOVED BEHIND SIGN-IN ──────
 // changes · bestBids · bidLowerings · bidTimes · whitelistConfirm · welcomeLog now attach
 // in _subscribeSensitiveOnce(), i.e. only after a real Google sign-in, alongside the PII
-// docs that already lived there. They used to attach at module load, during the ANONYMOUS
+// docs that already lived there. [build 152 · FB-5 stage 2 batch 2] locks · fteMap ·
+// bidPhase · slots moved there too — same board-only rule, verified reader by reader
+// (render() and every bid-flow guard sit behind getCurrentUser()/sign-in; signinReady()
+// waits only on adminSettings). mailStats was on the batch list in error: this page only
+// WRITES it (trackEmailSent), and the admin page's listener is already behind authReady.
+// timer is NOT moved yet — its callback runs startCountdownTick(); it ships last, alone. They used to attach at module load, during the ANONYMOUS
 // bootstrap.
 // WHY: every one of them feeds ONLY the bidding board, which is hidden until sign-in —
 // verified by reading every use of each variable before moving it. Attaching them
@@ -1578,7 +1583,7 @@ function _rbGateCheck(){
 // the rules can be tightened one document at a time afterwards, each proven separately.
 // The teardown in _unsubscribeSensitive() drops their caches on sign-out — a rejected
 // snapshot listener NEVER retries on this page, so stale data must not survive a session.
-onSnapshot(locksRef,  snap=>{ locksData=snap.exists()?snap.data():{globalLock:false,weeks:{}}; if(!locksData.weeks)locksData.weeks={}; scheduleRender(); });
+// [build 152] locks listener moved to _subscribeSensitiveOnce() — see the note above.
 // L-5: no top-level emailsRef listener — this doc is admin/self-only in firestore.rules, so
 // during the anonymous bootstrap it was rejected permission-denied (a dead, error-logging
 // listener that never recovers). The signed-in path (_subscribeSensitiveOnce + a getDoc)
@@ -1737,11 +1742,13 @@ onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; _use
 // L-5: no top-level loginEmailsRef listener either — same reason; the signed-in path re-subscribes.
 // Read-only: same rule as the user list — the user site never seeds/overwrites
 // admin-owned docs on an empty read (that pattern resurrected deleted data).
-onSnapshot(fteRef,      snap=>{ if(snap.exists()){ fteData=snap.data(); scheduleRender(); } });
+// [build 152] fteMap listener moved to _subscribeSensitiveOnce(). Its read-only rule
+// (never seed/overwrite an admin-owned doc on an empty read) travels with it: the moved
+// callback still only assigns on snap.exists().
 // (approvals listener removed 15 Jul 2026 — same privacy rule as denials: the
 // user site must not react to live admin decisions during the current phase.)
 onSnapshot(phasesRef,  snap=>{ phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{}}; renderPhaseLabel(); scheduleRender(); if(typeof updateSigninPhase==='function') updateSigninPhase(); });
-onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); scheduleRender(); });
+// [build 152] bidPhase listener moved to _subscribeSensitiveOnce().
 // (denials listener removed 15 Jul 2026 — the user site must not react to live
 // admin decisions; denial outcomes reach users via completed-phase snapshots.)
 // Every e-mail this page sends counts against the shared EmailJS monthly quota —
@@ -1766,7 +1773,8 @@ function trackEmailSent(){
   // The counter is advisory (quota gauge only); EmailJS's own dashboard is the source of truth.
   setDoc(mailStatsRef,{[k]:increment(1)},{merge:true}).catch(()=>{});
 }
-onSnapshot(slotsRef,   snap=>{ slotsData=snap.exists()?snap.data():{}; applySlotOverrides(); scheduleRender(); });
+// [build 152] slots listener moved to _subscribeSensitiveOnce(). weekMeta[wk].slots stays
+// 0 for every week until it fires — nothing pre-sign-in reads capacity.
 // [AUDIT 2026-07-25 #6] No top-level mailQueue listener. That doc is now readable only
 // by REGISTERED users (it carries staff addresses + message bodies, and was previously
 // world-readable), so attaching during the anonymous bootstrap would be rejected
@@ -3425,6 +3433,13 @@ function _subscribeSensitiveOnce(){
   _sensitiveUnsubs.push(onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; if(typeof popcornRefresh==='function') popcornRefresh(); scheduleRender(); }));
   _sensitiveUnsubs.push(onSnapshot(whitelistConfirmRef, _wlOnSnap));
   _sensitiveUnsubs.push(onSnapshot(welcomeLogRef, snap=>{ welcomeLogData=snap.exists()?snap.data():{}; }));
+  // [build 152 · FB-5 stage 2 batch 2] locks · fteMap · bidPhase · slots — moved here from
+  // module load. Same one-shot latch, same teardown. Callbacks byte-identical to the old
+  // attach sites; see the note there for why each is board-only and safe.
+  _sensitiveUnsubs.push(onSnapshot(locksRef,  snap=>{ locksData=snap.exists()?snap.data():{globalLock:false,weeks:{}}; if(!locksData.weeks)locksData.weeks={}; scheduleRender(); }));
+  _sensitiveUnsubs.push(onSnapshot(fteRef,      snap=>{ if(snap.exists()){ fteData=snap.data(); scheduleRender(); } }));
+  _sensitiveUnsubs.push(onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); scheduleRender(); }));
+  _sensitiveUnsubs.push(onSnapshot(slotsRef,   snap=>{ slotsData=snap.exists()?snap.data():{}; applySlotOverrides(); scheduleRender(); }));
 }
 // [FIX 25 Jul 2026 · delta-audit #10] Tear these down when the Google session ends. The latch
 // above is one-shot and was never reset, while "Sign in as someone else" / "Sign out" drop the
@@ -3440,6 +3455,9 @@ function _unsubscribeSensitive(){
   // session never retries — so nothing may survive on stale data into the next session.
   changesData={log:[]}; bestBidsData={}; bidLoweringsData={}; bidTimesData={};
   welcomeLogData={}; whitelistConfirmData={}; _whitelistLoaded=false;
+  // [build 152] batch 2's caches — same rule. slots also re-zeroes weekMeta capacity.
+  locksData={globalLock:false,weeks:{}}; fteData={}; bidPhaseData={}; slotsData={};
+  applySlotOverrides();
   _recipMapsLoaded=false;        // the relay's own gate — re-armed by the next sign-in
   if(_mqTimer){ try{ clearTimeout(_mqTimer); }catch(_){} _mqTimer=null; }
 }
