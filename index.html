@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 153;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 154;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -2125,6 +2125,11 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
   saveInProgress=true;
   const safety=setTimeout(()=>{saveInProgress=false;},8000);
   try{
+    // [154 · AUD-C2] Capture the bid's phase identity at ENTRY — the optimistic local tag
+    // write below reclassifies a leftover completed-phase value as current-phase before the
+    // change model is built, which is exactly how a dead prior-phase bid got scored as
+    // "already competing" in the before-picture (audit 20 Aug, double-confirmed CRITICAL).
+    const _preTagCurrent=isCurrentPhaseBid(user,wk);
     // [build 126 · CRITIC LEAD 3] The bid and its PHASE TAG now commit in ONE atomic batch.
     // The old code awaited the schedule write and fire-and-forgot the bidPhase write with a
     // swallowed error — so a deadline-second re-bid on a week lost in a completed phase could
@@ -2163,8 +2168,20 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
     // Timer reset on bid activity — EXCEPT: (a) re-saving the same bid value (no
     // substantive change → no reset), and (b) inside the opening window
     // (the countdown runs continuously until the starting-reset mark).
-    const _prevVal=prevSnapshot?.[user]?.[wk];
+    // [154 · AUD-C2] Phase visibility for the change model: a value lingering from a
+    // COMPLETED phase is not a live bid — the engine refuses to score it — so a re-bid
+    // here is a genuinely NEW bid (same rule as the isVisibleBid cap check above). The
+    // dead entry is also removed from the before-picture, so the timer-mode gate and the
+    // outbid e-mails see this change displace the current projections instead of judging
+    // it "no change" against an entry nobody was competing with.
+    const _prevRaw=prevSnapshot?.[user]?.[wk];
+    const _prevVal=_preTagCurrent?_prevRaw:undefined;
     const _sameVal=bid!==null&&bid!==undefined&&_prevVal!==undefined&&JSON.stringify(bid)===JSON.stringify(_prevVal);
+    let _beforeSnap=prevSnapshot;
+    if(prevSnapshot&&!_preTagCurrent&&_prevRaw!==undefined){
+      _beforeSnap=JSON.parse(JSON.stringify(prevSnapshot));
+      if(_beforeSnap[user]) delete _beforeSnap[user][wk];
+    }
     // [build 274 · V3] The AFTER snapshot is built ONCE, up front: the timer-mode gate
     // and the outbid notifications below must judge the exact same change model (owner:
     // "use the same event that triggers an outbid e-mail"). Built from prevSnapshot +
@@ -2174,14 +2191,14 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
     // just moved to winning. Deriving the after-state here makes every path correct.
     let _afterSnap=null;
     if(prevSnapshot){
-      _afterSnap=JSON.parse(JSON.stringify(prevSnapshot));
+      _afterSnap=JSON.parse(JSON.stringify(_beforeSnap)); // [154 · AUD-C2] built on the phase-visible before-picture
       if(bid===null||bid===undefined){ if(_afterSnap[user]) delete _afterSnap[user][wk]; }
       else { (_afterSnap[user]=_afterSnap[user]||{})[wk]=bid; }
     }
     const _isNewBid=bid!==null&&bid!==undefined&&_prevVal===undefined;
     const _remBefore=timerData.lastChange?(((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)):1;
     if(timerData.enabled&&_remBefore>0&&!_sameVal&&!openingWindowActive()
-       &&_timerModeAllowsReset(_timerResetMode(),_isNewBid,prevSnapshot,_afterSnap,user)){
+       &&_timerModeAllowsReset(_timerResetMode(),_isNewBid,_beforeSnap,_afterSnap,user)){ // [154 · AUD-C2]
       const _n=Date.now(); const _resetH=timerResetHours(timerPhaseStartMs(),_n);
       // [AUDIT 2026-07-26 H5/H8] Extend-only: firestore.rules now REJECT any user timer
       // write whose deadline lands earlier than the current one, so a bidder can no longer
@@ -2194,7 +2211,7 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
       // Any change to another user's outcome — lose/draw/review -> win as well as
       // win -> lose -> draw -> review — is detected and notified. (_afterSnap built
       // above, shared with the timer-mode gate.)
-      sendEmailNotifications(prevSnapshot,_afterSnap,user).catch(()=>{});
+      sendEmailNotifications(_beforeSnap,_afterSnap,user).catch(()=>{}); // [154 · AUD-C2]
     }
     return true;
   }catch(e){
