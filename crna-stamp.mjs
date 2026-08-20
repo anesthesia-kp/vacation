@@ -176,6 +176,21 @@ for (const page of ['staff', 'admin']) {
     fail('generic storage guard: an un-renamed storage-key prefix survived in ' + page);
 }
 
+// ── [stamp guard v2 · audit LOW, 20 Aug 2026] The scan above sees only LITERAL keys.
+// Variable-keyed calls (REMEMBER_KEY — 7 staff sites incl. the 156 revocation branch —
+// and the rbgate 'k') are invisible to it and are protected only by the rename table.
+// So PIN the variable-keyed count per page: a future MD build that adds a storage key
+// through a const deviates from the pin and ABORTS the stamp, forcing the new key into
+// the rename table (and this pin bumped) deliberately — never silently.
+const VARKEY_PIN = { staff: 9, admin: 2 }; // counted at MD builds 156/290
+for (const page of ['staff', 'admin']) {
+  const total   = (src[page].match(/(?:localStorage|sessionStorage)\.(?:getItem|setItem|removeItem)\(/g) || []).length;
+  const literal = (src[page].match(/(?:localStorage|sessionStorage)\.(?:getItem|setItem|removeItem)\(\s*['"]/g) || []).length;
+  const varkeyed = total - literal;
+  if (varkeyed !== VARKEY_PIN[page])
+    fail(`generic storage guard v2: crna ${page} has ${varkeyed} variable-keyed storage call sites (pinned ${VARKEY_PIN[page]}) — a storage key was added or removed via a variable; put it in the rename table and bump the pin deliberately.`);
+}
+
 // ── 4b · NO SCHEDULING LINKS on the CRNA site (owner, 18 Aug 2026: "for now, they do
 // not belong there" — the Daily Schedule is an MD tool; revisit if/when a CRNA schedule
 // exists, tracked in TODO). Both entries in the admin's Other Systems card are removed;

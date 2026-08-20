@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 155;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 156;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -593,7 +593,7 @@ body{zoom:1.15}
   <div id="notStartedBanner" style="display:none;background:rgba(251,191,36,.14);border:1px solid rgba(251,191,36,.45);color:#7a4e00;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-weight:600;font-size:.9rem;text-align:center">⏳ Bidding has not started yet — the auction opens when admin begins Phase 1.</div>
   <div id="errorMessage" class="flash err"></div>
   <div class="selections-bar" style="margin-bottom:14px">
-    <div class="selections-bar-title">My Bid Count</div>
+    <div class="selections-bar-title">My Bid Count<span id="blLeftLine" style="margin-left:auto;font-weight:400;font-size:.72rem;color:#48607a"></span></div> <!-- [156 · W-1] owner spec: plain muted "X of Y bid lowerings left"; hidden when unlimited -->
     <div id="bidPoolBox"></div>
   </div>
   <div class="selections-bar">
@@ -812,7 +812,26 @@ const authReady = new Promise((resolve) => {
   };
   onAuthStateChanged(auth, u => {
     if (u) { resolve(u); }
-    else { _tryAnon(); }
+    else {
+      // [156 · AUD-M] EXTERNAL session end (Google password change, "sign out of all
+      // devices", account disabled): the tab used to drop silently to the anonymous
+      // bootstrap — the sensitive listeners were rejected under the anonymous token, and a
+      // rejected snapshot listener never retries, so the board froze on part-stale data
+      // with no message. Tear down and return to sign-in, same as the roster-removal
+      // branch. User-initiated sign-outs tore down BEFORE this fires, so they skip it.
+      if(typeof _sensitiveSubbed!=='undefined' && _sensitiveSubbed){
+        try{ _unsubscribeSensitive(); }catch(_){}
+        if(typeof mainContainer!=='undefined' && mainContainer && mainContainer.style.display!=='none'){
+          selectedSignInName="";
+          try{ localStorage.removeItem(REMEMBER_KEY); }catch(_){}
+          mainContainer.style.display="none";
+          try{ document.getElementById("accountSelectModal").classList.add("show"); }catch(_){}
+          if(typeof refreshLoginUsers==='function') try{ refreshLoginUsers(); }catch(_){}
+          if(typeof showSigninError==='function') try{ showSigninError("Your sign-in session ended — please sign in again."); }catch(_){}
+        }
+      }
+      _tryAnon();
+    }
   }, e => console.error('[Auth] auth listener error:', e && e.code, e && e.message));
 });
 
@@ -1705,6 +1724,17 @@ function bidPoolInfo(user){
 }
 function renderBidPool(user){
   const box=document.getElementById('bidPoolBox'); if(!box||!user) return;
+  // [156 · W-1, owner spec 20 Aug] Unobtrusive lowerings tracker so users stop asking the
+  // admin: "X of Y bid lowerings left" (Phase 4 shows the current round's numbers, since
+  // both the allowance and the usage doc are per-round there). Hidden entirely when the
+  // phase allows unlimited lowerings.
+  try{
+    const _el=document.getElementById('blLeftLine');
+    if(_el){
+      const _a=blAllowance(Number(phasesData.currentPhase||1));
+      _el.textContent=(_a===Infinity)?'':(blRemaining(user)+' of '+_a+' bid lowering'+(_a!==1?'s':'')+' left');
+    }
+  }catch(_){}
   const pool=bidPoolInfo(user);
   const chip=(n,kind)=>`<span style="display:inline-block;font-weight:700;font-size:.78rem;padding:2px 9px;border-radius:7px;margin:2px;${kind==='used'?'background:rgba(239,68,68,.12);color:#b91c1c;border:1px solid rgba(239,68,68,.3)':'background:rgba(0,117,58,.1);color:#00713a;border:1px solid rgba(0,117,58,.3)'}">${n}</span>`;
   const usedHtml=pool.used.length?pool.used.map(n=>chip(n,'used')).join(''):'<span style="color:#48607a;font-size:.8rem">None yet</span>';
@@ -3466,7 +3496,11 @@ window.userGoogleSignIn = async function(){
 // emails) live via authenticated listeners. Called once; harmless if re-invoked.
 let _sensitiveSubbed=false, _sensitiveUnsubs=[];
 function _subscribeSensitiveOnce(){
-  if(_sensitiveSubbed) return; _sensitiveSubbed=true;
+  if(_sensitiveSubbed) return;
+  // [156 · AUD-L] never latch under an anonymous (or missing) session — a slow first handler
+  // resuming after the user bailed back to the picker must not burn the one-shot.
+  if(!(auth.currentUser&&!auth.currentUser.isAnonymous)) return;
+  _sensitiveSubbed=true;
   _sensitiveUnsubs.push(onSnapshot(loginEmailsRef, snap=>{ loginEmailsData=snap.exists()?snap.data():{}; }));
   _sensitiveUnsubs.push(onSnapshot(emailsRef, snap=>{ emailsData=snap.exists()?snap.data():{}; _emailsReady=true; _emLoadedOk=true; _kpModalSync(); if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); })); // [build 139 · KPFIX] flag + late-arrival modal sync
   // [AUDIT 2026-07-25 #6] mailQueue moved here from the top level — it is registered-user
@@ -3524,7 +3558,10 @@ onAuthStateChanged(auth, async u => {
   // snapshot hasn't arrived yet (cold start) fetch it now — otherwise a valid user
   // is wrongly told "not registered".
   if(!names.length){ try{ const s=await getDoc(userListRef); const d=s.exists()?s.data():{}; if(Array.isArray(d.users)){ names.length=0; d.users.forEach(n=>names.push(n)); } }catch(_){} }
-  _subscribeSensitiveOnce();
+  // [156 · AUD-L] _subscribeSensitiveOnce() moved BELOW the registration check: for an
+  // unregistered account the mailQueue listener (registered-only in the rules) was rejected
+  // permanently while the one-shot latch stayed set — a later registered sign-in in the same
+  // tab then ran the whole session with a dead mailQueue listener.
   const justNow=_userJustSignedIn;
   const initials=resolveByEmail(u.email);
   if(!initials){
@@ -3550,6 +3587,7 @@ onAuthStateChanged(auth, async u => {
     showSigninError("This Google account ("+u.email+") isn't registered for the auction. Please contact your admin.");
     return;
   }
+  _subscribeSensitiveOnce(); // [156 · AUD-L] registered account confirmed — attach now
   selectedSignInName=initials;
   let remembered=null; try{ remembered=localStorage.getItem(REMEMBER_KEY); }catch(_){}
   // Portal bypass: arriving via an admin "Other Systems" link (?portal=1) with a live,

@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 289;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 290;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -3966,7 +3966,7 @@ window.smartLockUnlock=function(){
     if(stdUnlock>0){
       openConfirm({
         title:'⚠️ Phase 1 is high-demand only',
-        body:`<div>Phase 1 keeps every standard week LOCKED. Smart Lock &amp; Unlock would <strong>unlock ${stdUnlock} standard week${stdUnlock!==1?'s':''}</strong> that are supposed to stay locked until Phase 2.</div>
+        body:`<div>Phase 1 keeps every standard week LOCKED. Smart Lock &amp; Unlock would <strong>unlock ${stdUnlock} standard week${stdUnlock!==1?'s':''}</strong> that ${stdUnlock!==1?'are':'is'} supposed to stay locked until Phase 2.</div>
               <div class="cmodal-danger">Only continue if you deliberately want standard weeks biddable during Phase 1.</div>`,
         okText:'Continue anyway', danger:true,
         onConfirm:()=>{ window._slP1Ack=true; try{ window.smartLockUnlock(); } finally { window._slP1Ack=false; } }
@@ -4662,7 +4662,7 @@ function guardP1Unlock(wks,proceed){
   if(!p1HighDemandOnly()||!std.length){ proceed(); return; }
   openConfirm({
     title:'⚠️ Phase 1 is high-demand only',
-    body:`<div>Phase 1 keeps every standard week LOCKED. This would <strong>unlock ${std.length} standard week${std.length!==1?'s':''}</strong> that are supposed to stay locked until Phase 2.</div>
+    body:`<div>Phase 1 keeps every standard week LOCKED. This would <strong>unlock ${std.length} standard week${std.length!==1?'s':''}</strong> that ${std.length!==1?'are':'is'} supposed to stay locked until Phase 2.</div>
           <div class="cmodal-danger">Only continue if you deliberately want standard weeks biddable during Phase 1.</div>`,
     okText:'Continue anyway', danger:true,
     onConfirm:()=>proceed()
@@ -5894,7 +5894,16 @@ async function _commitBeginPhase(next){
     // phase's usage for the tracking table, then clear — SAME boundary as the priority
     // locks above (lowerings are meaningless once the floors they lowered are gone).
     if(typeof bidLoweringsArchiveRef!=='undefined'&&typeof bidLoweringsRef!=='undefined'){ // typeof = sandbox convention
-      batch.set(bidLoweringsArchiveRef,{['p'+(next-1)]:(bidLoweringsData||{})},{merge:true});
+      // [290 · AUD-L] Archive from a SERVER read — the same 269 pattern the change-log
+      // archive above uses: a stale/empty tab mirror here archived {} while the SAME batch
+      // wiped the only server copy, losing the finished window's usage for good. Fall back
+      // to the mirror only with an honest toast.
+      let _blSnap=bidLoweringsData||{};
+      if(typeof getDocFromServer==='function'){
+        try{ const _s=await getDocFromServer(bidLoweringsRef); _blSnap=_s.exists()?(_s.data()||{}):{}; }
+        catch(_e){ toast('⚠️ Could not re-read lowering usage from the server — archiving this tab’s copy.','warn'); }
+      }
+      batch.set(bidLoweringsArchiveRef,{['p'+(next-1)]:_blSnap},{merge:true});
       batch.set(bidLoweringsRef,{});
     }
     try{ await batch.commit(); }
@@ -6858,7 +6867,13 @@ window.startNextP4Round=function(){
       batch.set(deniedRef,{});
       batch.set(worstBidsRef,{}); // priority locks mean nothing across a round boundary — same rule as phases
       if(typeof bidLoweringsArchiveRef!=='undefined'&&typeof bidLoweringsRef!=='undefined'){ // typeof = sandbox convention
-        batch.set(bidLoweringsArchiveRef,{['p4r'+N]:(bidLoweringsData||{})},{merge:true}); // [build 268 · BL] archive the finished round's usage
+        // [290 · AUD-L] server-read archive — same reasoning as the phase boundary.
+        let _blSnap=bidLoweringsData||{};
+        if(typeof getDocFromServer==='function'){
+          try{ const _s=await getDocFromServer(bidLoweringsRef); _blSnap=_s.exists()?(_s.data()||{}):{}; }
+          catch(_e){ toast('⚠️ Could not re-read lowering usage from the server — archiving this tab’s copy.','warn'); }
+        }
+        batch.set(bidLoweringsArchiveRef,{['p4r'+N]:_blSnap},{merge:true}); // [build 268 · BL] archive the finished round's usage
         batch.set(bidLoweringsRef,{}); // [build 268 · BL] every round gets the same fresh allowance (owner ruling)
       }
       batch.set(phasesRef,{p4Round:N+1},{merge:true});
@@ -9889,7 +9904,7 @@ window.onDurSliderChange=function(idx){
     openConfirm({
       title:'⏱ Expire Timer Now',
       body:`<div>Slide to <strong>0</strong> makes the countdown <strong>expire immediately</strong> — bidding closes and users see the auction-closed notice.</div>
-            <div class="cmodal-warn" style="margin-top:8px">🔒 All 52 weeks will also be locked automatically.</div>
+            <div class="cmodal-warn" style="margin-top:8px">🔒 All ${mondays.length} weeks will also be locked automatically.</div>
             <div class="cmodal-info" style="margin-top:8px">The timer stays <strong>on</strong> (just expired). To turn the timer off entirely, use the on/off toggle instead.</div>`,
       okText:'Expire Timer & Lock All Weeks', danger:true,
       onConfirm:async()=>{
@@ -9914,7 +9929,7 @@ window.onDurSliderChange=function(idx){
   openConfirm({
     title:'⏱️ Set Auction Window',
     body:`<div>Set the auction window to <strong>${h}h</strong>${en?'' :' and turn the timer <strong>on</strong>'}?</div>${
-      willExpireNow?'<div class="cmodal-danger" style="margin-top:8px">⚠️ This window is <strong>shorter than the time already elapsed</strong> in this phase — confirming will <strong>close bidding immediately</strong> for everyone and lock all 52 weeks. Use <strong>Reset Timer</strong> instead if you meant "'+h+'h from now."</div>'
+      willExpireNow?'<div class="cmodal-danger" style="margin-top:8px">⚠️ This window is <strong>shorter than the time already elapsed</strong> in this phase — confirming will <strong>close bidding immediately</strong> for everyone and lock all '+mondays.length+' weeks. Use <strong>Reset Timer</strong> instead if you meant "'+h+'h from now."</div>'
       :(wasExpired?'<div class="cmodal-warn" style="margin-top:8px">Bidding is currently <strong>closed</strong> (timer expired). Changing the window keeps it closed — use <strong>Reset Timer</strong> to reopen bidding.</div>'
       :(en?'<div class="cmodal-info" style="margin-top:8px">The timer is running — this changes the total window. Use Reset Timer afterward to restart the countdown from the new duration.</div>':''))}`,
     okText:willExpireNow?'Set '+h+'h & close bidding now':`Set ${h}h`, danger:willExpireNow,
