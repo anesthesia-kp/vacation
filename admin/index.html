@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 290;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 291;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -8878,6 +8878,47 @@ function _adminPriorApprovedCount(u){
 }
 // Returns [] when a manual bid breaks nothing, else a list of plain-English problems.
 // `val` is the raw control value ("NP", "3", or "1,2,3"); isNew=true for an add.
+// [291 · ES-1, owner ruling 20 Aug 2026] HARD refusal, never a warning: a current-phase bid
+// number reused across two weeks is the ONE admin-enterable state the engine will punish --
+// I2 (anti-forgery, 26 Jul audit) scores EVERY bid carrying the number as no-bid, so both
+// weeks LOSE regardless of competition. I2 cannot tell an admin duplicate from a devtools
+// one, so entry is the gate and the engine stays untouched. Reuse of a number consumed by a
+// PRIOR-PHASE win stays a warning in adminBidIssues below -- the engine honors that override.
+// Mirrors I2's own competition filter: NP and unscorable shapes ignored, strictly-prior bids
+// never compete. Returns one entry per clash; empty = nothing fatal.
+function adminDupFatal(u,wk,val){
+  const out=[];
+  try{
+    if(val==='NP') return out;
+    const nums=String(val).split(',').map(p=>parseInt(p.trim(),10)).filter(n=>!isNaN(n));
+    if(!nums.length) return out;
+    const _cur=Number(phasesData.currentPhase||1);
+    const _scor=p=>(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10));
+    for(const w in (scheduleData[u]||{})){
+      if(w===wk) continue; // the week being edited is being replaced, not duplicated
+      const p=scheduleData[u][w];
+      if(p===undefined||p==='NP'||!_scor(p)) continue;
+      if(getUserBidPhaseAdmin(u,w)<_cur) continue; // strictly-prior bids never compete -- I2's own filter
+      for(const n of (Array.isArray(p)?p:[p])) if(nums.includes(n)) out.push({n:n,wk:w});
+    }
+  }catch(e){ console.warn('adminDupFatal failed',e); }
+  return out;
+}
+// [291 · ES-1] The explanation dialog. Both buttons just dismiss; nothing is ever written
+// from here. `after` = the caller's redraw (same contract as guardAdminBid's onCancel).
+function refuseAdminDup(u,wk,val,clashes,after){
+  const _done=()=>{ try{ if(typeof after==='function') after(); else refreshAll(); }catch(_){} };
+  const lines=clashes.map(c=>'<li>Bid <strong>'+c.n+'</strong> is already '+esc(u)+"'s bid on <strong>"+esc(wLabel(wkDate(c.wk)))+'</strong> this phase.</li>').join('');
+  openConfirm({
+    title:'🚫 Duplicate bid number — nothing saved',
+    body:`<div>One bid number = one week within a phase. This one cannot be overridden:</div>
+          <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">${lines}</ul>
+          <div class="cmodal-danger">The engine treats a number placed on two weeks as forged and scores BOTH weeks as no-bid — ${esc(u)} would LOSE both even with the strongest bid in the competition. Nothing was saved.</div>
+          <div class="cmodal-warn" style="margin-top:8px">To move the bid: remove or change it on the other week first, then place it here.</div>`,
+    okText:'Understood',
+    onConfirm:_done, onCancel:_done
+  });
+}
 function adminBidIssues(u,wk,val,isNew){
   const out=[]; const cur=Number(phasesData.currentPhase||1);
   try{
@@ -8921,6 +8962,11 @@ function adminBidIssues(u,wk,val,isNew){
 }
 // Wraps any manual bid write in a warning confirm when it breaks a bidder-facing rule.
 function guardAdminBid(u,wk,val,isNew,proceed,onCancel){
+  // [291 · ES-1] Duplicate current-phase number: hard refusal, no "Save anyway". The typeof
+  // guard exists ONLY for extracted-code test sandboxes with legacy scope (build 266
+  // precedent) -- in the real page adminDupFatal always exists (same module).
+  const _dup=(typeof adminDupFatal==='function')?adminDupFatal(u,wk,String(val)):[];
+  if(_dup.length){ refuseAdminDup(u,wk,val,_dup,onCancel); return; }
   const issues=adminBidIssues(u,wk,val,isNew);
   if(!issues.length){ proceed(); return; }
   openConfirm({
@@ -8964,7 +9010,7 @@ window.adminChangePriority=async function(u,wk,val){
     body:`<div>Change <strong>${esc(u)}</strong> on <strong>${esc(wLabel(wkDate(wk)))}</strong> from
             <strong style="font-family:var(--mono)">${esc(bidLblAdmin(_cur))}</strong> to
             <strong style="font-family:var(--mono)">${esc(String(val))}</strong>?</div>
-          <div class="cmodal-warn" style="margin-top:8px">This also clears ${esc(u)}'s priority lock for the week and removes any approval or denial already recorded, and may e-mail colleagues whose projection changes.</div>`,
+          <div class="cmodal-warn" style="margin-top:8px">The new bid becomes ${esc(u)}'s priority lock for this week; any approval or denial already recorded is removed, and colleagues whose projection changes may be e-mailed.</div>`,
     okText:'Save change', danger:true,
     onConfirm:()=>window._adminChangePriorityRaw(u,wk,val), // [M4 · 234] promise returned → failures surface
 
@@ -8990,6 +9036,11 @@ function _adminBidTimerReset(){
   }catch(_){}
 }
 window._adminChangePriorityRaw=async function(u,wk,val){
+  // [291 · ES-1] Write-level backstop: NO path may create the I2-fatal duplicate state (the
+  // replace-dead-bid dialog reaches here without guardAdminBid). typeof guard for extracted-
+  // code test sandboxes only -- in the real page adminDupFatal always exists.
+  const _dupR=(typeof adminDupFatal==='function')?adminDupFatal(u,wk,String(val)):[];
+  if(_dupR.length){ toast('🚫 Not saved — '+u+' already has bid '+[...new Set(_dupR.map(c=>c.n))].join(', ')+' on another week this phase. A duplicated number makes BOTH weeks lose; change the other week first.','err'); try{ refreshAll(); }catch(_){ } return; }
   // Direct dropdown change in Edit Selections — real per-field writes via
   // mergeFields() (updateDoc-based); plain setDoc+merge on a nested object
   // silently wipes the user's OTHER weeks, which is what this used to do.
@@ -9002,13 +9053,16 @@ window._adminChangePriorityRaw=async function(u,wk,val){
   try{ await mergeFields(scheduleRef,{[u+'.'+wk]:scheduleData[u][wk]}); }
   catch(e){ if(_hadOld) scheduleData[u][wk]=_oldVal; else delete scheduleData[u][wk]; try{ refreshAll(); }catch(_){} throw e; }
   await mergeFields(bidPhaseRef,{[u+'.'+wk]:Number(phasesData.currentPhase||1)}).catch(()=>{});
-  await updateDoc(worstBidsRef,{[`${u}.${wk}`]:deleteField()}).catch(()=>{});
+  // [291 · ES-2, owner ruling 20 Aug 2026] The admin-set bid BECOMES the priority lock
+  // (staff-lowering precedent build 139; simulator precedent). NP stamps "NP", exactly like
+  // the staff twin. Deliberate unlocking lives on the Priority Locks page.
+  await mergeFields(worstBidsRef,{[`${u}.${wk}`]:scheduleData[u][wk]}).catch(()=>{});
   // Clear approval AND denial atomically — editing the bid re-opens the week for this
   // user, so a stale denial must not silently freeze them at LOSE.
   await updateDoc(approvalsRef,{[wk]:arrayRemove(u)}).catch(()=>{});
   await updateDoc(deniedRef,{[wk]:arrayRemove(u)}).catch(()=>{});
   await _reconcileStaleDenials(wk); // [H12] advisory only — warns if a denial now projects WIN/DRAW/REVIEW
-  await adminLog(u,wk,'admin-edit',scheduleData[u][wk]); toast(`✏️ ${u} ${wk} updated · lock cleared`,"ok");
+  await adminLog(u,wk,'admin-edit',scheduleData[u][wk]); toast(`✏️ ${u} ${wk} updated · lock → ${String(val).replace(/,/g,'/')}`,"ok");
   queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
       _adminBidTimerReset(); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling)
 };
@@ -9076,6 +9130,10 @@ window.adminRemove=function(u,wk){
 window.adminAddSelection=function(){
   const u=document.getElementById("addUser").value, wk=document.getElementById("addWeek").value, pv=document.getElementById("addPriority").value;
   if(!u||!wk){toast("Select user and week","err");return;}
+  // [291 · ES-1] A duplicate current-phase number is refused outright — adding OR replacing.
+  // typeof guard for extracted-code test sandboxes only (build 266 precedent).
+  { const _dupA=(typeof adminDupFatal==='function')?adminDupFatal(u,wk,String(pv)):[];
+    if(_dupA.length){ refuseAdminDup(u,wk,pv,_dupA); return; } }
   // [build 228 · CRITIC LEAD 2] The old check was phase-blind: a DEAD prior-phase bid (lost or
   // denied in an earlier phase, still lingering in the schedule doc) triggered "already has this
   // week" — and Edit Selections locks that row too, so NO admin path could enter a current-phase
@@ -9101,7 +9159,7 @@ window.adminAddSelection=function(){
             <div style="margin-top:8px">Replace it with a <strong>Phase ${esc(String(Number(phasesData.currentPhase||1)))}</strong> bid of <strong style="font-family:var(--mono)">${esc(String(pv))}</strong>?</div>`
         +(_rIss.length?`<ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">${_rIss.map(i=>'<li>'+i+'</li>').join('')}</ul>
             <div class="cmodal-danger">Admin entries bypass every check the bidding engine applies. Only continue if this override is deliberate.</div>`:'')
-        +`<div class="cmodal-warn" style="margin-top:8px">This clears ${esc(u)}'s priority lock for the week and any leftover approval/denial, and may e-mail colleagues whose projection changes.</div>`,
+        +`<div class="cmodal-warn" style="margin-top:8px">${esc(u)}'s priority lock moves to the new bid; any leftover approval/denial is cleared, and colleagues whose projection changes may be e-mailed.</div>`,
       okText:_rIss.length?'Replace anyway':'♻️ Replace with current-phase bid', danger:true,
       onConfirm:()=>window._adminChangePriorityRaw(u,wk,pv) // [M4 · 234] promise returned → failures surface
     });
@@ -9123,6 +9181,7 @@ window.adminAddSelection=function(){
       scheduleData[u][wk]=pv==="NP"?"NP":pv.includes(",")?pv.split(",").map(Number):Number(pv);
       await mergeFields(scheduleRef,{[u+'.'+wk]:scheduleData[u][wk]});
       await mergeFields(bidPhaseRef,{[u+'.'+wk]:Number(phasesData.currentPhase||1)}).catch(()=>{});
+      await mergeFields(worstBidsRef,{[u+'.'+wk]:scheduleData[u][wk]}).catch(()=>{}); // [291 · ES-2] an admin-placed bid stamps the lock, like every staff-placed bid
       // Clear any stale approval/denial for this user+week so the freshly added bid
       // can actually compete instead of being frozen by a leftover LOSE.
       await updateDoc(approvalsRef,{[wk]:arrayRemove(u)}).catch(()=>{});
@@ -11303,7 +11362,7 @@ window.confirmAdminEdit=function(user,wk){
               ${['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3'].map(v=>`<option value="${v}"${String(curLbl)===v.replace(/,/g,'/')?' selected':''}>${v.replace(/,/g,'/')}</option>`).join('')}
             </select>
           </div>
-          <div class="cmodal-warn">Any Priority Lock for this user on this week will be removed, allowing them to rebid freely.</div>`,
+          <div class="cmodal-warn">The new bid becomes this user's Priority Lock for the week — their own bids may only hold or strengthen from it. To let them rebid weaker, clear the lock on the Priority Locks page.</div>`,
     okText:'Save Changes',
     onConfirm:async()=>{
       const val=document.getElementById("cmEditSel").value;
@@ -11319,15 +11378,16 @@ window.confirmAdminEdit=function(user,wk){
       // weeks; confirmed and fixed.
       await mergeFields(scheduleRef,{[user+'.'+wk]:scheduleData[user][wk]});
       await mergeFields(bidPhaseRef,{[user+'.'+wk]:Number(phasesData.currentPhase||1)}).catch(()=>{});
-      // Atomic delete of the priority lock for this user/week
-      await updateDoc(worstBidsRef,{[`${user}.${wk}`]:deleteField()}).catch(()=>{});
+      // [291 · ES-2] The admin-set bid BECOMES the priority lock (NP stamps "NP", like the
+      // staff twin). Deliberate unlocking lives on the Priority Locks page.
+      await mergeFields(worstBidsRef,{[`${user}.${wk}`]:scheduleData[user][wk]}).catch(()=>{});
       // Atomic array remove for approval AND denial — editing re-opens the week for
       // this user, so a stale denial must not silently freeze them at LOSE.
       await updateDoc(approvalsRef,{[wk]:arrayRemove(user)}).catch(()=>{});
       await updateDoc(deniedRef,{[wk]:arrayRemove(user)}).catch(()=>{});
       await _reconcileStaleDenials(wk); // [H12] advisory only — warns if a denial now projects WIN/DRAW/REVIEW
       await adminLog(user,wk,'admin-edit',scheduleData[user][wk]);
-      toast(`✏️ ${user} ${wk} edited; lock cleared`,'ok');
+      toast(`✏️ ${user} ${wk} edited · lock → ${val.replace(/,/g,'/')}`,'ok');
       queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
       _adminBidTimerReset(); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling)
       }); // [287 · AUD-H] end guardAdminBid wrapper
