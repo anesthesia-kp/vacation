@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 284;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 285;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -5816,6 +5816,12 @@ async function _commitBeginPhase(next){
   // Beginning a phase writes timer + approvals-clear from local state — never from stale data.
   if(!_feedsHealthyOrExplain('Begin Phase')) return false;
   if(blockedByMissingFte()) return false;
+  // [285 · AUD-C4 sibling] Same [build 245 H2] identity rule as completePhase: a stale
+  // Begin-Phase confirm (second tab / advanced elsewhere) must not wipe the NOW-LIVE
+  // phase's decisions, clear worst bids and lowerings, or re-arm the timer — and a
+  // session two phases behind must not regress currentPhase outright.
+  if(next>1&&Number(phasesData.currentPhase||1)!==next-1){ toast('Phase '+(next-1)+' is no longer current — Phase '+next+' was NOT begun.','err'); return false; }
+  if(next===1&&phase1Started()){ toast('Phase 1 has already begun — Begin Phase 1 refused.','err'); return false; }
   if(next===1){
     // [FIX 25 Jul 2026 · integrity-audit CRITICAL] Phase 1 must clear live approvals/denials too.
     // It used to only stamp the phase, so any decision written BEFORE launch survived into the
@@ -8212,7 +8218,28 @@ window._fixLockAllWeeksInline=function(){
     onConfirm:async()=>{ await window._fixLockAllWeeksInlineConfirmed(); }
   });
 };
+// [285 · AUD-C4] Action-time phase-identity guard for the DECISION writers — the same
+// [build 245 H2] rule completePhase carries. A decision dialog can sit open (second tab,
+// walked-away laptop) while the phase advances elsewhere; a click then writes a decision
+// against a bid the engine no longer scores, completePhase's snapshot keeps it, and both
+// stale-decision scans skip non-current-phase bids — a permanent, warning-exempt mis-award.
+// Capture identity when the dialog OPENS (_decisionStamp at function entry); refuse at
+// CLICK time if it moved (_decisionGuard first line of every decision onConfirm).
+function _decisionStamp(){ const cur=Number(phasesData.currentPhase||1); return {phase:cur,round:cur===4?Number(phasesData.p4Round||0):null}; }
+function _decisionGuard(atOpen,user,wk){
+  const cur=Number(phasesData.currentPhase||1);
+  if(cur!==atOpen.phase||(atOpen.round!==null&&Number(phasesData.p4Round||0)!==atOpen.round)){
+    toast('The phase changed while this dialog was open — nothing was written. Re-open the decision from the current list.','err');
+    return false;
+  }
+  if(user&&wk&&!isCurrentPhaseBidAdmin(user,wk)){
+    toast('This bid is no longer a current-phase bid — nothing was written. Re-open the decision from the current list.','err');
+    return false;
+  }
+  return true;
+}
 window.adApprove=function(user,wk,currentOutcome){
+  const _ds=_decisionStamp(); // [285 · AUD-C4]
   // [build 256 · audit FINDING 3] An archived round's decision is frozen, announced history.
   { const _ar=_p4ArchivedDecisionRound(user,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); return; } }
   // [AUDIT 2026-07-26 medium] Refuse to approve a bid the engine will not score. An
@@ -8262,6 +8289,7 @@ window.adApprove=function(user,wk,currentOutcome){
           ${overageHtml}${_bfWarnHtml}${readinessWarnHtml({user,wk})}`,
     okText:'Approve',
     onConfirm:async()=>{
+      if(!_decisionGuard(_ds,user,wk)) return; // [285 · AUD-C4]
       await updateDoc(approvalsRef,{[wk]:arrayUnion(user)}).catch(async()=>setDoc(approvalsRef,{[wk]:[user]},{merge:true}));
       await updateDoc(deniedRef,{[wk]:arrayRemove(user)}).catch(()=>{});
       await adminLog(user,wk,'admin-approve',scheduleData[user]?.[wk]);
@@ -8272,6 +8300,7 @@ window.adApprove=function(user,wk,currentOutcome){
 };
 
 window.adDeny=function(user,wk,currentOutcome){
+  const _ds=_decisionStamp(); // [285 · AUD-C4]
   // [build 256 · audit FINDING 3] Same freeze rule as adApprove.
   { const _ar=_p4ArchivedDecisionRound(user,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); return; } }
   const m=wkDate(wk);
@@ -8283,6 +8312,7 @@ window.adDeny=function(user,wk,currentOutcome){
           <div class="cmodal-warn" style="margin-top:8px">Their bid number will be returned for use in the next phase. Email notification is sent via the "Send Phase Results" button.</div>${readinessWarnHtml()}`,
     okText:'Deny',danger:true,
     onConfirm:async()=>{
+      if(!_decisionGuard(_ds,user,wk)) return; // [285 · AUD-C4]
       await updateDoc(deniedRef,{[wk]:arrayUnion(user)}).catch(async()=>setDoc(deniedRef,{[wk]:[user]},{merge:true}));
       await updateDoc(approvalsRef,{[wk]:arrayRemove(user)}).catch(()=>{});
       await adminLog(user,wk,'admin-deny',scheduleData[user]?.[wk]);
@@ -8293,6 +8323,7 @@ window.adDeny=function(user,wk,currentOutcome){
 };
 
 window.adRevokeApprove=function(user,wk){
+  const _ds=_decisionStamp(); // [285 · AUD-C4]
   // [build 256 · audit FINDING 3] An announced round win is locked via its archive — a revoke
   // here would change nothing real (the engines obey the archive) and mislead the admin.
   { const _ar=_p4ArchivedDecisionRound(user,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); return; } }
@@ -8303,6 +8334,7 @@ window.adRevokeApprove=function(user,wk){
           <div class="cmodal-warn">The user will return to their computed outcome (draw, review, win, or lose).</div>`,
     okText:'Revoke',danger:true,
     onConfirm:async()=>{
+      if(!_decisionGuard(_ds,null,null)) return; // [285 · AUD-C4] phase identity only — revokes target existing decisions
       await updateDoc(approvalsRef,{[wk]:arrayRemove(user)}).catch(()=>{});
       await adminLog(user,wk,'admin-revoke',scheduleData[user]?.[wk]);
       toast('↶ Approval revoked for '+user,'warn');
@@ -8312,6 +8344,7 @@ window.adRevokeApprove=function(user,wk){
 };
 
 window.adRevokeDeny=function(user,wk){
+  const _ds=_decisionStamp(); // [285 · AUD-C4]
   // [build 256 · audit FINDING 3] Same freeze rule — the retired bid is gone and announced.
   { const _ar=_p4ArchivedDecisionRound(user,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); return; } }
   const m=wkDate(wk);
@@ -8320,6 +8353,7 @@ window.adRevokeDeny=function(user,wk){
     body:`<div>Revoke denial for <strong>${user}</strong> on week of <strong>${wLabel(m)}</strong>?</div>`,
     okText:'Revoke',
     onConfirm:async()=>{
+      if(!_decisionGuard(_ds,null,null)) return; // [285 · AUD-C4]
       await updateDoc(deniedRef,{[wk]:arrayRemove(user)}).catch(()=>{});
       await adminLog(user,wk,'admin-revoke',scheduleData[user]?.[wk]).catch?.(()=>{});
       toast('↶ Denial revoked for '+user,'ok');
@@ -8329,6 +8363,7 @@ window.adRevokeDeny=function(user,wk){
 };
 
 window.adApproveAllWinners=function(){
+  const _ds=_decisionStamp(); // [285 · AUD-C4]
   const ap=computeApprovals();
   const toApprove=[];
   mondays.forEach(d=>{
@@ -8355,8 +8390,10 @@ window.adApproveAllWinners=function(){
           <div class="cmodal-info" style="margin-top:10px">Only bids currently showing as WIN (not already approved or denied) will be approved. Draw, Review, and Lose bids are not affected.</div>${readinessWarnHtml()}`,
     okText:'Approve All '+toApprove.length+' Winners',
     onConfirm:async()=>{
+      if(!_decisionGuard(_ds,null,null)) return; // [285 · AUD-C4]
       let count=0;
       for(const {user,wk} of toApprove){
+        if(!isCurrentPhaseBidAdmin(user,wk)) continue; // [285 · AUD-C4] list was precomputed at dialog-open
         await updateDoc(approvalsRef,{[wk]:arrayUnion(user)}).catch(async()=>setDoc(approvalsRef,{[wk]:[user]},{merge:true}));
         await adminLog(user,wk,'admin-approve',scheduleData[user]?.[wk]);
         // No per-bid email here — users are notified only via "Send Phase Results E-mails".
@@ -8369,6 +8406,7 @@ window.adApproveAllWinners=function(){
 };
 
 window.adDenyAllLosers=function(){
+  const _ds=_decisionStamp(); // [285 · AUD-C4]
   const ap=computeApprovals();
   const toDeny=[];
   mondays.forEach(d=>{
@@ -8402,6 +8440,7 @@ window.adDenyAllLosers=function(){
       // time and recompute after each write — deniedData is updated locally first, so every
       // recompute sees the previous denial. Bids the recompute promotes to WIN/DRAW/REVIEW
       // are skipped, exactly matching what clicking Deny one at a time produces.
+      if(!_decisionGuard(_ds,null,null)) return; // [285 · AUD-C4]
       let count=0, guard=0;
       for(;;){
         if(++guard>2000) break; // unreachable backstop — every pass denies one bid or exits
@@ -11129,6 +11168,7 @@ window.renderDrawsReviews=function(){
 
 // ── Revoke admin approval ──
 window.confirmRevokeApproval=function(user,wk){
+  const _ds=_decisionStamp(); // [285 · AUD-C4]
   const m=wkDate(wk);
   openConfirm({
     title:'↶ Revoke Approval',
@@ -11136,6 +11176,7 @@ window.confirmRevokeApproval=function(user,wk){
           <div class="cmodal-warn">The user will return to their original Draw or Under Review status based on the algorithm.</div>`,
     okText:'Revoke',
     onConfirm:async()=>{
+      if(!_decisionGuard(_ds,null,null)) return; // [285 · AUD-C4]
       // Atomic array remove — removes ONLY this user, never touching other approvals.
       // The old fallback here wrote {[wk]:[]} on any error, which wiped EVERY user's
       // approval for the week (setDoc+merge replaces array fields wholesale). That
@@ -11151,6 +11192,7 @@ window.confirmRevokeApproval=function(user,wk){
 
 // ── Admin approve user (overage allowed) ──
 window.confirmApprove=function(user,wk,type){
+  const _ds=_decisionStamp(); // [285 · AUD-C4]
   const cap=getSlots(wk);
   const ap=computeApprovals();
   const fteWonNow=ap[wk]?.fteWon||0;
@@ -11168,6 +11210,7 @@ window.confirmApprove=function(user,wk,type){
           ${overageHtml}${readinessWarnHtml({user,wk})}`,
     okText:'Approve',
     onConfirm:async()=>{
+      if(!_decisionGuard(_ds,user,wk)) return; // [285 · AUD-C4]
       // Atomic array union — appends user to array without ever wiping it
       await updateDoc(approvalsRef,{[wk]:arrayUnion(user)}).catch(async()=>{
         await setDoc(approvalsRef,{[wk]:[user]},{merge:true});
