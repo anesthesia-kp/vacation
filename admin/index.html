@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 285;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 289;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1647,7 +1647,7 @@ function renderAdminAccess(){
         ? '<span style="font-size:10px;color:var(--t3)">lead admin — cannot be removed</span>'
         : last
         ? '<span style="font-size:10px;color:var(--t3)">last admin — cannot be removed</span>'
-        : `<button class="btn btn-danger" style="padding:2px 8px;font-size:11px" onclick="removeAdminEmail('${email}')">✕ Remove</button>`}
+        : `<button class="btn btn-danger" style="padding:2px 8px;font-size:11px" onclick="removeAdminEmail('${_jsq(email)}')">✕ Remove</button>`}
     </div>`).join('');
 }
 window.addAdminEmail=function(){
@@ -3342,7 +3342,7 @@ function renderLockSummary(){
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
         <div style="font-size:13px">${line}</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
-          ${count?`<button class="btn btn-ghost" style="font-size:11px" onclick="var e=document.getElementById('${listId}');var open=e.style.display!=='none';e.style.display=open?'none':'block';this.textContent=open?'Show weeks':'Hide weeks';">Show weeks</button>`:''}
+          ${count?`<button class="btn btn-ghost" style="font-size:11px" onclick="var e=document.getElementById('${_jsq(listId)}');var open=e.style.display!=='none';e.style.display=open?'none':'block';this.textContent=open?'Show weeks':'Hide weeks';">Show weeks</button>`:''}
           ${extraBtn||''}
         </div>
       </div>
@@ -3555,7 +3555,11 @@ function _fpPhases(){
 function _fpWasWinning(wkMap,u,wk,val){
   const my=pScore(val); if(my>=99) return false; // NP is never a winning position
   let used=0;
-  for(const uu in wkMap){ if(uu===u) continue; const o=wkMap[uu]; if(!o||o.val===undefined||o.val==='NP') continue; if(pScore(o.val)<my) used+=getUserFTE(uu); }
+  // [286 · AUD-H] <= counts TIES too: two tied FTE-1 bids on a 1-slot week are a DRAW on
+  // every screen (getOutcome), so a lowering/cancel from that position must not flag as a
+  // "winning-bid" incident — the spec comment above always said ties don't count as winning.
+  // A multi-slot tie where everyone fits still reads as winning, exactly as before.
+  for(const uu in wkMap){ if(uu===u) continue; const o=wkMap[uu]; if(!o||o.val===undefined||o.val==='NP') continue; if(pScore(o.val)<=my) used+=getUserFTE(uu); }
   return used+getUserFTE(u)<=getSlots(wk)+0.001;
 }
 function _fpAnalyzePhase(phase,events,isCurrent){
@@ -3623,7 +3627,15 @@ function _fpAnalyzePhase(phase,events,isCurrent){
     const _a=blAllowance(Number(phasesData.currentPhase||1));
     if(_a!==Infinity){
       const lowCnt={};
-      for(const e of events){ if(e&&e.action==='lowered'&&e.user) lowCnt[e.user]=(lowCnt[e.user]||0)+1; }
+      // [286 · AUD-H] Phase 4's allowance is PER ROUND, but the live change log spans the
+      // whole phase (round boundaries never reset changesRef — only completePhase does).
+      // Fence on the latest round-results stamp: bidding is locked between results-sent
+      // and the next round start, so no legitimate lowering falls in that gap, and round 1
+      // (no stamp yet) keeps the phase-start fence of 0.
+      const _fence=(Number(phasesData.currentPhase||1)===4)
+        ?Math.max(0,...Object.values(phasesData.p4RoundResultsSent||{}).map(Number).filter(n=>!isNaN(n)))
+        :0;
+      for(const e of events){ if(e&&e.action==='lowered'&&e.user&&Number(e.ts||0)>=_fence) lowCnt[e.user]=(lowCnt[e.user]||0)+1; }
       for(const u in lowCnt){ if(lowCnt[u]>_a) bump(u,'overLower',null,null,'lowered bids '+lowCnt[u]+'× this window — allowance is '+_a+' (client gate bypassed or counter forged)'); }
     }
   }
@@ -3899,7 +3911,7 @@ window.openSummaryTab=function(kind){
   }
   const title=isUsers?'User Summary':'Weekly Summary';
   const ok=openReportTab(`Vacation Auction — ${title}`, scopeLabel,
-    `Snapshot ${stamp}${isUsers?' · Projected = outcome before admin approval/denial · Result — = awaiting admin decision':' · FTE figures count admin-approved bids only (all completed phases) · Solid chip = admin decision, outlined = projected'}`,
+    `Snapshot ${stamp}${isUsers?' · Projected = outcome before admin approval/denial · Result — = awaiting admin decision':' · FTE figures = completed-phase approvals PLUS current-phase projected winners · Solid chip = admin decision, outlined = projected'}`,
     body,false);
   if(ok) toast('👁 '+title+' opened in a new tab','ok');
 };
@@ -4533,7 +4545,7 @@ function renderLockPanel(){
   if(!tabs||!grid)return;
   const months=groupByMonth(); const keys=Object.keys(months);
   if(!selLockMonth||!months[selLockMonth]) selLockMonth=keys[0];
-  tabs.innerHTML=keys.map(m=>`<div class="tab${m===selLockMonth?' on':''}" onclick="selectLockMonth('${m}')">${m}</div>`).join('');
+  tabs.innerHTML=keys.map(m=>`<div class="tab${m===selLockMonth?' on':''}" onclick="selectLockMonth('${_jsq(m)}')">${m}</div>`).join('');
   const weeks=months[selLockMonth]||[];
   grid.innerHTML=weeks.map(d=>{
     const wk=dateKey(d);
@@ -4544,7 +4556,7 @@ function renderLockPanel(){
       <div class="wcard-range">${wRange(d)} · ${n} bid${n!==1?'s':''}</div>
       <div class="wcard-foot">
         <span class="pill ${locked?'p-red':'p-green'}">${locked?'Locked':'Open'}</span>
-        <button class="btn ${locked?'btn-success':'btn-danger'}" style="padding:3px 8px;font-size:11px" onclick="toggleWeekLock('${wk}')">${locked?'Unlock':'Lock'}</button>
+        <button class="btn ${locked?'btn-success':'btn-danger'}" style="padding:3px 8px;font-size:11px" onclick="toggleWeekLock('${_jsq(wk)}')">${locked?'Unlock':'Lock'}</button>
       </div>
     </div>`;
   }).join('');
@@ -6325,6 +6337,10 @@ window.setMailMeter=async function(){
 // Send reminder emails to users who haven't placed any bids in the CURRENT phase.
 // (Prior-phase bids or historical wins don't count — this is about who still owes bids.)
 window.sendReminderEmails=function(){
+  // [288 · AUD-H] The one mass-mail path with NO entry gates. Feed health first: the
+  // recipient set is computed from the local scheduleData mirror — with dead feeds it
+  // reads as empty and every roster user gets "you have not yet placed any bids".
+  if(!_feedsHealthyOrExplain('Send Reminders')) return;
   const cur=Number(phasesData.currentPhase||1);
   const noBidders=[];
   for(const u of names){
@@ -6353,6 +6369,11 @@ window.sendReminderEmails=function(){
           <div class="cmodal-info" style="margin-top:8px">Users without a saved email will be silently skipped.</div>`,
     okText:'Send Reminders',
     onConfirm:async()=>{
+      // [288 · AUD-H] Same in-flight guard as the two results senders — a second click
+      // mid-send must not re-mail the roster.
+      if(window._resultsSendInFlight){ toast('A send is already running — let it finish before sending again.','warn'); return; }
+      window._resultsSendInFlight=true;
+      try{
       let ok=0, fail=0, skipped=0;
       for(const u of noBidders){
         if(!recipientsFor(u).length){ skipped++; continue; }
@@ -6371,6 +6392,7 @@ Thank you!`);
       toast(fail===0
         ? `📧 Reminders: ${ok} e-mail${ok!==1?'s':''} sent${skipped?` (${skipped} had no e-mail)`:''}`
         : `⚠️ Reminders: ${ok} sent, ${fail} FAILED — check EmailJS and retry.`, fail===0?'ok':'warn');
+      }finally{ window._resultsSendInFlight=false; } // [288 · AUD-H] released even on a thrown send
     }
   });
 };
@@ -6871,6 +6893,11 @@ window._p4FinishStamp=function(){
 // Escape user-controlled strings before ANY innerHTML interpolation — a
 // username or e-mail chosen on the user site must never execute as HTML here.
 function esc(v){ return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+// [287 · AUD-H] JS-string-in-onclick escaper: a roster name with an apostrophe (O'B) dropped
+// raw into onclick="fn('${_jsq(...)}')" is a JS syntax error at click time — every per-user button
+// dies for that user. JS-escape first (\ then '), then entity-escape for the attribute; the
+// HTML parser decodes entities before the JS parser runs, so \&#39; arrives as \'.
+function _jsq(v){ return esc(String(v??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\r?\n/g,'\\n')); }
 // Unbiased in-place Fisher-Yates shuffle. Array.sort(()=>Math.random()-.5) is NOT
 // uniform — some orderings are far likelier than others — so it must never decide a
 // draw (tied users would not get equal odds). Use this for any fairness-critical shuffle.
@@ -7247,7 +7274,7 @@ function wkHeadHtml(g){
   const typeTag=g.type?` <span class="typetag" style="background:${g.type==='Summer'?'#38bdf8':'#f59e0b'}">${g.type}</span>`:'';
   // Line 1: cumulative approved/available. Line 2: FTE approved broken out by phase
   // (no per-phase available). Shown on every report; omitted only if no phase has any.
-  const cum=`Cumulative — approved ${g.fte.approved} · available ${g.fte.available} of ${g.fte.cap}`;
+  const cum=`Cumulative — committed + projected ${g.fte.approved} · available ${g.fte.available} of ${g.fte.cap}`; // [288 · AUD-H] finalFteForWeek counts prior-phase approvals PLUS current-phase projected winners — "approved" was untrue mid-phase
   const bp=(g.byPhase&&g.byPhase.length)?` <span class="fte" style="opacity:.82">Closed phase approvals — ${g.byPhase.map(x=>`P${x.phase}: ${x.approved}`).join('&nbsp;&nbsp;-&nbsp;&nbsp;')}</span>`:'';
   return `<div class="wk-head">Week ${g.wn} · ${g.date}${typeTag}<span class="fte">${cum}</span>${bp}</div>`;
 }
@@ -7334,7 +7361,7 @@ window.exportPhaseResults=function(format,scopeOverride){
       groups.forEach(g=>{
         const r=aoa.length;
         const headTxt=`Week ${g.wn} · ${g.date}${g.type?' — '+g.type:''}`;
-        const fteTxt=`Cumulative — approved ${g.fte.approved} · available ${g.fte.available} of ${g.fte.cap}`+((g.byPhase&&g.byPhase.length)?`   ·   Closed phase approvals — ${g.byPhase.map(x=>`P${x.phase}: ${x.approved}`).join('   -   ')}`:'');
+        const fteTxt=`Cumulative — committed + projected ${g.fte.approved} · available ${g.fte.available} of ${g.fte.cap}`+((g.byPhase&&g.byPhase.length)?`   ·   Closed phase approvals — ${g.byPhase.map(x=>`P${x.phase}: ${x.approved}`).join('   -   ')}`:'');
         // Week header: one merged cell on ONE LINE at normal row height — FTE status
         // sits right next to the week/date. Width comes from padding columns (below).
         const headCells=Array(nCols).fill(''); headCells[0]=`${headTxt}   ·   ${fteTxt}`;
@@ -7853,12 +7880,12 @@ window.renderAppDenials=function(){
     if(isHistorical){
       actions=`<span style="color:var(--t3);font-size:11px;font-style:italic">Phase ${e.phase} — locked</span>`;
     } else if(!e.approved&&!e.denied){
-      actions=`<button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adApprove('${e.user}','${e.wk}','${e.outcome}')">✓ Approve</button>
-               <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adDeny('${e.user}','${e.wk}','${e.outcome}')">✕ Deny</button>`;
+      actions=`<button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adApprove('${_jsq(e.user)}','${_jsq(e.wk)}','${_jsq(e.outcome)}')">✓ Approve</button>
+               <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adDeny('${_jsq(e.user)}','${_jsq(e.wk)}','${_jsq(e.outcome)}')">✕ Deny</button>`;
     } else if(e.approved){
-      actions=`<button class="btn" style="padding:3px 8px;font-size:11px;background:rgba(251,191,36,.15);color:var(--yellow);border:1px solid rgba(251,191,36,.3)" onclick="adRevokeApprove('${e.user}','${e.wk}')">↶ Revoke Approval</button>`;
+      actions=`<button class="btn" style="padding:3px 8px;font-size:11px;background:rgba(251,191,36,.15);color:var(--yellow);border:1px solid rgba(251,191,36,.3)" onclick="adRevokeApprove('${_jsq(e.user)}','${_jsq(e.wk)}')">↶ Revoke Approval</button>`;
     } else {
-      actions=`<button class="btn" style="padding:3px 8px;font-size:11px;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="adRevokeDeny('${e.user}','${e.wk}')">↶ Revoke Denial</button>`;
+      actions=`<button class="btn" style="padding:3px 8px;font-size:11px;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="adRevokeDeny('${_jsq(e.user)}','${_jsq(e.wk)}')">↶ Revoke Denial</button>`;
     }
     // A "decision" is any current-phase bid still awaiting Approve/Deny — used
     // by "Jump to Next Decision" to find and scroll to the next one in DOM order.
@@ -7890,7 +7917,7 @@ window.renderAppDenials=function(){
       const remaining=Math.round((cap-a.fteWon)*10)/10;
       byWk[wk].sort((a,b)=>outcomeRank(a.outcome)-outcomeRank(b.outcome)||a.user.localeCompare(b.user));
       const drawUsers=byWk[wk].filter(e=>e.outcome==='draw').map(e=>e.user);
-      const spinBtn=drawUsers.length>=2?`<button class="btn btn-primary" style="padding:3px 10px;font-size:11px;margin-top:6px" onclick='openWheel("${wk}",${JSON.stringify(drawUsers)})'>🎡 Spin Randomizer (${drawUsers.length} in draw)</button>`:'';
+      const spinBtn=drawUsers.length>=2?`<button class="btn btn-primary" style="padding:3px 10px;font-size:11px;margin-top:6px" onclick='openWheel("${wk}",${esc(JSON.stringify(drawUsers))})'>🎡 Spin Randomizer (${drawUsers.length} in draw)</button>`:'';
       // Week-view table: 5 columns (user, bid, status, actions, history) — no
       // leading week-label column. Header colspan = 4 (info) + 1 (button).
       html+=`<div class="dr-card" data-card="${wk}">
@@ -8697,7 +8724,7 @@ window.renderEditTable=function(){
             return (_scor?'':`<option value="" selected disabled>⚠ invalid: ${String(pl).replace(/[<>&"]/g,'')}</option>`)
               +['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3'].map(v=>`<option value="${v}"${(_scor&&String(pl)===v.replace(/,/g,'/'))?' selected':''}>${v.replace(/,/g,'/')}</option>`).join('');
           })()}</select>`;
-      const removeBtn=isHistorical?'':`<button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminRemove('${u}','${wk}')">Remove</button>`;
+      const removeBtn=isHistorical?'':`<button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminRemove('${_jsq(u)}','${_jsq(wk)}')">Remove</button>`;
       rows.push(`<tr>
         <td>${phaseBadge}<strong>${u}</strong></td><td class="mono">${wLabel(m)}</td><td style="color:var(--t2)">${wRange(m)}</td>
         <td>${controls}</td>
@@ -8850,6 +8877,12 @@ function adminBidIssues(u,wk,val,isNew){
     // 3. NP switched off for this phase.
     if(isNP&&!npAllowedForPhase(cur))
       out.push('<strong>NP bids are switched off for Phase '+cur+'</strong> — no bidder can enter NP this phase.');
+    // 3b. [287 · AUD-H] Bid floor — the one bidder-facing rule this gate was missing. The
+    // engine refuses to score a below-floor bid (only an explicit Approve overrides a
+    // floor), so a manual entry here would be silently dead on every projection.
+    { const _f=bfFloorFor(wk);
+      if(_f!=='none'&&!bfAllows(_bfParse(String(val)),_f))
+        out.push('This bid is <strong>below the week&#39;s bid floor</strong> ('+_f+' or better) — the engine will not score it; only an explicit Approve overrides a floor.'); }
     // 4. Bid-number uniqueness, incl. numbers permanently consumed by prior-phase wins.
     if(nums.length){
       const used=[..._adminPriorUsedPriorities(u)];
@@ -8926,6 +8959,21 @@ window.adminChangePriority=async function(u,wk,val){
     onCancel:()=>{ try{ if(document.activeElement&&typeof document.activeElement.blur==='function') document.activeElement.blur(); }catch(_){ } try{ refreshAll(); }catch(_){ } }
   });
 };
+// [289 · AUD-H, owner ruling 20 Aug] Admin manual bid add/edit/delete is real bid activity:
+// the staff Timer Rules tell every bidder the countdown resets on bid changes, and these
+// paths already send the outbid alerts — so they take the SAME guarded reset as the
+// simulator batch (its stated rationale applies verbatim). Guards preserved: M-6 (never
+// reset an EXPIRED timer — that would silently reopen a closed phase), never inside the
+// opening window, and "timer on but never started" counts as open, mirroring the staff page.
+function _adminBidTimerReset(){
+  try{
+    const _rem=timerData.lastChange?(getDurationMs()-(Date.now()-timerData.lastChange)):1;
+    if(timerData.enabled && _rem>0 && !openingWindowActive()){
+      const _n=Date.now();
+      setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{});
+    }
+  }catch(_){}
+}
 window._adminChangePriorityRaw=async function(u,wk,val){
   // Direct dropdown change in Edit Selections — real per-field writes via
   // mergeFields() (updateDoc-based); plain setDoc+merge on a nested object
@@ -8947,6 +8995,7 @@ window._adminChangePriorityRaw=async function(u,wk,val){
   await _reconcileStaleDenials(wk); // [H12] advisory only — warns if a denial now projects WIN/DRAW/REVIEW
   await adminLog(u,wk,'admin-edit',scheduleData[u][wk]); toast(`✏️ ${u} ${wk} updated · lock cleared`,"ok");
   queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
+      _adminBidTimerReset(); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling)
 };
 // [build 235 · audit] ONE shared atomic delete of a user's bid + phase tag + priority lock +
 // approval/denial membership — used by BOTH admin delete paths (adminRemove in Edit Selections
@@ -9005,6 +9054,7 @@ window.adminRemove=function(u,wk){
       await _reconcileStaleDenials(wk); // [H12] advisory only — warns if a denial now projects WIN/DRAW/REVIEW
       await adminLog(u,wk,'admin-remove',oldBid); toast(`🗑 Removed · lock cleared`,"warn");
       queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
+      _adminBidTimerReset(); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling)
     }
   });
 };
@@ -9064,6 +9114,7 @@ window.adminAddSelection=function(){
       await updateDoc(deniedRef,{[wk]:arrayRemove(u)}).catch(()=>{});
       await adminLog(u,wk,'admin-add',scheduleData[u][wk]); toast(`➕ Added`,"ok");
       queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
+      _adminBidTimerReset(); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling)
     }
   });
 };
@@ -9077,8 +9128,8 @@ function renderEmailsPanel(){
       <td class="mono"><strong>${n}</strong></td>
       <td><input type="email" id="em_${n}" class="inp inp-wide" value="${skip?'':esc(em)}" placeholder="no email saved">${skip?' <span class="pill p-yellow">opted out</span>':''}</td>
       <td style="display:flex;gap:6px">
-        <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveEmail('${n}')">Save</button>
-        <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearEmail('${n}')">Clear</button>
+        <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveEmail('${_jsq(n)}')">Save</button>
+        <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearEmail('${_jsq(n)}')">Clear</button>
       </td>
     </tr>`;
   }).join('');
@@ -9231,7 +9282,7 @@ function renderBestBidsTable(){
           <div class="lw-bid">FTE ${getUserFTE(user)}</div>
           <span class="pill p-blue">${esc(lbl)}</span>
           <div class="lw-actions">
-            <button class="btn btn-danger" style="padding:3px 9px;font-size:11px" onclick="clearBestBid('${user}','${wk}')">Clear Lock</button>
+            <button class="btn btn-danger" style="padding:3px 9px;font-size:11px" onclick="clearBestBid('${_jsq(user)}','${_jsq(wk)}')">Clear Lock</button>
           </div>
         </div>`;
       }).join('');
@@ -9254,7 +9305,7 @@ function renderBestBidsTable(){
     const pl=Array.isArray(p)?p.join("/"):p;
     const lbl=p==='NP'?'NP':pl;
     const wn=_wkNumByISO[wk]||'?';
-    return `<tr><td class="mono"><strong>${esc(user)}</strong></td><td class="mono">${wn}</td><td class="mono">${fmtWk(wk)}</td><td><span class="pill p-blue">${esc(lbl)}</span></td><td><button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="clearBestBid('${user}','${wk}')">Clear</button></td></tr>`;
+    return `<tr><td class="mono"><strong>${esc(user)}</strong></td><td class="mono">${wn}</td><td class="mono">${fmtWk(wk)}</td><td><span class="pill p-blue">${esc(lbl)}</span></td><td><button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="clearBestBid('${_jsq(user)}','${_jsq(wk)}')">Clear</button></td></tr>`;
   });
   tb.innerHTML=rows.length?rows.join(''):`<tr><td colspan="5" style="text-align:center;color:var(--t2);padding:20px">${filter?`No locks stored for ${filter}.`:'No locks stored.'}</td></tr>`;
 }
@@ -10099,7 +10150,7 @@ function renderPasswordsPanel(){
     return `<tr>
       <td class="mono"><strong>${n}</strong></td>
       <td><span style="font-size:12px;color:${hasPass?'var(--green)':'var(--t3)'}">${hasPass?'✓ Set':'Not set'}</span></td>
-      <td><button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearPassword('${n}')" ${hasPass?'':'disabled'}>Clear</button></td>
+      <td><button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearPassword('${_jsq(n)}')" ${hasPass?'':'disabled'}>Clear</button></td>
     </tr>`;
   }).join('');
 }
@@ -10189,16 +10240,16 @@ function renderUsersCombined(){
     return `<tr>
       <td class="mono" style="white-space:nowrap"><strong>${n}</strong></td>
       <td style="white-space:nowrap"><input type="text" id="ufn_${n}" class="inp" autocomplete="off" style="width:160px" value="${esc(usernamesData[n]||'')}" placeholder="Full name">
-        <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveFullName('${n}')">Save</button></td>
+        <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveFullName('${_jsq(n)}')">Save</button></td>
       <td style="white-space:nowrap"><input type="number" id="fte_${n}" class="inp" autocomplete="off" style="width:70px${_unsaved?';border-color:#eab308;background:rgba(234,179,8,.08)':''}" value="${fte}" step="0.1" min="0.4" max="1"${_unsaved?' title="NOT SAVED — this is the code\'s fallback, not a value you entered"':''}${fteLocked?' disabled title="FTE editing is off — use the FTE editing toggle above"':''}>
-        ${_unsaved?'<span title="Not saved — this number is the fallback the code shows when no FTE is stored" style="font-size:11px;color:#946200;font-weight:700">unsaved</span> ':''}${fteLocked?'<span title="FTE editing is off — use the FTE editing toggle above" style="font-size:13px;color:var(--t3)">🔒</span>':`<button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveFte('${n}')">Save</button>`}</td>
+        ${_unsaved?'<span title="Not saved — this number is the fallback the code shows when no FTE is stored" style="font-size:11px;color:#946200;font-weight:700">unsaved</span> ':''}${fteLocked?'<span title="FTE editing is off — use the FTE editing toggle above" style="font-size:13px;color:var(--t3)">🔒</span>':`<button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveFte('${_jsq(n)}')">Save</button>`}</td>
       <td style="white-space:nowrap"><input type="email" id="lem_${n}" class="inp" autocomplete="off" style="width:200px" value="${esc(loginEmailsData[n]||'')}" placeholder="their-google@gmail.com">
-        <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveLoginEmail('${n}')">Save</button>
-        <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearLoginEmail('${n}')">Clear</button></td>
+        <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveLoginEmail('${_jsq(n)}')">Save</button>
+        <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearLoginEmail('${_jsq(n)}')">Clear</button></td>
       <td style="white-space:nowrap"><input type="email" id="em_${n}" class="inp" autocomplete="off" style="width:190px" value="${skip?'':esc(em)}" placeholder="KP e-mail">${skip?' <span class="pill p-yellow">none</span>':''}
-        <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveEmail('${n}')">Save</button>
-        <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearEmail('${n}')">Clear</button></td>
-      <td><button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="removeUser('${n}')">🗑 Delete</button></td>
+        <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveEmail('${_jsq(n)}')">Save</button>
+        <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearEmail('${_jsq(n)}')">Clear</button></td>
+      <td><button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="removeUser('${_jsq(n)}')">🗑 Delete</button></td>
     </tr>`;
   }).join('');
 }
@@ -10680,8 +10731,8 @@ function renderFtePanel(){
     return `<tr>
       <td class="mono"><strong>${n}</strong></td>
       <td><input type="number" id="fte_${n}" class="inp" style="width:80px" value="${fte}" step="0.1" min="0.4" max="1"></td>
-      <td><button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveFte('${n}')">Save</button></td>
-      <td><button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="removeUser('${n}')">🗑 Delete</button></td>
+      <td><button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveFte('${_jsq(n)}')">Save</button></td>
+      <td><button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="removeUser('${_jsq(n)}')">🗑 Delete</button></td>
     </tr>`;
   }).join('');
 }
@@ -10779,7 +10830,7 @@ function renderSlotsPanel(){
       <td class="mono" style="white-space:nowrap;padding:3px 8px;font-size:12px">${wLabel(d)} <span style="color:var(--t2);font-size:10px;font-weight:400">${wRange(d)}</span></td>
       <td style="padding:3px 8px"><input type="number" id="slot_${wk}" class="inp" style="width:72px;padding:3px 6px" value="${val}" step="0.1" min="0">${unsaved?' <span class="pill p-yellow" title="Live capacity is 0 until saved">NOT SAVED — capacity 0</span>':''}</td>
       <td style="padding:3px 8px"><input type="number" id="slc_${wk}" class="inp" style="width:72px;padding:3px 6px" value="${getSlc(wk)}" step="0.1" min="-1" max="1" title="Week locks when remaining FTE drops below this; opens at or above it"></td>
-      <td style="padding:3px 6px"><button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveOneSlot('${wk}')">Save</button></td>
+      <td style="padding:3px 6px"><button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveOneSlot('${_jsq(wk)}')">Save</button></td>
     </tr>`;
   }).join('');
   const st=document.getElementById("slotsStatus");
@@ -11051,15 +11102,15 @@ window.renderDrawsReviews=function(){
       tag=`${projPill(natOutcome(nat,e.wk,e.user))}<span class="pill p-green">✓ APPROVED</span>`;
     }
     if(e.type==='approved'){
-      actions=`<button class="btn" style="padding:3px 9px;font-size:11px;background:rgba(251,191,36,.15);color:var(--yellow);border:1px solid rgba(251,191,36,.3)" onclick="confirmRevokeApproval('${e.user}','${e.wk}')">↶ Revoke</button>
-        <button class="btn btn-danger" style="padding:3px 9px;font-size:11px" onclick="confirmAdminCancel('${e.user}','${e.wk}')">✕ Cancel</button>`;
+      actions=`<button class="btn" style="padding:3px 9px;font-size:11px;background:rgba(251,191,36,.15);color:var(--yellow);border:1px solid rgba(251,191,36,.3)" onclick="confirmRevokeApproval('${_jsq(e.user)}','${_jsq(e.wk)}')">↶ Revoke</button>
+        <button class="btn btn-danger" style="padding:3px 9px;font-size:11px" onclick="confirmAdminCancel('${_jsq(e.user)}','${_jsq(e.wk)}')">✕ Cancel</button>`;
     } else if(e.type==='denied'){
       // Denied entries stay visible so admin can revoke them
-      actions=`<button class="btn" style="padding:3px 9px;font-size:11px;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="adRevokeDeny('${e.user}','${e.wk}')">↶ Revoke Denial</button>`;
+      actions=`<button class="btn" style="padding:3px 9px;font-size:11px;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="adRevokeDeny('${_jsq(e.user)}','${_jsq(e.wk)}')">↶ Revoke Denial</button>`;
     } else {
-      actions=`<button class="btn btn-success" style="padding:3px 9px;font-size:11px" onclick="confirmApprove('${e.user}','${e.wk}','${e.type}')">✓ Approve as Win</button>
-        <button class="btn btn-danger" style="padding:3px 9px;font-size:11px" onclick="adDeny('${e.user}','${e.wk}','${e.type}')">✕ Deny</button>
-        <button class="btn btn-danger" style="padding:3px 9px;font-size:11px;opacity:.7" onclick="confirmAdminCancel('${e.user}','${e.wk}')">✕ Cancel</button>`;
+      actions=`<button class="btn btn-success" style="padding:3px 9px;font-size:11px" onclick="confirmApprove('${_jsq(e.user)}','${_jsq(e.wk)}','${_jsq(e.type)}')">✓ Approve as Win</button>
+        <button class="btn btn-danger" style="padding:3px 9px;font-size:11px" onclick="adDeny('${_jsq(e.user)}','${_jsq(e.wk)}','${_jsq(e.type)}')">✕ Deny</button>
+        <button class="btn btn-danger" style="padding:3px 9px;font-size:11px;opacity:.7" onclick="confirmAdminCancel('${_jsq(e.user)}','${_jsq(e.wk)}')">✕ Cancel</button>`;
     }
     const m=wkDate(e.wk);
     const weekCol=showWeekLabel?`<td class="dr-weeklabel">${wLabel(m)}</td>`:'';
@@ -11137,7 +11188,7 @@ window.renderDrawsReviews=function(){
       }
       html+=`</table></div>`;
       if(drawUsers.length>=2){
-        html+=`<div style="margin-top:8px"><button class="btn btn-primary" style="padding:4px 10px;font-size:11px" onclick='openWheel("${wk}",${JSON.stringify(drawUsers)})'>🎡 Spin Randomizer</button></div>`;
+        html+=`<div style="margin-top:8px"><button class="btn btn-primary" style="padding:4px 10px;font-size:11px" onclick='openWheel("${wk}",${esc(JSON.stringify(drawUsers))})'>🎡 Spin Randomizer</button></div>`;
       }
       html+=`</div>`;
     });
@@ -11241,6 +11292,9 @@ window.confirmAdminEdit=function(user,wk){
     okText:'Save Changes',
     onConfirm:async()=>{
       const val=document.getElementById("cmEditSel").value;
+      // [287 · AUD-H] This dialog skipped adminBidIssues entirely — route the selected
+      // value through the same warning gate as every other admin bid-entry surface.
+      guardAdminBid(user,wk,val,false,async()=>{
       const _prev=snapshotSchedule();
       if(!scheduleData[user]) scheduleData[user]={};
       scheduleData[user][wk]=val==="NP"?"NP":val.includes(",")?val.split(",").map(Number):Number(val);
@@ -11260,6 +11314,8 @@ window.confirmAdminEdit=function(user,wk){
       await adminLog(user,wk,'admin-edit',scheduleData[user][wk]);
       toast(`✏️ ${user} ${wk} edited; lock cleared`,'ok');
       queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
+      _adminBidTimerReset(); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling)
+      }); // [287 · AUD-H] end guardAdminBid wrapper
     }
   });
 };
@@ -11293,6 +11349,7 @@ window.confirmAdminCancel=function(user,wk){
       await adminLog(user,wk,'admin-remove',oldBid);
       toast(`✕ ${user} ${wk} cancelled; lock cleared`,'warn');
       queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
+      _adminBidTimerReset(); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling)
     }
   });
 };
@@ -12022,12 +12079,12 @@ window.renderCloudBackups=async function(){
     const kb=Math.max(1,Math.round((b.bytes||0)/1024));
     const tip='build '+String(b.build||'?')+' · '+kb+' KB · '+(Number(b.bidUsers)||0)+' user'+(Number(b.bidUsers)!==1?'s':'')+' bidding · by '+String(b.by||'?');
     return `<div title="${esc(tip)}" style="display:flex;align-items:center;gap:10px;border:1px solid var(--b1);border-radius:8px;padding:5px 10px;margin-bottom:6px;font-size:12px;flex-wrap:wrap">
-      <button class="btn btn-danger" style="padding:2px 8px;font-size:11px" onclick="cloudRestore('${esc(b.id)}')">🛟 Restore…</button>
-      <button class="btn btn-ghost" style="padding:2px 8px;font-size:11px;border:1px solid var(--b1)" title="Restore a single user's bids, locks, times and phase tags from this backup — nobody else is touched" onclick="cloudRestoreUser('${esc(b.id)}')">👤 One user…</button>
+      <button class="btn btn-danger" style="padding:2px 8px;font-size:11px" onclick="cloudRestore('${_jsq(b.id)}')">🛟 Restore…</button>
+      <button class="btn btn-ghost" style="padding:2px 8px;font-size:11px;border:1px solid var(--b1)" title="Restore a single user's bids, locks, times and phase tags from this backup — nobody else is touched" onclick="cloudRestoreUser('${_jsq(b.id)}')">👤 One user…</button>
       <span style="font-weight:700;color:var(--t1);white-space:nowrap">☁️ ${esc(when)}</span>
       <span style="color:var(--t2);white-space:nowrap">Phase ${esc(String(b.phase||'?'))} · ${Number(b.bids)||0} bid${Number(b.bids)!==1?'s':''} · ${esc(String(b.by||'?').split('@')[0])}</span>
       <span style="margin-left:auto">
-        <button class="btn btn-ghost" style="padding:2px 6px;font-size:11px" title="Delete this backup" onclick="cloudDeleteBackup('${esc(b.id)}','${esc(when)}')">🗑</button>
+        <button class="btn btn-ghost" style="padding:2px 6px;font-size:11px" title="Delete this backup" onclick="cloudDeleteBackup('${_jsq(b.id)}','${_jsq(when)}')">🗑</button>
       </span>
     </div>`;
   }).join('')

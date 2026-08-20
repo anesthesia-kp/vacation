@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 154;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 155;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -1708,7 +1708,13 @@ function renderBidPool(user){
   const pool=bidPoolInfo(user);
   const chip=(n,kind)=>`<span style="display:inline-block;font-weight:700;font-size:.78rem;padding:2px 9px;border-radius:7px;margin:2px;${kind==='used'?'background:rgba(239,68,68,.12);color:#b91c1c;border:1px solid rgba(239,68,68,.3)':'background:rgba(0,117,58,.1);color:#00713a;border:1px solid rgba(0,117,58,.3)'}">${n}</span>`;
   const usedHtml=pool.used.length?pool.used.map(n=>chip(n,'used')).join(''):'<span style="color:#48607a;font-size:.8rem">None yet</span>';
-  const remHtml=(pool.remaining.length?pool.remaining.map(n=>chip(n,'rem')).join(''):'<span style="color:#48607a;font-size:.8rem">None</span>')+chip('NP','rem');
+  // [155 · AUD-H4] The NP chip follows the LIVE policy: green only when an NP bid could
+  // actually be placed right now; otherwise a muted chip with the reason, so the pool
+  // never contradicts the bid dialog (which already disables NP correctly).
+  const _npChip=npAllowedNow()
+    ?chip('NP','rem')
+    :`<span title="NP bids are not allowed in the current phase" style="display:inline-block;font-weight:700;font-size:.78rem;padding:2px 9px;border-radius:7px;margin:2px;background:rgba(100,116,139,.10);color:#64748b;border:1px solid rgba(100,116,139,.25)">NP</span>`;
+  const remHtml=(pool.remaining.length?pool.remaining.map(n=>chip(n,'rem')).join(''):'<span style="color:#48607a;font-size:.8rem">None</span>')+_npChip;
   box.innerHTML=`
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
       <div>
@@ -2151,7 +2157,12 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
         if(e1&&e1.code==='not-found'){ await updateDoc(scheduleRef, {[`${user}.${wk}`]: deleteField()}); }
         else throw e1;
       }
-      if(bidPhaseData[user]) delete bidPhaseData[user][wk]; // keep the local phase tag in sync too
+      // [155 · AUD-H1] The local tag delete is DEFERRED to after the timer-gate/e-mail
+      // block below: deleting it here let getUserBidPhase fall back to a completed-phase
+      // archive and classify this LIVE bid as dead in the before-picture — so a cancel
+      // that flipped a competitor LOSE→WIN sent no e-mail and (modes 2/3) never reset the
+      // countdown. The after-model holds no value for the week, so the stale tag cannot
+      // affect it. (Audit 20 Aug; the cancel-path sibling of C-2.)
     } else {
       const _ph=Number(phasesData.currentPhase||1);
       const _b=writeBatch(db);
@@ -2213,6 +2224,7 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
       // above, shared with the timer-mode gate.)
       sendEmailNotifications(_beforeSnap,_afterSnap,user).catch(()=>{}); // [154 · AUD-C2]
     }
+    if((bid===null||bid===undefined)&&bidPhaseData[user]) delete bidPhaseData[user][wk]; // [155 · AUD-H1] deferred remove-path tag cleanup (see note above)
     return true;
   }catch(e){
     showError("Save failed: "+e.message);
@@ -2548,8 +2560,26 @@ async function removeSelection(wk){
   const prioLockOn=adminSettings.priorityLockEnabled!==false;
   const bestEver=(bestBidsData[user]||{})[wk];
   const willHaveCap=prioLockOn&&((bestEver!==undefined&&bestEver!=='NP')||(prio!==undefined&&prio!=='NP'));
-  // Build informative confirmation message
-  const lockMsg=willHaveCap?`<div style="margin-top:12px;padding:10px 12px;background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);border-radius:8px;font-size:.82rem;color:#6b4602;line-height:1.5"><strong>⚠️ Priority lock note:</strong> A bid may be placed again for this week, but it must be <strong>equal to or better than your previous bid</strong> (${bidLbl(bestEver!==undefined?bestEver:prio)}).</div>`:'<div style="margin-top:12px;padding:10px 12px;background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.2);border-radius:8px;font-size:.82rem;color:#2c4257;line-height:1.5">A bid may be placed again for this week, but it must be equal to or better than your previous bid.</div>';
+  // Build informative confirmation message.
+  // [155 · AUD-H3] The old message hard-coded the absolute floor sentence in BOTH branches —
+  // untrue when lowerings are allowed (the rules list on this same page says so) and when no
+  // lock exists at all. It now states the rule actually in force, using the owner's W-1
+  // phrasing ("X of Y bid lowerings left") for the finite-lowerings case.
+  const _blA=blAllowance(Number(phasesData.currentPhase||1));
+  const _blR=blRemaining(user);
+  const _floorLbl=bidLbl(bestEver!==undefined?bestEver:prio);
+  const _boxAmber='margin-top:12px;padding:10px 12px;background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);border-radius:8px;font-size:.82rem;color:#6b4602;line-height:1.5';
+  const _boxBlue='margin-top:12px;padding:10px 12px;background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.2);border-radius:8px;font-size:.82rem;color:#2c4257;line-height:1.5';
+  let lockMsg;
+  if(!willHaveCap){
+    lockMsg=`<div style="${_boxBlue}">A bid may be placed again for this week.</div>`;
+  } else if(_blA===Infinity){
+    lockMsg=`<div style="${_boxBlue}">A bid may be placed again for this week at any level you still have available — bid lowerings are unlimited in ${_blWindowLabel()}.</div>`;
+  } else if(_blR>0){
+    lockMsg=`<div style="${_boxAmber}"><strong>⚠️ Priority lock note:</strong> A re-bid on this week must be <strong>equal to or better than your previous bid</strong> (${_floorLbl}) — or you can go lower by spending a bid lowering (${_blR} of ${_blA} bid lowerings left for ${_blWindowLabel()}).</div>`;
+  } else {
+    lockMsg=`<div style="${_boxAmber}"><strong>⚠️ Priority lock note:</strong> A bid may be placed again for this week, but it must be <strong>equal to or better than your previous bid</strong> (${_floorLbl}).</div>`;
+  }
   const msg=`<div style="font-size:.95rem;font-weight:600;color:#132f49">You are removing your bid for <span style="color:#006ba6">Week ${meta.weekNum}</span> (${meta.range}).</div>
   <div style="margin-top:8px;font-size:.85rem;color:#2c4257">Current bid: <strong style="color:#005e93">${bidLbl(prio)}</strong></div>${lockMsg}`;
   if(!await showConfirm(msg,{yesText:'Confirm Remove',noText:'Cancel'})) return;
@@ -3486,8 +3516,8 @@ onAuthStateChanged(auth, async u => {
   // OUR OWN credentials. This is what lets the security rules forbid ANONYMOUS reads
   // of loginEmails/emails (the PII) while sign-in still works: we no longer depend on
   // those docs having been pre-loaded during the anonymous bootstrap.
-  let _lemOk=false,_emOk=false;
-  try{ const s=await getDoc(loginEmailsRef); loginEmailsData=s.exists()?s.data():{}; _lemOk=true; }catch(_){}
+  let _lemOk=false,_emOk=false,_lemErr=null; // [155 · AUD-H2] keep the loginEmails error — permission-denied is a PERMANENT state under App Check enforcement
+  try{ const s=await getDoc(loginEmailsRef); loginEmailsData=s.exists()?s.data():{}; _lemOk=true; }catch(e){ _lemErr=e; }
   try{ const s=await getDoc(emailsRef); emailsData=s.exists()?s.data():{}; _emailsReady=true; _emOk=true; _emLoadedOk=true; }catch(_){} // [build 139 · KPFIX] genuinely-loaded flag
   _recipMapsLoaded=_lemOk&&_emOk; // relay may only resolve recipients once BOTH maps genuinely loaded
   // Roster-load race guard: resolveByEmail() scans `names`, so if the userList
@@ -3505,6 +3535,14 @@ onAuthStateChanged(auth, async u => {
     // problem, NOT an unregistered account — don't gate them as "not registered" and
     // don't poison the admin's unmatched-sign-in list with a valid address.
     if(!_lemOk){
+      // [155 · AUD-H2] App Check enforcement is LIVE: a device whose reCAPTCHA scores as
+      // bot-like gets permission-denied on EVERY Firestore read — permanent for that
+      // device, not a blip. Saying "try again in a moment" sent exactly the person FB-4
+      // says we must hear from into a silent retry loop instead of to the admin.
+      if(_lemErr&&_lemErr.code==='permission-denied'){
+        showSigninError("This device could not be verified by the site's security check, so your account cannot be loaded here. This usually will not fix itself by retrying — please contact your admin and mention the security check.");
+        return;
+      }
       showSigninError("Couldn't verify your sign-in just now (temporary connection problem). Please try again in a moment.");
       return;
     }
