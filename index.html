@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 159;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 160;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -456,7 +456,13 @@ body{zoom:1.15}
 <div id="priorityModal" class="modal">
   <div class="modal-content">
     <div id="prioStep1">
-      <h2 class="modal-title">Select Bid</h2>
+      <!-- [160] The refusal belongs where the reader is already looking. Owner marked the
+           spot: the title row, to the right of the heading. Sitting in the row rather than
+           between the fields means a message never shoves the dropdown down the dialog. -->
+      <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:16px">
+        <h2 class="modal-title" style="margin:0;flex:0 0 auto">Select Bid</h2>
+        <div class="dlg-err" style="display:none;flex:1 1 auto;background:#fee2e2;border:1px solid #ef4444;color:#b91c1c;border-radius:8px;padding:7px 10px;font-size:.8rem;font-weight:600;line-height:1.35;text-align:center"></div>
+      </div>
       <div id="prioWeekInfo" style="background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.25);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:.85rem"></div>
       <label class="modal-label">Bid Level</label>
       <select id="prioritySelect" class="priority-input">
@@ -475,7 +481,10 @@ body{zoom:1.15}
       </div>
     </div>
     <div id="prioStep2" style="display:none">
-      <h2 class="modal-title">Confirm Your Bid</h2>
+      <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:16px">
+        <h2 class="modal-title" style="margin:0;flex:0 0 auto">Confirm Your Bid</h2>
+        <div class="dlg-err" style="display:none;flex:1 1 auto;background:#fee2e2;border:1px solid #ef4444;color:#b91c1c;border-radius:8px;padding:7px 10px;font-size:.8rem;font-weight:600;line-height:1.35;text-align:center"></div>
+      </div>
       <div style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:14px 16px;margin-bottom:16px">
         <div style="font-size:.7rem;color:#48607a;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Week</div>
         <div id="confirmDates" style="font-size:1rem;font-weight:700;color:#132f49;margin-bottom:12px"></div>
@@ -2322,7 +2331,37 @@ function showCenterAlert(msg){
   document.getElementById('centerAlertOk').onclick=()=>ov.remove();
 }
 
-function flash(el,msg,dur){ el.textContent=msg; el.classList.add("show"); setTimeout(()=>el.classList.remove("show"),dur); }
+// [160] One entry point, two destinations. If a dialog is open and offers a .dlg-err slot,
+// the message goes THERE — beside that dialog's own heading, where the reader is already
+// looking. Otherwise it falls back to the floating banner, which is still the only way to
+// surface a board-level refusal ("This week is locked", "Save failed") that has no dialog.
+function _openDlgErrSlot(){
+  try{
+    const boxes=document.querySelectorAll('.modal.show');
+    for(let i=boxes.length-1;i>=0;i--){            // topmost open dialog wins
+      const step=boxes[i].querySelector('#prioStep2');
+      const visibleStep2=step&&step.style.display!=='none';
+      const slots=boxes[i].querySelectorAll('.dlg-err');
+      if(!slots.length) continue;
+      if(slots.length>1&&visibleStep2) return slots[slots.length-1];
+      return slots[0];
+    }
+  }catch(_){}
+  return null;
+}
+function _clearDlgErrs(){
+  try{ document.querySelectorAll('.dlg-err').forEach(e=>{ e.style.display='none'; e.textContent=''; }); }catch(_){}
+}
+function flash(el,msg,dur){
+  const slot=_openDlgErrSlot();
+  if(slot){
+    slot.textContent=msg; slot.style.display='block';
+    clearTimeout(slot._t); slot._t=setTimeout(()=>{ slot.style.display='none'; slot.textContent=''; },dur);
+    return;
+  }
+  el.textContent=msg; el.classList.add("show");
+  clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove("show"),dur);
+}
 
 // ── Priority modal ──
 function openPriorityModal(wk){
@@ -2370,6 +2409,7 @@ function openPriorityModal(wk){
   }
   document.getElementById("prioStep1").style.display="block";
   document.getElementById("prioStep2").style.display="none";
+  _clearDlgErrs(); // [160] a refusal from the last attempt never greets the next one
   const sel=document.getElementById("prioritySelect"); sel.value="";
   const isHighPrioOnly=weekMeta[wk]?.highPriorityOnly||false;
   const isSummerOnly=weekMeta[wk]?.summerOnly||false;
