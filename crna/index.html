@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 156;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 158;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -826,6 +826,11 @@ const authReady = new Promise((resolve) => {
           try{ localStorage.removeItem(REMEMBER_KEY); }catch(_){}
           mainContainer.style.display="none";
           try{ document.getElementById("accountSelectModal").classList.add("show"); }catch(_){}
+          // [157 · RA-M4] The error box lives INSIDE the picker panel, and a remembered
+          // "Continue as X" session keeps the picker hidden -- so force the picker visible
+          // (the remembered key was just cleared, making the picker the truthful screen),
+          // or the honest message this branch exists to show never shows.
+          if(typeof signinShowPicker==='function') try{ signinShowPicker(); }catch(_){}
           if(typeof refreshLoginUsers==='function') try{ refreshLoginUsers(); }catch(_){}
           if(typeof showSigninError==='function') try{ showSigninError("Your sign-in session ended — please sign in again."); }catch(_){}
         }
@@ -1732,7 +1737,12 @@ function renderBidPool(user){
     const _el=document.getElementById('blLeftLine');
     if(_el){
       const _a=blAllowance(Number(phasesData.currentPhase||1));
-      _el.textContent=(_a===Infinity)?'':(blRemaining(user)+' of '+_a+' bid lowering'+(_a!==1?'s':'')+' left');
+      // [157 · RA-H6/RA-L2] Render ONLY while the feature is real: hidden when unlimited,
+      // when the allowance is 0 (feature off -- the copy rules never mention an off
+      // feature), and when priority locks are disabled (no floors exist, nothing to
+      // "lower"; every other lowering surface already gates on that toggle).
+      const _locksOn=!(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.priorityLockEnabled===false);
+      _el.textContent=(_a===Infinity||!(_a>0)||!_locksOn)?'':(blRemaining(user)+' of '+_a+' bid lowering'+(_a!==1?'s':'')+' left');
     }
   }catch(_){}
   const pool=bidPoolInfo(user);
@@ -2166,6 +2176,14 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
     // change model is built, which is exactly how a dead prior-phase bid got scored as
     // "already competing" in the before-picture (audit 20 Aug, double-confirmed CRITICAL).
     const _preTagCurrent=isCurrentPhaseBid(user,wk);
+    // [158 · RA-H2] Capture the raw LOCAL tag too. The Firestore web SDK's latency-
+    // compensated listener echo replaces bidPhaseData WHOLESALE the moment the remove
+    // batch touches the local copy of the server doc -- usually BEFORE commit() resolves --
+    // so the tag the 155 fix "deferred deleting" is already gone when the change model
+    // runs, and getUserBidPhase reclassifies the live bid as a dead prior-phase entry
+    // (no outbid mail, no mode-2/3 timer reset). Captured here; re-injected after the
+    // commit for the SYNCHRONOUS model computations; removed by the deferred cleanup.
+    const _preTagRaw=bidPhaseData[user]?bidPhaseData[user][wk]:undefined;
     // [build 126 · CRITIC LEAD 3] The bid and its PHASE TAG now commit in ONE atomic batch.
     // The old code awaited the schedule write and fire-and-forgot the bidPhase write with a
     // swallowed error — so a deadline-second re-bid on a week lost in a completed phase could
@@ -2193,6 +2211,15 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
       // that flipped a competitor LOSE→WIN sent no e-mail and (modes 2/3) never reset the
       // countdown. The after-model holds no value for the week, so the stale tag cannot
       // affect it. (Audit 20 Aug; the cancel-path sibling of C-2.)
+      // [158 · RA-H2] ...and the deferral alone was NOT enough: the listener echo (see the
+      // capture note above) usually wipes the tag before commit() resolves. Re-inject the
+      // pre-change tag now. Safe because the timer gate AND sendEmailNotifications' outcome
+      // diff both run synchronously below (an async function runs synchronously to its
+      // first await), before the deferred cleanup removes the tag again.
+      if(_preTagCurrent&&data[user]&&true){
+        if(!bidPhaseData[user]) bidPhaseData[user]={};
+        bidPhaseData[user][wk]=_preTagRaw!==undefined?_preTagRaw:Number(phasesData.currentPhase||1);
+      }
     } else {
       const _ph=Number(phasesData.currentPhase||1);
       const _b=writeBatch(db);
@@ -2601,12 +2628,32 @@ async function removeSelection(wk){
   const _boxAmber='margin-top:12px;padding:10px 12px;background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);border-radius:8px;font-size:.82rem;color:#6b4602;line-height:1.5';
   const _boxBlue='margin-top:12px;padding:10px 12px;background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.2);border-radius:8px;font-size:.82rem;color:#2c4257;line-height:1.5';
   let lockMsg;
+  // [157 · RA-H11] Never promise a lowering the week's rules make impossible: check whether
+  // ANY allowed value is actually weaker than the stored lock (bid floor + NP-phase rules,
+  // the same filters the re-bid modal applies to its options). Fails OPEN to the old
+  // wording -- a broken check must never hide a real lowering option.
+  // [157 · RA-L1] Singular/plural follows the allowance, matching the W-1 counter.
+  const _lockVal=bestEver!==undefined?bestEver:prio;
+  const _canLower=(function(){
+    try{
+      const _fl=bfFloorFor(wk), _ls=priorityScore(_lockVal);
+      return ['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3'].some(function(v){
+        const p=v==='NP'?'NP':(v.includes(',')?v.split(',').map(Number):Number(v));
+        if(priorityScore(p)<=_ls) return false;
+        if(!bfAllows(p,_fl)) return false;
+        if(p==='NP'&&!npAllowedNow()) return false;
+        return true;
+      });
+    }catch(_){ return true; }
+  })();
   if(!willHaveCap){
     lockMsg=`<div style="${_boxBlue}">A bid may be placed again for this week.</div>`;
+  } else if(!_canLower){
+    lockMsg=`<div style="${_boxAmber}"><strong>⚠️ Priority lock note:</strong> A bid may be placed again for this week, but it must be <strong>equal to or better than your previous bid</strong> (${_floorLbl}) — nothing weaker can be placed on this week.</div>`;
   } else if(_blA===Infinity){
     lockMsg=`<div style="${_boxBlue}">A bid may be placed again for this week at any level you still have available — bid lowerings are unlimited in ${_blWindowLabel()}.</div>`;
   } else if(_blR>0){
-    lockMsg=`<div style="${_boxAmber}"><strong>⚠️ Priority lock note:</strong> A re-bid on this week must be <strong>equal to or better than your previous bid</strong> (${_floorLbl}) — or you can go lower by spending a bid lowering (${_blR} of ${_blA} bid lowerings left for ${_blWindowLabel()}).</div>`;
+    lockMsg=`<div style="${_boxAmber}"><strong>⚠️ Priority lock note:</strong> A re-bid on this week must be <strong>equal to or better than your previous bid</strong> (${_floorLbl}) — or you can go lower by spending a bid lowering (${_blR} of ${_blA} bid lowering${_blA!==1?'s':''} left for ${_blWindowLabel()}).</div>`;
   } else {
     lockMsg=`<div style="${_boxAmber}"><strong>⚠️ Priority lock note:</strong> A bid may be placed again for this week, but it must be <strong>equal to or better than your previous bid</strong> (${_floorLbl}).</div>`;
   }
@@ -3558,6 +3605,12 @@ onAuthStateChanged(auth, async u => {
   // snapshot hasn't arrived yet (cold start) fetch it now — otherwise a valid user
   // is wrongly told "not registered".
   if(!names.length){ try{ const s=await getDoc(userListRef); const d=s.exists()?s.data():{}; if(Array.isArray(d.users)){ names.length=0; d.users.forEach(n=>names.push(n)); } }catch(_){} }
+  // [158 · RA-H5] The awaits above can take seconds (App Check + cold Firestore). If the
+  // user clicked "Sign in as someone else" or signed out meanwhile, the session is now
+  // anonymous (or a different account) and completing THIS sign-in would open a live-
+  // looking board under the wrong token — empty caches, dead listeners, wrong identity.
+  // Act only if the closed-over user is still the CURRENT session.
+  if(!auth.currentUser||auth.currentUser.isAnonymous||auth.currentUser.uid!==u.uid) return;
   // [156 · AUD-L] _subscribeSensitiveOnce() moved BELOW the registration check: for an
   // unregistered account the mailQueue listener (registered-only in the rules) was rejected
   // permanently while the one-shot latch stayed set — a later registered sign-in in the same
@@ -3819,8 +3872,19 @@ function timerRulesEmailText(){
   let owTxt='';
   if(r.openingWindow){ owTxt=`\n\nEach phase opens with a ${r.openingWindow.days}-day window: the timer counts down continuously (bids do NOT reset it) until ${(st[0]||{}).hours||48} hours remain — then the reset rules above take over.`; }
   const endLine='Each phase ends when the countdown timer gets to 0. ';
-  if(st.length<=1){ return endLine+`Every time anyone places or changes a bid, the countdown resets to ${(st[0]||{}).hours||48} hours.${quiet}${owTxt}`; }
-  return endLine+`Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}${owTxt}`;
+  // [157 · RA-M2] The reset sentence follows the admin-selected mode, exactly like the
+  // on-site explainer (build 274 V3) whose wording this e-mail promises to match.
+  // Mode 1 keeps the classic wording byte-for-byte.
+  const _m=_timerResetMode();
+  const resetSentence=_m===2
+    ?'The countdown resets when a bid, change, or cancel changes the projected outcome for another user — moves that affect only your own bids do not reset it'
+    :_m===3
+    ?'Every NEW bid resets the countdown; changes and cancels reset it only when they change the projected outcome for another user'
+    :'Every time anyone places or changes a bid, the countdown resets';
+  if(st.length<=1){ return endLine+(_m===1
+    ?`Every time anyone places or changes a bid, the countdown resets to ${(st[0]||{}).hours||48} hours.${quiet}${owTxt}`
+    :`${resetSentence}. Each qualifying reset returns the countdown to ${(st[0]||{}).hours||48} hours.${quiet}${owTxt}`); }
+  return endLine+`${resetSentence}. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}${owTxt}`;
 }
 function buildWelcomeEmailBody(user){
   // Plain-text e-mail can't hang-indent a soft-wrapped line, so split the (long) cap

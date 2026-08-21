@@ -108,6 +108,17 @@ by design — the send button is still a deliberate act.
 
 ---
 
+**NE-14 · A bid or projection changes under the admin's decisions.** Once bidding is
+closed (timer expiry or the explicit Close Bidding flag), no user bid write may land —
+approvals and denials are made against a frozen board. (Owner order, 20 Aug 2026.)
+*Guard:* firestore.rules — bid-doc writes require `timerNotExpired() && biddingNotClosed()`
+(the 25 Jul audit closed the devtools-after-close hole this rule exists for); every
+decision additionally carries a phase/round identity stamp (C-4), so even a stale dialog
+cannot land in the wrong era. Deciding while bidding is still OPEN is legitimate but the
+Approvals & Denials panel banners it plainly (build 296).
+*Proven today:* the rules assertions (emulator suite, pending its one-time jar) + C-4
+suites. *Planned:* included in the rules-emulator run once RA-2 is enabled.
+
 ## What the mega-fuzz will assert on every decided week of every random auction
 F-1 no priority inversion (mirrors the shipped guard from first principles, not by re-running it) ·
 F-2 no automatic over-cap / over-overage · F-3 prior winners intact across phases · F-4 malformed

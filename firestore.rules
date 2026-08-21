@@ -80,8 +80,17 @@ service cloud.firestore {
     // What it buys: the anonymous-stranger hole is closed. What it does NOT buy: a
     // determined person with any Google account. That case is App Check's job (FB-4), not
     // this rule's. Tightening to isRegisteredUser later is a one-word change.
+    // [PREP 20 Aug 2026 · RA-H13, owner: prepare-and-hold] FB-5 finished: the remaining
+    // world-readable bid data joins the same verified-sign-in gate. bestBids (every
+    // user's strongest bid VALUE per week), changes (the full timestamped bid history),
+    // bidTimes, bidPhase and bidLowerings together let an unauthenticated session
+    // reconstruct the whole live auction and bid exactly one number stronger. Every
+    // staff listener for these five has been behind the signed-in path since FB-5
+    // stage 2 (builds 151/152); the admin page signs in; mobile is a redirect — so
+    // gating reads breaks nobody. Same zero-cost isVerifiedAccount bar as above.
     function isBidDataDoc(docId) {
-      return docId == 'schedule';
+      return docId == 'schedule' || docId == 'bestBids' || docId == 'changes'
+          || docId == 'bidTimes' || docId == 'bidPhase' || docId == 'bidLowerings';
     }
 
     // ── Outbound mail relay [AUDIT 2026-07-25 #6] ─────────────────────────────
@@ -422,9 +431,24 @@ service cloud.firestore {
                    // the staff banner both read. Isolated from the auction: no auction doc, engine,
                    // or phase logic touches it.
                    || (docId == 'whitelistConfirm' && (isAdmin() || (isRegisteredUser() && writesOnlyOwnKeys())))
+                   // [PREP 20 Aug 2026 · RA-M8] mailStats is the admin's EmailJS quota
+                   // meter. It used to fall through to the catch-all below: any registered
+                   // user could zero it, inflate it, or DELETE the doc — and the admin
+                   // would act on the wrong number mid-send (cut off a results mail run,
+                   // or refuse one that had quota). Now: admin free; a registered user may
+                   // only UPDATE (never delete), removing no keys and touching exactly ONE
+                   // cycle key — the shape of the only legitimate staff write,
+                   // increment(1) on the current month. (Residual: a malicious registered
+                   // user can still misSET one month's number — visible, recoverable, and
+                   // App Check + sign-in stand in front of it.)
+                   || (docId == 'mailStats' && (isAdmin() || (isRegisteredUser()
+                        && request.method == 'update'
+                        && request.resource.data.diff(resource.data).removedKeys().size() == 0
+                        && request.resource.data.diff(resource.data).affectedKeys().size() == 1)))
                    || (!isAdminOnlyDoc(docId) && !isBidDoc(docId) && !isRelayDoc(docId)
                         && docId != 'timer' && docId != 'signInMisses' && docId != 'emails'
                         && docId != 'changes' && docId != 'whitelistConfirm' && docId != 'welcomeLog'
+                        && docId != 'mailStats'
                         && (isRegisteredUser() || isAdmin()));
     }
 

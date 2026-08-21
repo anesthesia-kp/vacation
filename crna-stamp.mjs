@@ -191,6 +191,20 @@ for (const page of ['staff', 'admin']) {
     fail(`generic storage guard v2: crna ${page} has ${varkeyed} variable-keyed storage call sites (pinned ${VARKEY_PIN[page]}) — a storage key was added or removed via a variable; put it in the rename table and bump the pin deliberately.`);
 }
 
+// ── [v3 · RA-L3, 20 Aug 2026] v2 pins only the COUNT — a count-preserving key SWAP
+// (repointing an existing storage call at a new, un-renamed const) sailed through with a
+// green stamp (proven by the audit's negative test). Pin the exact IDENTIFIER SET too:
+// any new or renamed variable inside a storage call aborts the stamp until it is added
+// here AND handled in the rename table deliberately. (The two sites share one web origin,
+// so a shared un-renamed key silently mixes MD and CRNA state.)
+const VARKEY_NAMES = { staff: ['REMEMBER_KEY', 'k'], admin: ['k'] }; // read from MD builds 158/294
+for (const page of ['staff', 'admin']) {
+  const seen = [...new Set([...src[page].matchAll(/(?:localStorage|sessionStorage)\.(?:getItem|setItem|removeItem)\(\s*([A-Za-z_$][\w$]*)/g)].map(m => m[1]))].sort();
+  const pin = [...VARKEY_NAMES[page]].sort();
+  if (JSON.stringify(seen) !== JSON.stringify(pin))
+    fail(`generic storage guard v3: crna ${page} variable-keyed storage identifiers are [${seen}] but the pin says [${pin}] — a storage call was repointed at a new variable; add it to VARKEY_NAMES and the rename table deliberately.`);
+}
+
 // ── 4b · NO SCHEDULING LINKS on the CRNA site (owner, 18 Aug 2026: "for now, they do
 // not belong there" — the Daily Schedule is an MD tool; revisit if/when a CRNA schedule
 // exists, tracked in TODO). Both entries in the admin's Other Systems card are removed;

@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 291;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 296;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -896,7 +896,7 @@ thead th{color:var(--t2)}
           <span id="trChevron" class="chev">▸ Show</span>
         </div>
         <div id="timerRulesWrap" style="display:none">
-          <div class="page-sub" style="margin:10px 0">The bidding countdown resets every time someone bids. It starts long and gets shorter as the round goes on. When the reset gets short, bidding won't close overnight. Adjust the days, the reset lengths, and the overnight window below — <strong>each change asks you to confirm and saves right away</strong>.</div>
+          <div class="page-sub" style="margin:10px 0">The bidding countdown resets every time someone bids. It starts long and gets shorter as the round goes on. When the reset gets short, bidding won't close overnight. Adjust the days, the reset lengths, and the overnight window below — <strong>edits stage here and nothing reaches the database until you press Save</strong> (one confirm covers the whole batch).</div>
           <div id="timerRulesBody"></div>
         </div>
       </div>
@@ -2289,11 +2289,11 @@ function _bfEngineFilter(u,wk,p){
 // ONE reason the bid left the competition — unscorable, I2-reused and dead prior-phase bids
 // stay refused exactly as before.
 function _bfOverrideEligible(u,wk){
-  const p=scheduleData[u]?scheduleData[u][wk]:undefined;
-  if(p===undefined||!_isScorableBid(p)) return false;
-  if(getUserBidPhaseAdmin(u,wk)<Number(phasesData.currentPhase||1)) return false;
-  if(_i2DisqualifiedSet().has(u+'|'+wk)) return false;
-  return !_bfEngineFilter(u,wk,p);
+  // [296 · §72] RETIRED — floors are absolute for the admin too (owner ruling). Kept as a
+  // named function (test extraction stability, and so any stray caller gets the new truth)
+  // but nothing is override-eligible any more; the engine's approval-honoring no longer
+  // consults it.
+  return false;
 }
 // Rules/welcome-e-mail wording, driven by the live floors (twin: staff 137).
 function bfRulesBullets(){
@@ -2994,11 +2994,9 @@ function computeApprovals(ignoreAdmin){
       }
     }
     for(const u of draws) reviews.delete(u);
-    // Snapshot the NATURAL fteWon (winners the priority rules produced) BEFORE the admin
-    // force-add below can inflate it via a discretionary overbook. The priority-inversion
-    // guard measures capacity scarcity against THIS baseline — an admin overbook is the
-    // admin's own call and must not make an unrelated denied bid look capacity-blocked.
-    const _naturalFteWon=fteWon;
+    // [294 · §70] (The old _naturalFteWon snapshot lived here. The inversion guard now
+    // rebuilds the PRE-DENIAL natural fill from scratch — see the guard below — so no
+    // decided/overbook-tainted baseline exists to measure against.)
     if(!ignoreAdmin){
       const approvedHere=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
       approvedHere.forEach(u=>{
@@ -3006,7 +3004,10 @@ function computeApprovals(ignoreAdmin){
         // override — honor it here (counted once, FTE included) even though the bid was excluded
         // from reqs as a competitor. Everything else that isn't in reqs stays refused, exactly
         // as before (unscorable, I2-reused, dead prior-phase).
-        if(!reqs.some(r=>r.user===u) && !(typeof _bfOverrideEligible==='function'&&_bfOverrideEligible(u,wk))) return;
+        // [296 · §72] The build-266 _bfOverrideEligible exception is RETIRED: floors are
+        // absolute, so an approval of a floor-filtered (or NP-off) bid is no longer
+        // honored — exactly like unscorable, I2-reused and dead prior-phase bids.
+        if(!reqs.some(r=>r.user===u)) return;
         if(!winners.has(u)){
           draws.delete(u); reviews.delete(u);
           winners.add(u);
@@ -3031,21 +3032,46 @@ function computeApprovals(ignoreAdmin){
       const _denW=Array.isArray(deniedData?.[wk])?deniedData[wk]:[];
       const _curPh=Number(phasesData.currentPhase||1);
       const _scorable=p=>p==="NP"||(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10));
-      let _blockFloor=Infinity;
-      for(const u of _denW){
-        const p=scheduleData[u]?.[wk]; if(p===undefined) continue;
-        if(getUserBidPhaseAdmin(u,wk)<_curPh) continue;   // a dead prior-phase bid blocks nothing
-        if(!_scorable(p)) continue;                        // an unscorable/forged bid blocks nothing
-        if(_i2Disq.has(u+'|'+wk)) continue;                // an I2-disqualified bid blocks nothing
+      // [294 · RA-H9/H10 · owner ruling §70, 20 Aug 2026] CAPACITY vs POLICY, judged
+      // against the PRE-DENIAL NATURAL projection. The old test measured each denied bid
+      // against the DECIDED run's refilled baseline, which (a) branded a denied NATURAL
+      // WINNER "couldn't fit" and demoted its untouched co-winners, and (b) after several
+      // denials let a genuinely capacity-blocked bid measure as "fits", elevating strictly
+      // weaker bids — the NE-1 inversion. Classification now:
+      //   · denied NATURAL WINNER — a policy call: frees its spot, blocks nothing;
+      //   · denied member of the CONTESTED group (the first tie-group that did not fit —
+      //     the natural draw/review/over-cap set): capacity-blocked, every strictly
+      //     weaker bid stays blocked;
+      //   · denied natural LOSER — was already outranked: blocks nothing.
+      const _natFilter=u=>{
+        const p=scheduleData[u]?.[wk]; if(p===undefined) return null;
+        if(priorWinners.has(u)) return null;
+        if(getUserBidPhaseAdmin(u,wk)<_curPh) return null; // a dead prior-phase bid blocks nothing
+        if(!_scorable(p)) return null;                     // an unscorable/forged bid blocks nothing
+        if(_i2Disq.has(u+'|'+wk)) return null;             // an I2-disqualified bid blocks nothing
         // [build 266 · BF] a below-floor bid (or an NP bid forged into an NP-off phase) was
         // never a legal competitor — it blocks nothing. typeof: extracted-test sandbox scope.
-        if(typeof _bfEngineFilter==='function' && !_bfEngineFilter(u,wk,p)) continue;
-        // Capacity-driven only: this denied stronger bid was over the STRICT cap alongside the
-        // winners (genuinely couldn't fit — scarce capacity it was competing for). The review
-        // THRESHOLD is a borderline-approval overage, NOT "room": a draw-loser denied at 0.7 over
-        // a 0.8 threshold still couldn't fit the cap, so it must still lock out weaker bids. A
-        // denial that fits within the strict cap (room to spare — a policy call) blocks nothing.
-        if(Math.round((_naturalFteWon+getUserFTE(u)-cap)*10)/10>0) _blockFloor=Math.min(_blockFloor,pScore(p));
+        if(typeof _bfEngineFilter==='function' && !_bfEngineFilter(u,wk,p)) return null;
+        return p;
+      };
+      const _natReqs=[...reqs];
+      for(const u of _denW){ const p=_natFilter(u); if(p===null) continue; if(!_natReqs.some(r=>r.user===u)) _natReqs.push({user:u,score:pScore(p),fte:getUserFTE(u)}); }
+      _natReqs.sort((a,b)=>a.score-b.score);
+      const _natContested=new Set();
+      { let _nf=priorFte, _i=0, _settled=false;
+        while(_i<_natReqs.length){
+          const _s=_natReqs[_i].score; const _g=[];
+          while(_i<_natReqs.length&&_natReqs[_i].score===_s){ _g.push(_natReqs[_i]); _i++; }
+          if(_settled) continue;
+          const _gf=_g.reduce((t,r)=>t+r.fte,0);
+          if(Math.round((_nf+_gf-cap)*10)/10<=0){ _nf+=_gf; }        // this whole group fit naturally
+          else { _settled=true; _g.forEach(r=>_natContested.add(r.user)); }
+        } }
+      let _blockFloor=Infinity;
+      for(const u of _denW){
+        const p=_natFilter(u); if(p===null) continue;
+        if(!_natContested.has(u)) continue; // a denied natural winner (policy) or natural loser blocks nothing
+        _blockFloor=Math.min(_blockFloor,pScore(p));
       }
       // Admin OVERRIDE escape hatch (user ruling): strict priority is the DEFAULT — the demotion
       // below removes any auto-elevated weaker bid so the auto-decider, Deny-All-Losers, and the
@@ -5152,11 +5178,26 @@ function cfgUnlockedNow(){ return !phase1Started()||_phaseGapNow(); }
 // engine silently refuses below-floor bids at decision time — the admin must see this
 // BEFORE confirming a gap edit; users get no automatic notice).
 function _cfgStrandedBids(floors,hdSet,summerWin){
+  // [293 · RA-H1] This scan feeds the red "would fall below the new floor and can no
+  // longer win or block" box — so it must count ONLY bids the engine would actually score
+  // in a coming phase/round. It used to scan every raw schedule entry, naming prior-phase
+  // LOCKED WINNERS (their wins are permanent — floors never touch them) and dead
+  // lost/denied leftovers, which could scare an admin out of a legitimate between-phases
+  // floor change (or into "notifying" winners of a non-event). Filters mirror the engine:
+  // unscorable shapes never compete; completed-phase entries are either locked wins or
+  // dead; announced Phase-4 round decisions are frozen history.
   const out=[]; const f=floors||bfFloors();
   const sw=summerWin||{start:AC.summerStartWk,end:AC.summerEndWk};
+  const _cur=Number(phasesData.currentPhase||1);
+  const _cp=(phasesData&&phasesData.completedPhases)||{};
   for(const u of Object.keys(scheduleData||{})){
     for(const wk of Object.keys(scheduleData[u]||{})){
       const bid=scheduleData[u][wk]; if(bid===undefined) continue;
+      if(typeof _isScorableBid==='function'&&!_isScorableBid(bid)) continue;
+      const _ph=getUserBidPhaseAdmin(u,wk);
+      if(_cp[_ph]!==undefined||_cp[String(_ph)]!==undefined) continue; // its phase completed: a locked win or a dead entry — never a live competitor
+      if(_ph<_cur) continue;                                           // strictly-prior leftover — dead
+      if(typeof _p4ArchivedDecisionRound==='function'&&_p4ArchivedDecisionRound(u,wk)!==null) continue; // announced round decision — frozen
       const cat=(hdSet&&hdSet.has(wk))?f.highDemand:((wk>=sw.start&&wk<=sw.end)?f.summer:'none');
       if(cat!=='none'&&!bfAllows(_bfParse(bid),cat)) out.push(u+' · '+wk);
     }
@@ -5822,6 +5863,7 @@ function blockedByMissingFte(){
 }
 window.blockedByMissingFte=blockedByMissingFte;
 async function _commitBeginPhase(next){
+  let _retired=0; // [295 · DB-1 · §71] set by the boundary scrub below; reported in the begun toast
   // [build 229] ACTION-TIME re-check: every route into here passes an entry gate, but each
   // runs through at least one confirm dialog that can sit open while the connection dies.
   // Beginning a phase writes timer + approvals-clear from local state — never from stale data.
@@ -5906,6 +5948,29 @@ async function _commitBeginPhase(next){
       batch.set(bidLoweringsArchiveRef,{['p'+(next-1)]:_blSnap},{merge:true});
       batch.set(bidLoweringsRef,{});
     }
+    // [295 · DB-1 · owner ruling §71, 20 Aug 2026: "THE BOUNDARY FORGETS"] Retire the
+    // finished phases' non-winning entries in this SAME atomic batch — the round rule
+    // (startNextP4Round has retired denied bids this way since build 255) applied to
+    // phase boundaries. Deleted: every live entry strictly older than the phase now
+    // beginning whose user did NOT win that week in any completed phase. The winner
+    // check reads the MERGED archive view (published + the snapshot staged in this very
+    // batch), so the just-completed phase's winners are protected. History is untouched:
+    // the archives keep every bid, the pre-admin projections, and every decision, and
+    // the Reports/Edit-Selections history views read the archives. Mid-phase denials
+    // keep their entries (revocability + the §70 block floor) — only the boundary forgets.
+    { const _allCP={..._publishedCompletedPhases,..._srvStaged};
+      const _wonAt=(u,wk)=>{ for(const n of Object.keys(_allCP)){ if(Number(n)>=next) continue; const _a=_allCP[n]?.approvals||{}; if(Array.isArray(_a[wk])&&_a[wk].includes(u)) return true; } return false; };
+      const _schedDel={}, _bpDel={};
+      for(const u of Object.keys(scheduleData||{})){
+        for(const wk of Object.keys(scheduleData[u]||{})){
+          if(scheduleData[u][wk]===undefined) continue;
+          if(getUserBidPhaseAdmin(u,wk)>=next) continue; // current/future-tagged entries stay live
+          if(_wonAt(u,wk)) continue;                     // a win is permanent — never scrubbed
+          _schedDel[`${u}.${wk}`]=deleteField(); _bpDel[`${u}.${wk}`]=deleteField(); _retired++;
+        }
+      }
+      if(_retired){ batch.update(scheduleRef,_schedDel); batch.update(bidPhaseRef,_bpDel); }
+    }
     try{ await batch.commit(); }
     // [BATCH D · L2 · build 234] Same honest wording as the Phase-1 path.
     catch(e){ toast('Could not begin Phase '+next+' — the phase did NOT start ('+(e?.message||e)+'). Week locks may already have changed; check the Lock Weeks panel, then try again.','err'); return false; }
@@ -5923,9 +5988,10 @@ async function _commitBeginPhase(next){
   // admin believed bidding was open. The arm is now verified by reading the timer BACK from the
   // server; only the echo counts.
   const _t=await _armPhaseTimer(next);
+  const _retireNote=_retired?(' · '+_retired+' denied bid'+(_retired!==1?'s':'')+' retired — numbers returned to their users'):''; // [295 · DB-1]
   toast(_t.ok
-    ? (_t.ow ? '▶ Phase '+next+' begun — bidding is open (opening window: '+_t.ow.days+' days, no timer resets until '+stage0Hours()+'h remain)'
-             : '▶ Phase '+next+' begun — bidding is open (timer reset to '+stage0Hours()+'h)')
+    ? (_t.ow ? '▶ Phase '+next+' begun — bidding is open (opening window: '+_t.ow.days+' days, no timer resets until '+stage0Hours()+'h remain)'+_retireNote
+             : '▶ Phase '+next+' begun — bidding is open (timer reset to '+stage0Hours()+'h)'+_retireNote)
     : '🚨 Phase '+next+' begun, but the TIMER did NOT verifiably arm — users may see the auction as CLOSED and CANNOT BID. Open the Timer card and reset the countdown NOW.',
     _t.ok?'ok':'err');
   return true;
@@ -6108,7 +6174,7 @@ window.beginNextPhase=function(){
   openConfirm({
     title:'▶ Begin Phase '+next,
     body:`<div>Begin Phase <strong>${next}</strong>?</div>
-          <div class="cmodal-info" style="margin-top:10px">Users will see "Phase ${next}" on the bidding board and can place new bids. Previous approvals remain locked in.</div>${resultsWarn}`,
+          <div class="cmodal-info" style="margin-top:10px">Users will see "Phase ${next}" on the bidding board and can place new bids. Previous approvals remain locked in, and denied bids from finished phases retire — their numbers return to their owners (the round rule, §71).</div>${resultsWarn}`,
     okText:'Continue',
     onConfirm:()=>_beginPhaseLockDecision(next)
   });
@@ -6208,8 +6274,20 @@ function timerRulesEmailText(){
   let owTxt='';
   if(r.openingWindow){ owTxt=`\n\nEach phase opens with a ${r.openingWindow.days}-day window: the timer counts down continuously (bids do NOT reset it) until ${(st[0]||{}).hours||48} hours remain — then the reset rules above take over.`; }
   const endLine='Each phase ends when the countdown timer gets to 0. ';
-  if(st.length<=1){ return endLine+`Every time anyone places or changes a bid, the countdown resets to ${(st[0]||{}).hours||48} hours.${quiet}${owTxt}`; }
-  return endLine+`Every time anyone places or changes a bid, the countdown resets. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}${owTxt}`;
+  // [293 · RA-M2 twin] The reset sentence follows the admin-selected mode, matching the
+  // staff twin (157) and the on-site explainer (build 274 V3). Mode 1 keeps the classic
+  // wording byte-for-byte.
+  const _mRaw=parseInt(adminSettings?.timerResetMode,10);
+  const _m=(_mRaw===2||_mRaw===3)?_mRaw:1;
+  const resetSentence=_m===2
+    ?'The countdown resets when a bid, change, or cancel changes the projected outcome for another user — moves that affect only your own bids do not reset it'
+    :_m===3
+    ?'Every NEW bid resets the countdown; changes and cancels reset it only when they change the projected outcome for another user'
+    :'Every time anyone places or changes a bid, the countdown resets';
+  if(st.length<=1){ return endLine+(_m===1
+    ?`Every time anyone places or changes a bid, the countdown resets to ${(st[0]||{}).hours||48} hours.${quiet}${owTxt}`
+    :`${resetSentence}. Each qualifying reset returns the countdown to ${(st[0]||{}).hours||48} hours.${quiet}${owTxt}`); }
+  return endLine+`${resetSentence}. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}${owTxt}`;
 }
 function _cumCap(phase){
   const m=adminSettings?.maxBidsCumulative;
@@ -6657,7 +6735,8 @@ window.completeP4Round=function(){
       const _i2d=_i2DisqualifiedSet();
       for(const wk of Object.keys(apSnap)){ if(Array.isArray(apSnap[wk])) apSnap[wk]=apSnap[wk].filter(u=>snap[u]&&snap[u][wk]!==undefined&&_isScorableBid(snap[u][wk])&&!_i2d.has(u+'|'+wk)); }
       for(const wk of Object.keys(denSnap)){ if(Array.isArray(denSnap[wk])) denSnap[wk]=denSnap[wk].filter(u=>snap[u]&&snap[u][wk]!==undefined); }
-      const _payload={completedAt:Date.now(),approvals:apSnap,denials:denSnap,schedule:snap};
+      const _payload={completedAt:Date.now(),approvals:apSnap,denials:denSnap,schedule:snap,
+        ...(typeof serializeProjections==='function'?{projections:serializeProjections()}:{})}; // [295 · DB-1 · §71] the owner's look-back rule: bid + PROJECTION + result — rounds now archive all three, like phases (typeof = extracted-test sandbox convention; always present in the real page)
       // Stage ADMIN-ONLY (privacy, H6 lineage): the archive publishes when results are sent.
       try{ await setDoc(phaseStagingRef,{pendingP4Rounds:{[N]:_payload}},{merge:true}); }
       catch(e){ toast('⚠️ Could not complete Round '+N+' — nothing was changed ('+(e?.message||e)+'). Try again.','err'); return; }
@@ -7820,6 +7899,18 @@ window.renderAppDenials=function(){
   if(wkDiv) wkDiv.style.display=viewBy==='week'?'flex':'none';
   if(userDiv) userDiv.style.display=viewBy==='user'?'flex':'none';
   const body=document.getElementById('adBody'); if(!body) return;
+  // [296 · NE-14] While bidding is OPEN, user bids can still arrive and projections can
+  // shift under the admin's decisions. Once bidding closes (timer expiry or the Close
+  // flag) the security rules refuse every user bid write — decisions are then made on a
+  // frozen board. Say which world the admin is in, plainly.
+  const _adOpenNow=(function(){ try{
+    if(!phase1Started()) return false;
+    if(typeof biddingIsClosedFlag==='function'&&biddingIsClosedFlag()) return false;
+    if(!(timerData&&timerData.enabled===true)) return false;
+    if(timerData.lastChange&&Date.now()>=timerData.lastChange+((timerData.durationHours||48)*3600000)) return false;
+    return true;
+  }catch(_){ return false; } })();
+  const _adOpenWarn=_adOpenNow?'<div class="cmodal-warn" style="margin:0 0 10px;padding:10px 12px">⚠️ <strong>Bidding is still OPEN</strong> — bids can arrive and projections can shift while you decide. The usual rhythm is Close Bidding first: once closed, the server refuses every user bid write and the board is frozen (NE-14).</div>':'';
   const ap=computeApprovals();
   const nat=computeApprovals(true); // natural projection, ignores admin decisions
   const cur=Number(phasesData.currentPhase||1);
@@ -7968,7 +8059,7 @@ window.renderAppDenials=function(){
       </div>`;
     });
   }
-  body.innerHTML=html||'<div style="text-align:center;color:var(--t2);padding:20px">No bids.</div>';
+  body.innerHTML=_adOpenWarn+(html||'<div style="text-align:center;color:var(--t2);padding:20px">No bids.</div>');
   _placeJumpInline(); // [build 273 · V7c] re-place the sticky Next Decision button after every render
 };
 
@@ -8290,6 +8381,12 @@ window.adApprove=function(user,wk,currentOutcome){
   // Block it here; the admin must fix the bid (Edit Selections) before approving.
   if(!_isScorableBid(scheduleData[user]?.[wk])){
     toast('⚠ Cannot approve '+user+' on Wk '+(_wkNumByISO[wk]||wk)+' — their stored bid is not a valid value (edit it first).','err');
+    return;
+  }
+  // [296 · §72] Floors are absolute: approving a below-floor (or NP-off) bid is refused —
+  // the sanctioned route to an exception is changing the floor / NP setting itself.
+  if(typeof _bfEngineFilter==='function'&&!_bfEngineFilter(user,wk,scheduleData[user]?.[wk])){
+    toast('🚫 Cannot approve '+user+' on Wk '+(_wkNumByISO[wk]||wk)+' — the bid is below the week\'s floor (or NP in an NP-off phase). §72: floors are absolute; change the floor/NP setting to make an exception.','err');
     return;
   }
   // [AUDIT 2026-07-26 re-audit #2 disputed-low] Also refuse to approve a bid disqualified for
@@ -8705,17 +8802,31 @@ window.renderEditTable=function(){
   if(tb.contains(document.activeElement)) return; // H-7: an open priority <select> or focused row must not be torn down mid-edit by a snapshot
   const cur=Number(phasesData.currentPhase||1);
   const rows=[];
+  // [295 · DB-1 · §71] A COMPLETED phase/round filter reads that ARCHIVE's schedule: after
+  // "the boundary forgets", denied prior-phase entries no longer linger in the live doc,
+  // and the history view must show the bid placed and its result without them (the same
+  // source the Reports phase views have always used). Live filters are unchanged.
+  const _mmH=String(phaseFilter).match(/^ph(\d+)$/), _mrH=String(phaseFilter).match(/^p4r(\d+)$/);
+  const _histKey=_mmH?String(Number(_mmH[1])):(_mrH?_p4RoundKey(Number(_mrH[1])):null);
+  const _cpAllH=_histKey!==null?_cpWithRounds():null;
+  const _histSched=(_histKey!==null&&(_cpAllH[_histKey]||{}).schedule)?_cpAllH[_histKey].schedule:null;
   (uf?[uf]:names).forEach(u=>{
-    const uw=scheduleData[u]||{};
+    const uw=_histSched?(_histSched[u]||{}):(scheduleData[u]||{});
     const weeks=wf?(uw[wf]!==undefined?[wf]:[]):Object.keys(uw);
     weeks.sort().forEach(wk=>{
-      if(!bidMatchesPhaseFilter(u,wk,phaseFilter)) return;
-      const p=uw[wk]; const pl=Array.isArray(p)?p.join("/"):p;
+      const p=uw[wk]; if(p===undefined) return;
+      if(_histSched){ if(inEarlierSnapshot(_cpAllH,_histKey,u,wk,p)) return; }
+      else if(!bidMatchesPhaseFilter(u,wk,phaseFilter)) return;
+      const pl=Array.isArray(p)?p.join("/"):p;
       const m=wkDate(wk);
-      const bidPh=getUserBidPhaseAdmin(u,wk);
-      // Historical bids get outcome from that phase's snapshot
+      const bidPh=_histSched?(_mmH?Number(_mmH[1]):4):getUserBidPhaseAdmin(u,wk);
+      // Historical bids get outcome from that phase's (or round's) snapshot
       let o;
-      if(bidPh<cur){
+      if(_histSched){
+        const phSnap=_cpAllH[_histKey]||{};
+        const phAp=Array.isArray(phSnap.approvals?.[wk])?phSnap.approvals[wk]:[];
+        o=phAp.includes(u)?'win':'lose';
+      } else if(bidPh<cur){
         const phSnap=phasesData.completedPhases?.[bidPh]||{};
         const phAp=Array.isArray(phSnap.approvals?.[wk])?phSnap.approvals[wk]:[];
         const phDen=Array.isArray(phSnap.denials?.[wk])?phSnap.denials[wk]:[];
@@ -8724,10 +8835,15 @@ window.renderEditTable=function(){
         o=getOutcome(wk,u,ap);
       }
       const phaseBadge=phaseFilter==='all'?`<span style="background:rgba(96,165,250,.15);color:var(--blue);font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;margin-right:6px">P${bidPh}</span>`:'';
-      const isHistorical=bidPh<cur;
+      // [292 · RA-H4] An ANNOUNCED winner's row is frozen too: prior-phase wins were
+      // caught by bidPh<cur, but a Phase-4 round winner keeps bidPh=4=cur and stayed fully
+      // editable in a fresh tab — one Remove click then deleted a live bid the round
+      // archive still awards. getPriorPhaseWinners includes announced round wins (255).
+      const _wonLock=!(bidPh<cur)&&getPriorPhaseWinners(wk).has(u);
+      const isHistorical=!!_histSched||bidPh<cur||_wonLock; // [295 · DB-1] archive rows are read-only history
       const controls=isHistorical?
-        `<span style="color:var(--t3);font-size:11px;font-style:italic">Phase ${bidPh} — locked</span>`:
-        `<select class="sel" onchange="adminChangePriority('${u}','${wk}',this.value)">${
+        `<span style="color:var(--t3);font-size:11px;font-style:italic">${_wonLock?'🏆 Won — locked':`Phase ${bidPh} — locked`}</span>`:
+        `<select class="sel" onchange="adminChangePriority('${_jsq(u)}','${_jsq(wk)}',this.value)">${
           // [AUDIT 2026-07-26 H7 + medium] A stored value the engine won't score (a devtools-
           // forged 0, -1, or the STRING "1"/"1/2") used to slip through: the old check matched
           // the string LABEL against the option list, so a string "1" matched option "1" and
@@ -8903,6 +9019,33 @@ function adminDupFatal(u,wk,val){
   }catch(e){ console.warn('adminDupFatal failed',e); }
   return out;
 }
+// [296 · §72, owner ruling 20 Aug 2026] FLOORS ARE ABSOLUTE — for the admin too. A
+// below-floor value, or NP in an NP-off phase, is refused outright on every admin bid
+// surface, exactly like a duplicate number: the engine will not score it, every bidder
+// can see the rule, and a visible exception "would create trouble" (owner). The honest
+// route to an exception is changing the floor / NP setting itself. Caps and locked weeks
+// stay deliberately overridable (same ruling). Returns null when the value is fine.
+function adminFloorFatal(u,wk,val){
+  try{
+    const p=_bfParse(String(val));
+    const _fl=bfFloorFor(wk);
+    if(_fl!=='none'&&!bfAllows(p,_fl)) return {kind:'floor',floor:_fl};
+    if(p==="NP"&&!npAllowedForPhase(Number(phasesData.currentPhase||1))) return {kind:'np'};
+  }catch(e){ console.warn('adminFloorFatal failed',e); }
+  return null;
+}
+function refuseAdminFloor(u,wk,val,why,after){
+  const _done=()=>{ try{ if(typeof after==='function') after(); else refreshAll(); }catch(_){} };
+  openConfirm({
+    title:why.kind==='np'?'🚫 NP is off this phase — nothing saved':'🚫 Below the week\'s bid floor — nothing saved',
+    body: why.kind==='np'
+      ?`<div>NP bids are switched off for Phase ${esc(String(Number(phasesData.currentPhase||1)))} — no bidder may place one, and neither may an admin entry (§72: the rules bidders see are absolute).</div>
+         <div class="cmodal-warn" style="margin-top:8px">To allow NP, switch it on for this phase in Controls — that changes the rule for everyone, honestly.</div>`
+      :`<div>This week's bid floor is <strong>${esc(String(why.floor))} or better</strong>. A below-floor bid cannot be entered for anyone — the engine will not score it, and every bidder can see the rule (§72: floors are absolute, even for admin).</div>
+         <div class="cmodal-warn" style="margin-top:8px">To make an exception, change the floor itself in Controls (between phases) — that changes the rule for everyone, honestly.</div>`,
+    okText:'Understood', onConfirm:_done, onCancel:_done
+  });
+}
 // [291 · ES-1] The explanation dialog. Both buttons just dismiss; nothing is ever written
 // from here. `after` = the caller's redraw (same contract as guardAdminBid's onCancel).
 function refuseAdminDup(u,wk,val,clashes,after){
@@ -8929,15 +9072,10 @@ function adminBidIssues(u,wk,val,isNew){
     // 2. The week is locked, so users cannot touch it themselves.
     if(locksData?.globalLock) out.push('<strong>Global Lock is ON</strong> — all bidding is frozen for every user.');
     else if(locksData?.weeks?.[wk]) out.push('This week is <strong>locked</strong> — users cannot add or change bids on it.');
-    // 3. NP switched off for this phase.
-    if(isNP&&!npAllowedForPhase(cur))
-      out.push('<strong>NP bids are switched off for Phase '+cur+'</strong> — no bidder can enter NP this phase.');
-    // 3b. [287 · AUD-H] Bid floor — the one bidder-facing rule this gate was missing. The
-    // engine refuses to score a below-floor bid (only an explicit Approve overrides a
-    // floor), so a manual entry here would be silently dead on every projection.
-    { const _f=bfFloorFor(wk);
-      if(_f!=='none'&&!bfAllows(_bfParse(String(val)),_f))
-        out.push('This bid is <strong>below the week&#39;s bid floor</strong> ('+_f+' or better) — the engine will not score it; only an explicit Approve overrides a floor.'); }
+    // 3/3b RETIRED [296 · §72]: NP-off and below-floor are no longer WARNINGS — they are
+    // hard refusals in adminFloorFatal/refuseAdminFloor (the fatal gate runs before this
+    // list is ever consulted), because floors and the NP-phase rule are absolute for the
+    // admin too. Caps, locks and Phase-1-scope below remain deliberate warn-and-override.
     // 4. Bid-number uniqueness, incl. numbers permanently consumed by prior-phase wins.
     if(nums.length){
       const used=[..._adminPriorUsedPriorities(u)];
@@ -8966,8 +9104,11 @@ function guardAdminBid(u,wk,val,isNew,proceed,onCancel){
   // precedent) -- in the real page adminDupFatal always exists (same module).
   const _dup=(typeof adminDupFatal==='function')?adminDupFatal(u,wk,String(val)):[];
   if(_dup.length){ refuseAdminDup(u,wk,val,_dup,onCancel); return; }
+  // [296 · §72] below-floor / NP-off: hard refusal, same contract as duplicates.
+  const _flF=(typeof adminFloorFatal==='function')?adminFloorFatal(u,wk,String(val)):null;
+  if(_flF){ refuseAdminFloor(u,wk,val,_flF,onCancel); return; }
   const issues=adminBidIssues(u,wk,val,isNew);
-  if(!issues.length){ proceed(); return; }
+  if(!issues.length){ return proceed(); } // [292 · RA-M6] return the promise — openConfirm's M-14 net awaits it
   openConfirm({
     title:'⚠️ This bid breaks the rules users follow',
     body:`<div>Setting <strong>${esc(u)}</strong> to <strong style="font-family:var(--mono)">${esc(String(val))}</strong> on <strong>${esc(wLabel(wkDate(wk)))}</strong> would:</div>
@@ -8985,6 +9126,7 @@ function guardAdminBid(u,wk,val,isNew,proceed,onCancel){
 window.adminBidIssues=adminBidIssues; window.guardAdminBid=guardAdminBid;
 
 window.adminChangePriority=async function(u,wk,val){
+  const _ds=(typeof _decisionStamp==='function')?_decisionStamp():null; // [292 · RA-M1]
   // [AUDIT #8/#9] Warn before an edit that no bidder could have made. Everything
   // below runs unchanged once the admin has confirmed (or if nothing is wrong).
   const _issues=adminBidIssues(u,wk,val,false);
@@ -8993,7 +9135,7 @@ window.adminChangePriority=async function(u,wk,val){
     // awaits the onConfirm chain and toasts "Action failed" on rejection — but these arrow
     // functions dropped the promise, so a failed bid save showed no error and the table kept the
     // unsaved value. One word reconnects the net.
-    guardAdminBid(u,wk,val,false,()=>window._adminChangePriorityRaw(u,wk,val));
+    guardAdminBid(u,wk,val,false,()=>window._adminChangePriorityRaw(u,wk,val,_ds));
     return;
   }
   // [SWEEP D3 · 30 Jul 2026] A rule-LEGAL change used to write straight through with no dialog at
@@ -9011,7 +9153,7 @@ window.adminChangePriority=async function(u,wk,val){
             <strong style="font-family:var(--mono)">${esc(String(val))}</strong>?</div>
           <div class="cmodal-warn" style="margin-top:8px">The new bid becomes ${esc(u)}'s priority lock for this week; any approval or denial already recorded is removed, and colleagues whose projection changes may be e-mailed.</div>`,
     okText:'Save change', danger:true,
-    onConfirm:()=>window._adminChangePriorityRaw(u,wk,val), // [M4 · 234] promise returned → failures surface
+    onConfirm:()=>window._adminChangePriorityRaw(u,wk,val,_ds), // [M4 · 234] promise returned → failures surface
 
     // [delta-audit #7, same trap] The <select> has ALREADY moved to the new value in the DOM and
     // no snapshot fires when nothing is written, so a cancel would leave the table showing a value
@@ -9034,12 +9176,20 @@ function _adminBidTimerReset(){
     }
   }catch(_){}
 }
-window._adminChangePriorityRaw=async function(u,wk,val){
+window._adminChangePriorityRaw=async function(u,wk,val,_atOpen){
   // [291 · ES-1] Write-level backstop: NO path may create the I2-fatal duplicate state (the
   // replace-dead-bid dialog reaches here without guardAdminBid). typeof guard for extracted-
   // code test sandboxes only -- in the real page adminDupFatal always exists.
   const _dupR=(typeof adminDupFatal==='function')?adminDupFatal(u,wk,String(val)):[];
   if(_dupR.length){ toast('🚫 Not saved — '+u+' already has bid '+[...new Set(_dupR.map(c=>c.n))].join(', ')+' on another week this phase. A duplicated number makes BOTH weeks lose; change the other week first.','err'); try{ refreshAll(); }catch(_){ } return; }
+  // [292 · RA-M1] Phase-identity guard for the manual-edit dialogs: a confirm left open
+  // across a phase/round boundary must not re-tag an archived bid as a live new-phase bid
+  // (line below stamps bidPhase with the phase CURRENT AT CLICK TIME). Callers pass the
+  // stamp captured at dialog-open; callers/sandboxes that pass none keep the old behavior.
+  if(_atOpen&&typeof _decisionGuard==='function'&&!_decisionGuard(_atOpen)){ try{ refreshAll(); }catch(_){ } return; }
+  // [296 · §72] write-level backstop: below-floor / NP-off values never reach the server.
+  { const _flR=(typeof adminFloorFatal==='function')?adminFloorFatal(u,wk,String(val)):null;
+    if(_flR){ toast('🚫 Not saved — '+(_flR.kind==='np'?('NP is switched off for Phase '+Number(phasesData.currentPhase||1)):('this week\'s floor is '+_flR.floor+' or better'))+'. §72: floors are absolute; change the setting itself to make an exception.','err'); try{ refreshAll(); }catch(_){ } return; } }
   // Direct dropdown change in Edit Selections — real per-field writes via
   // mergeFields() (updateDoc-based); plain setDoc+merge on a nested object
   // silently wipes the user's OTHER weeks, which is what this used to do.
@@ -9093,6 +9243,11 @@ async function _adminDeleteBidAtomic(u,wk){
   }
 }
 window.adminRemove=function(u,wk){
+  // [292 · RA-H4] Same missing C-4 guard as confirmAdminCancel — and this button was
+  // reachable with NO staleness for announced Phase-4 round winners (row lock fixed in
+  // renderEditTable, same build).
+  const _ds=(typeof _decisionStamp==='function')?_decisionStamp():null;
+  if(typeof _p4ArchivedDecisionRound==='function'){ const _ar=_p4ArchivedDecisionRound(u,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); return; } }
   const m=wkDate(wk);
   const cur=scheduleData[u]?.[wk]; const curLbl=Array.isArray(cur)?cur.join('/'):cur;
   openConfirm({
@@ -9102,6 +9257,7 @@ window.adminRemove=function(u,wk){
     okText:'Remove',
     danger:true,
     onConfirm:async()=>{
+      if(_ds&&!_decisionGuard(_ds)) return; // [292 · RA-H4]
       if(!scheduleData[u])return;
       const _prev=snapshotSchedule();
       const oldBid=scheduleData[u][wk];
@@ -9133,6 +9289,9 @@ window.adminAddSelection=function(){
   // typeof guard for extracted-code test sandboxes only (build 266 precedent).
   { const _dupA=(typeof adminDupFatal==='function')?adminDupFatal(u,wk,String(pv)):[];
     if(_dupA.length){ refuseAdminDup(u,wk,pv,_dupA); return; } }
+  // [296 · §72] below-floor / NP-off refused outright — adding OR replacing.
+  { const _flA=(typeof adminFloorFatal==='function')?adminFloorFatal(u,wk,String(pv)):null;
+    if(_flA){ refuseAdminFloor(u,wk,pv,_flA); return; } }
   // [build 228 · CRITIC LEAD 2] The old check was phase-blind: a DEAD prior-phase bid (lost or
   // denied in an earlier phase, still lingering in the schedule doc) triggered "already has this
   // week" — and Edit Selections locks that row too, so NO admin path could enter a current-phase
@@ -9148,10 +9307,16 @@ window.adminAddSelection=function(){
     // to "replace" it while asserting it "did not win." Wins are refused outright.
     if(getPriorPhaseWinners(wk).has(u)){ toast('🏆 '+u+' WON this week in a prior phase — locked-in wins are permanent and cannot be replaced. Pick a different week.','err'); return; }
     const _mD=wkDate(wk), _oldPh=getUserBidPhaseAdmin(u,wk), _oldVal=bidLblAdmin(scheduleData[u][wk]);
+    const _ds=(typeof _decisionStamp==='function')?_decisionStamp():null; // [292 · RA-M1]
     // [build 229 · audit] Same rule warnings as every other admin bid entry — the first cut
     // skipped adminBidIssues entirely, so a rule-breaking replacement (reused bid number, NP off,
     // over the cap) entered with zero warnings while both sibling paths warn.
-    const _rIss=adminBidIssues(u,wk,pv,false);
+    // [293 · RA-M5] A replacement of a DEAD prior-phase bid is a net-NEW current-phase
+    // bid (the dead one never counted toward anything), so it gets the same isNew warning
+    // set as the plain Add path — including the cumulative-win-cap warning this branch
+    // silently skipped while its own build-229 note promised "the same rule warnings as
+    // every other admin bid entry".
+    const _rIss=adminBidIssues(u,wk,pv,true);
     openConfirm({
       title:_rIss.length?'⚠️ Replace dead bid — breaks the rules users follow':'♻️ Replace a dead prior-phase bid?',
       body:`<div><strong>${esc(u)}</strong> has a Phase ${esc(String(_oldPh))} bid (<strong style="font-family:var(--mono)">${esc(_oldVal)}</strong>) on <strong>${esc(wLabel(_mD))}</strong> that did not win and is no longer in play.</div>
@@ -9160,7 +9325,7 @@ window.adminAddSelection=function(){
             <div class="cmodal-danger">Admin entries bypass every check the bidding engine applies. Only continue if this override is deliberate.</div>`:'')
         +`<div class="cmodal-warn" style="margin-top:8px">${esc(u)}'s priority lock moves to the new bid; any leftover approval/denial is cleared, and colleagues whose projection changes may be e-mailed.</div>`,
       okText:_rIss.length?'Replace anyway':'♻️ Replace with current-phase bid', danger:true,
-      onConfirm:()=>window._adminChangePriorityRaw(u,wk,pv) // [M4 · 234] promise returned → failures surface
+      onConfirm:()=>window._adminChangePriorityRaw(u,wk,pv,_ds) // [M4 · 234] promise returned → failures surface
     });
     return;
   }
@@ -9168,6 +9333,7 @@ window.adminAddSelection=function(){
   // [AUDIT #8/#9] Surface any bidder-facing rule this manual add would break, right
   // in the existing confirm — no extra click when the entry is clean.
   const _iss=adminBidIssues(u,wk,pv,true);
+  const _dsA=(typeof _decisionStamp==='function')?_decisionStamp():null; // [292 · RA-M1]
   openConfirm({
     title:_iss.length?'⚠️ Add Bid — breaks the rules users follow':'➕ Add Bid',
     body:`<div>Add bid <strong style="font-family:var(--mono)">${pv}</strong> for <strong>${u}</strong> on week of <strong>${wLabel(m)}</strong> (${wRange(m)})?</div>`
@@ -9175,6 +9341,14 @@ window.adminAddSelection=function(){
           <div class="cmodal-danger">Admin entries bypass every check the bidding engine applies. Only continue if this override is deliberate.</div>`:''),
     okText:_iss.length?'Add anyway':'Add', danger:!!_iss.length,
     onConfirm:async()=>{
+      if(_dsA&&!_decisionGuard(_dsA)) return; // [292 · RA-M1] phase changed while the dialog sat open
+      // [292 · RA-H7] Re-check duplicates at WRITE time — a bid can arrive (another tab,
+      // the user's own phone) while this dialog is open; 291's click-time check alone
+      // cannot see it, and the engine would then score BOTH weeks as no-bid.
+      { const _d2=(typeof adminDupFatal==='function')?adminDupFatal(u,wk,String(pv)):[];
+        if(_d2.length){ toast('🚫 Not added — '+u+' now has bid '+[...new Set(_d2.map(c=>c.n))].join(', ')+' on another week (it arrived while this dialog was open). Nothing was written.','err'); try{ refreshAll(); }catch(_){ } return; } }
+      { const _f2=(typeof adminFloorFatal==='function')?adminFloorFatal(u,wk,String(pv)):null; // [296 · §72]
+        if(_f2){ toast('🚫 Not added — the value violates the week\'s floor or the NP-phase rule (§72: absolute). Nothing was written.','err'); try{ refreshAll(); }catch(_){ } return; } }
       const _prev=snapshotSchedule();
       if(!scheduleData[u])scheduleData[u]={};
       scheduleData[u][wk]=pv==="NP"?"NP":pv.includes(",")?pv.split(",").map(Number):Number(pv);
@@ -11367,15 +11541,20 @@ window.confirmAdminEdit=function(user,wk){
       const val=document.getElementById("cmEditSel").value;
       // [287 · AUD-H] This dialog skipped adminBidIssues entirely — route the selected
       // value through the same warning gate as every other admin bid-entry surface.
-      guardAdminBid(user,wk,val,false,async()=>{
+      // [292 · RA-M6] RETURN the gate's promise so a rejected write surfaces through
+      // openConfirm's M-14 net instead of silently closing the dialog. (NOTE: this dialog
+      // currently has no invoker at tip — kept correct for the day it is re-wired.)
+      return guardAdminBid(user,wk,val,false,async()=>{
       const _prev=snapshotSchedule();
       if(!scheduleData[user]) scheduleData[user]={};
+      const _hadOld=scheduleData[user][wk]!==undefined, _oldVal=scheduleData[user][wk]; // [292 · RA-M6]
       scheduleData[user][wk]=val==="NP"?"NP":val.includes(",")?val.split(",").map(Number):Number(val);
       // Real per-field write via mergeFields() (updateDoc-based) — the old
       // comment here said "SAFE: per-field merge write" but plain
       // setDoc+merge on a nested object actually wipes the user's other
       // weeks; confirmed and fixed.
-      await mergeFields(scheduleRef,{[user+'.'+wk]:scheduleData[user][wk]});
+      try{ await mergeFields(scheduleRef,{[user+'.'+wk]:scheduleData[user][wk]}); }
+      catch(e){ if(_hadOld) scheduleData[user][wk]=_oldVal; else delete scheduleData[user][wk]; try{ refreshAll(); }catch(_){ } throw e; } // [292 · RA-M6] rollback + rethrow into the M-14 net (raw's pattern)
       await mergeFields(bidPhaseRef,{[user+'.'+wk]:Number(phasesData.currentPhase||1)}).catch(()=>{});
       // [291 · ES-2] The admin-set bid BECOMES the priority lock (NP stamps "NP", like the
       // staff twin). Deliberate unlocking lives on the Priority Locks page.
@@ -11396,6 +11575,11 @@ window.confirmAdminEdit=function(user,wk){
 
 // ── Admin cancel bid (clears priority lock) ──
 window.confirmAdminCancel=function(user,wk){
+  // [292 · RA-H3] The one decision-row button with NO C-4 guard: a Cancel left open across
+  // a phase/round boundary deleted a live bid the archive still awards. Same stamp+guard as
+  // every sibling (typeof guards for extracted-code sandboxes only).
+  const _ds=(typeof _decisionStamp==='function')?_decisionStamp():null;
+  if(typeof _p4ArchivedDecisionRound==='function'){ const _ar=_p4ArchivedDecisionRound(user,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); return; } }
   const m=wkDate(wk);
   const cur=scheduleData[user]?.[wk]; const curLbl=Array.isArray(cur)?cur.join('/'):cur;
   openConfirm({
@@ -11405,6 +11589,7 @@ window.confirmAdminCancel=function(user,wk){
     okText:'Cancel Bid',
     danger:true,
     onConfirm:async()=>{
+      if(_ds&&!_decisionGuard(_ds)) return; // [292 · RA-H3] phase/round identity at click time
       const _prev=snapshotSchedule();
       const oldBid=scheduleData[user]?.[wk];
       // [build 235 · audit] Same honest atomic delete as adminRemove — this Draws & Reviews
