@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 297;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 299;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -2901,6 +2901,47 @@ function bidMatchesPhaseFilter(user,wk,filterVal){
   return true;
 }
 
+// ── [298 · §77] WHO IS ACTUALLY GETTING THIS WEEK — the decisions, not the projection ──
+// §77 froze the projection, so it can no longer answer "who is getting this week". That
+// question now has its own two helpers, and every caller that ACTS on an outcome uses them.
+// Neither re-ranks anybody, promotes anybody, or consults the engine's opinion.
+//
+//   decidedWinners(wk)  — the people who actually hold this week: prior-phase winners who are
+//                         locked in, plus everyone the admin has approved this phase. A DENIAL
+//                         puts nobody in and takes nobody out; it simply means not approved.
+//   weekLedger(wk, ap)  — the arithmetic on top of that:
+//                           projectedFte  the frozen projection's winners
+//                           approvedFte   decidedWinners, i.e. capacity actually spoken for
+//                           committedFte  the union of the two, each person counted ONCE —
+//                                         what `computeApprovals()[wk].fteWon` meant BEFORE
+//                                         §77 removed the approvals-promotion from the engine,
+//                                         so every "how full is this week" caller keeps the
+//                                         number it always had.
+function decidedWinners(wk){
+  const out=new Set();
+  try{ getPriorPhaseWinners(wk).forEach(u=>out.add(u)); }catch(_){}
+  const ap=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
+  ap.forEach(u=>out.add(u));
+  return out;
+}
+function weekLedger(wk, ap){
+  const a=(ap||computeApprovals())[wk]||{winners:new Set(),fteWon:0};
+  const cap=getSlots(wk);
+  const decided=decidedWinners(wk);
+  let approved=0; decided.forEach(u=>{ approved+=getUserFTE(u); });
+  // [298 · §82d] The frozen projection still LISTS people the admin has denied (§77), and a
+  // denied bid fills nothing. Before §77 the engine dropped them before fteWon was computed,
+  // so committedFte must drop them here or every "how full is this week" caller counts a week
+  // as consumed by bids nobody is getting. Measured: without this, ~72% of decided week states
+  // disagree with the pre-§77 number; with it, only the intended re-deal cases do.
+  let _lden=[]; try{ _lden=Array.isArray(deniedData?.[wk])?deniedData[wk]:[]; }catch(_){ _lden=[]; } // sandbox convention
+  const both=new Set(); (a.winners||new Set()).forEach(u=>{ if(_lden.indexOf(u)<0) both.add(u); }); decided.forEach(u=>both.add(u));
+  let committed=0; both.forEach(u=>{ committed+=getUserFTE(u); });
+  const R=x=>Math.round(x*10)/10;
+  return { cap, projectedFte:R(a.fteWon||0), approvedFte:R(approved), committedFte:R(committed),
+           remainingFte:R(cap-R(committed)), remainingApproved:R(cap-R(approved)) };
+}
+
 function computeApprovals(ignoreAdmin){
   // L-10: this ADMIN variant takes a BOOLEAN ignoreAdmin. The user site's same-named twin takes
   // a schedule snapshot and has a different body — keep them in lockstep by porting LOGIC, never
@@ -2953,8 +2994,10 @@ function computeApprovals(ignoreAdmin){
       // Kept inline (no helper) so test extraction of this function stays self-contained.
       // PORTED LOGIC: the user site's computeApprovals carries this same filter.
       if(!(p==="NP"||(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10)))) continue;
-      const deniedHereChk=Array.isArray(deniedData?.[wk])&&deniedData[wk].includes(u);
-      if(!ignoreAdmin&&deniedHereChk) continue;
+      // [298 · §77] The denial no longer removes the bid from the field. A projection is
+      // computed from the bids as they stood when bidding closed and from nothing else, so a
+      // denied bid keeps its place in the ladder and the people below it keep theirs.
+      // (`deniedData` is still read by the PANELS, to label a row "denied" — never here.)
       // Prior-phase bids never compete in the current phase: winners are locked
       // in via priorWinners above, and non-winning prior bids are DEAD (their
       // numbers returned to the user). Without this filter a phase-1 denied bid
@@ -2998,99 +3041,18 @@ function computeApprovals(ignoreAdmin){
     // [294 · §70] (The old _naturalFteWon snapshot lived here. The inversion guard now
     // rebuilds the PRE-DENIAL natural fill from scratch — see the guard below — so no
     // decided/overbook-tainted baseline exists to measure against.)
-    if(!ignoreAdmin){
-      const approvedHere=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
-      approvedHere.forEach(u=>{
-        // [build 266 · BF] An explicit admin approval of a floor-filtered bid is the sanctioned
-        // override — honor it here (counted once, FTE included) even though the bid was excluded
-        // from reqs as a competitor. Everything else that isn't in reqs stays refused, exactly
-        // as before (unscorable, I2-reused, dead prior-phase).
-        // [296 · §72] The build-266 _bfOverrideEligible exception is RETIRED: floors are
-        // absolute, so an approval of a floor-filtered (or NP-off) bid is no longer
-        // honored — exactly like unscorable, I2-reused and dead prior-phase bids.
-        if(!reqs.some(r=>r.user===u)) return;
-        if(!winners.has(u)){
-          draws.delete(u); reviews.delete(u);
-          winners.add(u);
-          fteWon+=getUserFTE(u);
-        }
-      });
-    }
-    // [PRIORITY-INVERSION FIX · build 239 · NEVER-EVENT] A weaker-priority bid must never win,
-    // draw, or review a week where a STRICTLY-stronger-priority bid was DENIED because it could
-    // not fit. Denied bids are excluded from `reqs` above, so once (say) a priority-1 bidder is
-    // turned away in a draw, the engine "forgets" them and the group loop cascades their freed
-    // room down to priority-2 — a bid-2 winning while a bid-1 lost. Guard: find the strongest
-    // priority among denied bids that genuinely could NOT fit alongside the winners (capacity-
-    // driven denials only — a denial that still fits, e.g. a policy call with room to spare,
-    // blocks nothing, so a week with real spare capacity is never emptied). Any winner/draw/
-    // review strictly weaker than that floor is demoted to a loss. Prior-phase winners are locked
-    // and never demoted. NATURAL projection (ignoreAdmin=true) has no denials and is untouched.
-    // This runs only on the ADMIN engine: the staff twin cannot read denials (security rules),
-    // so it never sees a denial and structurally cannot produce this inversion — do NOT port a
-    // deniedData reference into the staff computeApprovals.
-    if(!ignoreAdmin){
-      const _denW=Array.isArray(deniedData?.[wk])?deniedData[wk]:[];
-      const _curPh=Number(phasesData.currentPhase||1);
-      const _scorable=p=>p==="NP"||(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10));
-      // [294 · RA-H9/H10 · owner ruling §70, 20 Aug 2026] CAPACITY vs POLICY, judged
-      // against the PRE-DENIAL NATURAL projection. The old test measured each denied bid
-      // against the DECIDED run's refilled baseline, which (a) branded a denied NATURAL
-      // WINNER "couldn't fit" and demoted its untouched co-winners, and (b) after several
-      // denials let a genuinely capacity-blocked bid measure as "fits", elevating strictly
-      // weaker bids — the NE-1 inversion. Classification now:
-      //   · denied NATURAL WINNER — a policy call: frees its spot, blocks nothing;
-      //   · denied member of the CONTESTED group (the first tie-group that did not fit —
-      //     the natural draw/review/over-cap set): capacity-blocked, every strictly
-      //     weaker bid stays blocked;
-      //   · denied natural LOSER — was already outranked: blocks nothing.
-      const _natFilter=u=>{
-        const p=scheduleData[u]?.[wk]; if(p===undefined) return null;
-        if(priorWinners.has(u)) return null;
-        if(getUserBidPhaseAdmin(u,wk)<_curPh) return null; // a dead prior-phase bid blocks nothing
-        if(!_scorable(p)) return null;                     // an unscorable/forged bid blocks nothing
-        if(_i2Disq.has(u+'|'+wk)) return null;             // an I2-disqualified bid blocks nothing
-        // [build 266 · BF] a below-floor bid (or an NP bid forged into an NP-off phase) was
-        // never a legal competitor — it blocks nothing. typeof: extracted-test sandbox scope.
-        if(typeof _bfEngineFilter==='function' && !_bfEngineFilter(u,wk,p)) return null;
-        return p;
-      };
-      const _natReqs=[...reqs];
-      for(const u of _denW){ const p=_natFilter(u); if(p===null) continue; if(!_natReqs.some(r=>r.user===u)) _natReqs.push({user:u,score:pScore(p),fte:getUserFTE(u)}); }
-      _natReqs.sort((a,b)=>a.score-b.score);
-      const _natContested=new Set();
-      { let _nf=priorFte, _i=0, _settled=false;
-        while(_i<_natReqs.length){
-          const _s=_natReqs[_i].score; const _g=[];
-          while(_i<_natReqs.length&&_natReqs[_i].score===_s){ _g.push(_natReqs[_i]); _i++; }
-          if(_settled) continue;
-          const _gf=_g.reduce((t,r)=>t+r.fte,0);
-          if(Math.round((_nf+_gf-cap)*10)/10<=0){ _nf+=_gf; }        // this whole group fit naturally
-          else { _settled=true; _g.forEach(r=>_natContested.add(r.user)); }
-        } }
-      let _blockFloor=Infinity;
-      for(const u of _denW){
-        const p=_natFilter(u); if(p===null) continue;
-        if(!_natContested.has(u)) continue; // a denied natural winner (policy) or natural loser blocks nothing
-        _blockFloor=Math.min(_blockFloor,pScore(p));
-      }
-      // Admin OVERRIDE escape hatch (user ruling): strict priority is the DEFAULT — the demotion
-      // below removes any auto-elevated weaker bid so the auto-decider, Deny-All-Losers, and the
-      // draw/review buttons never promote one. But if the admin has DELIBERATELY approved a weaker
-      // bidder (an exceptional call they own), that explicit approval is respected and never
-      // demoted. The stale-approval warning still surfaces it at Complete Phase.
-      const _appW=Array.isArray(approvalsData?.[wk])?approvalsData[wk]:[];
-      if(_blockFloor<Infinity){
-        for(const _set of [winners,draws,reviews]){
-          for(const u of [..._set]){
-            if(priorWinners.has(u)) continue;              // locked-in prior winners are never demoted
-            if(_appW.includes(u)) continue;                // deliberate admin override — respected
-            const p=scheduleData[u]?.[wk];
-            if(p!==undefined&&pScore(p)>_blockFloor){ _set.delete(u); if(_set===winners) fteWon=Math.round((fteWon-getUserFTE(u))*10)/10; }
-          }
-        }
-      }
-    }
+    // [298 · §77 — PROJECTIONS NEVER CHANGE. They freeze when the phase closes.]
+    // Owner ruling, superseding §70: "I don't care what admin approves/denies, PROJECTIONS
+    // NEVER CHANGE." Everything that used to live here is gone: the block that promoted an
+    // admin-approved bid into `winners` and added its FTE, and the §70 capacity-vs-policy
+    // classification with its pre-denial re-run, contested set, block floor and demotion loop.
+    // Both of that machinery's failure directions died with it — it could PROMOTE a weaker bid
+    // over a capacity-denied stronger one, and it could ERASE bidders from a week that still
+    // had room. Neither can exist when nothing recomputes.
+    // WHAT THE PROJECTION IS NOW: a frozen answer to "who would have got this week", and
+    // nothing else. It is NOT the answer to "who is getting this week" — that question is
+    // answered by the DECISIONS, via decidedWinners()/weekLedger() below, and every caller
+    // that acts on an outcome reads those instead.
     // NOTE: We intentionally do NOT auto-collapse a lone remaining draw into a
     // review or a loss. When the admin approves one member of a draw, every
     // other member of that draw must stay a DRAW so the admin still has to
@@ -4621,8 +4583,7 @@ window.toggleWeekLock=async function(wk){
   // UNLOCKING an effectively-full week warns too — users could waste bids on
   // a week that is below its Smart Lock Control.
   if(cur){
-    const a=computeApprovals()[wk];
-    const remaining=Math.round((getSlots(wk)-(a?.fteWon||0))*10)/10;
+    const remaining=weekLedger(wk).remainingFte; // [298 · §77] was ap.fteWon; same number, now from the ledger
     const slc=getSlc(wk);
     if(remaining<slc){
       openConfirm({
@@ -4661,7 +4622,7 @@ window.lockAllWeeks=function(){
 window.unlockAllWeeks=function(){
   openConfirm({
     title:'🔓 Unlock All Weeks',
-    body:(()=>{const ap=computeApprovals();let full=0;mondays.forEach(d=>{const wk=dateKey(d);const a=ap[wk];const rem=Math.round((getSlots(wk)-(a?.fteWon||0))*10)/10;if(rem<getSlc(wk))full++;});
+    body:(()=>{const ap=computeApprovals();let full=0;mondays.forEach(d=>{const wk=dateKey(d);const rem=weekLedger(wk,ap).remainingFte;if(rem<getSlc(wk))full++;}); // [298 · §77] ledger, not the projection
       return `<div>Unlock all ${mondays.length} weeks?</div><div class="cmodal-info">Users will be able to add, edit, and remove bids on any week.</div>${full?`<div class="cmodal-warn" style="margin-top:8px">⚠️ ${full} week${full!==1?'s are':' is'} below ${full!==1?'their':'its'} Smart Lock Control (effectively full) — users could waste bids there.</div>`:''}`;})(),
     okText:'Unlock All',
     onConfirm:()=>guardP1Unlock(null,async()=>{                     // [AUDIT #4]
@@ -7143,7 +7104,12 @@ function finalFteForWeek(wk, apPre){ // L-6: accept precomputed approvals to avo
   }
   const ap=apPre||computeApprovals();
   const win=ap[wk]?.winners;
-  if(win && typeof win.forEach==='function') win.forEach(u=>users.add(u));
+  // [298 · §77] The projection is frozen and therefore still lists people the admin has
+  // DENIED. This figure is "committed + projected", and a denied bid is neither, so the
+  // denied are filtered out here — restoring exactly what this union meant before §77 moved
+  // the filtering out of the engine.
+  let _den=[]; try{ _den=Array.isArray(deniedData?.[wk])?deniedData[wk]:[]; }catch(_){ _den=[]; } // sandbox convention
+  if(win && typeof win.forEach==='function') win.forEach(u=>{ if(_den.indexOf(u)<0) users.add(u); });
   const live=approvalsData?.[wk];
   // [build 230 · CRITIC LEAD 1] Orphan guard, mirroring completePhase's snapshot filter: a live
   // approval only counts if the bid still EXISTS and is scorable. Mid-phase, a user can remove
@@ -7207,7 +7173,9 @@ function perPhaseApprovedList(wk, uptoPhase, liveCurrent){
     if(liveCurrent && p===cur && !cp[p]){
       const users=new Set();
       const live=approvalsData?.[wk]; if(Array.isArray(live)) live.forEach(u=>users.add(u));
-      const ap=computeApprovals(); const win=ap[wk]?.winners; if(win && typeof win.forEach==='function') win.forEach(u=>users.add(u));
+      const ap=computeApprovals(); const win=ap[wk]?.winners;
+      let _den2=[]; try{ _den2=Array.isArray(deniedData?.[wk])?deniedData[wk]:[]; }catch(_){ _den2=[]; } // [298 · §77] denied bids are not "approved"; guarded for extracted sandboxes
+      if(win && typeof win.forEach==='function') win.forEach(u=>{ if(_den2.indexOf(u)<0) users.add(u); });
       const prior=new Set(); for(let q=1;q<p;q++){ const a=cp[q]?.approvals?.[wk]; if(Array.isArray(a)) a.forEach(u=>prior.add(u)); }
       let fte=0; users.forEach(u=>{ if(!prior.has(u)) fte+=getUserFTE(u); });
       approved=R(fte);
@@ -8176,6 +8144,34 @@ function _jumpAutoRelocate(){
 
 // Approvals/denials should ideally only happen once bidding is closed and every
 // week is locked. This reports readiness so we can warn (but still allow override).
+// [299 · §79] THE ONE DEFINITION of "bidding is still open on the server", used by the phase
+// readiness check below AND by the guard on every approve/deny surface. SERVER truth only: the
+// biddingClosed flag, or an ENABLED timer past its deadline. Week locks are CLIENT-side and
+// never count as closure — a merely switched-OFF timer once made this read "closed" while every
+// bidder could still write from devtools (that bug is recorded in approvalReadiness below). A
+// second, hand-rolled definition of "open" is exactly how that returns, so there is only one.
+function biddingOpenOnServer(){
+  const timerExpired = !!(timerData?.enabled===true && timerData?.lastChange && (((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange))<=0);
+  return !biddingIsClosedFlag() && !timerExpired;
+}
+// [299 · §79] Owner ruling 21 Aug 2026: approvals and denials are BLOCKED while bidding is open,
+// not merely warned about ("we currently have a warning not to do that, but blocking is better").
+// Deciding mid-phase means deciding against bids that can still change underneath the decision.
+//
+// SCOPE, deliberate: this gates the actions that CREATE or CHANGE a decision. It does NOT gate
+// adRevokeApprove / adRevokeDeny, because a revoke only ever REMOVES a decision — it moves
+// toward the ruling, never against it, and blocking correction while a stale decision sits there
+// would trap the admin with no way out (§72: a false refusal is its own incident).
+//
+// The refusal names WHAT is blocked, WHY, and WHICH button clears it. Phase 4 runs in rounds all
+// year, so it names the round rather than the phase when that is what is open.
+function _decisionsAllowedOrExplain(what){
+  if(!biddingOpenOnServer()) return true;
+  const cur=Number(phasesData.currentPhase||1);
+  const where=(cur===4)?('Phase 4: Round '+Number(phasesData.p4Round||1)):('Phase '+cur);
+  toast('\u26d4 '+what+' is blocked while '+where+' bidding is OPEN \u2014 bids can still change underneath the decision. Close bidding first with "\u23f1 Stop bidding & lock all weeks", then decide.','err');
+  return false;
+}
 function approvalReadiness(sim){
   const allWeeksLocked = !!locksData.globalLock || mondays.every(d=>!!locksData?.weeks?.[dateKey(d)]);
   // [FIX 25 Jul 2026 · delta-audit #8] The server-side flag is authoritative: when it is set,
@@ -8187,8 +8183,7 @@ function approvalReadiness(sim){
   // "Lock all weeks" button (client-side locks only, no biddingClosed write anywhere on
   // that path) flipped ready=true and printed "Bidding is now closed" while every bidder
   // could still write from devtools. Locks are CLIENT-side and never count as closure.
-  const timerExpired = !!(timerData?.enabled===true && timerData?.lastChange && (((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange))<=0);
-  const phaseOpen = !biddingIsClosedFlag() && !timerExpired;
+  const phaseOpen = biddingOpenOnServer(); // [299 · §79] ONE definition, shared with the decision guard
   const problems=[];
   if(phaseOpen) problems.push('bidding is NOT closed on the server — users can still write bids. Use "⏱ Stop bidding & lock all weeks", which sets the server-side biddingClosed gate');
   if(!allWeeksLocked) problems.push('not all weeks are locked — bids can still change on unlocked weeks');
@@ -8222,14 +8217,32 @@ function capBreaches(sim){
     const won={};
     // Count every user present in the winner sets — not just `names` — so a bidder who is
     // no longer on the roster (e.g. restored from a backup) is still surfaced. [delta-audit #6]
+    // [298 · §77] This warning is PREDICTIVE — "X would end Phase N with too many weeks" — so
+    // it must keep counting bids that are still on course to win, not only decided ones. What
+    // it must NOT count is a bid the admin has DENIED, and the frozen projection still lists
+    // those. So the set per week is: the projection's winners minus the denied, plus everyone
+    // actually decided into the week. That is precisely what `a.winners` meant before §77
+    // moved the denial filter out of the engine — the number is unchanged, its derivation is
+    // just no longer hidden inside the projection.
+    // typeof/try guards are the extracted-test sandbox convention used throughout this file:
+    // a legacy sandbox that carries neither deniedData nor decidedWinners degrades to exactly
+    // the pre-§77 answer, which is correct there because such a sandbox has no decisions.
     mondays.forEach(d=>{
-      const wk=dateKey(d); const a=ap[wk]; if(!a||!a.winners) return;
-      a.winners.forEach(u=>{ won[u]=(won[u]||0)+1; });
+      const wk=dateKey(d); const a=ap[wk]; if(!a) return;
+      let den=[]; try{ den=Array.isArray(deniedData?.[wk])?deniedData[wk]:[]; }catch(_){ den=[]; }
+      const set=new Set();
+      if(a.winners&&typeof a.winners.forEach==='function') a.winners.forEach(u=>{ if(den.indexOf(u)<0) set.add(u); });
+      try{ if(typeof decidedWinners==='function') decidedWinners(wk).forEach(u=>set.add(u)); }catch(_){}
+      set.forEach(u=>{ won[u]=(won[u]||0)+1; });
     });
     let simCounted=false;
     if(sim&&sim.user&&sim.wk){
-      const aw=ap[sim.wk]&&ap[sim.wk].winners;
-      if(!(aw&&aw.has(sim.user))){ won[sim.user]=(won[sim.user]||0)+1; simCounted=true; }
+      // [298 · §77] mirrors the set above, with the same sandbox guards.
+      let _sden=[]; try{ _sden=Array.isArray(deniedData?.[sim.wk])?deniedData[sim.wk]:[]; }catch(_){ _sden=[]; }
+      const _saw=ap[sim.wk]&&ap[sim.wk].winners;
+      let _dec=false; try{ _dec=(typeof decidedWinners==='function')&&decidedWinners(sim.wk).has(sim.user); }catch(_){}
+      const _counted=(_saw&&_saw.has(sim.user)&&_sden.indexOf(sim.user)<0)||_dec;
+      if(!_counted){ won[sim.user]=(won[sim.user]||0)+1; simCounted=true; }
     }
     for(const u of Object.keys(won)){
       if(won[u]>cap) out.push('<strong>'+esc(u)+'</strong> would end Phase '+cur+' with '+won[u]+' weeks — over the cumulative cap of '+cap
@@ -8390,6 +8403,7 @@ function _decisionGuard(atOpen,user,wk){
   return true;
 }
 window.adApprove=function(user,wk,currentOutcome){
+  if(!_decisionsAllowedOrExplain('Approve')) return; // [299 · §79]
   const _ds=_decisionStamp(); // [285 · AUD-C4]
   // [build 256 · audit FINDING 3] An archived round's decision is frozen, announced history.
   { const _ar=_p4ArchivedDecisionRound(user,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); return; } }
@@ -8425,9 +8439,12 @@ window.adApprove=function(user,wk,currentOutcome){
   // snapshot AND the never-cleared live approvals list) and treats projected
   // wins as using FTE. If the user being approved is already in the winner set
   // (approving a projected winner), their FTE is not added a second time.
-  const a=computeApprovals()[wk]||{winners:new Set(),fteWon:0};
-  const usedFte=a.fteWon||0;
-  const total=a.winners?.has(user)?usedFte:usedFte+ufte;
+  // [298 · §77] The engine no longer folds approvals into fteWon, so "how full is this week"
+  // comes from the ledger. committedFte is the same union this line always counted.
+  const _ap=computeApprovals(); const a=_ap[wk]||{winners:new Set(),fteWon:0};
+  const usedFte=weekLedger(wk,_ap).committedFte;
+  const _already=(a.winners?.has(user))||decidedWinners(wk).has(user);
+  const total=_already?usedFte:usedFte+ufte;
   const overage=Math.round((total-cap)*10)/10;
   const overageHtml=overage>0?`<div class="cmodal-warn">⚠️ FTE will exceed cap by ${overage} — counting locked-in winners, approved bids, and projected wins (admin override allowed).</div>`:'';
   // [build 266 · BF] Approving a below-floor bid (or an NP bid placed in an NP-off phase) is
@@ -8457,6 +8474,7 @@ window.adApprove=function(user,wk,currentOutcome){
 };
 
 window.adDeny=function(user,wk,currentOutcome){
+  if(!_decisionsAllowedOrExplain('Deny')) return; // [299 · §79]
   const _ds=_decisionStamp(); // [285 · AUD-C4]
   // [build 256 · audit FINDING 3] Same freeze rule as adApprove.
   { const _ar=_p4ArchivedDecisionRound(user,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); return; } }
@@ -8520,6 +8538,7 @@ window.adRevokeDeny=function(user,wk){
 };
 
 window.adApproveAllWinners=function(){
+  if(!_decisionsAllowedOrExplain('Approve All Current Winners')) return; // [299 · §79]
   const _ds=_decisionStamp(); // [285 · AUD-C4]
   const ap=computeApprovals();
   const toApprove=[];
@@ -8563,6 +8582,7 @@ window.adApproveAllWinners=function(){
 };
 
 window.adDenyAllLosers=function(){
+  if(!_decisionsAllowedOrExplain('Deny All Losers')) return; // [299 · §79]
   const _ds=_decisionStamp(); // [285 · AUD-C4]
   const ap=computeApprovals();
   const toDeny=[];
@@ -11531,6 +11551,7 @@ window.confirmRevokeApproval=function(user,wk){
 
 // ── Admin approve user (overage allowed) ──
 window.confirmApprove=function(user,wk,type){
+  if(!_decisionsAllowedOrExplain('Approve')) return; // [299 · §79]
   const _ds=_decisionStamp(); // [285 · AUD-C4]
   const cap=getSlots(wk);
   const ap=computeApprovals();
