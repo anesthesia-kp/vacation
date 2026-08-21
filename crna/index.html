@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 160;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 161;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -1214,7 +1214,20 @@ const nameList     =document.getElementById("nameList");
 const mainContainer=document.getElementById("mainContainer");
 
 names.forEach(n=>{ const o=document.createElement("option"); o.value=o.textContent=n; personSelect.appendChild(o); });
-function getCurrentUser(){ return personSelect.value; }
+function getCurrentUser(){
+  // [161 · RA-3] Was `personSelect.value`. A <select> auto-selects its first <option>, so from
+  // the moment the roster loaded until sign-in finished this returned the alphabetically FIRST
+  // person on the roster. Public listeners (phases, timer, admin settings) fire inside that
+  // window and run a full render, so a doctor signing in could see — for a painted frame or
+  // several hundred milliseconds — someone ELSE's "My Bids Already Used" numbers, and a
+  // lowerings counter reading the full allowance no matter what they had actually spent. A
+  // bidder who glanced at that count and acted on it would be acting on another person's data.
+  // The signed-in identity is the only authority. Before sign-in there is no current user, and
+  // render() already returns early on an empty one, so the board simply stays unpainted.
+  // try/catch: this function is defined ABOVE `let selectedSignInName`, so a call during module
+  // evaluation would land in the temporal dead zone rather than read undefined.
+  try{ return selectedSignInName || ""; }catch(_){ return ""; }
+}
 
 // ── SHA-256 hashing ──
 async function sha256(str){
@@ -2513,6 +2526,7 @@ window.confirmPriority=async function(){
   // bestBids.<user>.null and a change-log row with weekKey null. Use the local from here.
   const wk=pendingWeek;
   const sel=document.getElementById("prioritySelect"), val=sel.value.toUpperCase(), user=getCurrentUser();
+  let _blSpendUncounted=false; // [161 · RA-3] set when a sanctioned lowering's counter write is refused
   if(!val){showError("Please select a bid");return;}
   // ALL gates run BEFORE any write. Previously the priority-lock, change-log,
   // and bid-time writes happened first, so a bid rejected by a gate (timer
@@ -2586,7 +2600,13 @@ window.confirmPriority=async function(){
       // The local bidTimes mirror is stamped only AFTER its write lands (no phantom timestamp).
       try{
         await saveBestBid(user,wk,"NP",!!_blSpend); // [build 139 · BL] a sanctioned lowering moves the floor DOWN
-        if(_blSpend&&typeof _blCommitSpend==='function') await _blCommitSpend(user);   // [build 139 · BL] consume only after the bid landed
+        // [161 · RA-3] The spend is now its own attempt. The floor has ALREADY moved down by
+        // this point; if the counter write is refused, the bidder has taken the benefit of a
+        // lowering that was never counted, and nothing anywhere re-derives it. That is not a
+        // "self-correcting" bookkeeping slip, so it no longer claims to be one.
+        if(_blSpend&&typeof _blCommitSpend==='function'){
+          try{ await _blCommitSpend(user); }catch(_bl){ _blSpendUncounted=true; }
+        }
         logOwnChange(user,wk,_blSpend?'lowered':(isNewNP?'added':'edited'),"NP").catch(()=>{});
         const nowTs=Date.now();
         await setDoc(bidTimesRef,{[user]:{[wk]:nowTs}},{merge:true});
@@ -2595,6 +2615,7 @@ window.confirmPriority=async function(){
       }catch(_bk){
         showCenterAlert("Your bid IS saved. Some bookkeeping (bid floor or timestamp) didn't record — it will self-correct on your next change; no action needed.");
       }
+      if(_blSpendUncounted) showCenterAlert("Your bid IS saved and the lower bid stands. One thing did NOT record: this lowering was not counted against your allowance, and it will not correct itself. Please tell your admin so the count can be put right.");
     } else {
       // L-2: write didn't land (save in flight, or a timer/lock re-check) — undo the optimistic
       // change on THIS key only. Don't restore `data` wholesale: a fresher snapshot may have
@@ -2626,7 +2647,10 @@ window.confirmPriority=async function(){
     // [BATCH D · M9 · build 127] Same honest bookkeeping guard as the NP branch above.
     try{
       await saveBestBid(user,wk,newPrio,!!_blSpend); // [build 139 · BL] a sanctioned lowering moves the floor DOWN
-      if(_blSpend&&typeof _blCommitSpend==='function') await _blCommitSpend(user);       // [build 139 · BL] consume only after the bid landed
+      // [161 · RA-3] see the NP branch above — an uncounted lowering is reported, not glossed.
+      if(_blSpend&&typeof _blCommitSpend==='function'){
+        try{ await _blCommitSpend(user); }catch(_bl){ _blSpendUncounted=true; }
+      }
       logOwnChange(user,wk,_blSpend?'lowered':(isNewBid?'added':'edited'),newPrio).catch(()=>{});
       // Record the timestamp this bid was placed/replaced — local mirror AFTER the write lands
       const nowTs2=Date.now();
@@ -2636,6 +2660,7 @@ window.confirmPriority=async function(){
     }catch(_bk){
       showCenterAlert("Your bid IS saved. Some bookkeeping (bid floor or timestamp) didn't record — it will self-correct on your next change; no action needed.");
     }
+    if(_blSpendUncounted) showCenterAlert("Your bid IS saved and the lower bid stands. One thing did NOT record: this lowering was not counted against your allowance, and it will not correct itself. Please tell your admin so the count can be put right.");
   } else {
     // L-2: write didn't land — undo the optimistic change on THIS key only (not `data` wholesale).
     if(_prev[user]?.[wk]===undefined){ if(data[user]) delete data[user][wk]; }
@@ -4052,6 +4077,11 @@ window.saveEmail=async function(){
   const val=_normKpEmail(document.getElementById("emailInput").value); // [build 140 · M3] trimmed + lower-cased, unarguable-only rejections
   if(!val){showError("Please enter a valid email.");return;}
   const user=getCurrentUser();
+  // [161 · RA-3, verification pass] Belt and braces on a SHARED-ROSTER write. In practice this
+  // prompt only opens after sign-in resolves, but `vacations/emails` is read by the Daily
+  // Schedule too, and a write keyed on an empty identity would put a junk key into a document
+  // neither site owns alone. Refuse rather than write nowhere.
+  if(!user){ showError("You're not signed in yet — please try again in a moment."); return; }
   try{ await setDoc(emailsRef,{[user]:val},{merge:true}); }
   catch(e){ showError("Could not save your e-mail ("+(e.code||'error')+") — please try again or tell your admin."); return; } // modal stays open
   document.getElementById("emailModal").classList.remove("show");
@@ -4065,6 +4095,7 @@ window.remindLater=function(){ document.getElementById("emailModal").classList.r
 // welcomes that address once). No welcome is sent for declining.
 window.declineEmail=async function(){
   const user=getCurrentUser();
+  if(!user){ showError("You're not signed in yet — please try again in a moment."); return; } // [161] same shared-roster guard as saveEmail
   try{ await setDoc(emailsRef,{[user]:"__skip__"},{merge:true}); }
   catch(e){ showError("Could not save your choice — please try again."); return; } // else they'd be re-prompted forever believing they declined
   document.getElementById("emailModal").classList.remove("show");

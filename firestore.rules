@@ -462,10 +462,22 @@ service cloud.firestore {
                    // increment(1) on the current month. (Residual: a malicious registered
                    // user can still misSET one month's number — visible, recoverable, and
                    // App Check + sign-in stand in front of it.)
-                   || (docId == 'mailStats' && (isAdmin() || (isRegisteredUser()
-                        && request.method == 'update'
-                        && request.resource.data.diff(resource.data).removedKeys().size() == 0
-                        && request.resource.data.diff(resource.data).affectedKeys().size() == 1)))
+                   // [RA-3 · 21 Aug 2026] A CREATE branch was missing. The clause below
+                   // demanded request.method == 'update', but the staff and CRNA pages bump
+                   // this counter with a merge-write designed to create the document if it is
+                   // not there yet — and Firestore classifies that as a CREATE while the
+                   // document does not exist. So on a project whose meter has never been
+                   // written (the fresh CRNA one), every staff-side send was refused and the
+                   // failure swallowed: the quota gauge under-reported from the first e-mail,
+                   // and the 2,000-message ceiling could arrive with the gauge still looking
+                   // healthy. The create is held to the same containment as the update — one
+                   // key, the cycle being counted, and nothing else.
+                   || (docId == 'mailStats' && (isAdmin() || (isRegisteredUser() && (
+                          (request.method == 'update'
+                           && request.resource.data.diff(resource.data).removedKeys().size() == 0
+                           && request.resource.data.diff(resource.data).affectedKeys().size() == 1)
+                       || (request.method == 'create'
+                           && request.resource.data.keys().size() == 1)))))
                    || (!isAdminOnlyDoc(docId) && !isBidDoc(docId) && !isRelayDoc(docId)
                         && docId != 'timer' && docId != 'signInMisses' && docId != 'emails'
                         && docId != 'changes' && docId != 'whitelistConfirm' && docId != 'welcomeLog'

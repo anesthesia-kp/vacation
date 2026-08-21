@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 296;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 297;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -5989,7 +5989,10 @@ async function _commitBeginPhase(next){
   // admin believed bidding was open. The arm is now verified by reading the timer BACK from the
   // server; only the echo counts.
   const _t=await _armPhaseTimer(next);
-  const _retireNote=_retired?(' · '+_retired+' denied bid'+(_retired!==1?'s':'')+' retired — numbers returned to their users'):''; // [295 · DB-1]
+  // [297 · RA-3] The sweep deletes every leftover bid from a finished phase whose owner did
+  // not win that week — the ones the admin denied AND, far more numerous, the ones that
+  // simply lost. Calling the whole count "denied bids" understated what had been removed.
+  const _retireNote=_retired?(' · '+_retired+' leftover bid'+(_retired!==1?'s':'')+' from finished phases retired — numbers returned to their users'):''; // [295 · DB-1 · wording 297]
   toast(_t.ok
     ? (_t.ow ? '▶ Phase '+next+' begun — bidding is open (opening window: '+_t.ow.days+' days, no timer resets until '+stage0Hours()+'h remain)'+_retireNote
              : '▶ Phase '+next+' begun — bidding is open (timer reset to '+stage0Hours()+'h)'+_retireNote)
@@ -6175,7 +6178,7 @@ window.beginNextPhase=function(){
   openConfirm({
     title:'▶ Begin Phase '+next,
     body:`<div>Begin Phase <strong>${next}</strong>?</div>
-          <div class="cmodal-info" style="margin-top:10px">Users will see "Phase ${next}" on the bidding board and can place new bids. Previous approvals remain locked in, and denied bids from finished phases retire — their numbers return to their owners (the round rule, §71).</div>${resultsWarn}`,
+          <div class="cmodal-info" style="margin-top:10px">Users will see "Phase ${next}" on the bidding board and can place new bids. Previous approvals remain locked in, and every leftover bid from a finished phase that did not win retires — the ones you denied and the ones that simply lost — so their numbers return to their owners (the round rule, §71).</div>${resultsWarn}`,
     okText:'Continue',
     onConfirm:()=>_beginPhaseLockDecision(next)
   });
@@ -6675,7 +6678,13 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
         // over a lost ledger looked clean while leaving the re-send trap armed for the next click.
         toast(`📮 Phase ${cur} results: ${ok} e-mail${ok!==1?'s':''} sent${alreadyDone?`, ${alreadyDone} already sent`:''}${skipped?` (${skipped} had no e-mail)`:''}`+_ledgerWarn,_ledgerOk?'ok':'warn');
       } else if(fail===0 && ok===0 && alreadyDone){
-        toast(`📮 Phase ${cur} results were already sent to all ${alreadyDone} user${alreadyDone!==1?'s':''} — nothing new to send.`,'ok');
+        // [297 · RA-3] "all N users" only ever counted the doctors who HAVE an address on
+        // file. Anyone without one was quietly skipped and has still never been told anything.
+        // The sibling toast above already discloses that count; this one hid it behind the
+        // word "all", on the click where the admin concludes the job is finished.
+        toast(`📮 Phase ${cur} results were already sent to ${alreadyDone} user${alreadyDone!==1?'s':''}`
+              +(skipped?` — but ${skipped} ${skipped!==1?'have':'has'} no e-mail address on file and ${skipped!==1?'have':'has'} NOT been told. Add an address on the Users tab, then send again.`
+                       :' — nothing new to send.'),skipped?'warn':'ok');
       } else {
         toast(`⚠️ Phase ${cur} results: ${ok} sent, ${fail} FAILED — NOT marked complete. Click Send again to retry just the ones still owed.`+_ledgerWarn,'warn');
       }
@@ -6874,7 +6883,10 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
           b.set(phasesRef,{p4Rounds:{[N]:arch},p4RoundResultsSent:{[N]:Date.now()}},{merge:true});
           b.set(phaseStagingRef,{pendingP4Rounds:{[N]:deleteField()}},{merge:true});
           await b.commit();
-          toast(`📮 Round ${N} results were already sent to all ${alreadyDone} user${alreadyDone!==1?'s':''} — round marked announced.`,'ok');
+          // [297 · RA-3] same as the phase toast above — "all" excluded anyone with no address.
+          toast(`📮 Round ${N} results were already sent to ${alreadyDone} user${alreadyDone!==1?'s':''}`
+                +(skipped?` — but ${skipped} ${skipped!==1?'have':'has'} no e-mail address on file and ${skipped!==1?'have':'has'} NOT been told.`:'')
+                +' — round marked announced.',skipped?'warn':'ok');
         }catch(e){ toast('⚠️ Could not publish Round '+N+' — click Send Round Results again to retry ('+(e?.message||e)+').','err'); }
       } else {
         toast(`⚠️ Round ${N} results: ${ok} sent, ${fail} FAILED — round NOT marked announced. Click Send Round Results again to retry just the ones still owed.`+_ledgerWarn,'warn');
@@ -7907,8 +7919,14 @@ window.renderAppDenials=function(){
   const _adOpenNow=(function(){ try{
     if(!phase1Started()) return false;
     if(typeof biddingIsClosedFlag==='function'&&biddingIsClosedFlag()) return false;
-    if(!(timerData&&timerData.enabled===true)) return false;
-    if(timerData.lastChange&&Date.now()>=timerData.lastChange+((timerData.durationHours||48)*3600000)) return false;
+    // [297 · RA-3] The old line here was `if(!timerData.enabled) return false` — it read a
+    // switched-OFF countdown as "bidding has finished". It is the opposite: with the timer off
+    // nothing ever expires, so bidding stays open indefinitely until Close Bidding is pressed
+    // by hand (the Disable Timer dialog now says exactly that). So the banner fell silent in
+    // the one state where bids are most able to arrive mid-decision. Only a timer that is ON
+    // and has RUN OUT is evidence that bidding stopped.
+    if(timerData&&timerData.enabled===true&&timerData.lastChange
+       &&Date.now()>=timerData.lastChange+((timerData.durationHours||48)*3600000)) return false;
     return true;
   }catch(_){ return false; } })();
   const _adOpenWarn=_adOpenNow?'<div class="cmodal-warn" style="margin:0 0 10px;padding:10px 12px">⚠️ <strong>Bidding is still OPEN</strong> — bids can arrive and projections can shift while you decide. The usual rhythm is Close Bidding first: once closed, the server refuses every user bid write and the board is frozen (NE-14).</div>':'';
@@ -10035,8 +10053,18 @@ function buildTimerRulesFromDOM(){
 }
 window.saveTimerRules=async function(rules){
   rules=rules||buildTimerRulesFromDOM();
-  await setDoc(adminRef,{timerRules:rules},{merge:true}).catch(()=>{});
+  // [297 · RA-3] The write's error used to be swallowed and success announced regardless, so
+  // a refused or dropped save looked identical to a good one — on the card that decides when
+  // bidding ends. Every other configuration card on this page already fails honestly; this
+  // one now does too, and returns false so a caller can tell.
+  try{
+    await setDoc(adminRef,{timerRules:rules},{merge:true});
+  }catch(e){
+    toast('⏱ Timer rules NOT saved — nothing changed ('+((e&&e.code)||'error')+'). Check your connection and try again.','warn');
+    return false;
+  }
   toast('⏱ Timer rules saved','ok');
+  return true;
 };
 // ── Timer ──
 function syncTimer(){
@@ -10201,7 +10229,12 @@ window.toggleTimerEnabled=function(){
     title:nv?'⏱️ Enable Timer':'🔕 Disable Timer',
     body:nv
       ? `<div>Turn the countdown timer <strong>on</strong>? A live countdown will show to all users and reset on each bid change.</div>`
-      : `<div>Turn the countdown timer <strong>off</strong>? Users will no longer see a countdown.</div>`,
+      // [297 · RA-3] The old text described only what disappears from the doctors' screen.
+      // Switching the timer off also removes the thing that ENDS the phase: nothing expires,
+      // bids stay writable, and the phase runs until Close Bidding is pressed by hand. The
+      // staff page states that consequence plainly to doctors; this dialog now does too.
+      : `<div>Turn the countdown timer <strong>off</strong>? Users will no longer see a countdown.</div>
+         <div class="cmodal-warn" style="margin-top:10px">This also removes the deadline that ends the phase. Nothing will expire on its own — bidding stays open until you press <strong>Close Bidding</strong>.</div>`,
     okText:nv?'Enable Timer':'Disable Timer', danger:!nv,
     onConfirm:async()=>{
       // Re-enabling mid-phase with the opening window ON and time still inside the
@@ -10902,6 +10935,13 @@ window.removeUser=function(u){
 window.deleteAllUsers=function(){
   const n=names.length;
   if(!n){ toast('No users to delete','ok'); return; }
+  // [297 · RA-3] This destroys strictly MORE than Reset Auction beside it: on top of every
+  // bid, lock, timestamp, approval and denial it also empties the roster, the Google
+  // login-e-mail map and the display names — the three things Reset Auction deliberately
+  // preserves. Yet Reset Auction carried both gates and this carried neither. Same two, same
+  // order, same helpers: never act from a stale page, and offer a cloud backup first.
+  if(!_feedsHealthyOrExplain('Delete All Users')) return;
+  if(!_bkBypass){ _backupThen('deleting all users',function(){ _bkBypass=true; try{ window.deleteAllUsers(); } finally { _bkBypass=false; } }); return; }
   openConfirm({
     title:'🗑 Delete ALL Users',
     body:`<div>Delete <strong>all ${n} users</strong> and every piece of their data?</div>
@@ -11584,10 +11624,14 @@ window.confirmAdminCancel=function(user,wk){
   const m=wkDate(wk);
   const cur=scheduleData[user]?.[wk]; const curLbl=Array.isArray(cur)?cur.join('/'):cur;
   openConfirm({
-    title:'✕ Cancel Bid',
+    // [297 · RA-3] Was "Cancel Bid" — which sat beside the shared modal's grey "Cancel"
+    // button, so the two choices read as "Cancel" and "Cancel Bid". One word, two opposite
+    // meanings, on the destructive dialog. "Cancel" now only ever means back out; the body
+    // text already said the bid would be REMOVED, so the button says that too.
+    title:'✕ Remove Bid',
     body:`<div>Cancel <strong>${user}</strong>'s bid (<strong style="font-family:var(--mono)">${curLbl}</strong>) on week of <strong>${wLabel(m)}</strong> (${wRange(m)})?</div>
           <div class="cmodal-danger">The bid will be removed from the schedule. All Priority Locks for this user on this week will be removed and the bid will be restored to the user for re-use.</div>`,
-    okText:'Cancel Bid',
+    okText:'Remove Bid',
     danger:true,
     onConfirm:async()=>{
       if(_ds&&!_decisionGuard(_ds)) return; // [292 · RA-H3] phase/round identity at click time
