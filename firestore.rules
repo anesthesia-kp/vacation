@@ -54,8 +54,17 @@ service cloud.firestore {
     // with a verified Google account. The apps read them only AFTER sign-in (the
     // staff sites via an authenticated fetch, the admin sites only once an admin
     // has signed in), so nothing in the anonymous login bootstrap depends on them.
+    // [RA-3 · 20 Aug 2026] 'welcomeLog' added. Its keys are participants' e-mail
+    // addresses, lower-cased with every non-alphanumeric character turned into an
+    // underscore (_wlKey) — a trivially reversible encoding, so the document was an
+    // open list of every physician's personal and KP address. The comment further
+    // down this file calling it "no PII" was wrong. Nothing in the anonymous login
+    // bootstrap touches it: the staff sites subscribe to it only inside the
+    // sensitive-listener set (after a registered sign-in) and read it once more
+    // inside welcomeOnce(), which runs after Google sign-in; the admin sites read it
+    // from an admin session. Its WRITE clause below is unchanged.
     function isSensitiveDoc(docId) {
-      return docId in ['loginEmails', 'emails', 'adminAccess', 'emailToUser', 'signInMisses'];
+      return docId in ['loginEmails', 'emails', 'adminAccess', 'emailToUser', 'signInMisses', 'welcomeLog'];
     }
 
     // ── Bid data [FB-5 stage 1, 19 Aug 2026] ──────────────────────────────────
@@ -127,8 +136,18 @@ service cloud.firestore {
     // announced. That is exactly the mid-phase-private data H6 exists to protect, so it must
     // be admin-read-only (never world-readable like `phases`). Admin-write-only via
     // isAdminOnlyDoc below. It carries NO field the anonymous login bootstrap needs.
+    // [RA-3 · 20 Aug 2026] 'changesArchive' added. completePhase merges the bid log
+    // and the DECISION log (changesDecisions — admin-read-only precisely so the
+    // winner/loser list cannot leak) and writes the union here. changesArchive was on
+    // no read gate at all, so from the moment a phase was completed — which happens
+    // BEFORE results are e-mailed — the whole approve/deny trail, and every bid every
+    // physician ever placed, was readable by anyone with no sign-in. It was already
+    // admin-WRITE-only via isAdminOnlyDoc; only the read was missed. No page loses
+    // anything: the staff sites never reference changesArchive, and the admin sites
+    // subscribe to it in the same block as approvals/denials/phaseStaging, which are
+    // gated exactly this way already.
     function isAdminReadDoc(docId) {
-      return docId in ['approvals', 'denials', 'changesDecisions', 'phaseStaging'];
+      return docId in ['approvals', 'denials', 'changesDecisions', 'phaseStaging', 'changesArchive'];
     }
 
     // ── Vacation Auction collection ───────────────────────────────────────────
@@ -343,8 +362,10 @@ service cloud.firestore {
       allow read: if isAdminReadDoc(docId) ? isAdmin()
                    : (isRelayDoc(docId) ? (isRegisteredUser() || isAdmin())
                    : ((isSensitiveDoc(docId) || isBidDataDoc(docId)) ? isVerifiedAccount() : true));
-      // welcomeLog only records which addresses have already been welcomed (no PII, no
-      // control data). [L-8] Writable by a REGISTERED user or an admin — tightened from
+      // welcomeLog records WHICH ADDRESSES have already been welcomed, keyed by the
+      // address itself — so it is PII, and its READ is gated by isSensitiveDoc above
+      // [RA-3, 20 Aug 2026; an earlier version of this comment claimed "no PII" and was
+      // wrong]. It carries no control data. [L-8] Writable by a REGISTERED user or an admin — tightened from
       // "any verified Google account" so a signed-in outsider who isn't in the auction
       // can't touch it. [L1 · APPEND-ONLY, enforced by CONTAINMENT] A registered user may only
       // ADD marks under the single 'sent' map (never remove keys, never touch other fields, never
