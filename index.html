@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 158;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 159;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -102,10 +102,15 @@ header{text-align:center;margin-bottom:32px}
 select{padding:10px 14px;font-size:1rem;border:2px solid #9fb4c6;border-radius:10px;background:#ffffff;color:#0a2540;cursor:pointer;transition:border-color .2s;min-width:180px}
 select:hover{border-color:#5a7186}
 select:focus{outline:none;border-color:#006ba6}
-.flash{padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:.9rem;display:none;animation:slideDown .3s ease}
+/* [159 · RA-3 F-2] The refusal banner FLOATS. It used to sit in the page flow near the
+   top; every bid is made far down the board behind a centred dialog, so 17 messages —
+   "Save failed" among them — rendered ~800px above the viewport and were never seen.
+   Fixed + above the dialogs = always visible, and still nothing to dismiss. */
+.flash{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:100000;width:max-content;max-width:min(560px,calc(100vw - 32px));text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 16px;border-radius:8px;font-size:.9rem;display:none;animation:flashIn .3s ease}
 .flash.show{display:block}
 .flash.err{background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.5);color:#b91c1c}
 @keyframes slideDown{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes flashIn{from{opacity:0;transform:translate(-50%,-8px)}to{opacity:1;transform:translate(-50%,0)}}
 
 /* Rules banner */
 .rules-banner{background:rgba(255,255,255,.85);border:1px solid #c2cfdb;border-radius:12px;margin-bottom:18px;overflow:hidden;backdrop-filter:blur(10px)}
@@ -591,6 +596,9 @@ body{zoom:1.15}
 
   <div id="globalLockBanner">🔒 The schedule has been locked by the admin.</div>
   <div id="notStartedBanner" style="display:none;background:rgba(251,191,36,.14);border:1px solid rgba(251,191,36,.45);color:#7a4e00;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-weight:600;font-size:.9rem;text-align:center">⏳ Bidding has not started yet — the auction opens when admin begins Phase 1.</div>
+  <!-- [159 · §78] Replaces the auction-closed POP-UP: a state the page states, not an
+       obstruction the reader has to dismiss. -->
+  <div id="phaseClosedBanner" style="display:none;background:rgba(239,68,68,.10);border:1px solid rgba(239,68,68,.40);color:#b91c1c;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-weight:600;font-size:.9rem;text-align:center">🔒 <span id="pcbText">Bidding is closed — no more changes can be made.</span></div>
   <div id="errorMessage" class="flash err"></div>
   <div class="selections-bar" style="margin-bottom:14px">
     <div class="selections-bar-title">My Bid Count<span id="blLeftLine" style="margin-left:auto;font-weight:400;font-size:.72rem;color:#48607a"></span></div> <!-- [156 · W-1] owner spec: plain muted "X of Y bid lowerings left"; hidden when unlimited -->
@@ -1998,24 +2006,23 @@ onSnapshot(timerRef,  snap=>{
   scheduleRender();
 });
 
-// ── Auction-closed pop-up ──
-// Shows once per closure so a scrolled-down user can't miss it. Re-arms only if
-// the admin restarts the timer (handled in renderCountdown when remaining>0).
-let _auctionClosedShown=false;
-function showAuctionClosedModal(){
-  if(_auctionClosedShown) return;
-  // Never pop this up before the user has actually signed in — the timer
-  // snapshot listener is live from page load, well before sign-in, so
-  // without this guard the alert could appear on top of the login screen.
-  if(!mainContainer || mainContainer.style.display==="none") return;
-  _auctionClosedShown=true;
-  const m=document.getElementById("auctionClosedModal");
-  if(m) m.classList.add("show");
+// ── Bidding-closed statement ──
+// [159 · §78] This replaces the auction-closed POP-UP (owner: "it actually just gets in the
+// way"). A closure is a STATE, so the page states it and leaves it stated — no interruption,
+// nothing to dismiss, and it cannot be missed by someone who was scrolled away when it
+// happened, because it stays. Named for what it is: bidding closes at every phase boundary,
+// not just at the end of the auction.
+function _setPhaseClosedBanner(on){
+  const b=document.getElementById("phaseClosedBanner"); if(!b) return;
+  // Never before sign-in: the timer listener is live from page load, well before the board
+  // exists, and the login screen must not carry a board banner.
+  if(on && (!mainContainer || mainContainer.style.display==="none")){ b.style.display="none"; return; }
+  const t=document.getElementById("pcbText");
+  if(t){ const ph=Number(phasesData.currentPhase||0);
+    t.textContent = ph ? ("Phase "+ph+" bidding is closed — no more changes can be made.")
+                       : "Bidding is closed — no more changes can be made."; }
+  b.style.display = on ? "block" : "none";
 }
-window.closeAuctionClosedModal=function(){
-  const m=document.getElementById("auctionClosedModal");
-  if(m) m.classList.remove("show");
-};
 
 // ── Countdown ──
 function startCountdownTick(){
@@ -2054,14 +2061,17 @@ function renderCountdown(){
   banner.classList.remove("urgent","warning");
   if(remaining<=0){
     timeEl.innerHTML='<div class="countdown-expired">Bidding closed</div>';
-    descEl.textContent="The auction window has closed — no more changes can be made";
+    descEl.textContent="Bidding is closed — no more changes can be made";
     if(countdownInterval){clearInterval(countdownInterval);countdownInterval=null;}
-    // Pop up a modal so the user sees the closure even if scrolled down the page.
-    showAuctionClosedModal();
+    // [159 · §78] The pop-up is gone — owner: "it actually just gets in the way", and the
+    // board itself already reads as closed (closing a phase locks all 52 weeks, and a locked
+    // card paints greyed, red-tinted, cursor:not-allowed, with a 🔒 LOCKED badge). State the
+    // closure at the top of the board instead of interrupting to say it.
+    _setPhaseClosedBanner(true);
     return;
   }
-  // Timer is running again (e.g. admin reset it) — re-arm the closed pop-up.
-  _auctionClosedShown=false;
+  // Timer is running again (e.g. admin reset it) — clear the closed statement.
+  _setPhaseClosedBanner(false);
   const ts=Math.floor(remaining/1000);
   const h=Math.floor(ts/3600), m=Math.floor((ts%3600)/60), s=ts%60;
   const pad=n=>String(n).padStart(2,"0");
@@ -2144,9 +2154,9 @@ async function logOwnChange(user,wk,action,bidValue){
 // FALSE on any gate bail, limit block, or write error.
 async function persistScheduleChange(user, wk, bid, prevSnapshot){
   // bid===null or undefined → remove. Otherwise → set.
-  if(!biddingOpen()){ showCenterAlert("Bidding hasn't started yet — the auction opens when admin begins Phase 1."); return false; }
-  if(isAuctionClosed()){ showCenterAlert("The auction has closed — no more changes allowed."); return false; }
-  if(locksData.globalLock||locksData.weeks?.[wk]){ showCenterAlert("This week has been locked by the admin — no changes allowed."); return false; }
+  if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); return false; }
+  if(isAuctionClosed()){ showError("Bidding is closed — no more changes can be made."); return false; }
+  if(locksData.globalLock||locksData.weeks?.[wk]){ showError("This week is locked — no more changes allowed."); return false; }
   // Enforce the admin-set per-phase bid limit — NEW bids only (edits/removals always allowed).
   // "NEW bid" = not currently a VISIBLE current-phase bid (phase-aware), matching the
   // modal gates. Keying off raw schedule presence let a re-bid on a week LOST in a prior
@@ -2316,9 +2326,9 @@ function flash(el,msg,dur){ el.textContent=msg; el.classList.add("show"); setTim
 
 // ── Priority modal ──
 function openPriorityModal(wk){
-  if(!biddingOpen()){ showCenterAlert("Bidding hasn't started yet — the auction opens when admin begins Phase 1."); return; }
-  if(isAuctionClosed()){ showCenterAlert("The auction has closed — no more changes allowed."); return; }
-  if(locksData.globalLock||locksData.weeks?.[wk]){ showCenterAlert("This week has been locked by the admin — no changes allowed."); return; }
+  if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); return; }
+  if(isAuctionClosed()){ showError("Bidding is closed — no more changes can be made."); return; }
+  if(locksData.globalLock||locksData.weeks?.[wk]){ showError("This week is locked — no more changes allowed."); return; }
   const user=getCurrentUser();
   // Block bidding on weeks user has already won via admin approval in a previous phase
   if(getPriorPhaseWinners(wk).has(user)){
@@ -2468,9 +2478,9 @@ window.confirmPriority=async function(){
   // and bid-time writes happened first, so a bid rejected by a gate (timer
   // expired / limit hit / week locked while the modal was open) still left
   // phantom side effects behind.
-  if(!biddingOpen()){ showCenterAlert("Bidding hasn't started yet — the auction opens when admin begins Phase 1."); window.closeModal(); return; }
-  if(isAuctionClosed()){ showCenterAlert("The auction has closed — no more changes allowed."); window.closeModal(); return; }
-  if(locksData.globalLock||locksData.weeks?.[wk]){ showCenterAlert("This week has been locked by the admin — no changes allowed."); window.closeModal(); return; }
+  if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); window.closeModal(); return; }
+  if(isAuctionClosed()){ showError("Bidding is closed — no more changes can be made."); window.closeModal(); return; }
+  if(locksData.globalLock||locksData.weeks?.[wk]){ showError("This week is locked — no more changes allowed."); window.closeModal(); return; }
   if(!isVisibleBid(user,wk)&&bidLimitStatus(user).atLimit){ showBidLimitModal(); window.closeModal(); return; }
   if(val==="NP"&&!npAllowedNow()){ showCenterAlert("NP bids are not enabled for Phase "+Number(phasesData.currentPhase||1)+" — the admin controls which phases allow them."); window.closeModal(); return; }
   // L-3: re-validate the prior-phase-won guard, high-demand restriction, and priority-lock
@@ -2596,9 +2606,9 @@ window.confirmPriority=async function(){
 };
 
 async function removeSelection(wk){
-  if(!biddingOpen()){ showCenterAlert("Bidding hasn't started yet — the auction opens when admin begins Phase 1."); return; }
-  if(isAuctionClosed()){ showCenterAlert("The auction has closed — no more changes allowed."); return; }
-  if(locksData.globalLock||locksData.weeks?.[wk]){ showCenterAlert("This week has been locked by the admin — no changes allowed."); return; }
+  if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); return; }
+  if(isAuctionClosed()){ showError("Bidding is closed — no more changes can be made."); return; }
+  if(locksData.globalLock||locksData.weeks?.[wk]){ showError("This week is locked — no more changes allowed."); return; }
   const user=getCurrentUser(); if(!data[user])return;
   // [build 132 · LIVE BUG, lead admin] A WON week can never be cancelled — in rolling
   // Phase 4 the week may be UNLOCKED for later rounds, so the lock check above no longer
@@ -3345,7 +3355,7 @@ function renderCalendar(user,ap){
       // Click handler
       div.onclick=(e)=>{
         if(e.target.closest('button')) return;
-        if(closed){showCenterAlert("The auction has closed — no more changes allowed.");return;}
+        if(closed){showError("Bidding is closed — no more changes can be made.");return;}
         if(isLocked){showError("This week is locked.");return;}
         if(priorWon){showError("You already won this week in a previous phase — it's locked in for you.");return;}
         if(isF){showError("Your selections are finalized.");return;}
@@ -4044,14 +4054,10 @@ document.addEventListener("keydown",e=>{
 </script>
 
 <!-- Confirm Modal -->
-<div id="auctionClosedModal" class="modal">
-  <div class="modal-content" style="max-width:360px;text-align:center;padding:28px 24px">
-    <div style="font-size:2.4rem;margin-bottom:6px">⛔</div>
-    <div class="modal-title" style="color:#b91c1c;margin-bottom:10px">Auction Closed</div>
-    <p style="color:#132f49;font-size:.95rem;margin-bottom:20px;line-height:1.5">The bidding window has closed and the timer has run out. No more bids can be placed, edited, or removed.</p>
-    <button id="auctionClosedOk" onclick="closeAuctionClosedModal()" style="padding:9px 26px;background:#0f2744;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:.95rem">Got it</button>
-  </div>
-</div>
+<!-- [159 · §78] The "Auction Closed" modal is REMOVED. It called a phase boundary the end of
+     the auction (three phases early), and it interrupted to announce a state the board was
+     already showing — every week locked, greyed, cursor:not-allowed, badged 🔒 LOCKED. The
+     statement now lives in #phaseClosedBanner at the top of the board. -->
 <div id="confirmModal" class="modal">
   <div class="modal-content" style="max-width:340px;text-align:center;padding:24px">
     <p id="confirmMsg" style="color:#132f49;font-size:.95rem;margin-bottom:18px"></p>
