@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 161;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 162;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -1157,13 +1157,32 @@ function _timerModeAllowsReset(mode,isNewBid,prevSnap,afterSnap,actor){
   if(!prevSnap||!afterSnap) return true;
   return _changeAffectsOthers(prevSnap,afterSnap,actor);
 }
+// [162 · RA-4/H-2] A DEADLINE ON EVERY WRITE THE BID DIALOG WAITS FOR.
+// Measured, not assumed: with no network, writeBatch().commit() in this SDK neither
+// resolves NOR rejects -- it pends for ever, while the latency-compensated listener echo
+// paints the bid on the board as though it had saved. The confirm dialog then hung open
+// (its trailing closeModal is never reached), the save lock was freed silently by its
+// safety timer, and a bidder who dismissed the stuck dialog and closed the tab lost a bid
+// they had watched appear. The write lives in memory only, so it dies with the tab.
+// Racing a deadline turns a permanent silence into something we can TELL them about.
+const WRITE_DEADLINE_MS=10000;
+function _awaitWrite(p){
+  let t;
+  return Promise.race([
+    Promise.resolve(p).finally(()=>clearTimeout(t)),
+    new Promise((_,rej)=>{ t=setTimeout(()=>{
+      const e=new Error("write-deadline"); e.code="write-deadline"; rej(e);
+    },WRITE_DEADLINE_MS); })
+  ]);
+}
+
 // Consume one lowering — called ONLY after the lowered bid's write has landed.
 // [adversarial audit 268] increment() (atomic, server-side) — a plain used:n+1 write
 // loses one spend when two of the same user's tabs lower simultaneously (both read 0,
 // both write 1). The local mirror still bumps optimistically; the snapshot echo corrects.
 async function _blCommitSpend(user){
   const n=blUsed(user)+1; // captured BEFORE the write — the latency-compensated snapshot
-  await setDoc(bidLoweringsRef,{[user]:{used:increment(1)}},{merge:true});
+  await _awaitWrite(setDoc(bidLoweringsRef,{[user]:{used:increment(1)}},{merge:true})); // [162] deadline
   // may already have echoed by now, so never ADD on top of it: take the larger of the
   // echo and our own expected count (the server echo stays authoritative either way).
   if(!bidLoweringsData[user]) bidLoweringsData[user]={};
@@ -2201,7 +2220,7 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
   }
   if(saveInProgress){ showCenterAlert("Still saving your previous change — please wait a moment and try again."); return false; } // L-2: was a silent no-op; tell the user instead
   saveInProgress=true;
-  const safety=setTimeout(()=>{saveInProgress=false;},8000);
+  const safety=setTimeout(()=>{saveInProgress=false;},15000); // [162] must outlive WRITE_DEADLINE_MS
   try{
     // [154 · AUD-C2] Capture the bid's phase identity at ENTRY — the optimistic local tag
     // write below reclassifies a leftover completed-phase value as current-phase before the
@@ -2229,12 +2248,12 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
       const _b=writeBatch(db);
       _b.update(scheduleRef, {[`${user}.${wk}`]: deleteField()});
       _b.update(bidPhaseRef, {[`${user}.${wk}`]: deleteField()});
-      try{ await _b.commit(); }
+      try{ await _awaitWrite(_b.commit()); } // [162] deadline
       catch(e1){
         // The bidPhase doc may legitimately not exist yet (fresh database) — batch update on a
         // missing doc aborts the whole batch. Fall back to the schedule delete alone; a missing
         // bidPhase doc has no tag to remove anyway.
-        if(e1&&e1.code==='not-found'){ await updateDoc(scheduleRef, {[`${user}.${wk}`]: deleteField()}); }
+        if(e1&&e1.code==='not-found'){ await _awaitWrite(updateDoc(scheduleRef, {[`${user}.${wk}`]: deleteField()})); } // [162] deadline
         else throw e1;
       }
       // [155 · AUD-H1] The local tag delete is DEFERRED to after the timer-gate/e-mail
@@ -2257,7 +2276,7 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
       const _b=writeBatch(db);
       _b.set(scheduleRef, {[user]: {[wk]: bid}}, {merge:true});
       _b.set(bidPhaseRef, {[user]: {[wk]: _ph}}, {merge:true});
-      await _b.commit();
+      await _awaitWrite(_b.commit()); // [162] deadline
       // Optimistically tag the local phase too. Without this, a re-bid on a week the user
       // lost in a COMPLETED phase has no local tag, so getUserBidPhase falls back to the
       // completed-phase snapshot and the fresh bid is hidden as "prior phase" until the
@@ -2316,7 +2335,14 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
     if((bid===null||bid===undefined)&&bidPhaseData[user]) delete bidPhaseData[user][wk]; // [155 · AUD-H1] deferred remove-path tag cleanup (see note above)
     return true;
   }catch(e){
-    showError("Save failed: "+e.message);
+    // [162 · RA-4/H-2] A deadline is NOT a refusal. The write may still land when the
+    // connection returns, so say "couldn't confirm" and point them at the board rather
+    // than asserting a failure that may not be one.
+    if(e&&e.code==="write-deadline"){
+      showError("Couldn't confirm your bid — your connection may have dropped. Check the board before you leave this page.");
+    } else {
+      showError("Save failed: "+e.message);
+    }
     return false;
   } finally {
     clearTimeout(safety);
@@ -2451,9 +2477,27 @@ function openPriorityModal(wk){
 }
 window.openPriorityModal=openPriorityModal;
 window.closeModal=function(){ 
+  // [162 · RA-4/H-3] Build 160 moved refusals INTO the open dialog, beside its heading —
+  // the right place to read one. But three gate refusals and the failed-save path show a
+  // message and close this dialog in the SAME BREATH, with no await between them, so the
+  // browser never paints a frame carrying it. Measured in a DOM harness over this very
+  // code: zero frames, every time. Under enforced App Check that is a bidder who is
+  // refused permanently and told nothing at all. Rescue whatever is still showing on the
+  // way out, into the floating banner, which survives the close.
+  let _rescue="";
+  try{
+    modal.querySelectorAll(".dlg-err").forEach(el=>{
+      if(el.style.display!=="none"&&el.textContent){
+        _rescue=el.textContent; clearTimeout(el._t); el.style.display="none"; el.textContent="";
+      }
+    });
+  }catch(_){}
   modal.classList.remove("show"); pendingWeek=null;
   const s1=document.getElementById("prioStep1"), s2=document.getElementById("prioStep2");
   if(s1) s1.style.display="block"; if(s2) s2.style.display="none";
+  // Rescued AFTER .show is stripped, so flash() falls through to the banner rather than
+  // routing straight back into the slot it just came from.
+  if(_rescue){ try{ flash(errorEl,_rescue,6000); }catch(_){} }
 };
 
 async function saveBestBid(user,wk,prio,allowDown){
@@ -2465,7 +2509,7 @@ async function saveBestBid(user,wk,prio,allowDown){
     // SAFE: only writes this one nested key. Other users' locks and this user's other weeks are preserved.
     // [M9 · build 127] Write FIRST, stamp the local mirror after it lands — a rejected write must
     // not leave a phantom floor on screen that the server never stored.
-    await setDoc(bestBidsRef,{[user]:{[wk]:prio}},{merge:true});
+    await _awaitWrite(setDoc(bestBidsRef,{[user]:{[wk]:prio}},{merge:true})); // [162] deadline
     if(!bestBidsData[user]) bestBidsData[user]={};
     bestBidsData[user][wk]=prio;
   }
@@ -2654,13 +2698,14 @@ window.confirmPriority=async function(){
       logOwnChange(user,wk,_blSpend?'lowered':(isNewBid?'added':'edited'),newPrio).catch(()=>{});
       // Record the timestamp this bid was placed/replaced — local mirror AFTER the write lands
       const nowTs2=Date.now();
-      await setDoc(bidTimesRef,{[user]:{[wk]:nowTs2}},{merge:true});
+      await _awaitWrite(setDoc(bidTimesRef,{[user]:{[wk]:nowTs2}},{merge:true})); // [162] deadline
       if(!bidTimesData[user]) bidTimesData[user]={};
       bidTimesData[user][wk]=nowTs2;
     }catch(_bk){
       showCenterAlert("Your bid IS saved. Some bookkeeping (bid floor or timestamp) didn't record — it will self-correct on your next change; no action needed.");
     }
     if(_blSpendUncounted) showCenterAlert("Your bid IS saved and the lower bid stands. One thing did NOT record: this lowering was not counted against your allowance, and it will not correct itself. Please tell your admin so the count can be put right.");
+    _clearDlgErrs(); // [162] the bid landed — never rescue a message the user already fixed
   } else {
     // L-2: write didn't land — undo the optimistic change on THIS key only (not `data` wholesale).
     if(_prev[user]?.[wk]===undefined){ if(data[user]) delete data[user][wk]; }
