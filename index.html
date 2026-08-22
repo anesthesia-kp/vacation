@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 162;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 163;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -2044,6 +2044,10 @@ onSnapshot(timerRef,  snap=>{
   timerData=snap.exists()?snap.data():{enabled:false,lastChange:null};
   startCountdownTick();
   if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); // rules text tracks the timer master switch live
+  // [163 · LOGIN-1] The sign-in badge now depends on timer state, so it must be recomputed
+  // here too — the phases listener alone would leave someone sitting on the login screen
+  // reading "Bidding open" after bidding actually closed.
+  if(typeof updateSigninPhase==='function') updateSigninPhase();
   scheduleRender();
 });
 
@@ -3858,7 +3862,13 @@ function updateSigninPhase(){
   const el=document.getElementById("signinPhaseLine"); if(!el) return;
   const ph=Number(phasesData?.currentPhase||0);
   if(!ph){ el.textContent="Sign in to bid"; return; }
-  el.textContent=biddingOpen()?("Phase "+ph+" · Bidding open"):"Bidding closed"; // [135] no timing promises anywhere
+  // [163 · LOGIN-1] biddingOpen() only knows whether a PHASE has begun — it consults neither
+  // the admin's Close Bidding flag nor timer expiry. The board has always used
+  // isAuctionClosed() for both. So between a phase's timer running out and the admin beginning
+  // the next one, the first thing a bidder saw said "Bidding open" while the board behind it
+  // said closed. One question, one answer, on both surfaces.
+  const _open=biddingOpen()&&!isAuctionClosed();
+  el.textContent=_open?("Phase "+ph+" · Bidding open"):"Bidding closed"; // [135] no timing promises anywhere
 }
 window.updateSigninPhase=updateSigninPhase;
 refreshLoginUsers();
