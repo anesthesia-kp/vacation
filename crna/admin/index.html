@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 299;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 300;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -8005,7 +8005,9 @@ window.renderAppDenials=function(){
       const m=wkDate(wk);
       const a=ap[wk]||{fteWon:0};
       const cap=getSlots(wk);
-      const remaining=Math.round((cap-a.fteWon)*10)/10;
+      // [300 · H-1] "Remaining" is a CAPACITY answer, so it comes from the ledger. "Winning"
+      // below stays on the frozen projection, which is what it means (§77/§82b).
+      const remaining=weekLedger(wk,ap).remainingFte;
       byWk[wk].sort((a,b)=>outcomeRank(a.outcome)-outcomeRank(b.outcome)||a.user.localeCompare(b.user));
       const drawUsers=byWk[wk].filter(e=>e.outcome==='draw').map(e=>e.user);
       const spinBtn=drawUsers.length>=2?`<button class="btn btn-primary" style="padding:3px 10px;font-size:11px;margin-top:6px" onclick='openWheel("${wk}",${esc(JSON.stringify(drawUsers))})'>🎡 Spin Randomizer (${drawUsers.length} in draw)</button>`:'';
@@ -8479,9 +8481,12 @@ window.adDeny=function(user,wk,currentOutcome){
   { const _ar=_p4ArchivedDecisionRound(user,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); return; } }
   const m=wkDate(wk);
   const isDrawUser=currentOutcome==='draw';
+  // [300 · M-1] Deny REMOVES an existing approval. Say so before the click, not after.
+  const _holdsApproval=Array.isArray(approvalsData?.[wk])&&approvalsData[wk].includes(user);
   openConfirm({
     title:'✕ Deny '+user,
     body:`<div>Deny <strong>${user}</strong> for week of <strong>${wLabel(m)}</strong>?</div>
+          ${_holdsApproval?`<div class="cmodal-warn" style="margin-top:8px">⚠️ <strong>${user}</strong> is currently APPROVED for this week — denying REMOVES that approval.</div>`:''}
           ${isDrawUser?`<div class="cmodal-info" style="margin-top:8px">User was in a DRAW — they will be notified when phase results are sent.</div>`:''}
           <div class="cmodal-warn" style="margin-top:8px">Their bid number will be returned for use in the next phase. Email notification is sent via the "Send Phase Results" button.</div>${readinessWarnHtml()}`,
     okText:'Deny',danger:true,
@@ -8662,8 +8667,7 @@ function weeksNeedingLock(unlockedOnly){
   mondays.forEach(d=>{
     const wk=dateKey(d);
     const a=ap[wk]; if(!a) return;
-    const cap=getSlots(wk);
-    const remaining=Math.round((cap-a.fteWon)*10)/10;
+    const remaining=weekLedger(wk,ap).remainingFte; // [300 · H-1] was cap-a.fteWon; toggleWeekLock already uses the ledger
     const slc=getSlc(wk);
     if(remaining<slc){
       if(unlockedOnly && locksData?.weeks?.[wk]) return; // already locked
@@ -8686,8 +8690,7 @@ function lockedWeeksWithAvailability(){
     const wk=dateKey(d);
     if(!locksData?.weeks?.[wk]) return;         // only per-week locked weeks
     const a=ap[wk]; if(!a) return;
-    const cap=getSlots(wk);
-    const remaining=Math.round((cap-a.fteWon)*10)/10;
+    const remaining=weekLedger(wk,ap).remainingFte; // [300 · H-1] same source as weeksNeedingLock, its inverse
     const slc=getSlc(wk);
     if(remaining>=slc){ list.push({wk,remaining,slc,label:wLabel(wkDate(wk))}); }
   });
@@ -8795,7 +8798,10 @@ async function _execSimulationApprovals(){
         if(drawArr.length){
           fyShuffle(drawArr);
           const u=drawArr[0]; const cap=getSlots(wk); const T=getReviewThreshold();
-          if(Math.round((a.fteWon+getUserFTE(u)-cap)*10)/10<=T){
+          // [300 · H-1] The loop recomputes after every write; on the frozen projection that
+          // recompute was a no-op, so every member of a draw met the identical fit test and all
+          // were approved. committedFte moves as approvals land, which is what the loop assumed.
+          if(Math.round((weekLedger(wk).committedFte+getUserFTE(u)-cap)*10)/10<=T){
             await _simApprove(wk,u,'✓ Draw winner: '+u+' for Wk '+(_wkNumByISO[wk]||wk));
           } else {
             await _simDeny(wk,u,'✕ Draw loser: '+u+' for Wk '+(_wkNumByISO[wk]||wk));
@@ -10306,9 +10312,7 @@ window._reopenRoundMonths=function(){
   const byMonth={}; let availTotal=0;
   mondays.forEach(d=>{
     const wk=dateKey(d);
-    const cap=getSlots(wk);
-    const fteWon=(ap[wk]&&typeof ap[wk].fteWon==='number')?ap[wk].fteWon:0;
-    const remaining=Math.round((cap-fteWon)*10)/10;
+    const remaining=weekLedger(wk,ap).remainingFte; // [300 · H-1] guards NE-2/NE-3, which needs the capacity number
     const avail=remaining>=getSlc(wk);
     const mkey=wk.slice(0,7);
     if(!byMonth[mkey]){ const p=mkey.split('-'); byMonth[mkey]={label:(MONTHS[Number(p[1])-1]||mkey)+' '+p[0], avail:0, availWeeks:[]}; }
@@ -11363,11 +11367,27 @@ window.renderDrawsReviews=function(){
   const sortBy=document.getElementById("drSortBy")?.value||'week';
   const filter=document.getElementById("drFilter")?.value||'all';
   // Collect entries
-  const entries=[]; // {wk, user, type:'draw'|'review'|'approved'}
+  const entries=[]; // {wk, user, type:'draw'|'review'|'approved'|'denied'}
+  // [300 · M-1] ONE row per person per week, and anyone the admin has already decided renders
+  // as THAT DECISION. §77 froze the projection, so an approved person stays in a.draws for the
+  // rest of the phase; before this they were drawn a second time as a bare draw row wearing no
+  // chip and carrying a live ✕ Deny — whose handler removes the approval. One click on a row
+  // showing no sign of a decision destroyed it. Deciding the type here also takes decided people
+  // off the randomizer wheel, which reads the draw rows.
+  const _seenRow=new Set();
+  const _decidedAs=(wk,u)=>{
+    if(Array.isArray(approvalsData?.[wk])&&approvalsData[wk].includes(u)) return 'approved';
+    if(Array.isArray(deniedData?.[wk])&&deniedData[wk].includes(u)) return 'denied';
+    return null;
+  };
+  const _addRow=(wk,user,type)=>{
+    const k=user+'|'+wk; if(_seenRow.has(k)) return;
+    _seenRow.add(k); entries.push({wk,user,type});
+  };
   Object.keys(ap).sort().forEach(wk=>{
     const a=ap[wk];
-    if(filter!=='review') [...a.draws].forEach(u=>entries.push({wk,user:u,type:'draw'}));
-    if(filter!=='draw') [...a.reviews].forEach(u=>entries.push({wk,user:u,type:'review'}));
+    if(filter!=='review') [...a.draws].forEach(u=>_addRow(wk,u,_decidedAs(wk,u)||'draw'));
+    if(filter!=='draw') [...a.reviews].forEach(u=>_addRow(wk,u,_decidedAs(wk,u)||'review'));
   });
   // Add admin-approved users (filter=all only — they're neither draw nor review now)
   // Restrict to CURRENT-phase bids only. Prior-phase approvals are locked in and
@@ -11378,7 +11398,7 @@ window.renderDrawsReviews=function(){
       list.forEach(u=>{
         if(scheduleData[u]?.[wk]===undefined) return;
         if(!isCurrentPhaseBidAdmin(u,wk)) return;
-        entries.push({wk,user:u,type:'approved'});
+        _addRow(wk,u,'approved');
       });
     });
     // Also include current-phase DENIED users so they stay visible for follow-up edits.
@@ -11387,7 +11407,7 @@ window.renderDrawsReviews=function(){
       list.forEach(u=>{
         if(scheduleData[u]?.[wk]===undefined) return;
         if(!isCurrentPhaseBidAdmin(u,wk)) return;
-        entries.push({wk,user:u,type:'denied'});
+        _addRow(wk,u,'denied');
       });
     });
   }
@@ -11444,7 +11464,7 @@ window.renderDrawsReviews=function(){
       const cap=getSlots(wk);
       const a=ap[wk]||{fteWon:0,winners:new Set(),draws:new Set(),reviews:new Set()};
       const fteWonNow=Math.round(a.fteWon*10)/10;
-      const remaining=Math.round((cap-fteWonNow)*10)/10;
+      const remaining=weekLedger(wk,ap).remainingFte; // [300 · H-1] capacity from the ledger; "Winning" stays the projection
       const remainingColor=remaining<0?'var(--red)':'var(--t2)';
       // Week-view table: 5 columns (user, bid, status, actions, history) — no
       // leading week-label column. Header colspan = 4 (info) + 1 (button).
@@ -11554,9 +11574,12 @@ window.confirmApprove=function(user,wk,type){
   const _ds=_decisionStamp(); // [285 · AUD-C4]
   const cap=getSlots(wk);
   const ap=computeApprovals();
-  const fteWonNow=ap[wk]?.fteWon||0;
+  // [300 · H-1] Byte-identical write to adApprove, so it must give byte-identical advice:
+  // the same ledger, and no second count of someone already decided in.
+  const _used=weekLedger(wk,ap).committedFte;
   const ufte=getUserFTE(user);
-  const newTotal=Math.round((fteWonNow+ufte)*10)/10;
+  const _already=(ap[wk]?.winners?.has(user))||decidedWinners(wk).has(user);
+  const newTotal=_already?_used:Math.round((_used+ufte)*10)/10;
   const overage=Math.round((newTotal-cap)*10)/10;
   const m=wkDate(wk);
   const overageHtml=overage>0
