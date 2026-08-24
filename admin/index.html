@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 300;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 301;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -7282,7 +7282,11 @@ function bidsByWeekModel(scope, includeEmpty){
     // Skip weeks with no bids UNLESS includeEmpty is set (the weekly report shows every
     // week of the year for context, even empty ones — its FTE header still renders).
     if(!bids.length && !includeEmpty) return;
-    bids.sort((a,b)=>bwOutcomeRank(a.outcome)-bwOutcomeRank(b.outcome)||a.score-b.score||a.user.localeCompare(b.user));
+    // [301 · §88] was bwOutcomeRank(outcome) — result-first, so approving a projected LOSER moved
+    // them to the top, and in a COMPLETED phase (where every row is approved or denied) bid strength
+    // only ever broke ties inside those two blocks. `projected` is already computed on every row in
+    // both branches, live and from the phase snapshot, so this needs no new data.
+    bids.sort((a,b)=>projRank(a.projected)-projRank(b.projected)||a.score-b.score||a.user.localeCompare(b.user));
     // Every report now shows: (1) a CUMULATIVE approved/available line, then (2) a
     // BY-PHASE breakdown of FTE APPROVED per phase (no per-phase available).
     //   • Locked phase-N report → cumulative frozen through N; by-phase = phases 1..N,
@@ -7865,6 +7869,18 @@ window.exportDashboard=function(format){
 // Ordering for the Approvals/Denials & Draws/Reviews lists: winners first, then
 // draws, then reviews, then losers (approved groups with win, denied with lose).
 function outcomeRank(o){ const m={approved:0,win:1,draw:2,review:3,lose:4,denied:5}; return (o in m)?m[o]:9; }
+// ── [301 · §88 · SORT-1] ALWAYS SORT BY PROJECTION ──────────────────────────────────────────
+// Owner ruling, 24 Aug 2026: "Always sort by projection." A DECISION NEVER DRIVES POSITION — it is
+// shown by the row's badge, in place. Two reasons, both his: a list that re-orders under the cursor
+// mid-session is the same hazard class as a stale confirm dialog; and in a COMPLETED phase, ranking
+// approved above denied buries a strong denied bid beneath a weak approved one.
+// Draw and review are ONE tier — per-week they are mutually exclusive (the engine's group loop sets
+// `settled` at the first non-fitting group), so nothing is being conflated that can co-occur.
+// Measured 24 Aug over 6,000 week states: computeApprovals(true) and (false) are IDENTICAL post-§77
+// and neither moves when a decision is written, so this key is stable by construction.
+function projRank(o){ const m={win:0,winning:0,draw:1,review:1,lose:2,losing:2}; return (o in m)?m[o]:3; }
+// Strongest bid first; pScore already ranks 1/2/3 › 1/2 › 1 › 2 … › 10 › NP (lower is stronger).
+function bidRank(p){ return p===undefined?999:pScore(p); }
 window.renderAppDenials=function(){
   initAppDenialsFilters();
   const phaseSel=document.getElementById('adPhaseFilter');
@@ -7901,6 +7917,11 @@ window.renderAppDenials=function(){
   const ap=computeApprovals();
   const nat=computeApprovals(true); // natural projection, ignores admin decisions
   const cur=Number(phasesData.currentPhase||1);
+  // [301 · §88] per-render cache of reconstructed past-phase projections (same source the
+  // by-week report uses); null when a snapshot cannot be rebuilt, and the sort tolerates null.
+  const _adSnapCache={};
+  const _adSnapProj=ph=>{ if(!(ph in _adSnapCache)){ try{ _adSnapCache[ph]=snapshotProjection(ph); }catch(_){ _adSnapCache[ph]=null; } } return _adSnapCache[ph]; };
+  const _adProj=e=>e.proj;
   // Build full entries list — every bid placed, with outcome. In "all phases" or
   // a specific past-phase view, use that phase's historical approvals/denials for outcome.
   const entries=[];
@@ -7945,7 +7966,14 @@ window.renderAppDenials=function(){
         else if(a.reviews.has(u)) outcome='review';
         else outcome='lose';
       }
-      const proj=(bidPh<cur||_arch!==null)?null:natOutcome(nat,wk,u);
+      // [301 · §88] A past-phase row had NO projection here, so those rows fell back to name
+      // order — exactly the completed-phase mis-ordering the owner reported. The report already
+      // reconstructs it from the phase snapshot; do the same, cached per render.
+      let proj;
+      if(bidPh<cur||_arch!==null){
+        const _snap=_adSnapProj(bidPh);
+        proj=_snap?(_snap[wk]?.win?.has(u)?'winning':_snap[wk]?.draw?.has(u)?'draw':_snap[wk]?.review?.has(u)?'review':'losing'):null;
+      } else proj=natOutcome(nat,wk,u);
       entries.push({wk,user:u,priority:p,outcome,phase:_arch!==null?('4:R'+_arch):bidPh,approved:_arch!==null?outcome==='approved':approvedHere.includes(u),denied:_arch!==null?outcome==='denied':deniedHere.includes(u),proj,_arch});
     }
   });
@@ -8009,7 +8037,7 @@ window.renderAppDenials=function(){
       // [300 · H-1] "Remaining" is a CAPACITY answer, so it comes from the ledger. "Winning"
       // below stays on the frozen projection, which is what it means (§77/§82b).
       const remaining=weekLedger(wk,ap).remainingFte;
-      byWk[wk].sort((a,b)=>outcomeRank(a.outcome)-outcomeRank(b.outcome)||a.user.localeCompare(b.user));
+      byWk[wk].sort((a,b)=>projRank(_adProj(a))-projRank(_adProj(b))||bidRank(a.priority)-bidRank(b.priority)||a.user.localeCompare(b.user)); // [301 · §88]
       const drawUsers=byWk[wk].filter(e=>e.outcome==='draw').map(e=>e.user);
       const spinBtn=drawUsers.length>=2?`<button class="btn btn-primary" style="padding:3px 10px;font-size:11px;margin-top:6px" onclick='openWheel("${wk}",${esc(JSON.stringify(drawUsers))})'>🎡 Spin Randomizer (${drawUsers.length} in draw)</button>`:'';
       // Week-view table: 5 columns (user, bid, status, actions, history) — no
@@ -8034,7 +8062,7 @@ window.renderAppDenials=function(){
     const byUser={};
     filtered.forEach(e=>{ (byUser[e.user]=byUser[e.user]||[]).push(e); });
     Object.keys(byUser).sort().forEach(u=>{
-      byUser[u].sort((a,b)=>outcomeRank(a.outcome)-outcomeRank(b.outcome)||a.wk.localeCompare(b.wk));
+      byUser[u].sort((a,b)=>projRank(_adProj(a))-projRank(_adProj(b))||bidRank(a.priority)-bidRank(b.priority)||a.wk.localeCompare(b.wk)); // [301 · §88]
       // User-view table: 6 columns (weeklabel, user, bid, status, actions,
       // history). Header colspan = 5 (info) + 1 (button).
       html+=`<div class="dr-card" data-card="${u}">
@@ -11481,7 +11509,7 @@ window.renderDrawsReviews=function(){
             <td><button class="btn btn-ghost" style="padding:2px 8px;font-size:10px" onclick="toggleWeekPriorPhase(this)">📋 Prior Phase Results</button></td>
           </tr>`;
       // Render the draw/review/approved entries (with action buttons)
-      list.slice().sort((a,b)=>outcomeRank(a.type)-outcomeRank(b.type)||a.user.localeCompare(b.user)).forEach(e=>{ html+=renderRow(e,false); });
+      list.slice().sort((a,b)=>projRank(natOutcome(nat,a.wk,a.user))-projRank(natOutcome(nat,b.wk,b.user))||bidRank(scheduleData[a.user]?.[a.wk])-bidRank(scheduleData[b.user]?.[b.wk])||a.user.localeCompare(b.user)).forEach(e=>{ html+=renderRow(e,false); }); // [301 · §88]
       // Also show projected wins/losses for context (read-only, no action buttons)
       const allWkBidders=[];
       for(const u in scheduleData){
@@ -11490,7 +11518,7 @@ window.renderDrawsReviews=function(){
         if(!isCurrentPhaseBidAdmin(u,wk)) continue;
         allWkBidders.push({user:u,priority:p,score:pScore(p)});
       }
-      allWkBidders.sort((x,y)=>x.score-y.score);
+      allWkBidders.sort((x,y)=>projRank(natOutcome(nat,wk,x.user))-projRank(natOutcome(nat,wk,y.user))||x.score-y.score||x.user.localeCompare(y.user)); // [301 · §88] same order as the rows above them
       const shownUsers=new Set(list.map(e=>e.user));
       const contextRows=[];
       allWkBidders.forEach(b=>{
@@ -11537,7 +11565,7 @@ window.renderDrawsReviews=function(){
             </td>
             <td><button class="btn btn-ghost" style="padding:2px 8px;font-size:10px" onclick="toggleWeekPriorPhase(this)">📋 Prior Phase Results</button></td>
           </tr>`;
-      list.sort((a,b)=>outcomeRank(a.type)-outcomeRank(b.type)||a.wk.localeCompare(b.wk)).forEach(e=>{ html+=renderRow(e,true); });
+      list.sort((a,b)=>projRank(natOutcome(nat,a.wk,a.user))-projRank(natOutcome(nat,b.wk,b.user))||bidRank(scheduleData[a.user]?.[a.wk])-bidRank(scheduleData[b.user]?.[b.wk])||a.wk.localeCompare(b.wk)).forEach(e=>{ html+=renderRow(e,true); }); // [301 · §88]
       html+=`</table></div>
       </div>`;
     });
