@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 303;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 304;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -8488,7 +8488,13 @@ window.adApprove=function(user,wk,currentOutcome){
       ?`<div class="cmodal-warn">⚠️ This NP bid was placed in a phase where NP bids were toggled OFF — the engine does not score it. Approving it is an explicit admin override.</div>`:'');
   const isDrawUser=currentOutcome==='draw';
   const _rdy=readinessWarnHtml({user,wk});                       // [302 · FAST-1]
-  const _warned=overage>0||!!_bfWarnHtml||!!_rdy;
+  // [304 · FAST-1 FIX] readinessWarnHtml() ALWAYS returns a non-empty string — it wraps its
+  // content in a wrapper div (see readinessWarnBox) even when there is nothing to say. Testing it
+  // with !!_rdy therefore read as "warned" on EVERY decision, so the offer never appeared and fast
+  // mode could never skip anything. Test the box's TEXT, which is empty exactly when both
+  // _capWarnHtml and _readinessProblemHtml returned ''.
+  const _rdyWarns=_rdy.replace(/<[^>]*>/g,'').trim().length>0;
+  const _warned=overage>0||!!_bfWarnHtml||_rdyWarns;
   // RETURN it: in fast mode this is the write's promise, and a caller (or openConfirm's
   // M-14 net) must be able to await it. Dropping it would make a failed write silent.
   return _fastDecide({ _warned,
@@ -8521,7 +8527,13 @@ window.adDeny=function(user,wk,currentOutcome){
   const _rdy=readinessWarnHtml();                                // [302 · FAST-1]
   // The "bid number will be returned" line below is INFORMATION, not a warning — it appears on
   // every deny, so treating it as one would make fast mode skip nothing at all.
-  const _warned=_holdsApproval||!!_rdy;
+  // [304 · FAST-1 FIX] readinessWarnHtml() ALWAYS returns a non-empty string — it wraps its
+  // content in a wrapper div (see readinessWarnBox) even when there is nothing to say. Testing it
+  // with !!_rdy therefore read as "warned" on EVERY decision, so the offer never appeared and fast
+  // mode could never skip anything. Test the box's TEXT, which is empty exactly when both
+  // _capWarnHtml and _readinessProblemHtml returned ''.
+  const _rdyWarns=_rdy.replace(/<[^>]*>/g,'').trim().length>0;
+  const _warned=_holdsApproval||_rdyWarns;
   // RETURN it: in fast mode this is the write's promise, and a caller (or openConfirm's
   // M-14 net) must be able to await it. Dropping it would make a failed write silent.
   return _fastDecide({ _warned,
@@ -11670,7 +11682,13 @@ window.confirmApprove=function(user,wk,type){
     ? `<div class="cmodal-warn">⚠️ Approved FTE will exceed FTE available by <strong>${overage}</strong>. (Cap ${cap} → Total winning ${newTotal}, Remaining ${(cap-newTotal).toFixed(1)})</div>`
     : `<div class="cmodal-info">This approval fits within capacity (Total winning ${newTotal} / ${cap}).</div>`;
   const _rdy=readinessWarnHtml({user,wk});                       // [302 · FAST-1]
-  const _warned=overage>0||!!_rdy;
+  // [304 · FAST-1 FIX] readinessWarnHtml() ALWAYS returns a non-empty string — it wraps its
+  // content in a wrapper div (see readinessWarnBox) even when there is nothing to say. Testing it
+  // with !!_rdy therefore read as "warned" on EVERY decision, so the offer never appeared and fast
+  // mode could never skip anything. Test the box's TEXT, which is empty exactly when both
+  // _capWarnHtml and _readinessProblemHtml returned ''.
+  const _rdyWarns=_rdy.replace(/<[^>]*>/g,'').trim().length>0;
+  const _warned=overage>0||_rdyWarns;
   // RETURN it: in fast mode this is the write's promise, and a caller (or openConfirm's
   // M-14 net) must be able to await it. Dropping it would make a failed write silent.
   return _fastDecide({ _warned,
