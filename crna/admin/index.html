@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 301;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 303;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -4118,8 +4118,10 @@ function renderOverview(){
     const fv=[...(a.reviews||new Set())].reduce((s,u)=>s+getUserFTE(u),0);
     const fl=[...loserSet].reduce((s,u)=>s+getUserFTE(u),0);
     const isSummer=d>=AC_SUMMER_START&&d<=AC_SUMMER_END; // [build 265 · B5]
+    // [303] Both markers: a holiday week inside the summer window is still a summer week, and the
+    // dashboard grid should say so. High-demand weeks are exempt, matching bfFloorFor's precedence.
     let tag='';
-    if(specLabels[wk]) tag=specLabels[wk];
+    if(specLabels[wk]) tag=specLabels[wk]+((isSummer&&!HIGH_DEMAND_WEEKS.has(wk))?'☀️':'');
     else if(isSummer) tag='☀️';
     const wStr=[...(a.winners||new Set())].join(' ')||'';
     // Draw: 2+ tied — admin must pick one winner
@@ -8484,12 +8486,16 @@ window.adApprove=function(user,wk,currentOutcome){
     :((_bfP==="NP"&&!npAllowedForPhase(getUserBidPhaseAdmin(user,wk)))
       ?`<div class="cmodal-warn">⚠️ This NP bid was placed in a phase where NP bids were toggled OFF — the engine does not score it. Approving it is an explicit admin override.</div>`:'');
   const isDrawUser=currentOutcome==='draw';
-  openConfirm({
+  const _rdy=readinessWarnHtml({user,wk});                       // [302 · FAST-1]
+  const _warned=overage>0||!!_bfWarnHtml||!!_rdy;
+  // RETURN it: in fast mode this is the write's promise, and a caller (or openConfirm's
+  // M-14 net) must be able to await it. Dropping it would make a failed write silent.
+  return _fastDecide({ _warned,
     title:'✓ Approve '+user,
     body:`<div>Approve <strong>${user}</strong> as winner for <strong>${wLabel(m)}</strong>?</div>
           <div style="margin-top:6px;font-size:12px;color:var(--t2)">Current outcome: ${currentOutcome.toUpperCase()}</div>
           ${isDrawUser?`<div class="cmodal-info" style="margin-top:8px">User was in a DRAW — they will be notified when phase results are sent (see "Send Phase Results" button).</div>`:''}
-          ${overageHtml}${_bfWarnHtml}${readinessWarnHtml({user,wk})}`,
+          ${overageHtml}${_bfWarnHtml}${_rdy}${_fastOffer('adapprove',user,wk,currentOutcome,_warned)}`,
     okText:'Approve',
     onConfirm:async()=>{
       if(!_decisionGuard(_ds,user,wk)) return; // [285 · AUD-C4]
@@ -8511,12 +8517,18 @@ window.adDeny=function(user,wk,currentOutcome){
   const isDrawUser=currentOutcome==='draw';
   // [300 · M-1] Deny REMOVES an existing approval. Say so before the click, not after.
   const _holdsApproval=Array.isArray(approvalsData?.[wk])&&approvalsData[wk].includes(user);
-  openConfirm({
+  const _rdy=readinessWarnHtml();                                // [302 · FAST-1]
+  // The "bid number will be returned" line below is INFORMATION, not a warning — it appears on
+  // every deny, so treating it as one would make fast mode skip nothing at all.
+  const _warned=_holdsApproval||!!_rdy;
+  // RETURN it: in fast mode this is the write's promise, and a caller (or openConfirm's
+  // M-14 net) must be able to await it. Dropping it would make a failed write silent.
+  return _fastDecide({ _warned,
     title:'✕ Deny '+user,
     body:`<div>Deny <strong>${user}</strong> for week of <strong>${wLabel(m)}</strong>?</div>
           ${_holdsApproval?`<div class="cmodal-warn" style="margin-top:8px">⚠️ <strong>${user}</strong> is currently APPROVED for this week — denying REMOVES that approval.</div>`:''}
           ${isDrawUser?`<div class="cmodal-info" style="margin-top:8px">User was in a DRAW — they will be notified when phase results are sent.</div>`:''}
-          <div class="cmodal-warn" style="margin-top:8px">Their bid number will be returned for use in the next phase. Email notification is sent via the "Send Phase Results" button.</div>${readinessWarnHtml()}`,
+          <div class="cmodal-warn" style="margin-top:8px">Their bid number will be returned for use in the next phase. Email notification is sent via the "Send Phase Results" button.</div>${_rdy}${_fastOffer('deny',user,wk,currentOutcome,_warned)}`,
     okText:'Deny',danger:true,
     onConfirm:async()=>{
       if(!_decisionGuard(_ds,user,wk)) return; // [285 · AUD-C4]
@@ -11302,6 +11314,49 @@ window.saveAllSlots=async function(){
 
 // ── Confirmation modal ──
 let cmCallback=null, cmCancelCallback=null;
+// ── [302 · FAST-1] FAST DECISIONS — skip the confirm, never the guards ──────────────────────
+// Owner request: a decision session can be hundreds of clicks. His three rulings: skip ONLY a
+// dialog that has no warning to show · available in rehearsal AND live · turning the mode on is
+// itself confirmed by a dialog stating what it does and does not do.
+// This does not breach §3.5 ("no one-click destructive actions") — that rule's own second clause
+// is the licence: DIALOGS ARE PAINT, GUARDS AT THE MOMENT OF ACTION ARE THE ENFORCEMENT. Fast
+// mode removes paint. Every gate still runs: _decisionsAllowedOrExplain, _p4ArchivedDecisionRound,
+// _isScorableBid, the floor filter, and _decisionGuard inside onConfirm itself.
+// IN MEMORY ONLY — never persisted, so leaving or reloading the page turns it off, as he asked.
+let _fastMode=false;
+// The write path is IDENTICAL either way because there is only one: fast mode calls the very
+// onConfirm the dialog would have called. There is no second code path to drift.
+function _fastDecide(cfg){
+  if(_fastMode && !cfg._warned && typeof cfg.onConfirm==='function') return cfg.onConfirm();
+  return openConfirm(cfg);
+}
+// The offer appears ONLY where it would actually apply — on a warning-free dialog, with the mode
+// off. On a dialog that has something to say, fast mode would not skip it anyway.
+function _fastOffer(kind,user,wk,type,warned){
+  if(_fastMode||warned) return '';
+  return `<div style="margin-top:12px;font-size:12px"><span onclick="_fastAsk('${_jsq(kind)}','${_jsq(user)}','${_jsq(wk)}','${_jsq(type||'')}')" style="color:var(--blue);cursor:pointer;text-decoration:underline">⚡ Stop asking me for the rest of this session…</span></div>`;
+}
+window._fastAsk=function(kind,user,wk,type){
+  openConfirm({
+    title:'⚡ Turn on fast decisions?',
+    body:`<div>Approvals and denials will go through <strong>without a confirmation dialog</strong> for the rest of this session.</div>
+          <div class="cmodal-info" style="margin-top:10px"><strong>It still stops you when it matters.</strong> A decision that would exceed capacity, override a bid floor, destroy an existing approval, or hit a readiness problem <strong>still opens its dialog</strong>. Only the routine ones go straight through.</div>
+          <div class="cmodal-info" style="margin-top:8px"><strong>Nothing else changes.</strong> Every check still runs — bidding-open, archived rounds, invalid bids, floors — and the write is byte-for-byte the one the dialog would have made.</div>
+          <div class="cmodal-warn" style="margin-top:8px">It does <strong>not</strong> apply to Reset Auction, Complete Phase, Send Results, restores or revokes. It is <strong>not</strong> remembered: leaving or reloading this page turns it off.</div>`,
+    okText:'⚡ Turn on fast decisions',
+    onConfirm:async()=>{
+      _fastMode=true;
+      toast('⚡ Fast decisions ON for this session — warnings still stop you','ok');
+      const fn={approve:window.confirmApprove,adapprove:window.adApprove,deny:window.adDeny}[kind];
+      // RETURN the handler's promise. Without this the re-run's write is fire-and-forget and a
+      // failure would never reach openConfirm's M-14 net — it would be a silent unhandled
+      // rejection, which is the exact failure that net exists to prevent.
+      if(typeof fn==='function') return fn(user,wk,type||undefined);   // re-run through the SAME handler
+    }
+  });
+};
+window.fastModeOn=()=>_fastMode; // exposed for testing
+
 window.openConfirm=function({title,body,okText='Confirm',danger=false,onConfirm,onCancel}){
   document.getElementById("cmTitle").innerHTML=title||'⚠️ Confirm';
   document.getElementById("cmBody").innerHTML=body||'';
@@ -11613,11 +11668,15 @@ window.confirmApprove=function(user,wk,type){
   const overageHtml=overage>0
     ? `<div class="cmodal-warn">⚠️ Approved FTE will exceed FTE available by <strong>${overage}</strong>. (Cap ${cap} → Total winning ${newTotal}, Remaining ${(cap-newTotal).toFixed(1)})</div>`
     : `<div class="cmodal-info">This approval fits within capacity (Total winning ${newTotal} / ${cap}).</div>`;
-  openConfirm({
+  const _rdy=readinessWarnHtml({user,wk});                       // [302 · FAST-1]
+  const _warned=overage>0||!!_rdy;
+  // RETURN it: in fast mode this is the write's promise, and a caller (or openConfirm's
+  // M-14 net) must be able to await it. Dropping it would make a failed write silent.
+  return _fastDecide({ _warned,
     title:'✓ Approve as Winner',
     body:`<div>Approve <strong>${user}</strong> (FTE ${ufte}) as winner for week of <strong>${wLabel(m)}</strong> (${wRange(m)})?</div>
           <div style="margin-top:8px;font-size:12px;color:var(--t2)">Current status: ${type==='draw'?'Draw':'Under Review'}</div>
-          ${overageHtml}${readinessWarnHtml({user,wk})}`,
+          ${overageHtml}${_rdy}${_fastOffer('approve',user,wk,type,_warned)}`,
     okText:'Approve',
     onConfirm:async()=>{
       if(!_decisionGuard(_ds,user,wk)) return; // [285 · AUD-C4]
