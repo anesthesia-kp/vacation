@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 304;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 305;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -9263,8 +9263,43 @@ window.adminChangePriority=async function(u,wk,val){
 // simulator batch (its stated rationale applies verbatim). Guards preserved: M-6 (never
 // reset an EXPIRED timer — that would silently reopen a closed phase), never inside the
 // opening window, and "timer on but never started" counts as open, mirroring the staff page.
-function _adminBidTimerReset(){
+// [305 · TM-1, §117 — owner-found 26 Aug 2026] ...and it obeys the Timer Reset Mode, exactly as the
+// staff page does (_timerModeAllowsReset, builds 154/274). Mode 2 was resetting on every admin
+// entry. The predicate is the staff page's _changeAffectsOthers on the admin's own before-picture
+// — the one the outbid alerts already build — so the timer and the alerts can never disagree
+// about what "affects someone" means: NATURAL projections, every user but the bid's owner.
+function _adminChangeAffectsOthers(prevSched,actor){
+  const liveSched=scheduleData, newSched=liveSched||{};
+  let prevAp,newAp;
+  // computeApprovals reads the module-global scheduleData; swap it briefly (queueProjectionAlerts precedent).
+  try{ scheduleData=prevSched; prevAp=computeApprovals(true); } finally { scheduleData=liveSched; }
+  newAp=computeApprovals(true);
+  for(const user of new Set([...Object.keys(prevSched||{}),...Object.keys(newSched)])){
+    if(user===actor) continue;
+    const pu=(prevSched&&prevSched[user]&&typeof prevSched[user]==='object')?prevSched[user]:{};
+    const nu=(newSched[user]&&typeof newSched[user]==='object')?newSched[user]:{};
+    for(const wk of new Set([...Object.keys(pu),...Object.keys(nu)])){
+      if(getOutcome(wk,user,prevAp)!==getOutcome(wk,user,newAp)) return true;
+    }
+  }
+  return false;
+}
+function _adminBidTimerReset(u,wk,prevSched){
   try{
+    // [305] The mode gate. Mode 1 always; mode 3 on a NEW bid, else only if another user's
+    // projected outcome changed; mode 2 only on that change. A missing before-picture, or a
+    // failure inside the predicate, fails OPEN to the classic reset — the timer must never
+    // silently starve. typeof guard for extracted-code test sandboxes only.
+    let gate=true;
+    try{
+      const mode=(typeof _timerModeCurrent==='function')?_timerModeCurrent():1;
+      if(mode!==1 && prevSched && u && wk){
+        const had=!!(prevSched[u]&&typeof prevSched[u]==='object'&&prevSched[u][wk]!==undefined);
+        const has=!!(scheduleData&&scheduleData[u]&&scheduleData[u][wk]!==undefined);
+        gate=(mode===3&&!had&&has)||_adminChangeAffectsOthers(prevSched,u);
+      }
+    }catch(_){ gate=true; }
+    if(!gate) return;
     const _rem=timerData.lastChange?(getDurationMs()-(Date.now()-timerData.lastChange)):1;
     if(timerData.enabled && _rem>0 && !openingWindowActive()){
       const _n=Date.now();
@@ -9309,7 +9344,7 @@ window._adminChangePriorityRaw=async function(u,wk,val,_atOpen){
   await _reconcileStaleDenials(wk); // [H12] advisory only — warns if a denial now projects WIN/DRAW/REVIEW
   await adminLog(u,wk,'admin-edit',scheduleData[u][wk]); toast(`✏️ ${u} ${wk} updated · lock → ${String(val).replace(/,/g,'/')}`,"ok");
   queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
-      _adminBidTimerReset(); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling)
+      _adminBidTimerReset(u,wk,_prev); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling) · [305 · §117] gated by the Timer Reset Mode
 };
 // [build 235 · audit] ONE shared atomic delete of a user's bid + phase tag + priority lock +
 // approval/denial membership — used by BOTH admin delete paths (adminRemove in Edit Selections
@@ -9374,7 +9409,7 @@ window.adminRemove=function(u,wk){
       await _reconcileStaleDenials(wk); // [H12] advisory only — warns if a denial now projects WIN/DRAW/REVIEW
       await adminLog(u,wk,'admin-remove',oldBid); toast(`🗑 Removed · lock cleared`,"warn");
       queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
-      _adminBidTimerReset(); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling)
+      _adminBidTimerReset(u,wk,_prev); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling) · [305 · §117] gated by the Timer Reset Mode
     }
   });
 };
@@ -9457,7 +9492,7 @@ window.adminAddSelection=function(){
       await updateDoc(deniedRef,{[wk]:arrayRemove(u)}).catch(()=>{});
       await adminLog(u,wk,'admin-add',scheduleData[u][wk]); toast(`➕ Added`,"ok");
       queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
-      _adminBidTimerReset(); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling)
+      _adminBidTimerReset(u,wk,_prev); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling) · [305 · §117] gated by the Timer Reset Mode
     }
   });
 };
@@ -11756,7 +11791,7 @@ window.confirmAdminEdit=function(user,wk){
       await adminLog(user,wk,'admin-edit',scheduleData[user][wk]);
       toast(`✏️ ${user} ${wk} edited · lock → ${val.replace(/,/g,'/')}`,'ok');
       queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
-      _adminBidTimerReset(); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling)
+      _adminBidTimerReset(user,wk,_prev); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling) · [305 · §117] gated by the Timer Reset Mode
       }); // [287 · AUD-H] end guardAdminBid wrapper
     }
   });
@@ -11801,7 +11836,7 @@ window.confirmAdminCancel=function(user,wk){
       await adminLog(user,wk,'admin-remove',oldBid);
       toast(`✕ ${user} ${wk} cancelled; lock cleared`,'warn');
       queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
-      _adminBidTimerReset(); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling)
+      _adminBidTimerReset(user,wk,_prev); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling) · [305 · §117] gated by the Timer Reset Mode
     }
   });
 };
