@@ -46,6 +46,13 @@ if (!existsSync(CFG_PATH)) {
   process.exit(2);
 }
 const CFG = JSON.parse(readFileSync(CFG_PATH, 'utf8'));
+// [26 Aug 2026 · owner ruling, DECISIONS §118] While the CRNA sites are SUSPENDED nothing is
+// stamped: crna/ is deliberately absent from the repo so GitHub Pages serves 404 for both
+// addresses. Revival recipe: TODO.md (CRNA-SUSPENDED). Exit 0 — a suspended stamp is not an error.
+if (CFG.suspended === true) {
+  console.log('⏸ CRNA suspended (crna-config.json "suspended": true) — nothing stamped, crna/ stays absent.');
+  process.exit(0);
+}
 const FB = CFG.firebase || {};
 const REQUIRED = ['apiKey', 'authDomain', 'projectId', 'storageBucket', 'messagingSenderId', 'appId'];
 const placeholder = REQUIRED.some(k => !FB[k] || String(FB[k]).includes('REPLACE_ME'));
