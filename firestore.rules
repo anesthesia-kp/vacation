@@ -502,40 +502,108 @@ service cloud.firestore {
                  get(/databases/$(database)/documents/dailysched/adminAccess).data.get('emails', []))
             || (!schedAccessDocExists() && isDefaultAdmin()));
     }
-    // [H-5, part 1] 'fteMap' added — the schedule FTE source is only ever read/written
-    // by sched-admin, so locking it to schedule-admins closes a tampering hole with no
-    // functional impact. (The deeper H-5 fix for requests/swaps/auditLog — per-author
-    // validation — needs a subcollection migration and is deferred with the schedule site.)
+    // ── [Stage 5 · RA-6 R-3, S-3, B-5, B-6, D-1, N-6, N-8, N-12, N-13 · DECISIONS §129] ──
+    // Owner, 29 Aug 2026: a rules deploy "as long as it's very low risk to the auction site".
+    // So THIS BLOCK CHANGES AND NOTHING ABOVE IT DOES — the vacations block is byte-identical.
+    //
+    // Before: every dailysched document was readable by the anonymous internet (every
+    // physician's requests, swaps and free-text notes; draft months; the admins' e-mail on
+    // every cell) and every document not on a ten-name list was writable by any of the 37
+    // registered physicians (the rules the engine obeys, the tags fairness is measured by,
+    // the audit log, each other's requests, a colleague's personal change feed).
+    //
+    // Now: READS need a verified Google sign-in — the same bar the auction sets on its own
+    // e-mail-bearing documents (isVerifiedAccount: no document access, so no per-read cost).
+    // Both schedule pages attach every dailysched listener only after that sign-in (staff 47,
+    // admin 140 — live BEFORE this file is published, never after). WRITES are an allow-list:
+    // a registered physician may (1) create their OWN request, pending; (2) move their own
+    // request between pending and withdrawn; (3) propose a swap they are the initiator of;
+    // (4) move a swap they are a party to through the non-admin states — accept, decline,
+    // withdraw — without changing who is in it; (5) append ONE entry to the legacy audit
+    // array. Everything else under dailysched — every other document, every day of every
+    // month, the audit entries, the change feed, the feeds and their tokens, the legacy
+    // request/swap arrays — is the Daily Schedule admin's alone. Decisions (approved, denied,
+    // applied) can only ever be written by an admin, which is what makes an approved request
+    // safe for the engine to obey (R-3). Nothing here can reach the auction.
     function isSchedAdminOnlyDoc(docId) {
+      // Kept as documentation of what used to be the list; the write rule below no longer
+      // consults it — under Stage 5 EVERY parent document is admin-only except the audit
+      // append, and every subcollection except requests/items and swaps/items.
       return docId in ['shiftCatalog', 'eligibility', 'openShifts', 'callTotals', 'callBaseline', 'fteMap', 'adminAccess',
-                       'groups', 'groupMembers', 'categories']
+                       'groups', 'groupMembers', 'categories', 'rules', 'quotas', 'requestTypes', 'printConfig',
+                       'callArchive', 'feedTokens', 'feeds', 'tags', 'compPool', 'changes', 'requests', 'swaps']
         || docId.matches('sched_.*');
+    }
+    function schedInitials() {
+      // The writer's initials, from the auction's bid-security map (the same source the
+      // auction's own bid rules trust). One document access per non-admin WRITE; reads
+      // never call this. An unmapped address gets [] and can therefore write nothing.
+      return exists(/databases/$(database)/documents/vacations/emailToUser)
+        ? get(/databases/$(database)/documents/vacations/emailToUser).data.get(request.auth.token.email.lower(), [])
+        : [];
+    }
+    function auditAppendOnly() {
+      // The legacy audit document (dailysched/auditLog): a physician may add exactly one
+      // entry to `log` and touch nothing else. No shortening, no rewrite, no delete (N-8).
+      return resource == null
+        ? (request.resource.data.keys().hasOnly(['log']) && request.resource.data.log.size() == 1)
+        : (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['log'])
+           && request.resource.data.log.size() == resource.data.log.size() + 1);
+    }
+    function reqOwnCreate() {
+      // A new request of my own, and it starts pending — a physician never creates a decision.
+      return request.resource.data.get('user', '') in schedInitials()
+        && request.resource.data.get('status', '') == 'pending';
+    }
+    function reqOwnUpdate() {
+      // My own request, still mine, moving only between pending and withdrawn (a withdrawal,
+      // or a re-applied claim). approved / denied stay the admin's words.
+      return resource.data.get('user', '') in schedInitials()
+        && request.resource.data.get('user', '') == resource.data.get('user', '')
+        && request.resource.data.get('status', '') in ['pending', 'withdrawn'];
+    }
+    function swapParty(d) {
+      // A party to a swap: the 2-way's from/to, or anyone in a 3-way's participants.
+      return d.get('from', '') in schedInitials()
+        || d.get('to', '') in schedInitials()
+        || d.get('participants', []).hasAny(schedInitials());
+    }
+    function swapOwnCreate() {
+      // A new swap I am proposing (2-way: from; 3-way: participants[0]), awaiting the other side.
+      return request.resource.data.get('status', '') == 'pending_target'
+        && (request.resource.data.get('from', '') in schedInitials()
+            || (request.resource.data.get('participants', []).size() > 0
+                && request.resource.data.participants[0] in schedInitials()));
+    }
+    function swapPartyUpdate() {
+      // A swap I am a party to, with the parties unchanged, moving through the states a
+      // physician may set: still waiting, accepted (pending_admin), declined, withdrawn.
+      return swapParty(resource.data)
+        && request.resource.data.get('from', '') == resource.data.get('from', '')
+        && request.resource.data.get('to', '') == resource.data.get('to', '')
+        && request.resource.data.get('participants', []) == resource.data.get('participants', [])
+        && request.resource.data.get('type', '') == resource.data.get('type', '')
+        && request.resource.data.get('status', '') in ['pending_target', 'pending_admin', 'declined_by_target', 'withdrawn'];
     }
 
     match /dailysched/{docId} {
-      // The schedule's own admin list names people, so it is not world-readable;
-      // everything else in the schedule stays public for the anonymous bootstrap.
-      allow read: if docId != 'adminAccess' || isVerifiedAccount();
-      allow write: if (isSchedAdminOnlyDoc(docId) && isSchedAdmin())
-                   || (!isSchedAdminOnlyDoc(docId) && (isRegisteredUser() || isSchedAdmin()));
+      allow read: if isVerifiedAccount();
+      allow write: if isSchedAdmin()
+                   || (docId == 'auditLog' && isRegisteredUser() && auditAppendOnly());
     }
 
-    // [schedule 59/63/68] SUBCOLLECTIONS under dailysched documents:
-    //   sched_YYYY-MM/days/{dd}    — one doc per day of the month            [59]
-    //   auditLog/entries/{id}      — one doc per audit entry                 [63]
-    //   requests/items/{id} · swaps/items/{id} · openShifts/items/{id}       [68]
-    // The flat match above does NOT reach these — Firestore matches are not
-    // recursive — so without this block the catch-all at the bottom denies every
-    // subcollection read and write. Policy mirrors the parent document exactly:
-    // world-readable (the anonymous bootstrap), and the write split keyed on the
-    // PARENT doc id, so days under a sched_* month and items under openShifts stay
-    // admin-only while requests/swaps items accept registered users — the same
-    // people who could write those parent docs before. (H-5's per-author
-    // validation remains deferred, unchanged in scope by this block.)
+    // SUBCOLLECTIONS under dailysched documents (Firestore matches are not recursive):
+    //   sched_YYYY-MM/days/{dd} · auditLog/entries/{id} · changes/items/{id} · feeds/items/{tok}
+    //   requests/items/{id} · swaps/items/{id} · openShifts/items/{id}
     match /dailysched/{docId}/{sub}/{itemId} {
-      allow read: if true;
-      allow write: if (isSchedAdminOnlyDoc(docId) && isSchedAdmin())
-                   || (!isSchedAdminOnlyDoc(docId) && (isRegisteredUser() || isSchedAdmin()));
+      allow read: if isVerifiedAccount();
+      allow create: if isSchedAdmin()
+                    || (isRegisteredUser() && docId == 'requests' && sub == 'items' && reqOwnCreate())
+                    || (isRegisteredUser() && docId == 'swaps' && sub == 'items' && swapOwnCreate());
+      allow update: if isSchedAdmin()
+                    || (isRegisteredUser() && docId == 'requests' && sub == 'items' && reqOwnUpdate())
+                    || (isRegisteredUser() && docId == 'swaps' && sub == 'items' && swapPartyUpdate());
+      allow delete: if isSchedAdmin();
     }
 
     // ── Cloud Backups [admin build 213] ───────────────────────────────────────
