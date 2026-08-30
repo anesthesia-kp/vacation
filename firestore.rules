@@ -586,8 +586,15 @@ service cloud.firestore {
         && request.resource.data.get('status', '') in ['pending_target', 'pending_admin', 'declined_by_target', 'withdrawn'];
     }
 
+    // ── [Calendar feed · DECISIONS §136 · 30 Aug 2026] READS of the two feed documents ──
+    // dailysched/feedTokens is the secret that stands in for signing in: only the schedule
+    // admin may read it (the page that mints links). dailysched/feeds/items/{token} is the
+    // rendered calendar: NO client reads it — only the endpoint, with server credentials that
+    // bypass these rules. Every other read is exactly as before; the admin lookup runs only
+    // for feedTokens, so ordinary reads carry no new document access. Nothing above changes.
     match /dailysched/{docId} {
-      allow read: if isVerifiedAccount();
+      allow read: if (docId != 'feedTokens' && isVerifiedAccount())
+                  || (docId == 'feedTokens' && isSchedAdmin());
       allow write: if isSchedAdmin()
                    || (docId == 'auditLog' && isRegisteredUser() && auditAppendOnly());
     }
@@ -596,7 +603,7 @@ service cloud.firestore {
     //   sched_YYYY-MM/days/{dd} · auditLog/entries/{id} · changes/items/{id} · feeds/items/{tok}
     //   requests/items/{id} · swaps/items/{id} · openShifts/items/{id}
     match /dailysched/{docId}/{sub}/{itemId} {
-      allow read: if isVerifiedAccount();
+      allow read: if docId != 'feeds' && isVerifiedAccount();
       allow create: if isSchedAdmin()
                     || (isRegisteredUser() && docId == 'requests' && sub == 'items' && reqOwnCreate())
                     || (isRegisteredUser() && docId == 'swaps' && sub == 'items' && swapOwnCreate());
