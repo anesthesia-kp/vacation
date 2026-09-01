@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 311;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 313;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -5550,10 +5550,17 @@ window.completePhase=function(){
   if(!_feedsHealthyOrExplain('Complete Phase')) return; // [build 227] completion FREEZES this page's local state — stale data would freeze wrong winners permanently
   if(!_bkBypass){ _backupThen('completing Phase '+Number(phasesData.currentPhase||1),function(){ _bkBypass=true; try{ window.completePhase(); } finally { _bkBypass=false; } }); return; }
   const cur=Number(phasesData.currentPhase||1);
-  // [build 255 · rounds-as-mini-phases] Once Phase 4 has run in rounds, completing the
-  // PHASE is only legal at a clean round boundary: the current round completed AND every
-  // round's results announced. Anything else means the year isn't actually finished here.
-  if(cur===4&&Object.keys(phasesData.p4Rounds||{}).length){
+  // [build 255 · rounds-as-mini-phases] Completing Phase 4 is only legal at a clean round
+  // boundary: the current round completed AND every round's results announced. Anything else
+  // means the year isn't actually finished here.
+  // [313 · D4 · owner-found] This gate used to be wrapped in "and at least one round has been
+  // ARCHIVED", which let it be skipped entirely by never completing a round: begin Phase 4,
+  // decide in Round 1, hit Complete Phase — no round archive exists, the whole check is bypassed,
+  // and the phase finishes with zero rounds recorded and the round attribution simply lost.
+  // Beginning Phase 4 ALWAYS opens Round 1 (`_commitBeginPhase` sets p4Round=1), so there is no
+  // such thing as a Phase 4 without rounds — the owner's own correction, DECISIONS §152. With the
+  // wrapper gone the first check below now says "Complete Round 1 first", which is the truth.
+  if(cur===4){
     const _rN=Number(phasesData.p4Round||1);
     if(!(phasesData.p4Rounds||{})[_rN]){ toast('Complete Round '+_rN+' first (✓ Complete Round → 📮 Send Round Results), then Complete Phase 4.','err'); return; }
     const _un=_p4UnsentRounds();
@@ -8067,7 +8074,11 @@ window.renderAppDenials=function(){
       // reconstructs it from the phase snapshot; do the same, cached per render.
       let proj;
       if(bidPh<cur||_arch!==null){
-        const _snap=_adSnapProj(bidPh);
+        // [312 · D2 · owner-found] An ARCHIVED ROUND row used to ask for phase 4's projection.
+        // Its archive lives under the round's own key in _cpWithRounds (_p4RoundKey), and while
+        // Phase 4 is still running there is nothing under key 4 at all — so every P4:Rn row fell
+        // through to 'lose', including ones the admin had APPROVED. Ask the round.
+        const _snap=_adSnapProj(_arch!==null?_p4RoundKey(_arch):bidPh);
         // [§149] Emit the canonical tokens — the SAME ones natOutcome returns and the same
         // ones projPill keys on. This line used to say 'winning'/'losing', which projPill has
         // no key for, so it fell into m.lose and EVERY historical winner read "proj: LOSE".
@@ -8101,9 +8112,20 @@ window.renderAppDenials=function(){
         for(const u in _sch){
           const p=_sch[u]?.[wk]; if(p===undefined) continue;
           if(inEarlierSnapshot(_cpA,k,u,wk,p)) continue;  // inherited, not a bid placed in this phase
-          if(entries.some(e=>e.wk===wk&&e.user===u&&String(e.phase)===String(_phLbl))) continue;
+          // [312 · D1 · owner-found] `completedPhases[4]` is NOT an independent archive: in
+          // rounds-mode Complete Phase 4 builds it by MERGING every round's schedule and UNIONING
+          // their approvals/denials, so every bid in it is already in a round. The dedupe below
+          // keys on the phase LABEL, and '4:R1' is not '4', so the same decision was emitted twice
+          // — once tagged P4:R1 and once bare P4. Keys sort numerically (…3, 3.01, 3.02, 4), so the
+          // rounds are always emitted first and the roll-up is the copy to drop. Rounds still
+          // dedupe against each other by label, because a genuine re-bid in a LATER round is a
+          // different row and must survive.
+          const _p4Roll=(!_isRound)&&_n===4&&Object.keys(phasesData.p4Rounds||{}).length>0;
+          if(entries.some(e=>e.wk===wk&&e.user===u&&(_p4Roll||String(e.phase)===String(_phLbl)))) continue;
           const _out=_apK.includes(u)?'approved':(_denK.includes(u)?'denied':'lose');
-          const _sn=_adSnapProj(_isRound?4:_n);
+          // [312 · D2] Same defect in the archive pass: `_isRound?4:_n` sent every round row to
+          // phase 4. `k` IS the round's key here — use it.
+          const _sn=_adSnapProj(k);
           entries.push({wk,user:u,priority:p,outcome:_out,phase:_phLbl,
             approved:_out==='approved',denied:_out==='denied',
             proj:_sn?(_sn[wk]?.win?.has(u)?'win':_sn[wk]?.draw?.has(u)?'draw':_sn[wk]?.review?.has(u)?'review':'lose'):null,
@@ -8153,11 +8175,21 @@ window.renderAppDenials=function(){
     const m=wkDate(e.wk);
     const wkHtml=showWeek?`<td class="dr-weeklabel">${wLabel(m)}</td>`:'';
     const phaseBadge=phaseFilter==='all'?`<span style="background:rgba(96,165,250,.15);color:var(--blue);font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;margin-right:4px">P${e.phase}</span>`:'';
-    // Historical bids (bidPh < cur) get no action buttons — they're locked in
-    const isHistorical=e.phase<(Number(phasesData.currentPhase||1));
+    // [312 · D3 · owner-found] "I am given the option to revoke decisions despite p4 being closed."
+    // The old test was `e.phase < currentPhase`, which is FALSE for a phase-4 row (4 < 4) and NaN
+    // for a round row ('4:R1' < 4) — so once Phase 4 completed, every one of its rows stayed fully
+    // editable, Revoke buttons and all, after the auction was finished and its results announced.
+    // A row is history when the thing that decided it is closed: its ROUND is archived, or its
+    // PHASE is earlier than the current one OR itself completed.
+    const _curP=Number(phasesData.currentPhase||1);
+    const _rowRound=(e._arch!==null&&e._arch!==undefined)?Number(e._arch):null;
+    const isHistorical = _rowRound!==null
+      ? !!(phasesData.p4Rounds||{})[_rowRound]
+      : (Number(e.phase)<_curP || !!(phasesData.completedPhases||{})[Number(e.phase)]);
     let actions='';
     if(isHistorical){
-      actions=`<span style="color:var(--t3);font-size:11px;font-style:italic">Phase ${e.phase} — locked</span>`;
+      const _lockLbl=_rowRound!==null?('Phase 4 · Round '+_rowRound):('Phase '+e.phase);
+      actions=`<span style="color:var(--t3);font-size:11px;font-style:italic">${_lockLbl} — locked</span>`;
     } else if(!e.approved&&!e.denied){
       actions=`<button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adApprove('${_jsq(e.user)}','${_jsq(e.wk)}','${_jsq(e.outcome)}')">✓ Approve</button>
                <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adDeny('${_jsq(e.user)}','${_jsq(e.wk)}','${_jsq(e.outcome)}')">✕ Deny</button>`;
