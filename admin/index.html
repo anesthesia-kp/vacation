@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 306;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 307;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -3216,7 +3216,9 @@ function projPill(o){
     review:['UNDER REVIEW','#5b4fb5','rgba(168,85,247,.15)'],
     lose:['LOSE','#b91c1c','rgba(239,68,68,.1)']
   };
-  const [t,c,bg]=m[uiOutcome(o)]||m.lose;
+  // [§149] A value with no key used to land silently in m.lose — a wrong answer that looked
+  // like a real one. Accept the -ing spellings too, so a caller can never reintroduce it.
+  const [t,c,bg]=m[({winning:'win',losing:'lose'})[o]||uiOutcome(o)]||m.lose;
   return `<span title="Projected outcome before admin decision" style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;color:${c};background:${bg};border:1px dashed ${c}">proj: ${t}</span>`;
 }
 
@@ -7280,6 +7282,52 @@ function bidsByWeekModel(scope, includeEmpty){
       const decided=bp<cur||outcome==='approved'||outcome==='denied';
       bids.push({user:u,bid:bidLblAdmin(p),phase:bpLabel||bp,outcome,projected,decided,score:pScore(p)});
     }
+    // ── [§149] SCOPE 'all' MUST SHOW EVERY BID EVER PLACED — INCLUDING THE ONES THE PHASE
+    //    BOUNDARY DELETED. §71's scrub ("THE BOUNDARY FORGETS") removes a finished phase's
+    //    non-winning entries from the LIVE schedule doc, so the loop above — which reads that
+    //    live doc — cannot see them, and every denied bid from a closed phase vanished from the
+    //    All-Phases report. Its own comment promised "the Reports … read the archives"; Edit
+    //    Selections was fixed for this in 295, the reports were not. The archives kept every bid.
+    //    This pass ADDS what is missing and CHANGES NOTHING the loop above already collected.
+    if(scope==='all'){
+      for(const k of Object.keys(cpAll).sort((a,b)=>Number(a)-Number(b))){
+        const _a=cpAll[k]||{};
+        const _n=Number(k);
+        const _lbl=(_n%1)?('4:R'+Math.round((_n-3)*100)):_n;
+        const _ap=Array.isArray(_a.approvals?.[wk])?_a.approvals[wk]:[];
+        const _den=Array.isArray(_a.denials?.[wk])?_a.denials[wk]:[];
+        const _have=u=>bids.some(b=>b.user===u&&String(b.phase)===String(_lbl));
+        const _pr=_a.projections?.[wk];
+        const _projOf=u=>{
+          if(_pr) return _pr.win?.includes(u)?'winning':_pr.draw?.includes(u)?'draw':_pr.review?.includes(u)?'review':'losing';
+          if(_n%1) return 'losing'; // round archives predate stored projections only in theory
+          if(!snapProjCache[k]) snapProjCache[k]=snapshotProjection(_n);
+          const sp=snapProjCache[k]?.[wk];
+          return sp?(sp.win.has(u)?'winning':sp.draw.has(u)?'draw':sp.review.has(u)?'review':'losing'):'losing';
+        };
+        if(_a.schedule){
+          for(const u in _a.schedule){
+            const p=_a.schedule[u]?.[wk]; if(p===undefined) continue;
+            if(inEarlierSnapshot(cpAll,k,u,wk,p)) continue; // inherited from an earlier phase, not a bid placed in this one
+            if(_have(u)) continue;                          // the live pass already produced this row
+            bids.push({user:u,bid:bidLblAdmin(p),phase:_lbl,
+              outcome:_ap.includes(u)?'approved':(_den.includes(u)?'denied':'losing'),
+              projected:_projOf(u),decided:true,score:pScore(p),fromArchive:true});
+          }
+        } else {
+          // A legacy archive with decisions but no stored schedule. The bid VALUE is
+          // unrecoverable, but the fact of the bid and its result are not — so the row is
+          // shown with a dash rather than dropped. Silently omitting it is the very failure
+          // this block exists to repair.
+          for(const u of [...new Set([..._ap,..._den])]){
+            if(_have(u)) continue;
+            bids.push({user:u,bid:'—',phase:_lbl,
+              outcome:_ap.includes(u)?'approved':'denied',
+              projected:_projOf(u),decided:true,score:999,fromArchive:true,bidUnknown:true});
+          }
+        }
+      }
+    }
     // Skip weeks with no bids UNLESS includeEmpty is set (the weekly report shows every
     // week of the year for context, even empty ones — its FTE header still renders).
     if(!bids.length && !includeEmpty) return;
@@ -7975,7 +8023,10 @@ window.renderAppDenials=function(){
       let proj;
       if(bidPh<cur||_arch!==null){
         const _snap=_adSnapProj(bidPh);
-        proj=_snap?(_snap[wk]?.win?.has(u)?'winning':_snap[wk]?.draw?.has(u)?'draw':_snap[wk]?.review?.has(u)?'review':'losing'):null;
+        // [§149] Emit the canonical tokens — the SAME ones natOutcome returns and the same
+        // ones projPill keys on. This line used to say 'winning'/'losing', which projPill has
+        // no key for, so it fell into m.lose and EVERY historical winner read "proj: LOSE".
+        proj=_snap?(_snap[wk]?.win?.has(u)?'win':_snap[wk]?.draw?.has(u)?'draw':_snap[wk]?.review?.has(u)?'review':'lose'):null;
       } else proj=natOutcome(nat,wk,u);
       entries.push({wk,user:u,priority:p,outcome,phase:_arch!==null?('4:R'+_arch):bidPh,approved:_arch!==null?outcome==='approved':approvedHere.includes(u),denied:_arch!==null?outcome==='denied':deniedHere.includes(u),proj,_arch});
     }
