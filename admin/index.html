@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 313;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 314;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -7331,7 +7331,14 @@ function bidsByWeekModel(scope, includeEmpty){
         const _lbl=(_n%1)?('4:R'+Math.round((_n-3)*100)):_n;
         const _ap=Array.isArray(_a.approvals?.[wk])?_a.approvals[wk]:[];
         const _den=Array.isArray(_a.denials?.[wk])?_a.denials[wk]:[];
-        const _have=u=>bids.some(b=>b.user===u&&String(b.phase)===String(_lbl));
+        // [314 · D5] Same defect D1 fixed on the Approvals/Denials screen, in the report that
+        // §149 built. `completedPhases[4]` is the ROLL-UP of the rounds, not an archive of its
+        // own, and this dedupe keyed on the phase LABEL — so '4:R1' never suppressed '4' and the
+        // All-Phases report showed the same bid twice. Measured on a two-round fixture: five rows
+        // for three bids, and the two copies DISAGREED about the projection. Rounds still dedupe
+        // against each other by label, so a genuine re-bid in a later round survives.
+        const _p4Roll=!(_n%1)&&_n===4&&Object.keys(phasesData.p4Rounds||{}).length>0;
+        const _have=u=>bids.some(b=>b.user===u&&(_p4Roll||String(b.phase)===String(_lbl)));
         const _pr=_a.projections?.[wk];
         const _projOf=u=>{
           if(_pr) return _pr.win?.includes(u)?'winning':_pr.draw?.includes(u)?'draw':_pr.review?.includes(u)?'review':'losing';
@@ -7846,23 +7853,34 @@ function buildDashboardRows(phaseFilter){
     const wk=dateKey(d);
     let a,loserSet;
     const m=phaseFilter&&phaseFilter.match(/^ph(\d+)$/);
-    if(m&&Number(m[1])<curPhase){
-      const wantPh=Number(m[1]);
-      const phSnapRaw=phasesData.completedPhases?.[wantPh]; const phSnap=phSnapRaw||{};
+    // [314 · D7] populatePhaseFilter offers "Phase 4: Round N (locked)" on THIS dropdown too, but
+    // this function only ever matched ^phN$ — so a round selection fell through to the LIVE
+    // branch and the dashboard showed today's state under a label promising a locked round.
+    // Measured: p4r1 returned output byte-identical to `current`, naming as a Round-1 winner
+    // someone who was DENIED in Round 2. Rounds fold into _cpWithRounds under fractional keys, so
+    // the historical branch below needs the KEY rather than a phase number, and nothing else.
+    const mr=phaseFilter&&phaseFilter.match(/^p4r(\d+)$/);
+    if((m&&Number(m[1])<curPhase)||mr){
+      const _cpR=_cpWithRounds();
+      const wantKey=mr?_p4RoundKey(Number(mr[1])):String(Number(m[1]));
+      const wantPh=Number(wantKey);
+      const phSnapRaw=_cpR[wantKey]; const phSnap=phSnapRaw||{};
       let phSched=phSnap.schedule||{}, phAp=phSnap.approvals||{};
       // M-10: fall back to live docs only when NO snapshot exists (never merely because a
       // completed phase had zero bids) — otherwise a zero-bid locked phase shows current live approvals.
-      if(!phSnapRaw){
+      // [314 · D7] NEVER for a round: falling back to live data is the defect this fixes, and a
+      // round with no archive has nothing truthful to show.
+      if(!phSnapRaw&&!mr){
         phSched={};
         for(const u in scheduleData){ if(scheduleData[u]?.[wk]===undefined) continue; if(getUserBidPhaseAdmin(u,wk)!==wantPh) continue; phSched[u]=scheduleData[u]; }
         phAp=approvalsData||{};
       }
-      const cpAll2=phasesData.completedPhases||{};
+      const cpAll2=_cpR;
       const prevWin2=new Set();
       for(const n of Object.keys(cpAll2)){ if(Number(n)>=wantPh) continue; const arr=cpAll2[n]?.approvals?.[wk]; if(Array.isArray(arr)) arr.forEach(x=>prevWin2.add(x)); }
       const winners=new Set((Array.isArray(phAp[wk])?phAp[wk]:[]).filter(x=>!prevWin2.has(x)));
       const losers=new Set();
-      for(const u in phSched){ const v=phSched[u]?.[wk]; if(v===undefined) continue; if(prevWin2.has(u)) continue; if(phSnap.schedule&&inEarlierSnapshot(cpAll2,wantPh,u,wk,v)) continue; if(!winners.has(u)) losers.add(u); }
+      for(const u in phSched){ const v=phSched[u]?.[wk]; if(v===undefined) continue; if(prevWin2.has(u)) continue; if(phSnap.schedule&&inEarlierSnapshot(cpAll2,wantKey,u,wk,v)) continue; if(!winners.has(u)) losers.add(u); }
       let fteWonHist=0; for(const u of winners) fteWonHist+=getUserFTE(u);
       a={winners,draws:new Set(),reviews:new Set(),fteWon:Math.round(fteWonHist*10)/10};
       loserSet=losers;
@@ -11761,7 +11779,16 @@ window.renderDrawsReviews=function(){
     } else {
       tag=`${projPill(natOutcome(nat,e.wk,e.user))}<span class="pill p-green">✓ APPROVED</span>`;
     }
-    if(e.type==='approved'){
+    // [314 · D6] This page never had a historical gate of ANY kind — not a broken one like the
+    // Approvals/Denials screen had before D3, none at all. Its rows come from the LIVE decision
+    // docs, and Complete Phase does not clear those (Begin Phase does), so once the auction ended
+    // it still offered ↶ Revoke, ↶ Revoke Denial and ✕ Cancel — and Cancel DELETES a bid. Driven
+    // with Phase 4 complete and its results sent, all three rendered. A completed phase is history:
+    // the rows stay visible, the buttons do not.
+    const _phaseDone=!!(phasesData.completedPhases||{})[Number(phasesData.currentPhase||1)];
+    if(_phaseDone){
+      actions=`<span style="color:var(--t3);font-size:11px;font-style:italic">Phase ${Number(phasesData.currentPhase||1)} — complete, locked</span>`;
+    } else if(e.type==='approved'){
       actions=`<button class="btn" style="padding:3px 9px;font-size:11px;background:rgba(251,191,36,.15);color:var(--yellow);border:1px solid rgba(251,191,36,.3)" onclick="confirmRevokeApproval('${_jsq(e.user)}','${_jsq(e.wk)}')">↶ Revoke</button>
         <button class="btn btn-danger" style="padding:3px 9px;font-size:11px" onclick="confirmAdminCancel('${_jsq(e.user)}','${_jsq(e.wk)}')">✕ Cancel</button>`;
     } else if(e.type==='denied'){
