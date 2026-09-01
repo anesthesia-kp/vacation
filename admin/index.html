@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 316;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 317;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -4037,8 +4037,17 @@ function renderOverview(){
       // In 'all phases' or a specific past-phase filter, use that phase's snapshot outcome for historical accuracy
       const bidPh=getUserBidPhaseAdmin(n,wk);
       const cur=Number(phasesData.currentPhase||1);
+      // [317 · F1] Which round decided this bid, if any. The dashboard is the most-looked-at
+      // screen and was the last surface with no round awareness at all.
+      const _archR=(cur===4&&typeof _p4ArchivedDecisionRound==='function')?_p4ArchivedDecisionRound(n,wk):null;
       let outcome;
-      if(bidPh<cur){
+      if(_archR!==null){
+        // [317 · F1] These cards asked the LIVE engine for a bid a completed ROUND had already
+        // decided — `bidPh<cur` is FALSE for a phase-4 row — so a bid its round DENIED was
+        // grouped under **Win**. Driven on a two-round archive before the fix. Ask the round.
+        const _ra=(phasesData.p4Rounds||{})[_archR]||{};
+        outcome=(Array.isArray(_ra.approvals?.[wk])&&_ra.approvals[wk].includes(n))?'win':'lose';
+      } else if(bidPh<cur){
         // Historical bid — look up whether it was approved in that phase.
         // Prefer the completed-phase snapshot; if the phase was advanced without
         // being formally "Completed" (no snapshot), fall back to live approvals.
@@ -4051,7 +4060,10 @@ function renderOverview(){
       } else {
         outcome=getOutcome(wk,n,ap);
       }
-      const suffix=(phaseFilter==='all'&&bidPh)?` <span style="opacity:.6;font-size:9px">(P${bidPh})</span>`:'';
+      // [317 · F1] A bare "P4" on a round-decided bid is always wrong (§152): beginning Phase 4
+      // always sets round 1, so every P4 bid belongs to a round.
+      const _phLbl=_archR!==null?`P4:R${_archR}`:`P${bidPh}`;
+      const suffix=(phaseFilter==='all'&&bidPh)?` <span style="opacity:.6;font-size:9px">(${_phLbl})</span>`:'';
       grouped[uiOutcome(outcome)].push(fmtWk(wk)+suffix);
     });
     let lines=[];
@@ -4077,11 +4089,24 @@ function renderOverview(){
     //   'all' → live ap[wk] but the per-user cards handle the multi-phase display
     let a, bidders, loserSet;
     let historicalMode=false;
-    if(phaseFilter&&phaseFilter.match(/^ph(\d+)$/)){
-      const wantPh=Number(phaseFilter.match(/^ph(\d+)$/)[1]);
-      if(wantPh<curPhase){
+    // [317 · F2] This tested ONLY /^ph(\d+)$/, so a "Phase 4: Round N (locked)" selection — which
+    // populatePhaseFilter puts in this very dropdown — fell through to the live branch and showed
+    // TODAY under a label promising a closed round. That is D7's defect exactly, on the screen
+    // rather than the export: D7 fixed buildDashboardRows, which feeds exportDashboard, and
+    // renderOverview draws the same dropdown's other consumer. Measured before the fix: p4r1
+    // returned output byte-identical to `current`. The second half of the same line is D3's rule —
+    // `wantPh<curPhase` is FALSE when Phase 4 is current AND complete.
+    const _mmW=phaseFilter&&String(phaseFilter).match(/^ph(\d+)$/);
+    const _mrW=phaseFilter&&String(phaseFilter).match(/^p4r(\d+)$/);
+    if(_mmW||_mrW){
+      const wantNum=_mrW?Number(_p4RoundKey(Number(_mrW[1]))):Number(_mmW[1]);
+      const wantKey=_mrW?_p4RoundKey(Number(_mrW[1])):String(Number(_mmW[1]));
+      const wantPh=_mrW?4:Number(_mmW[1]);
+      const _closed=_mrW?!!(phasesData.p4Rounds||{})[Number(_mrW[1])]
+                        :(wantPh<curPhase||!!(phasesData.completedPhases||{})[wantPh]);
+      if(_closed){
         historicalMode=true;
-        const phSnapRaw=phasesData.completedPhases?.[wantPh]; const phSnap=phSnapRaw||{};
+        const phSnapRaw=(_cpWithRounds()||{})[wantKey]; const phSnap=phSnapRaw||{};
         let phSched=phSnap.schedule||{};
         let phAp=phSnap.approvals||{};
         let phDen=phSnap.denials||{};
@@ -4089,7 +4114,9 @@ function renderOverview(){
         // M-10: key this on snapshot ABSENCE, not empty schedule — a phase legitimately
         // completed with zero bids also has an empty schedule, and rebuilding it from LIVE
         // docs would wrongly show the CURRENT phase's approvals as this locked phase's.
-        if(!phSnapRaw){
+        // A round is only "closed" above when its archive EXISTS, so this rebuild-from-live
+        // fallback is unreachable for a round and stays phase-only, as M-10 wrote it.
+        if(!phSnapRaw&&!_mrW){
           phSched={};
           for(const u in scheduleData){
             if(scheduleData[u]?.[wk]===undefined) continue;
@@ -4101,15 +4128,17 @@ function renderOverview(){
         }
         // Snapshot approvals/schedule are CUMULATIVE — subtract earlier phases
         // so phase-1 winners/bidders don't masquerade as phase-N results.
-        const cpAll=phasesData.completedPhases||{};
+        // [317 · F2] Rounds live under fractional keys (3.01, 3.02 …) which sort between phase 3
+        // and phase 4, so ">= this one" subtracts earlier phases AND earlier rounds correctly.
+        const cpAll=_cpWithRounds();
         const prevWin=new Set();
-        for(const n of Object.keys(cpAll)){ if(Number(n)>=wantPh) continue; const arr=cpAll[n]?.approvals?.[wk]; if(Array.isArray(arr)) arr.forEach(x=>prevWin.add(x)); }
+        for(const n of Object.keys(cpAll)){ if(Number(n)>=wantNum) continue; const arr=cpAll[n]?.approvals?.[wk]; if(Array.isArray(arr)) arr.forEach(x=>prevWin.add(x)); }
         const winners=new Set((Array.isArray(phAp[wk])?phAp[wk]:[]).filter(x=>!prevWin.has(x)));
         const losersFromSnap=new Set();
         for(const u in phSched){
           const v=phSched[u]?.[wk]; if(v===undefined) continue;
           if(prevWin.has(u)) continue;
-          if(phSnap.schedule&&inEarlierSnapshot(cpAll,wantPh,u,wk,v)) continue;
+          if(phSnap.schedule&&inEarlierSnapshot(cpAll,wantKey,u,wk,v)) continue;
           if(!winners.has(u)) losersFromSnap.add(u);
         }
         let fteWonHist=0; for(const u of winners) fteWonHist+=getUserFTE(u);
@@ -7411,6 +7440,16 @@ function bidsByWeekModel(scope, includeEmpty){
   return groups;
 }
 // Resolve the export/grid scope label from a filter value.
+// [317] Filename twin of bwScopeLabel — one place, so the two report exports cannot drift.
+function _bwFileScope(scope){
+  const mm=(typeof scope==='string')&&scope.match(/^ph(\d+)$/);
+  const mr=(typeof scope==='string')&&scope.match(/^p4r(\d+)$/);
+  if(scope==='all') return 'all';
+  if(mm) return 'phase'+mm[1];
+  if(mr) return 'phase4-round'+mr[1];
+  const cur=Number(phasesData.currentPhase||1);
+  return 'phase'+cur+((cur===4&&Number(phasesData.p4Round||0)>=1)?('-round'+Number(phasesData.p4Round)):'');
+}
 function bwScopeLabel(scope){
   const cur=Number(phasesData.currentPhase||1);
   const mm=(typeof scope==='string')&&scope.match(/^ph(\d+)$/);
@@ -7509,7 +7548,9 @@ window.exportPhaseResults=function(format,scopeOverride){
   const showPhaseCol=scope==='all';
   const now=new Date();
   const stamp=now.toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
-  const fnameScope=scope==='all'?'all':(String(scope).match(/^ph(\d+)$/)?('phase'+String(scope).match(/^ph(\d+)$/)[1]):('phase'+Number(phasesData.currentPhase||1)));
+  // [317] A round scope matched neither branch and fell back to the CURRENT phase, so every
+  // round export downloaded as "phase4" and collided with the last one. Name the round.
+  const fnameScope=_bwFileScope(scope);
   const totalBids=groups.reduce((s,g)=>s+g.bids.length,0);
   const projTxt=p=>p?(PROJ_LABEL[p]||p.toUpperCase()):'—';
   if(format==='csv'||format==='xlsx'){
@@ -7654,7 +7695,9 @@ window.exportUserSummary=function(format,scopeOverride){
   const showPhaseCol=scope==='all';
   const now=new Date();
   const stamp=now.toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
-  const fnameScope=scope==='all'?'all':(String(scope).match(/^ph(\d+)$/)?('phase'+String(scope).match(/^ph(\d+)$/)[1]):('phase'+Number(phasesData.currentPhase||1)));
+  // [317] A round scope matched neither branch and fell back to the CURRENT phase, so every
+  // round export downloaded as "phase4" and collided with the last one. Name the round.
+  const fnameScope=_bwFileScope(scope);
   const projTxt=p=>p?(PROJ_LABEL[p]||p.toUpperCase()):'—';
   // Re-pivot the by-week model into per-user rows.
   const byUser={};
@@ -7930,9 +7973,11 @@ function buildDashboardRows(phaseFilter){
 window.exportDashboard=function(format){
   const phaseSel=document.getElementById('dashPhaseFilter');
   const phaseFilter=phaseSel?.value||'current';
-  const curPhase=Number(phasesData.currentPhase||1);
-  const mm=phaseFilter.match(/^ph(\d+)$/);
-  const exportLabel=phaseFilter==='all'?'All Phases':(mm?`Phase ${mm[1]} (locked)`:`Phase ${curPhase} (current)`);
+  // [317 · F3] This built its own label from a /^ph/ match, so a ROUND scope fell through to
+  // "Phase 4 (current)" — printed on a document whose DATA is that round's, since D7 fixed
+  // buildDashboardRows underneath it. bwScopeLabel is the round-aware label the two sibling
+  // exports already use; there is no reason for a third spelling.
+  const exportLabel=bwScopeLabel(phaseFilter);
   const rows=buildDashboardRows(phaseFilter);
   const now=new Date();
   const stamp=now.toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
