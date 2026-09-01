@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 307;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 308;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -8028,7 +8028,43 @@ window.renderAppDenials=function(){
         // no key for, so it fell into m.lose and EVERY historical winner read "proj: LOSE".
         proj=_snap?(_snap[wk]?.win?.has(u)?'win':_snap[wk]?.draw?.has(u)?'draw':_snap[wk]?.review?.has(u)?'review':'lose'):null;
       } else proj=natOutcome(nat,wk,u);
-      entries.push({wk,user:u,priority:p,outcome,phase:_arch!==null?('4:R'+_arch):bidPh,approved:_arch!==null?outcome==='approved':approvedHere.includes(u),denied:_arch!==null?outcome==='denied':deniedHere.includes(u),proj,_arch});
+      // [§150] A CLOSED phase's result lives in THAT PHASE'S ARCHIVE — `outcome` above already
+      // reads it. But these two flags decide whether the solid ✓ APPROVED / ✕ DENIED chip is
+      // drawn at all, and they were still asking the LIVE decision docs, which a closed phase
+      // no longer answers for. So every historical row showed its PROJECTION and no result.
+      // Derive them from `outcome`, exactly as the archived-round branch has always done.
+      const _hist=_arch!==null||bidPh<cur;
+      entries.push({wk,user:u,priority:p,outcome,phase:_arch!==null?('4:R'+_arch):bidPh,approved:_hist?outcome==='approved':approvedHere.includes(u),denied:_hist?outcome==='denied':deniedHere.includes(u),proj,_arch});
+    }
+    // ── [§150] The loop above reads the LIVE schedule, which §71's boundary scrub has emptied
+    //    of every non-winning bid from a finished phase — so looking back at a closed phase
+    //    showed the survivors (the winners) and not one denial. Same defect as the reports
+    //    (§149), one function over. The archives kept every bid. Add the ones the loop cannot
+    //    see, for WHATEVER phase the admin selected, and never for the current-phase view.
+    if(phaseFilter!=='current'){
+      const _mmA=phaseFilter&&phaseFilter.match(/^ph(\d+)$/);
+      const _mrA=phaseFilter&&phaseFilter.match(/^p4r(\d+)$/);
+      const _cpA=_cpWithRounds();
+      for(const k of Object.keys(_cpA).sort((x,y)=>Number(x)-Number(y))){
+        const _n=Number(k), _isRound=!!(_n%1), _rN=_isRound?Math.round((_n-3)*100):null;
+        if(_mmA&&(_isRound||_n!==Number(_mmA[1]))) continue;   // "Phase N (locked)" — that phase only
+        if(_mrA&&(!_isRound||_rN!==Number(_mrA[1]))) continue; // "Phase 4: Round N" — that round only
+        const _sch=(_cpA[k]||{}).schedule; if(!_sch) continue;
+        const _apK=Array.isArray(_cpA[k].approvals?.[wk])?_cpA[k].approvals[wk]:[];
+        const _denK=Array.isArray(_cpA[k].denials?.[wk])?_cpA[k].denials[wk]:[];
+        const _phLbl=_isRound?('4:R'+_rN):_n;
+        for(const u in _sch){
+          const p=_sch[u]?.[wk]; if(p===undefined) continue;
+          if(inEarlierSnapshot(_cpA,k,u,wk,p)) continue;  // inherited, not a bid placed in this phase
+          if(entries.some(e=>e.wk===wk&&e.user===u&&String(e.phase)===String(_phLbl))) continue;
+          const _out=_apK.includes(u)?'approved':(_denK.includes(u)?'denied':'lose');
+          const _sn=_adSnapProj(_isRound?4:_n);
+          entries.push({wk,user:u,priority:p,outcome:_out,phase:_phLbl,
+            approved:_out==='approved',denied:_out==='denied',
+            proj:_sn?(_sn[wk]?.win?.has(u)?'win':_sn[wk]?.draw?.has(u)?'draw':_sn[wk]?.review?.has(u)?'review':'lose'):null,
+            _arch:_isRound?_rN:null,fromArchive:true});
+        }
+      }
     }
   });
   // Filter
