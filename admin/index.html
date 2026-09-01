@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 317;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 318;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -3123,6 +3123,20 @@ async function queueProjectionAlerts(prevSched, excludeUser, newSchedOverride){
           (notif[user]=notif[user]||[]).push(`Your bid for ${wLabel(wkDate(wk))} was removed — you no longer have a bid on this week`);
           continue;
         }
+        // [318 · G1] A bid whose ROUND has already announced its decision is a RESULT, not a
+        // projection, and this comparison reads the LIVE engine — which still has an opinion about
+        // it, because nothing retires a round's losers until the next round starts. So an ordinary
+        // admin edit to ANOTHER bid on the same week mailed the decided bidder that their
+        // projection had "changed", e.g. from UNDER REVIEW to WIN, about a week they had already
+        // been told they lost. Driven mid-auction with round 1 announced and round 2 open: the
+        // denied bidder was queued exactly that. **This is the staff site's own rule** — renderSelections
+        // drops such a week from the live list the moment the round's e-mails go out (build 133) —
+        // and the mailer never learned it. The existing round guards protect the bid being ACTED ON;
+        // this is the first one that protects the BYSTANDERS on the same week.
+        // Inert outside Phase 4: _p4ArchivedDecisionRound returns null for every other phase, so
+        // phases 1-3 send exactly what they sent before. A REMOVAL message is deliberately still
+        // sent below — "your bid was removed" is a fact whatever its round said.
+        if(typeof _p4ArchivedDecisionRound==='function'&&_p4ArchivedDecisionRound(user,wk)!==null) continue;
         // [§147] The MERGED projection — the one the user can see. A tie forming or
         // dissolving is not a change, so it sends nothing. Matches the staff site exactly.
         const po=uiOutcome(getOutcome(wk,user,prevAp)), no=uiOutcome(getOutcome(wk,user,newAp));
@@ -9727,6 +9741,14 @@ window.adminRemove=function(u,wk){
 window.adminAddSelection=function(){
   const u=document.getElementById("addUser").value, wk=document.getElementById("addWeek").value, pv=document.getElementById("addPriority").value;
   if(!u||!wk){toast("Select user and week","err");return;}
+  // [318 · G2] The last write path with NO completed-phase gate. Every other one refuses on a
+  // finished phase — Edit Selections' row lock and its two handlers (316), the decision buttons
+  // (312), the Under Review page (314) — and this one wrote straight through, which is what made
+  // G1 reachable after the auction ended as well as during it. Driven on a completed Phase 4
+  // before the fix: five writes, no refusal. Inert while a phase is genuinely open.
+  { const _curP=Number(phasesData.currentPhase||1);
+    if((phasesData.completedPhases||{})[_curP]){
+      toast('Phase '+_curP+' is complete — its bids are history and cannot be added to.','err'); return; } }
   // [291 · ES-1] A duplicate current-phase number is refused outright — adding OR replacing.
   // typeof guard for extracted-code test sandboxes only (build 266 precedent).
   { const _dupA=(typeof adminDupFatal==='function')?adminDupFatal(u,wk,String(pv)):[];
@@ -12071,6 +12093,16 @@ window.confirmApprove=function(user,wk,type){
 
 // ── Admin edit bid (clears priority lock) ──
 window.confirmAdminEdit=function(user,wk){
+  // [318 · G3] This dialog has NO INVOKER at tip — verified, not assumed: `confirmAdminEdit`
+  // appears exactly twice in this file, here and inside one comment. It is kept correct for the
+  // day it is re-wired, which is precisely why it gets the guards now: whoever re-wires it will
+  // not remember that it never had them. Neither gate can fire while it is unreachable, so this
+  // changes no behaviour today.
+  { if(typeof _p4ArchivedDecisionRound==='function'){ const _ar=_p4ArchivedDecisionRound(user,wk);
+      if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); return; } }
+    const _curP=Number(phasesData.currentPhase||1);
+    if((phasesData.completedPhases||{})[_curP]){
+      toast('Phase '+_curP+' is complete — its bids are history and cannot be edited.','err'); return; } }
   const m=wkDate(wk);
   const cur=scheduleData[user]?.[wk]; const curLbl=Array.isArray(cur)?cur.join('/'):cur;
   openConfirm({
