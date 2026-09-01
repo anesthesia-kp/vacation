@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 314;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 315;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -7242,12 +7242,29 @@ function bidsByWeekModel(scope, includeEmpty){
   const cur=Number(phasesData.currentPhase||1);
   const ap=computeApprovals();
   const natAp=computeApprovals(true); // pre-admin projection for current-phase bids
-  const snapProjCache={};             // recomputed projections for legacy snapshots
   const mm=(typeof scope==='string')&&scope.match(/^ph(\d+)$/);
   const mr=(typeof scope==='string')&&scope.match(/^p4r(\d+)$/); // [256] Phase 4 round scope
   const lockedPhase=mm?Number(mm[1]):null;
   const lockedRound=mr?Number(mr[1]):null;
   const lockedKey=lockedPhase!==null?String(lockedPhase):(lockedRound!==null?_p4RoundKey(lockedRound):null);
+  // [315 · D8 · F-9b] ONE resolver for a CLOSED phase's or round's projection, replacing three
+  // per-week fallbacks below. Same rule build 309 gave the Approvals/Denials screen (_adSnapProj):
+  // the recording is trusted WHOLE, never per week. serializeProjections omits exactly the weeks
+  // that had no winner, tie or review -- so a week the recording does not mention is a week where
+  // everyone lost, NOT a week with no record. Recomputing it instead answers under TODAY's caps,
+  // FTE and threshold, and PHASE-4 EXTRA FTE raises 34 weeks by +1 between Phases 3 and 4, which
+  // is how a recompute invents a winner who never existed. snapshotProjection survives ONLY as
+  // the legacy path, for an archive written before build 295 that recorded no projections at all.
+  const _recCache={};
+  const _recProj=(key,wk,u)=>{
+    if(!(key in _recCache)){ let m=null; try{
+      const _rec=_cpWithRounds()[key]?.projections;
+      m=_rec?Object.fromEntries(Object.entries(_rec).map(([w,p])=>[w,{win:new Set(p.win||[]),draw:new Set(p.draw||[]),review:new Set(p.review||[])}]))
+            :snapshotProjection(key);
+    }catch(_){ m=null; } _recCache[key]=m; }
+    const e=_recCache[key]?.[wk];
+    return e?(e.win?.has(u)?'winning':e.draw?.has(u)?'draw':e.review?.has(u)?'review':'losing'):'losing';
+  };
   const groups=[];
   mondays.forEach(d=>{
     const wk=dateKey(d);
@@ -7285,22 +7302,23 @@ function bidsByWeekModel(scope, includeEmpty){
       if(!snapMode&&_archRound!==null){
         const ra=(phasesData.p4Rounds||{})[_archRound]||{};
         outcome=(Array.isArray(ra.approvals?.[wk])&&ra.approvals[wk].includes(u))?'approved':'denied';
-        projected=natAp[wk]?.winners?.has(u)?'winning':natAp[wk]?.draws?.has(u)?'draw':natAp[wk]?.reviews?.has(u)?'review':'losing';
+        // [315 · D8] The result above reads the ROUND'S ARCHIVE; the projection beside it asked the
+        // LIVE engine. A bid decided in a completed round is still sitting in the live schedule
+        // whenever no later round retired it (the last round never does), so Complete Phase leaves
+        // it there and this line projected it against today's state instead of the round that
+        // decided it -- a row reading 'winning' for a bid its round recorded as 'review'. Same
+        // family as D2 and F-9. Ask the round.
+        projected=_recProj(_p4RoundKey(_archRound),wk,u);
       } else if(bp<cur){
         const phSnap=cpAll[lockedRound!==null?lockedKey:bp]||{};
         const phAp=Array.isArray(phSnap.approvals?.[wk])?phSnap.approvals[wk]:[];
         const phDen=Array.isArray(phSnap.denials?.[wk])?phSnap.denials[wk]:[];
         outcome=phAp.includes(u)?'approved':(phDen.includes(u)?'denied':'losing');
-        // Projection as stored when that phase completed; for older snapshots
-        // without stored projections, recompute it from the snapshot itself.
-        const pr=phSnap.projections?.[wk];
-        if(pr){
-          projected=pr.win?.includes(u)?'winning':pr.draw?.includes(u)?'draw':pr.review?.includes(u)?'review':'losing';
-        } else {
-          if(!snapProjCache[bp]) snapProjCache[bp]=snapshotProjection(bp);
-          const sp=snapProjCache[bp][wk];
-          projected=sp?(sp.win.has(u)?'winning':sp.draw.has(u)?'draw':sp.review.has(u)?'review':'losing'):'losing';
-        }
+        // [315 · F-9b] Was a PER-WEEK lookup with a per-week recompute fallback. A week the
+        // recording omits -- and it omits every week that had no winner, tie or review -- fell
+        // through to a recompute under today's caps, which can hand a winner to a week that
+        // never had one. The recording is trusted whole, or not at all.
+        projected=_recProj(lockedRound!==null?lockedKey:bp,wk,u);
       } else {
         if(approvedHere.includes(u)) outcome='approved';
         else if(deniedHere.includes(u)) outcome='denied';
@@ -7339,14 +7357,11 @@ function bidsByWeekModel(scope, includeEmpty){
         // against each other by label, so a genuine re-bid in a later round survives.
         const _p4Roll=!(_n%1)&&_n===4&&Object.keys(phasesData.p4Rounds||{}).length>0;
         const _have=u=>bids.some(b=>b.user===u&&(_p4Roll||String(b.phase)===String(_lbl)));
-        const _pr=_a.projections?.[wk];
-        const _projOf=u=>{
-          if(_pr) return _pr.win?.includes(u)?'winning':_pr.draw?.includes(u)?'draw':_pr.review?.includes(u)?'review':'losing';
-          if(_n%1) return 'losing'; // round archives predate stored projections only in theory
-          if(!snapProjCache[k]) snapProjCache[k]=snapshotProjection(_n);
-          const sp=snapProjCache[k]?.[wk];
-          return sp?(sp.win.has(u)?'winning':sp.draw.has(u)?'draw':sp.review.has(u)?'review':'losing'):'losing';
-        };
+        // [315 · F-9b] The same per-week fallback as the live pass, and the same fix. It also
+        // retires the round special-case, which answered 'losing' where the Approvals/Denials
+        // screen recomputes -- the two surfaces now resolve a closed phase or round identically,
+        // which is the whole point of F-9.
+        const _projOf=u=>_recProj(k,wk,u);
         if(_a.schedule){
           for(const u in _a.schedule){
             const p=_a.schedule[u]?.[wk]; if(p===undefined) continue;
