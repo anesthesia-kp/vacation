@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 315;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 316;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -9139,12 +9139,22 @@ window.renderEditTable=function(){
       const pl=Array.isArray(p)?p.join("/"):p;
       const m=wkDate(wk);
       const bidPh=_histSched?(_mmH?Number(_mmH[1]):4):getUserBidPhaseAdmin(u,wk);
+      // [316 · E1] Which ROUND decided this bid, if any. Needed twice below: for the outcome
+      // pill, and for the row lock. Only meaningful on the live views — an archive filter
+      // already knows which round it is showing.
+      const _archR=(!_histSched&&cur===4&&typeof _p4ArchivedDecisionRound==='function')?_p4ArchivedDecisionRound(u,wk):null;
       // Historical bids get outcome from that phase's (or round's) snapshot
       let o;
       if(_histSched){
         const phSnap=_cpAllH[_histKey]||{};
         const phAp=Array.isArray(phSnap.approvals?.[wk])?phSnap.approvals[wk]:[];
         o=phAp.includes(u)?'win':'lose';
+      } else if(_archR!==null){
+        // [316 · E1] This pill asked the LIVE engine for a bid a completed ROUND had already
+        // decided, so a bid its round DENIED displayed as a green WIN — the label an admin
+        // would act on. Same family as D2 and D8; this is the third screen. Ask the round.
+        const _ra=(phasesData.p4Rounds||{})[_archR]||{};
+        o=(Array.isArray(_ra.approvals?.[wk])&&_ra.approvals[wk].includes(u))?'win':'lose';
       } else if(bidPh<cur){
         const phSnap=phasesData.completedPhases?.[bidPh]||{};
         const phAp=Array.isArray(phSnap.approvals?.[wk])?phSnap.approvals[wk]:[];
@@ -9159,9 +9169,19 @@ window.renderEditTable=function(){
       // editable in a fresh tab — one Remove click then deleted a live bid the round
       // archive still awards. getPriorPhaseWinners includes announced round wins (255).
       const _wonLock=!(bidPh<cur)&&getPriorPhaseWinners(wk).has(u);
-      const isHistorical=!!_histSched||bidPh<cur||_wonLock; // [295 · DB-1] archive rows are read-only history
+      // [316 · E1] The old test was `bidPh < cur`, which is FALSE for a phase-4 row (4 < 4), so
+      // once Phase 4 completed every one of its rows stayed fully editable — a priority dropdown
+      // AND a Remove button on a finished auction. 292's _wonLock caught announced WINNERS; a bid
+      // a round DENIED is not a winner and was caught by nothing. This is 312's D3 rule verbatim,
+      // on the third screen that needed it: a row is history when the thing that decided it is
+      // closed — its ROUND is archived, or its PHASE is earlier than the current one OR itself
+      // completed. Nothing changes while a phase is genuinely open.
+      const _phaseClosed=_archR!==null
+        ? !!(phasesData.p4Rounds||{})[_archR]
+        : (bidPh<cur||!!(phasesData.completedPhases||{})[Number(bidPh)]);
+      const isHistorical=!!_histSched||_phaseClosed||_wonLock; // [295 · DB-1] archive rows are read-only history
       const controls=isHistorical?
-        `<span style="color:var(--t3);font-size:11px;font-style:italic">${_wonLock?'🏆 Won — locked':`Phase ${bidPh} — locked`}</span>`:
+        `<span style="color:var(--t3);font-size:11px;font-style:italic">${_wonLock?'🏆 Won — locked':(_archR!==null?`Phase 4 · Round ${_archR} — locked`:`Phase ${bidPh} — locked`)}</span>`:
         `<select class="sel" onchange="adminChangePriority('${_jsq(u)}','${_jsq(wk)}',this.value)">${
           // [AUDIT 2026-07-26 H7 + medium] A stored value the engine won't score (a devtools-
           // forged 0, -1, or the STRING "1"/"1/2") used to slip through: the old check matched
@@ -9445,6 +9465,16 @@ function guardAdminBid(u,wk,val,isNew,proceed,onCancel){
 window.adminBidIssues=adminBidIssues; window.guardAdminBid=guardAdminBid;
 
 window.adminChangePriority=async function(u,wk,val){
+  // [316 · E1] The archived-round guard SIX other write handlers already use, on the one that
+  // lacked it. adminRemove — the button on the SAME Edit Selections row — refuses this exact
+  // case; this dropdown wrote straight through: the bid value, the phase retag, the priority
+  // lock, and it cleared any approval and denial for that week. And because a round denial binds
+  // only while the exact denied bid is still on the schedule (259, deliberately value-aware),
+  // that write also DETACHED the bid from the round that decided it, so the reports stopped
+  // seeing it as round-decided. The archive was never corrupted; the live link to it was.
+  // Paint is not enforcement (§3 r5): the row lock stops it being OFFERED, this stops it being
+  // DONE. refreshAll because the <select> has already moved in the DOM and nothing was written.
+  if(typeof _p4ArchivedDecisionRound==='function'){ const _ar=_p4ArchivedDecisionRound(u,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); try{ refreshAll(); }catch(_){ } return; } }
   const _ds=(typeof _decisionStamp==='function')?_decisionStamp():null; // [292 · RA-M1]
   // [AUDIT #8/#9] Warn before an edit that no bidder could have made. Everything
   // below runs unchanged once the admin has confirmed (or if nothing is wrong).
