@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 308;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 311;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1083,14 +1083,19 @@ thead th{color:var(--t2)}
             <option value="all">All Users</option>
           </select>
         </div>
-        <label style="font-size:11px;color:var(--t2);margin-left:8px">Outcome:</label>
+        <label style="font-size:11px;color:var(--t2);margin-left:8px">Filter:</label>
         <select id="adOutcomeFilter" class="sel" onchange="renderAppDenials()">
-          <option value="all">All</option>
-          <option value="win">WIN</option>
-          <option value="review">UNDER REVIEW</option>
-          <option value="lose">LOSE</option>
-          <option value="approved">APPROVED</option>
-          <option value="denied">DENIED</option>
+          <option value="all">All bids</option>
+          <optgroup label="Result &mdash; what you decided">
+            <option value="r:approved">&#10003; Approved</option>
+            <option value="r:denied">&#10007; Denied</option>
+            <option value="r:none">No decision</option>
+          </optgroup>
+          <optgroup label="Projection &mdash; what the engine projected">
+            <option value="p:win">WIN</option>
+            <option value="p:review">UNDER REVIEW</option>
+            <option value="p:lose">LOSE</option>
+          </optgroup>
         </select>
       </div>
       <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
@@ -3217,8 +3222,16 @@ function projPill(o){
     lose:['LOSE','#b91c1c','rgba(239,68,68,.1)']
   };
   // [§149] A value with no key used to land silently in m.lose — a wrong answer that looked
-  // like a real one. Accept the -ing spellings too, so a caller can never reintroduce it.
-  const [t,c,bg]=m[({winning:'win',losing:'lose'})[o]||uiOutcome(o)]||m.lose;
+  // like a real one. The -ing spellings are accepted so the two vocabularies on this page both
+  // resolve.
+  // [311 · F-1] §149 fixed the INSTANCE and its comment then claimed a caller "can never
+  // reintroduce it" — which was false: any token outside this list still fell into m.lose and
+  // printed a confident, wrong LOSE. The class is closed here instead. An unrecognised value now
+  // renders as a visibly unknown pill carrying the raw token in its tooltip, so it reads as a
+  // question rather than as an answer, and console.warn names it for whoever has to find it.
+  const _pk=({winning:'win',losing:'lose'})[o]||uiOutcome(o);
+  if(!m[_pk]) try{ console.warn('projPill: unrecognised projection token',o); }catch(_){}
+  const [t,c,bg]=m[_pk]||['?','#475569','rgba(100,116,139,.12)'];
   return `<span title="Projected outcome before admin decision" style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;color:${c};background:${bg};border:1px dashed ${c}">proj: ${t}</span>`;
 }
 
@@ -5879,6 +5892,21 @@ async function _commitBeginPhase(next){
     }
     const _srvLedger=(_srvStg?_srvStg.resultsSentTo:_sentLedger)||{};
     const _srvStaged=(_srvStg?_srvStg.pendingPhaseSnapshots:_stagedCompletedPhases)||{};
+    // [311 · F-5b] The archive of the phase being LEFT must exist before anything is retired.
+    // The scrub further down is destructive and decides who "won" by reading the archives: with
+    // none it would conclude that even this phase's WINNERS had not won and delete their bids in
+    // the same batch that wipes approvals and denials — destroying the phase's outcome rather
+    // than merely hiding it. completePhase and completeRound both re-verify their preconditions
+    // inside onConfirm before committing; this path now does too, so the safety lives in the code
+    // and not solely in which button the render happens to draw.
+    // PUBLISHED **or** STAGED: at this moment the finished phase's snapshot may still be sitting
+    // in phaseStaging, about to be published by this very batch a few lines below. A first cut of
+    // this guard checked only completedPhases and would have refused that entirely legitimate
+    // path — caught by test-admin-295-db1, which models the staged case correctly.
+    if(!(phasesData.completedPhases?.[next-1]||_publishedCompletedPhases?.[next-1]||_srvStaged?.[next-1])){
+      toast('Phase '+(next-1)+' has no completed-phase archive, published or staged — complete it first. Phase '+next+' did NOT begin and nothing was changed.','err');
+      return false;
+    }
     const batch=writeBatch(db);
     const _phasePayload={currentPhase:next,phaseBeganAt:{...(phasesData.phaseBeganAt||{}),[next]:Date.now()}};
     // [build 255] (Re)beginning Phase 4 starts the round machinery fresh: Round 1, no
@@ -7964,14 +7992,31 @@ window.renderAppDenials=function(){
        &&Date.now()>=timerData.lastChange+((timerData.durationHours||48)*3600000)) return false;
     return true;
   }catch(_){ return false; } })();
-  const _adOpenWarn=_adOpenNow?'<div class="cmodal-warn" style="margin:0 0 10px;padding:10px 12px">⚠️ <strong>Bidding is still OPEN</strong> — bids can arrive and projections can shift while you decide. The usual rhythm is Close Bidding first: once closed, the server refuses every user bid write and the board is frozen (NE-14).</div>':'';
+  // [310 · F-8] Only on a view that includes the LIVE phase. A locked phase and an archived
+  // round are frozen — no bid can arrive and no projection can shift — so showing this there
+  // described settled history as though it were still moving.
+  const _adViewShowsLive=(phaseFilter==='current'||phaseFilter==='all');
+  const _adOpenWarn=(_adOpenNow&&_adViewShowsLive)?'<div class="cmodal-warn" style="margin:0 0 10px;padding:10px 12px">⚠️ <strong>Bidding is still OPEN</strong> — bids can arrive and projections can shift while you decide. The usual rhythm is Close Bidding first: once closed, the server refuses every user bid write and the board is frozen (NE-14).</div>':'';
   const ap=computeApprovals();
   const nat=computeApprovals(true); // natural projection, ignores admin decisions
   const cur=Number(phasesData.currentPhase||1);
   // [301 · §88] per-render cache of reconstructed past-phase projections (same source the
   // by-week report uses); null when a snapshot cannot be rebuilt, and the sort tolerates null.
   const _adSnapCache={};
-  const _adSnapProj=ph=>{ if(!(ph in _adSnapCache)){ try{ _adSnapCache[ph]=snapshotProjection(ph); }catch(_){ _adSnapCache[ph]=null; } } return _adSnapCache[ph]; };
+  // [309 · F-9] Prefer the projection RECORDED into the archive when that phase completed --
+  // the same source the reports read. snapshotProjection recomputes from TODAY's caps, FTE and
+  // threshold, so the moment a week's capacity moves (the planned Phase-4 pass raises 34 weeks
+  // by +1 FTE) it stops matching what the bidders actually saw, and this screen and the reports
+  // start giving different answers about the same closed phase. The recompute is now the legacy
+  // fallback it was always meant to be -- an archive written before build 295 stored none.
+  // Trusted WHOLE, never per week: a week the recording omits is a week with no winner, tie or
+  // review, and recomputing that week under raised caps could invent winners who never existed.
+  const _adSnapProj=ph=>{ if(!(ph in _adSnapCache)){ try{
+    const _rec=_cpWithRounds()[ph]?.projections;
+    _adSnapCache[ph]=_rec
+      ? Object.fromEntries(Object.entries(_rec).map(([w,p])=>[w,{win:new Set(p.win||[]),draw:new Set(p.draw||[]),review:new Set(p.review||[])}]))
+      : snapshotProjection(ph);
+  }catch(_){ _adSnapCache[ph]=null; } } return _adSnapCache[ph]; };
   const _adProj=e=>e.proj;
   // Build full entries list — every bid placed, with outcome. In "all phases" or
   // a specific past-phase view, use that phase's historical approvals/denials for outcome.
@@ -8071,14 +8116,36 @@ window.renderAppDenials=function(){
   let filtered=entries;
   if(wkFilter!=='all'&&viewBy==='week') filtered=filtered.filter(e=>e.wk===wkFilter);
   if(userFilter!=='all'&&viewBy==='user') filtered=filtered.filter(e=>e.user===userFilter);
-  // [§147] The dropdown lost its DRAW entry, so match on the MERGED value — otherwise
-  // picking UNDER REVIEW would hide every tied user.
-  if(outcomeFilter!=='all') filtered=filtered.filter(e=>uiOutcome(e.outcome)===uiOutcome(outcomeFilter));
+  // [310 · F-7 · the owner's design] This screen holds TWO different answers per row — what
+  // the engine PROJECTED (the dashed `proj:` pill) and what the admin DECIDED (the solid
+  // chip) — and the dropdown used to offer one flat list matched entirely against `outcome`.
+  // On a CLOSED phase `outcome` is only approved/denied/lose, so picking WIN, UNDER REVIEW or
+  // LOSE matched nothing and the screen said "No bids match" — while those very rows visibly
+  // carried a pill reading UNDER REVIEW. Three of six choices were dead on every historical
+  // view. Each group now reads the field the screen actually renders from.
+  // [§147] Projection still matches on the MERGED value, or picking UNDER REVIEW would hide
+  // every tied user.
+  if(outcomeFilter!=='all'){
+    const _fm=String(outcomeFilter).match(/^([rp]):(.+)$/);
+    if(_fm){
+      const _want=_fm[2];
+      filtered=_fm[1]==='r'
+        ? filtered.filter(e=>_want==='approved'?!!e.approved:(_want==='denied'?!!e.denied:!(e.approved||e.denied)))
+        // A legacy archive stored no projection, so fall back to the row's outcome rather
+        // than letting such a row be unreachable from every choice in the list.
+        : filtered.filter(e=>uiOutcome(e.proj==null?e.outcome:e.proj)===_want);
+    } else {
+      // A value from the old flat list (a bare outcome word) still behaves as it always did.
+      filtered=filtered.filter(e=>uiOutcome(e.outcome)===uiOutcome(outcomeFilter));
+    }
+  }
   if(!filtered.length){body.innerHTML='<div style="text-align:center;color:var(--t2);padding:30px;background:var(--card);border:1px solid var(--b1);border-radius:10px">No bids match the selected filters.</div>';return;}
 
   const outcomeChip=(o)=>{
     const map={win:'<span class="pill p-green">WIN</span>',review:'<span class="pill" style="background:rgba(168,85,247,.15);color:#5b4fb5">UNDER REVIEW</span>',lose:'<span class="pill p-red">LOSE</span>',approved:'<span class="pill p-green">✓ APPROVED</span>',denied:'<span class="pill p-red">✕ DENIED</span>'};
-    return map[uiOutcome(o)]||o;
+    // [311 · F-2] Same family as F-1: the old fallback printed the RAW internal token as
+    // though it were a label. Unknown now looks unknown, with the token in the tooltip.
+    return map[uiOutcome(o)]||`<span class="pill" style="background:rgba(100,116,139,.12);color:#475569" title="unrecognised outcome: ${esc(String(o))}">?</span>`;
   };
 
   const renderEntry=(e,showWeek)=>{
@@ -9370,8 +9437,19 @@ function _adminChangeAffectsOthers(prevSched,actor){
     const pu=(prevSched&&prevSched[user]&&typeof prevSched[user]==='object')?prevSched[user]:{};
     const nu=(newSched[user]&&typeof newSched[user]==='object')?newSched[user]:{};
     for(const wk of new Set([...Object.keys(pu),...Object.keys(nu)])){
-      // [§147] Same merged comparison as the alert mailer above — they share this test by
-      // design, so a tie forming or dissolving resets no clock and sends no e-mail.
+      // [§147] Same merged comparison as the alert mailer above, so a tie forming or dissolving
+      // resets no clock and sends no e-mail.
+      // [311 · F-4] The comment here used to say the two "share this test by design" and could
+      // "never disagree". They did not share it: queueProjectionAlerts skips a user who had NO
+      // prior bid on the week, and reports a REMOVAL as a removal rather than scoring the absence
+      // as a loss — neither guard existed here. Every current caller changes exactly ONE user's
+      // ONE week, so no other user's bid set can differ between the two pictures and the gap was
+      // unreachable — an invariant held by caller discipline, not by code. The first caller that
+      // changes several users at once (a simulator run wired to the timer, a restore, a bulk
+      // edit) would have made them diverge silently. Both guards now live here too, so the two
+      // agree by construction; both are no-ops for every caller that exists today.
+      if(pu[wk]===undefined) continue;              // no prior bid → there was no projection to change
+      if(nu[wk]===undefined) return true;           // the bid was REMOVED → the mailer tells them, so it counts
       if(uiOutcome(getOutcome(wk,user,prevAp))!==uiOutcome(getOutcome(wk,user,newAp))) return true;
     }
   }
