@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 318;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 319;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -2825,6 +2825,32 @@ function _phaseWindowLabel(cur){
   const c=Number(cur||phasesData.currentPhase||1);
   return (c===4&&Number(phasesData.p4Round||0)>=1)?('Phase 4: Round '+Number(phasesData.p4Round)):('Phase '+c);
 }
+// [319] Is the OPEN window (phase, or the Phase-4 round) already COMPLETED? One question, one place —
+// reopenBidding (256) asks the round half already; Reset Timer and the reminder sender now ask the same.
+function _windowCompletedNow(){
+  const cur=Number(phasesData.currentPhase||1);
+  if((phasesData.completedPhases||{})[cur]) return true;
+  return cur===4&&!!(phasesData.p4Rounds||{})[Number(phasesData.p4Round||1)];
+}
+// [319 · P-1] Has this user placed a bid in the OPEN window? Phases 1–3: any live bid tagged cur (unchanged).
+// Phase 4: the same, minus bids an ANNOUNCED round already decided (a round-1 win stays live all year but is
+// not a round-2 bid). "Announced" is H-9: an unsent denial must still count as placed.
+function _hasOpenRoundBid(u){
+  const cur=Number(phasesData.currentPhase||1); const uw=scheduleData[u]||{};
+  for(const wk in uw){
+    if(uw[wk]===undefined||getUserBidPhaseAdmin(u,wk)!==cur) continue;
+    if(cur===4){ const r=_p4ArchivedDecisionRound(u,wk); if(r!==null&&(phasesData.p4RoundResultsSent||{})[r]) continue; }
+    return true;
+  }
+  return false;
+}
+// [319 · R-2] §152: a bare "P4" is always wrong. A live Phase-4 entry no archived round decided belongs to the
+// OPEN round (winners are archived at Complete Round, denials retired at Start Round).
+function _bidPhaseLabel(bidPh,archR){
+  if(archR!==null&&archR!==undefined) return '4:R'+Number(archR);
+  const c=Number(phasesData.currentPhase||1);
+  return (c===4&&Number(bidPh)===4&&Number(phasesData.p4Round||0)>=1)?('4:R'+Number(phasesData.p4Round)):String(bidPh);
+}
 function getPriorPhaseFteWon(wk){
   let total=0;
   for(const u of getPriorPhaseWinners(wk)) total+=getUserFTE(u);
@@ -3177,11 +3203,15 @@ async function queueProjectionAlerts(prevSched, excludeUser, newSchedOverride){
 // bogus gray "N?" that used to show up next to a later phase's results.
 function userPhaseHistory(u){
   const cur=Number(phasesData.currentPhase||1);
-  const cp=phasesData.completedPhases||{};
-  const phaseNums=Object.keys(cp).map(Number).filter(n=>n<cur).sort((a,b)=>a-b);
+  // [319 · P-3] a round-2 decision's "prior phases" include round 1 (§163): read the merged map, keep
+  // earlier phases AND every archived round (a round key is a decided result, whatever its number).
+  const cp=_cpWithRounds();
+  const phaseKeys=Object.keys(cp).filter(k=>Number(k)<cur||!!(Number(k)%1)).sort((a,b)=>Number(a)-Number(b));
+  const phaseNums=phaseKeys.map(Number);
   const rows=[];
-  for(const ph of phaseNums){
-    const snap=cp[ph]||{};
+  for(const k of phaseKeys){
+    const snap=cp[k]||{};
+    const _n=Number(k), ph=(_n%1)?('R'+Math.round((_n-3)*100)):_n;
     const apr=snap.approvals||{}, den=snap.denials||{};
     let w=0,l=0;
     for(const wk of Object.keys(apr)){ if(Array.isArray(apr[wk])&&apr[wk].includes(u)) w++; }
@@ -3198,11 +3228,12 @@ function priorPhaseInlineHtml(u){
   const hist=userPhaseHistory(u);
   if(!hist.phaseNums.length) return ''; // Phase 1, nothing completed yet
   const parts=hist.rows.map(r=>{
-    if(!r.bid) return `<span><span style="color:var(--t3)">P${r.phase}:</span> <span style="color:var(--t3)">–</span></span>`;
+    const _pl=String(r.phase).startsWith('R')?r.phase:('P'+r.phase); // [319 · P-3] "R1: 1W"
+    if(!r.bid) return `<span><span style="color:var(--t3)">${_pl}:</span> <span style="color:var(--t3)">–</span></span>`;
     const bits=[];
     if(r.w) bits.push(`<span style="color:var(--green);font-weight:700">${r.w}W</span>`);
     if(r.l) bits.push(`<span style="color:var(--red);font-weight:700">${r.l}L</span>`);
-    return `<span><span style="color:var(--t3)">P${r.phase}:</span> ${bits.join(' ')}</span>`;
+    return `<span><span style="color:var(--t3)">${_pl}:</span> ${bits.join(' ')}</span>`;
   });
   return `<div class="dr-history">${parts.join('')}</div>`;
 }
@@ -3292,18 +3323,23 @@ window.renderOverview=renderOverview;
 function renderNoBidders(){
   const el=document.getElementById('noBidsList'); if(!el) return;
   const cur=Number(phasesData.currentPhase||1);
-  const noBidders=[];
-  for(const u of names){
-    let has=false; const uw=scheduleData[u]||{};
-    for(const wk in uw){
-      if(uw[wk]===undefined) continue;
-      // H-9: denied bids still count as "placed" (see sendReminderEmails) — this drives the
-      // same count/button, so both must agree or the card and reminder list would disagree.
-      if(getUserBidPhaseAdmin(u,wk)===cur){ has=true; break; }
-    }
-    if(!has) noBidders.push(u);
+  // [319 · P-1] GAP GUARD: a completed phase or round has no bidding window — the card must not count
+  // "missing" bidders a day after results went out, and Send Reminders must not mail them (H-9 too:
+  // in the Complete-but-unsent gap a decided user would be told "you have no bids").
+  if(_windowCompletedNow()){
+    el.innerHTML='<span style="color:var(--green);font-weight:700;font-size:13px">✓ '+_phaseWindowLabel()+' complete</span>';
+    const _ph0=document.getElementById('noBidsPhase'); if(_ph0) _ph0.textContent=_phaseWindowLabel().replace(/^Phase /,'');
+    const _cnt0=document.getElementById('noBidsCount'); if(_cnt0) _cnt0.textContent='0';
+    const _pl0=document.getElementById('noBidsPlural'); if(_pl0) _pl0.textContent='s';
+    const _vb0=document.getElementById('noBidsViewBtn'); if(_vb0) _vb0.style.display='none';
+    const _btn0=document.getElementById('noBidsRemindBtn'); if(_btn0) _btn0.disabled=true;
+    return;
   }
-  const ph=document.getElementById('noBidsPhase'); if(ph) ph.textContent=cur;
+  const noBidders=[];
+  // [319 · P-1] "No bids" = no bid in the OPEN window — the round, in Phase 4 (§163). H-9 (a denied bid
+  // still counts as placed) lives inside _hasOpenRoundBid, shared with sendReminderEmails by design.
+  for(const u of names){ if(!_hasOpenRoundBid(u)) noBidders.push(u); }
+  const ph=document.getElementById('noBidsPhase'); if(ph) ph.textContent=_phaseWindowLabel().replace(/^Phase /,''); // markup already says "Phase "
   const cnt=document.getElementById('noBidsCount'); if(cnt) cnt.textContent=noBidders.length;
   const pl=document.getElementById('noBidsPlural'); if(pl) pl.textContent=noBidders.length===1?'':'s';
   const vb=document.getElementById('noBidsViewBtn'); if(vb) vb.style.display=noBidders.length?'':'none';
@@ -3673,9 +3709,8 @@ function computeBadBehavior(){
       const began=phasesData.phaseBeganAt?.[cur];
       if(began&&phase1Started()&&!phasesData.completedPhases?.[cur]&&(Date.now()-began)>=24*3600000){
         for(const u of names){
-          let has=false;
-          for(const wk in (scheduleData[u]||{})){ if(scheduleData[u][wk]!==undefined&&isCurrentPhaseBidAdmin(u,wk)){has=true;break;} }
-          if(!has){ const f=(flags[u]=flags[u]||{winCancel:0,lateTimer:0,timerStall:0,slowStart:0,overLower:0,winLower:0,incidents:[]}); f.slowStart++; f.incidents.push({type:'slowStart',wk:null,ts:null,detail:'no bids '+Math.floor((Date.now()-began)/3600000)+'h after the phase opened'}); }
+          const has=_hasOpenRoundBid(u); // [319 · P-1] a round-1 win is not a round-2 bid
+          if(!has){ const f=(flags[u]=flags[u]||{winCancel:0,lateTimer:0,timerStall:0,slowStart:0,overLower:0,winLower:0,incidents:[]}); f.slowStart++; f.incidents.push({type:'slowStart',wk:null,ts:null,detail:'no bids '+Math.floor((Date.now()-began)/3600000)+(cur===4?'h after the round opened':'h after the phase opened')}); }
         }
       }
     }
@@ -3838,7 +3873,7 @@ function renderStruggling(){
 function renderBidChart(){
   const cv=document.getElementById('bidChart'); if(!cv) return;
   const cur=Number(phasesData.currentPhase||1);
-  const ph=document.getElementById('bcPhase'); if(ph) ph.textContent=cur;
+  const ph=document.getElementById('bcPhase'); if(ph) ph.textContent=_phaseWindowLabel().replace(/^Phase /,''); // [319 · P-6] markup already says "Phase "
   const events=(changesLog||[]).filter(e=>e&&typeof e.ts==='number'&&!isDecisionEntry(e)&&!isSystemEntry(e)&&e.ts>=(changesResetAt||0));
   const began=phasesData.phaseBeganAt?.[cur]
     || (events.length?Math.min(...events.map(e=>e.ts)):Date.now()-3600000);
@@ -4045,7 +4080,7 @@ function renderOverview(){
     const fte=getUserFTE(n);
     const allWeeks=Object.entries(scheduleData[n]||{}).sort((a,b)=>a[0].localeCompare(b[0]));
     const weeks=allWeeks.filter(([wk])=>bidMatchesPhaseFilter(n,wk,phaseFilter));
-    if(!weeks.length) return `<div class="ovcard"><div class="ovcard-name">${n} <span style="color:var(--t2);font-size:10px;font-weight:400">${fte} FTE</span></div><div style="color:var(--t3);font-size:10px">No bids${phaseFilter!=='all'?' in this phase':''}</div></div>`;
+    if(!weeks.length) return `<div class="ovcard"><div class="ovcard-name">${n} <span style="color:var(--t2);font-size:10px;font-weight:400">${fte} FTE</span></div><div style="color:var(--t3);font-size:10px">No bids${phaseFilter!=='all'?((Number(phasesData.currentPhase||1)===4&&!/^ph\d+$/.test(phaseFilter))?' in this round':' in this phase'):''}</div></div>`;
     const grouped={win:[],review:[],lose:[]}; // [§147] draw folds into review
     weeks.forEach(([wk])=>{
       // In 'all phases' or a specific past-phase filter, use that phase's snapshot outcome for historical accuracy
@@ -4076,7 +4111,7 @@ function renderOverview(){
       }
       // [317 · F1] A bare "P4" on a round-decided bid is always wrong (§152): beginning Phase 4
       // always sets round 1, so every P4 bid belongs to a round.
-      const _phLbl=_archR!==null?`P4:R${_archR}`:`P${bidPh}`;
+      const _phLbl='P'+_bidPhaseLabel(bidPh,_archR); // [319 · R-2] the open round's bids too
       const suffix=(phaseFilter==='all'&&bidPh)?` <span style="opacity:.6;font-size:9px">(${_phLbl})</span>`:'';
       grouped[uiOutcome(outcome)].push(fmtWk(wk)+suffix);
     });
@@ -4832,7 +4867,7 @@ function renderSimPanel(){
   if(apBtn){
     const pending=simHasUndecidedBids();
     apBtn.style.display=pending?'':'none';
-    apBtn.textContent=`✅ Auto-Approve/Deny Results (Phase ${cur})`;
+    apBtn.textContent=`✅ Auto-Approve/Deny Results (${_phaseWindowLabel()})`; // [319 · P-6]
   }
   const lockedCount=locksData?.weeks?Object.keys(locksData.weeks).filter(k=>locksData.weeks[k]).length:0;
   const globalLocked=!!locksData?.globalLock;
@@ -4850,14 +4885,14 @@ function renderSimPanel(){
     banner.style.display='block';
     banner.style.background='rgba(251,191,36,.08)'; banner.style.border='1px solid rgba(251,191,36,.3)'; banner.style.color='#946008';
     const phInfoL=cur>1?' — will also skip weeks users won in prior phases':'';
-    banner.innerHTML='⚠️ Simulator ready for <strong>Phase '+cur+'</strong> — '+lockedCount+' locked week'+(lockedCount!==1?'s':'')+' will be skipped (no bids placed)'+phInfoL+topUp;
+    banner.innerHTML='⚠️ Simulator ready for <strong>'+_phaseWindowLabel()+'</strong> — '+lockedCount+' locked week'+(lockedCount!==1?'s':'')+' will be skipped (no bids placed)'+phInfoL+topUp;
   } else {
     const _simOn2=adminSettings.simulatorEnabled===true; // [build 222] same gate on the ready path
     btn.disabled=!_simOn2; btn.style.opacity=_simOn2?'1':'.45'; btn.style.cursor=_simOn2?'pointer':'not-allowed'; btn.title=_simOn2?'':'Turn on Rehearsal Mode first';
     banner.style.display='block';
     banner.style.background='rgba(52,211,153,.08)'; banner.style.border='1px solid rgba(52,211,153,.2)'; banner.style.color='#0d7a43';
     const phInfo=cur>1?' — will skip weeks users won in prior phases and priority numbers already consumed':'';
-    banner.innerHTML='✅ Simulator ready for <strong>Phase '+cur+'</strong>'+phInfo+topUp;
+    banner.innerHTML='✅ Simulator ready for <strong>'+_phaseWindowLabel()+'</strong>'+phInfo+topUp; // [319 · P-6]
   }
 }
 
@@ -5566,23 +5601,27 @@ function renderPhasePanel(){
     return;
   }
   if(isComplete){
-    el.textContent='Phase '+cur+' ✓ Complete';
+    el.textContent=_phaseWindowLabel(cur)+' ✓ Complete'; // [319 · P-3]
     el.style.color='var(--green)';
   } else {
-    el.textContent='Phase '+cur;
-    el.style.color='var(--blue)';
+    // [319 · P-3] a completed round reads like a completed phase — green, and it says so
+    const _rDone=cur===4&&!!(phasesData.p4Rounds||{})[Number(phasesData.p4Round||1)];
+    el.textContent=_rDone?(_phaseWindowLabel(cur)+' ✓ Round complete'):_phaseWindowLabel(cur);
+    el.style.color=_rDone?'var(--green)':'var(--blue)';
   }
   // History
   const histEl=document.getElementById('phaseHistoryBody');
   if(histEl){
-    const keys=Object.keys(completed).sort((a,b)=>Number(a)-Number(b));
+    // [319 · P-3] rounds are phases here too — the same merged map the reports read (rounds under 3.0N)
+    const cpr=_cpWithRounds(); const keys=Object.keys(cpr).sort((a,b)=>Number(a)-Number(b));
     if(!keys.length){histEl.innerHTML='<div style="color:var(--t3)">No completed phases yet.</div>';return;}
     histEl.innerHTML=keys.map(ph=>{
-      const d=completed[ph];
+      const d=cpr[ph];
+      const _n=Number(ph), _isR=!!(_n%1); const _lbl=_isR?('Phase 4 · Round '+Math.round((_n-3)*100)):('Phase '+ph);
       const ts=d.completedAt?new Date(d.completedAt).toLocaleString():'—';
       const wins=Object.values(d.approvals||{}).reduce((s,arr)=>s+arr.length,0);
       return `<div style="padding:10px;background:rgba(0,0,0,.05);border-radius:8px;margin-bottom:8px">
-        <div style="font-weight:700;color:var(--t1)">Phase ${ph} <span style="color:var(--green);font-size:11px">✓ Complete</span></div>
+        <div style="font-weight:700;color:var(--t1)">${_lbl} <span style="color:var(--green);font-size:11px">✓ Complete</span></div>
         <div style="color:var(--t2);margin-top:4px">Completed: ${ts} · ${wins} approved bid${wins!==1?'s':''}</div>
       </div>`;
     }).join('');
@@ -6388,7 +6427,8 @@ ${bullets([
   `Phase 1 includes only the high-demand weeks; all remaining weeks open starting in Phase 2`,
   ...capBullets,
   `A combined bid like 1/2/3 uses bids 1, 2, and 3 at once`,
-  `Each number can only be used once, numbers from weeks you won in earlier phases are unavailable to be used again`,
+  `Each number can only be used once, numbers from weeks that were approved in earlier phases are unavailable to be used again`,
+  `Bids that do not win are returned to you when the phase (or Phase 4 round) completes — the number goes back into your pool and the week can be bid on again`,
   npPhasesDescription(),
   ...prioLockBullets(), // [build 268 · BL/COPY] Option A wording, allowance-derived
   ...bfRulesBullets(),
@@ -6406,6 +6446,7 @@ ${bullets([
   `Under Review (R): your bid is over the FTE cap for this week and the projection is uncertain`,
   `Losing (L): your bid is projected not to be approved for this week`,
   `If you are Under Review for a week and do not win after it is resolved, you will get the bid back for the next phase`,
+  `Under Review includes times when your combined bid with other users exceeds the FTE cap.`,
   `These are projections, not final results — outcomes can shift as others place bids or as unexpected staffing needs change`
 ])}
 
@@ -6472,30 +6513,22 @@ window.sendReminderEmails=function(){
   // recipient set is computed from the local scheduleData mirror — with dead feeds it
   // reads as empty and every roster user gets "you have not yet placed any bids".
   if(!_feedsHealthyOrExplain('Send Reminders')) return;
+  // [319 · P-1] No open window, no reminder: a completed phase or round (sent or not) refuses here.
+  if(_windowCompletedNow()){ toast('⛔ '+_phaseWindowLabel()+' is complete — there is no open bidding window to remind anyone about.','err'); return; }
   const cur=Number(phasesData.currentPhase||1);
   const noBidders=[];
-  for(const u of names){
-    let hasCurrentPhaseBid=false;
-    const uw=scheduleData[u]||{};
-    for(const wk of Object.keys(uw)){
-      if(uw[wk]===undefined) continue;
-      // H-9: do NOT skip denied bids here. A user whose bids were denied mid-phase still
-      // SEES them as live projections on their own board (the user site has no denials
-      // listener), so telling them "you have no bids" would leak that an admin decided
-      // them before results are e-mailed. "No bids" must mean "placed none this phase."
-      const bp=getUserBidPhaseAdmin(u,wk);
-      if(bp===cur){ hasCurrentPhaseBid=true; break; }
-    }
-    if(!hasCurrentPhaseBid) noBidders.push(u);
-  }
+  // [319 · P-1] The same rule as the dashboard card, by construction (H-9: do NOT skip denied bids —
+  // a user whose bids were denied mid-phase still SEES them as live projections on their own board,
+  // so "you have no bids" would leak the decision; an UNANNOUNCED round denial counts as placed too).
+  for(const u of names){ if(!_hasOpenRoundBid(u)) noBidders.push(u); }
   if(!noBidders.length){
-    openConfirm({title:'📧 Send Reminder E-mails',body:`<div>Every user has at least one bid in Phase ${cur}. No reminders to send.</div>`,okText:'OK',onConfirm:()=>{}});
+    openConfirm({title:'📧 Send Reminder E-mails',body:`<div>Every user has at least one bid in ${_phaseWindowLabel()}. No reminders to send.</div>`,okText:'OK',onConfirm:()=>{}});
     return;
   }
   const preview=noBidders.slice(0,10).join(', ')+(noBidders.length>10?`, ...+${noBidders.length-10} more`:'');
   openConfirm({
     title:'📧 Send Reminder E-mails',
-    body:`<div>Send bidding reminder to <strong>${noBidders.length}</strong> user${noBidders.length!==1?'s':''} without any Phase ${cur} bids?</div>
+    body:`<div>Send bidding reminder to <strong>${noBidders.length}</strong> user${noBidders.length!==1?'s':''} without any ${_phaseWindowLabel()} bids?</div>
           <div style="margin-top:8px;font-size:12px;color:var(--t2)">${preview}</div>
           <div class="cmodal-info" style="margin-top:8px">Users without a saved email will be silently skipped.</div>`,
     okText:'Send Reminders',
@@ -6508,10 +6541,10 @@ window.sendReminderEmails=function(){
       let ok=0, fail=0, skipped=0;
       for(const u of noBidders){
         if(!recipientsFor(u).length){ skipped++; continue; }
-        const r=await adminSendEmail(u,'Vacation Bidding Reminder — Phase '+cur,
+        const r=await adminSendEmail(u,'Vacation Bidding Reminder — '+_phaseWindowLabel(),
           `Hello ${u},
 
-You have not yet placed any bids in Phase ${cur} of the vacation auction. Please place your bids as soon as possible.
+You have not yet placed any bids in ${_phaseWindowLabel()} of the vacation auction. Please place your bids as soon as possible.
 
 Placing bids early benefits everyone — it moves the process along more quickly for the whole department.
 
@@ -7339,7 +7372,8 @@ function bidsByWeekModel(scope, includeEmpty){
         // announced APPROVED win as merely "winning").
         _archRound=(cur===4)?_p4ArchivedDecisionRound(u,wk):null;
         if(scope==='current'){ if(bp!==cur) continue; if(_archRound!==null) continue; }
-        if(_archRound!==null) bpLabel='4:R'+_archRound;
+        // [319 · R-2] the open round's own bids read P4:Rn too — never a bare P4 (§152)
+        bpLabel=(cur===4&&(_archRound!==null||Number(bp)===4))?_bidPhaseLabel(bp,_archRound):null;
       }
       let outcome, projected;
       if(!snapMode&&_archRound!==null){
@@ -8182,7 +8216,7 @@ window.renderAppDenials=function(){
       // no longer answers for. So every historical row showed its PROJECTION and no result.
       // Derive them from `outcome`, exactly as the archived-round branch has always done.
       const _hist=_arch!==null||bidPh<cur;
-      entries.push({wk,user:u,priority:p,outcome,phase:_arch!==null?('4:R'+_arch):bidPh,approved:_hist?outcome==='approved':approvedHere.includes(u),denied:_hist?outcome==='denied':deniedHere.includes(u),proj,_arch});
+      entries.push({wk,user:u,priority:p,outcome,phase:_arch!==null?('4:R'+_arch):bidPh,phaseLbl:_bidPhaseLabel(bidPh,_arch),approved:_hist?outcome==='approved':approvedHere.includes(u),denied:_hist?outcome==='denied':deniedHere.includes(u),proj,_arch});
     }
     // ── [§150] The loop above reads the LIVE schedule, which §71's boundary scrub has emptied
     //    of every non-winning bid from a finished phase — so looking back at a closed phase
@@ -8218,7 +8252,7 @@ window.renderAppDenials=function(){
           // [312 · D2] Same defect in the archive pass: `_isRound?4:_n` sent every round row to
           // phase 4. `k` IS the round's key here — use it.
           const _sn=_adSnapProj(k);
-          entries.push({wk,user:u,priority:p,outcome:_out,phase:_phLbl,
+          entries.push({wk,user:u,priority:p,outcome:_out,phase:_phLbl,phaseLbl:_phLbl,
             approved:_out==='approved',denied:_out==='denied',
             proj:_sn?(_sn[wk]?.win?.has(u)?'win':_sn[wk]?.draw?.has(u)?'draw':_sn[wk]?.review?.has(u)?'review':'lose'):null,
             _arch:_isRound?_rN:null,fromArchive:true});
@@ -8266,7 +8300,7 @@ window.renderAppDenials=function(){
     const lbl=e.priority==='NP'?'NP':(Array.isArray(e.priority)?e.priority.join('/'):e.priority);
     const m=wkDate(e.wk);
     const wkHtml=showWeek?`<td class="dr-weeklabel">${wLabel(m)}</td>`:'';
-    const phaseBadge=phaseFilter==='all'?`<span style="background:rgba(96,165,250,.15);color:var(--blue);font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;margin-right:4px">P${e.phase}</span>`:'';
+    const phaseBadge=phaseFilter==='all'?`<span style="background:rgba(96,165,250,.15);color:var(--blue);font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;margin-right:4px">P${e.phaseLbl||e.phase}</span>`:''; // [319 · R-2] badge names the round; phase stays numeric for the D3 lock
     // [312 · D3 · owner-found] "I am given the option to revoke decisions despite p4 being closed."
     // The old test was `e.phase < currentPhase`, which is FALSE for a phase-4 row (4 < 4) and NaN
     // for a round row ('4:R1' < 4) — so once Phase 4 completed, every one of its rows stayed fully
@@ -8781,7 +8815,7 @@ window.adApprove=function(user,wk,currentOutcome){
   return _fastDecide({ _warned,
     title:'✓ Approve '+user,
     body:`<div>Approve <strong>${user}</strong> as winner for <strong>${wLabel(m)}</strong>?</div>
-          <div style="margin-top:6px;font-size:12px;color:var(--t2)">Current outcome: ${currentOutcome.toUpperCase()}</div>
+          <div style="margin-top:6px;font-size:12px;color:var(--t2)">Current outcome: ${uiOutcome(currentOutcome)==='review'?'UNDER REVIEW':String(currentOutcome).toUpperCase()}</div>
           ${_wasTie?`<div class="cmodal-info" style="margin-top:8px">User was in a tie — they will be notified when phase results are sent (see "Send Phase Results" button).</div>`:''}
           ${overageHtml}${_bfWarnHtml}${_rdy}${_fastOffer('adapprove',user,wk,currentOutcome,_warned)}`,
     okText:'Approve',
@@ -9222,7 +9256,7 @@ window.renderEditTable=function(){
       } else {
         o=getOutcome(wk,u,ap);
       }
-      const phaseBadge=phaseFilter==='all'?`<span style="background:rgba(96,165,250,.15);color:var(--blue);font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;margin-right:6px">P${bidPh}</span>`:'';
+      const phaseBadge=phaseFilter==='all'?`<span style="background:rgba(96,165,250,.15);color:var(--blue);font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;margin-right:6px">P${_bidPhaseLabel(bidPh,_archR)}</span>`:''; // [319 · R-2]
       // [292 · RA-H4] An ANNOUNCED winner's row is frozen too: prior-phase wins were
       // caught by bidPh<cur, but a Phase-4 round winner keeps bidPh=4=cur and stayed fully
       // editable in a fresh tab — one Remove click then deleted a live bid the round
@@ -9748,7 +9782,10 @@ window.adminAddSelection=function(){
   // before the fix: five writes, no refusal. Inert while a phase is genuinely open.
   { const _curP=Number(phasesData.currentPhase||1);
     if((phasesData.completedPhases||{})[_curP]){
-      toast('Phase '+_curP+' is complete — its bids are history and cannot be added to.','err'); return; } }
+      toast('Phase '+_curP+' is complete — its bids are history and cannot be added to.','err'); return; }
+    // [319 · R-4] The round half of G2: between ✓ Complete Round N and ▶ Start Round N+1 an added bid
+    // belongs to no archive — decided here, it is never announced and Start Round wipes the decision.
+    if(_curP===4&&(phasesData.p4Rounds||{})[Number(phasesData.p4Round||1)]){ toast('Phase 4: Round '+Number(phasesData.p4Round||1)+' is complete — start Round '+(Number(phasesData.p4Round||1)+1)+' first; the bid will belong to that round.','err'); return; } }
   // [291 · ES-1] A duplicate current-phase number is refused outright — adding OR replacing.
   // typeof guard for extracted-code test sandboxes only (build 266 precedent).
   { const _dupA=(typeof adminDupFatal==='function')?adminDupFatal(u,wk,String(pv)):[];
@@ -10521,7 +10558,7 @@ function syncTimer(){
   const tog=document.getElementById("timerToggle"); if(tog)tog.className="tog"+(en?(gLocked?" on-red":" on-blue"):"");
   const trm=document.getElementById("trMasterTog"); if(trm)trm.className="tog"+(en?" on-blue":"");
   const rb=document.getElementById("resetTimerBtn");
-  if(rb){ rb.disabled=!en; rb.className="btn "+(gLocked?"btn-redlock":"btn-blue"); }
+  if(rb){ rb.disabled=!en||_windowCompletedNow(); rb.className="btn "+(gLocked?"btn-redlock":"btn-blue"); } // [319 · P-5] paint follows the gate
   const bl=document.getElementById("timerBlock"); const lb=document.getElementById("timerLabel"); const mt=document.getElementById("timerMeta");
   if(!bl||!lb||!mt)return;
   if(!en){bl.className="timer-block";lb.textContent="Timer disabled";mt.textContent="Enable above to start.";document.getElementById("timerDigs").innerHTML="";return;}
@@ -10715,7 +10752,7 @@ window._reopenCommit=async function(){
   const owr=getTimerRules().openingWindow;
   const payload={biddingClosed:false};
   if(timerData?.enabled===true){ payload.lastChange=_n; payload.durationHours=openingWindowActive()&&owr?owr.days*24:timerResetHours(timerPhaseStartMs(),_n); }
-  try{ await setDoc(timerRef,payload,{merge:true}); toast('↩ Phase '+cur+' bidding reopened','ok'); }
+  try{ await setDoc(timerRef,payload,{merge:true}); toast('↩ '+_phaseWindowLabel(cur)+' bidding reopened','ok'); }
   catch(e){ toast('Could not reopen bidding — '+(e?.message||e),'err'); }
 };
 // [build 263] The "reopen without changing locks" override was removed. Smart Lock (phases 1-3)
@@ -10798,6 +10835,9 @@ window.reopenBidding=function(){
   // [build 261] Phase 4 rounds open only a month or two at a time — Smart Lock (FTE-based)
   // opens EVERY week with room, far more than a round wants. Route round reopens to a month
   // picker that unlocks ONLY the chosen months' still-biddable weeks; every other week stays locked.
+  // [319 · P-5] The completed-PHASE half of the gate above (the round block stays first so Start
+  // Round's hand-off still passes): no button reaches this on a completed phase, the handler is global.
+  if((phasesData.completedPhases||{})[cur]){ toast('Phase '+cur+' is complete — its bidding cannot be reopened'+(cur<4?'; begin Phase '+(cur+1)+' when ready.':' — the auction is finished.'),'err'); return; }
   if(cur===4){ return window._reopenRoundMonths(); }
   // [build 254 · rolling Phase 4] Close Bidding locks ALL 52 weeks. Begin Phase used to be the
   // only step that re-ran Smart Lock — but rolling Phase 4 rounds REOPEN without a Begin, so a
@@ -10843,6 +10883,9 @@ window.reopenBidding=function(){
 };
 window.adminResetTimer=function(){
   if(!timerData.enabled)return;
+  // [319 · P-5] A completed phase or round is history: re-arming the countdown would tell the server
+  // bidding is open over a board every other gate has locked.
+  if(_windowCompletedNow()){ toast('⛔ '+_phaseWindowLabel()+' is complete — its bidding cannot be reopened by a timer reset.'+((Number(phasesData.currentPhase||1)===4&&!(phasesData.completedPhases||{})[4])?' Send (or skip) the round results, then ▶ Start Round '+(Number(phasesData.p4Round||1)+1)+'.':''),'err'); return; }
   const owr=getTimerRules().openingWindow, owActive=openingWindowActive();
   const newDurH=(owActive&&owr)?owr.days*24:timerResetHours(timerPhaseStartMs(),Date.now());
   openConfirm({
@@ -11604,12 +11647,15 @@ window.saveOneSlot=async function(wk){
   const _oldSlot=Number(getSlots(wk)), _oldSlc=Number(getSlc(wk));
   const _slotCh=_unsaved||Math.abs(r.value-_oldSlot)>1e-9;
   const _slcCh=Math.abs(c.value-_oldSlc)>1e-9;
+  // [319 · D-b] "never below approved" — say so in red before the write; the owner keeps the override. typeof = sandbox convention.
+  const _apv=(typeof weekLedger==='function')?weekLedger(wk).approvedFte:null, _below=_slotCh&&_apv!==null&&r.value<_apv;
   if(!_slotCh&&!_slcCh){ toast('Nothing to save — this week already matches what is stored.','ok'); return; }
   openConfirm({
     title:'💾 Save '+wLabel(wkDate(wk))+'?',
     body:`<div>${_slotCh?`FTE availability: <strong>${_unsaved?'not saved (live capacity 0)':_oldSlot}</strong> → <strong>${r.value}</strong>`:`FTE availability unchanged (${r.value})`}</div>
           <div style="margin-top:4px">${_slcCh?`Smart Lock Control: <strong>${_oldSlc}</strong> → <strong>${c.value}</strong>`:`Smart Lock Control unchanged (${c.value})`}</div>
-          ${_slotCh?`<div class="cmodal-warn" style="margin-top:8px">Changing a week's availability re-decides that week's winners immediately.</div>`:''}`,
+          ${_slotCh?`<div class="cmodal-warn" style="margin-top:8px">Changing a week's availability re-decides that week's winners immediately.</div>`:''}
+          ${_below?`<div class="cmodal-danger">This reduces capacity below what is already approved (${_apv} approved vs ${r.value} new cap).</div>`:''}`,
     okText:'💾 Save', danger:_slotCh,
     onConfirm:async()=>{
       await setDoc(slotsRef,{[wk]:r.value},{merge:true});
@@ -11671,6 +11717,9 @@ window.saveAllSlots=async function(){
   // a blind bulk write is the one operation most likely to save a stale value.
   const _chSlots=Object.keys(updates).filter(wk=>Math.abs(Number(updates[wk])-Number(getSlots(wk)))>1e-9);
   const _chSlc=Object.keys(slcUpdates).filter(wk=>Math.abs(Number(slcUpdates[wk])-Number(getSlc(wk)))>1e-9);
+  // [319 · D-b] one engine run for all 52 weeks; list every week the new cap would put below its approved total
+  const _apAll=(_chSlots.length&&typeof computeApprovals==='function'&&typeof weekLedger==='function')?computeApprovals():null;
+  const _belowAll=_apAll?_chSlots.filter(wk=>Number(updates[wk])<weekLedger(wk,_apAll).approvedFte).map(wk=>wLabel(wkDate(wk))+': '+weekLedger(wk,_apAll).approvedFte+' approved vs '+updates[wk]+' new cap'):[];
   if(!_chSlots.length&&!_chSlc.length){ toast('Nothing to save — every week already matches what is stored.','ok'); return; }
   const _wkList=a=>a.slice(0,6).map(wk=>wLabel(wkDate(wk))).join(', ')+(a.length>6?' and '+(a.length-6)+' more':'');
   openConfirm({
@@ -11679,6 +11728,7 @@ window.saveAllSlots=async function(){
           <ul style="margin:10px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">
             ${_chSlots.length?`<li><strong>${_chSlots.length}</strong> week${_chSlots.length!==1?'s':''} change availability: ${esc(_wkList(_chSlots))}</li>`:'<li>No availability changes</li>'}
             ${_chSlc.length?`<li><strong>${_chSlc.length}</strong> week${_chSlc.length!==1?'s':''} change Smart Lock Control: ${esc(_wkList(_chSlc))}</li>`:'<li>No Smart Lock Control changes</li>'}
+            ${_belowAll.length?`<li class="cmodal-danger">This reduces capacity below what is already approved — ${esc(_belowAll.join('; '))}</li>`:''}
           </ul>
           <div class="cmodal-warn" style="margin-top:6px">Changing a week's availability re-decides that week's winners immediately.</div>`,
     okText:'💾 Save these changes', danger:true,
@@ -11824,7 +11874,7 @@ window.renderDrawsReviews=function(){
   const body=document.getElementById("drawsReviewsBody"); if(!body) return;
   // The Under Review panel only applies to the phase that's currently active. Label it.
   const drBanner=document.getElementById("drPhaseBanner");
-  if(drBanner) drBanner.textContent='Showing bids under review for the current phase — Phase '+Number(phasesData.currentPhase||1);
+  if(drBanner) drBanner.textContent='Showing bids under review for the current phase — '+_phaseWindowLabel(); // [319 · P-6]
   const ap=computeApprovals();
   const nat=computeApprovals(true); // natural projection, ignores admin decisions
   const sortBy=document.getElementById("drSortBy")?.value||'week';
@@ -11898,8 +11948,13 @@ window.renderDrawsReviews=function(){
     // with Phase 4 complete and its results sent, all three rendered. A completed phase is history:
     // the rows stay visible, the buttons do not.
     const _phaseDone=!!(phasesData.completedPhases||{})[Number(phasesData.currentPhase||1)];
+    // [319 · P-4] The round half of D6: a row whose ROUND already archived its decision is history too
+    // (Complete Round → Start Round is the only window in which the live docs still hold it).
+    const _rowArch=_p4ArchivedDecisionRound(e.user,e.wk);
     if(_phaseDone){
-      actions=`<span style="color:var(--t3);font-size:11px;font-style:italic">Phase ${Number(phasesData.currentPhase||1)} — complete, locked</span>`;
+      actions=`<span style="color:var(--t3);font-size:11px;font-style:italic">${_phaseWindowLabel()} — complete, locked</span>`;
+    } else if(_rowArch!==null){
+      actions=`<span style="color:var(--t3);font-size:11px;font-style:italic">Phase 4 · Round ${_rowArch} — locked</span>`;
     } else if(e.type==='approved'){
       actions=`<button class="btn" style="padding:3px 9px;font-size:11px;background:rgba(251,191,36,.15);color:var(--yellow);border:1px solid rgba(251,191,36,.3)" onclick="confirmRevokeApproval('${_jsq(e.user)}','${_jsq(e.wk)}')">↶ Revoke</button>
         <button class="btn btn-danger" style="padding:3px 9px;font-size:11px" onclick="confirmAdminCancel('${_jsq(e.user)}','${_jsq(e.wk)}')">✕ Cancel</button>`;
@@ -12019,6 +12074,9 @@ window.renderDrawsReviews=function(){
 // ── Revoke admin approval ──
 window.confirmRevokeApproval=function(user,wk){
   const _ds=_decisionStamp(); // [285 · AUD-C4]
+  // [319 · P-4] Same archived-round guard as adRevokeApprove: the round's archive is what the engines
+  // and the results e-mail obey, so this write changed nothing real and misled the admin.
+  { const _ar=_p4ArchivedDecisionRound(user,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); return; } }
   const m=wkDate(wk);
   openConfirm({
     title:'↶ Revoke Approval',
@@ -12056,7 +12114,8 @@ window.confirmApprove=function(user,wk,type){
   const m=wkDate(wk);
   // [§147] Draw and Under Review are one word now, so the count is what tells the admin a
   // spin is possible. type is still the internal 'draw'/'review'.
-  const _tieN=(type==='draw')?Math.max(0,(ap[wk]?.draws?.size||0)-1):0;
+  // [319 · M-2] count only the tie members still UNDECIDED — the frozen projection keeps listing the ones already approved or denied
+  const _tieN=(type==='draw')?[...(ap[wk]?.draws||[])].filter(x=>x!==user&&!(approvalsData?.[wk]||[]).includes(x)&&!(deniedData?.[wk]||[]).includes(x)).length:0;
   const overageHtml=overage>0
     ? `<div class="cmodal-warn">⚠️ Approved FTE will exceed FTE available by <strong>${overage}</strong>. (Cap ${cap} → Total winning ${newTotal}, Remaining ${(cap-newTotal).toFixed(1)})</div>`
     : `<div class="cmodal-info">This approval fits within capacity (Total winning ${newTotal} / ${cap}).</div>`;
@@ -12102,7 +12161,9 @@ window.confirmAdminEdit=function(user,wk){
       if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); return; } }
     const _curP=Number(phasesData.currentPhase||1);
     if((phasesData.completedPhases||{})[_curP]){
-      toast('Phase '+_curP+' is complete — its bids are history and cannot be edited.','err'); return; } }
+      toast('Phase '+_curP+' is complete — its bids are history and cannot be edited.','err'); return; }
+    // [319 · R-4] same round half as adminAddSelection
+    if(_curP===4&&(phasesData.p4Rounds||{})[Number(phasesData.p4Round||1)]){ toast('Phase 4: Round '+Number(phasesData.p4Round||1)+' is complete — start Round '+(Number(phasesData.p4Round||1)+1)+' first; the bid will belong to that round.','err'); return; } }
   const m=wkDate(wk);
   const cur=scheduleData[user]?.[wk]; const curLbl=Array.isArray(cur)?cur.join('/'):cur;
   openConfirm({
@@ -12278,7 +12339,7 @@ function renderRestoreList(){
     let tmTxt='timer off';
     if(tm.enabled&&typeof tm.lastChange==='number'){ const rem=(tm.durationHours||48)*3600000-(f.ts-tm.lastChange); tmTxt=rem>0?('timer '+Math.floor(rem/3600000)+'h '+Math.floor((rem%3600000)/60000)+'m left'):'timer expired'; }
     else if(tm.enabled) tmTxt='timer waiting';
-    const phTxt=esc(ph.phase1Started||Number(ph.currentPhase||1)>1?('Phase '+(ph.currentPhase||1)+(ph.completedPhases&&ph.completedPhases[ph.currentPhase]?' (complete)':'')):'pre-launch');
+    const phTxt=esc(ph.phase1Started||Number(ph.currentPhase||1)>1?('Phase '+(ph.currentPhase||1)+((Number(ph.currentPhase)===4&&ph.p4Round)?': Round '+ph.p4Round:'')+(ph.completedPhases&&ph.completedPhases[ph.currentPhase]?' (complete)':'')):'pre-launch'); // [319 · P-6] label from the backup's own phases doc — no new field
     const simTxt=(d.adminSettings&&d.adminSettings.simulatorEnabled===true)?' · <span style="color:var(--yellow)">rehearsal was ON (a restore always lands with it OFF)</span>':'';
     // diff vs current
     const cur=_bidCount(scheduleData); const dBids=cur.weeks-bc.weeks;
@@ -12290,7 +12351,7 @@ function renderRestoreList(){
     // A cost-us-an-investigation ambiguity: never say "1 setting differ" without saying which.
     const bs=d.adminSettings||{}, cs=adminSettings||{};
     const _difKeys=[...new Set([...Object.keys(bs),...Object.keys(cs)])].filter(k=>_stableStr(bs[k])!==_stableStr(cs[k]));
-    const diff=`vs now: ${dBids===0?'same bid count':(dBids>0?'current has '+dBids+' more bid'+(dBids!==1?'s':''):'current has '+(-dBids)+' fewer bid'+((-dBids)!==1?'s':''))} · ${phNow===Number(ph.currentPhase||1)?'same phase':'phase differs'} · ${_difKeys.length===0?'settings identical':_difKeys.length+' setting'+(_difKeys.length!==1?'s':'')+' differ: '+_difKeys.slice(0,4).join(', ')+(_difKeys.length>4?'…':'')}`;
+    const diff=`vs now: ${dBids===0?'same bid count':(dBids>0?'current has '+dBids+' more bid'+(dBids!==1?'s':''):'current has '+(-dBids)+' fewer bid'+((-dBids)!==1?'s':''))} · ${phNow!==Number(ph.currentPhase||1)?'phase differs':(phNow===4?(Number(ph.p4Round||0)===Number(phasesData.p4Round||0)?'same round':'round differs'):'same phase')} · ${_difKeys.length===0?'settings identical':_difKeys.length+' setting'+(_difKeys.length!==1?'s':'')+' differ: '+_difKeys.slice(0,4).join(', ')+(_difKeys.length>4?'…':'')}`;
     return `<div style="border:1px solid var(--b1);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:12.5px">
       <div style="font-weight:700;color:var(--t1)">${esc(f.name)}</div>
       <div style="color:var(--t2);margin-top:3px">Taken <strong>${new Date(f.ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'})}</strong> · ${phTxt} · ${bc.weeks} bid${bc.weeks!==1?'s':''} across ${bc.users} user${bc.users!==1?'s':''} · ${tmTxt}${simTxt}</div>

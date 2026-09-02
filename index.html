@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 165;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 166;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -567,7 +567,8 @@ body{zoom:1.15}
         <li>Phase 1 includes only the high-demand weeks; all remaining weeks open starting in Phase 2</li>
         <li id="ruleMaxBids">Running cap on total weeks you can win across the auction — only weeks you win count</li>
         <li>A combined bid like 1/2/3 uses bids 1, 2, and 3 at once</li>
-        <li>Each number can only be used once, numbers from weeks you won in earlier phases are unavailable to be used again</li>
+        <li>Each number can only be used once, numbers from weeks that were approved in earlier phases are unavailable to be used again</li>
+        <li>Bids that do not win are returned to you when the phase (or Phase 4 round) completes — the number goes back into your pool and the week can be bid on again</li>
         <li id="ruleNpPhases">NP bids may only be used during the phases for which admin has turned them on</li>
         <li id="rulePrioLock">Bid priorities can only stay the same or get stronger — bid a 5 on a week, and any re-bid there must be 5 or better.</li>
         <li id="ruleBidFloors" style="display:none"></li><!-- [COPY-3] filled from the live floors at boot; hidden until then so no stale or invented floor text can flash, and it stays hidden when no floor is set -->
@@ -591,6 +592,7 @@ body{zoom:1.15}
       <ul class="rules-list" style="margin-top:10px">
         <li>You will be notified via e-mail when someone places a bid that changes your outcome for a week</li>
         <li>If you are Under Review for a week and do not win after it is resolved, you will get the bid back for the next phase</li>
+        <li>Under Review includes times when your combined bid with other users exceeds the FTE cap.</li>
         <li style="margin-top:8px"><strong style="color:#2c4257">These are projections, not final results — outcomes can shift as others place bids or as unexpected staffing needs change</strong></li>
       </ul>
       <div onclick="collapseRules()" style="margin-top:14px;padding-top:12px;border-top:1px solid #c2cfdb;text-align:center;cursor:pointer;color:#006ba6;font-weight:600;font-size:.82rem;user-select:none">▲ Collapse Rules &amp; Reminders</div>
@@ -1072,6 +1074,9 @@ function blAllowance(ph){
 function blUsed(user){ const e=(typeof bidLoweringsData!=='undefined'&&bidLoweringsData)?bidLoweringsData[user]:null; return Math.max(0,Number(e&&e.used)||0); }
 function blRemaining(user){ const a=blAllowance(Number(phasesData.currentPhase||1)); return a===Infinity?Infinity:Math.max(0,a-blUsed(user)); }
 function _blWindowLabel(){ return Number(phasesData.currentPhase||1)===4?'this round':('Phase '+Number(phasesData.currentPhase||1)); }
+// [166] Twin of the admin's _phaseWindowLabel: the OPEN window is the round in Phase 4 — a bare "Phase 4" is always wrong (§152).
+function _phaseWindowLabel(){ const c=Number(phasesData.currentPhase||1);
+  return (c===4&&Number(phasesData.p4Round||0)>=1)?('Phase 4: Round '+Number(phasesData.p4Round)):('Phase '+c); }
 function blFmtBid(b){ return b==="NP"?"NP":(Array.isArray(b)?b.join('/'):String(b)); }
 // The out-of-lowerings refusal. Allowance 0 keeps the classic absolute wording (no
 // mention of a feature that is off); otherwise the count is stated plainly. DELIBERATELY
@@ -1542,7 +1547,7 @@ function timerPhaseStartMs(){ try{ const cur=Number((typeof phasesData!=='undefi
 // Current BASE reset length (one of 48/24/12/6/3) for right now, from the stages + elapsed.
 function currentStageHours(){ const r=getTimerRules(); const st=r.stages; const elapsedDays=(Date.now()-timerPhaseStartMs())/86400000; let base=st.length?st[0].hours:48; for(const s of st){ if(elapsedDays>=(s.days||0)) base=s.hours; } return base; }
 function fmtElapsed(ms){ if(!(ms>0)) ms=0; const tm=Math.floor(ms/60000); const d=Math.floor(tm/1440), h=Math.floor((tm%1440)/60), mi=tm%60; return d+'d '+h+'h '+mi+'m'; }
-function updatePhaseOpen(){ const el=document.getElementById('phaseOpenFor'); if(!el) return; const cur=Number((phasesData&&phasesData.currentPhase)||1); const began=(phasesData&&phasesData.phaseBeganAt)?phasesData.phaseBeganAt[cur]:null; const completed=!!(phasesData&&phasesData.completedPhases&&phasesData.completedPhases[cur]); const expired=(typeof isAuctionClosed==='function')&&isAuctionClosed(); const open=began&&(phasesData&&(phasesData.phase1Started||cur>1))&&!completed&&!expired; el.textContent=open?('Phase '+cur+' has been open for '+fmtElapsed(Date.now()-began)):''; }
+function updatePhaseOpen(){ const el=document.getElementById('phaseOpenFor'); if(!el) return; const cur=Number((phasesData&&phasesData.currentPhase)||1); const began=(phasesData&&phasesData.phaseBeganAt)?phasesData.phaseBeganAt[cur]:null; const completed=!!(phasesData&&phasesData.completedPhases&&phasesData.completedPhases[cur]); const expired=(typeof isAuctionClosed==='function')&&isAuctionClosed(); const open=began&&(phasesData&&(phasesData.phase1Started||cur>1))&&!completed&&!expired; el.textContent=open?(_phaseWindowLabel()+' has been open for '+fmtElapsed(Date.now()-began)):''; } // [166] label only; the round's own start is Build 2
 try{ setInterval(function(){ try{ updatePhaseOpen(); }catch(e){} }, 20000); }catch(e){}
 // Periodic outbid-alert relay: freshly-queued alerts are too young to sweep at
 // queue-write time, so without a periodic re-check they would sit until the next
@@ -2079,7 +2084,7 @@ function _setPhaseClosedBanner(on){
   if(on && (!mainContainer || mainContainer.style.display==="none")){ b.style.display="none"; return; }
   const t=document.getElementById("pcbText");
   if(t){ const ph=Number(phasesData.currentPhase||0);
-    t.textContent = ph ? ("Phase "+ph+" bidding is closed — no more changes can be made.")
+    t.textContent = ph ? (_phaseWindowLabel()+" bidding is closed — no more changes can be made.") // [166]
                        : "Bidding is closed — no more changes can be made."; }
   b.style.display = on ? "block" : "none";
 }
@@ -3884,7 +3889,7 @@ function updateSigninPhase(){
   // the next one, the first thing a bidder saw said "Bidding open" while the board behind it
   // said closed. One question, one answer, on both surfaces.
   const _open=biddingOpen()&&!isAuctionClosed();
-  el.textContent=_open?("Phase "+ph+" · Bidding open"):"Bidding closed"; // [135] no timing promises anywhere
+  el.textContent=_open?(_phaseWindowLabel()+" · Bidding open"):"Bidding closed"; // [166] names the round in Phase 4 // [135] no timing promises anywhere
 }
 window.updateSigninPhase=updateSigninPhase;
 refreshLoginUsers();
@@ -4063,7 +4068,8 @@ ${bullets([
   `Phase 1 includes only the high-demand weeks; all remaining weeks open starting in Phase 2`,
   ...capBullets,
   `A combined bid like 1/2/3 uses bids 1, 2, and 3 at once`,
-  `Each number can only be used once, numbers from weeks you won in earlier phases are unavailable to be used again`,
+  `Each number can only be used once, numbers from weeks that were approved in earlier phases are unavailable to be used again`,
+  `Bids that do not win are returned to you when the phase (or Phase 4 round) completes — the number goes back into your pool and the week can be bid on again`,
   npPhasesDescription(),
   ...prioLockBullets(), // [build 139 · BL/COPY] Option A wording, allowance-derived
   ...bfRulesBullets(),
@@ -4081,6 +4087,7 @@ ${bullets([
   `Under Review (R): your bid is over the FTE cap for this week and the projection is uncertain`,
   `Losing (L): your bid is projected not to be approved for this week`,
   `If you are Under Review for a week and do not win after it is resolved, you will get the bid back for the next phase`,
+  `Under Review includes times when your combined bid with other users exceeds the FTE cap.`,
   `These are projections, not final results — outcomes can shift as others place bids or as unexpected staffing needs change`
 ])}
 
