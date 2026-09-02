@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 323;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 324;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -2802,17 +2802,17 @@ function _p4ArchivedDecisionRound(u,wk){
   for(const r of Object.keys(rounds)){
     const a=rounds[r]||{};
     if(Array.isArray(a.approvals?.[wk])&&a.approvals[wk].includes(u)) return Number(r);
-    // [build 259 · AUDIT CRITICAL] A round DENIAL binds only while the EXACT denied bid is
-    // still on the schedule — mirroring the staff twin p4AnnouncedDecision, which was always
-    // value-aware for precisely this case. Start Round retires the denied bid; a fresh
-    // re-bid in a later round is a NEW, LIVE bid. The old membership-only test made that
-    // re-bid invisible to every counter and gate (never pended, never decidable, never
-    // announced, never retired — confirmed live 10 Aug 2026): countPendingDecisions,
-    // renderPhaseProgress, the decide panel's current view and all four decision guards
-    // key on this helper, so the value check here heals every one of them at once.
-    if(Array.isArray(a.denials?.[wk])&&a.denials[wk].includes(u)){
-      const av=a.schedule?.[u]?.[wk];
-      if(scheduleData[u]?.[wk]!==undefined&&JSON.stringify(scheduleData[u][wk])===JSON.stringify(av)) return Number(r);
+    // [build 259 · AUDIT CRITICAL] A round DENIAL must not bind a fresh re-bid in a later round —
+    // the old membership-only test made such a re-bid invisible to every counter and gate (never
+    // pended, never decidable, never announced, never retired — confirmed live 10 Aug 2026).
+    // [324 · §174] 259 fixed that by comparing VALUES, which left a same-value re-bid (and any
+    // admin Add-bid at the denied value) in the same trap. The exact rule: a denial binds only
+    // while ITS round is still current. Start Round deletes every denied bid before it advances
+    // p4Round (one atomic batch), so a bid present in a later round is new by construction. The
+    // last round is never followed by Start Round, so its denials keep binding after Complete
+    // Phase 4. Twin of the staff p4AnnouncedDecision — keep them in lockstep.
+    if(Number(r)===Number(phasesData.p4Round||1)&&Array.isArray(a.denials?.[wk])&&a.denials[wk].includes(u)){
+      if(scheduleData[u]?.[wk]!==undefined) return Number(r);
     }
   }
   return null;
@@ -9628,10 +9628,10 @@ window.adminChangePriority=async function(u,wk,val){
   // [316 · E1] The archived-round guard SIX other write handlers already use, on the one that
   // lacked it. adminRemove — the button on the SAME Edit Selections row — refuses this exact
   // case; this dropdown wrote straight through: the bid value, the phase retag, the priority
-  // lock, and it cleared any approval and denial for that week. And because a round denial binds
-  // only while the exact denied bid is still on the schedule (259, deliberately value-aware),
-  // that write also DETACHED the bid from the round that decided it, so the reports stopped
-  // seeing it as round-decided. The archive was never corrupted; the live link to it was.
+  // lock, and it cleared any approval and denial for that week. And under 259's value-aware rule
+  // (a round denial bound only while the exact denied bid was on the schedule) that write also
+  // DETACHED the bid from the round that decided it, so the reports stopped seeing it as
+  // round-decided. [324] The rule is now round-current, not value-aware; this gate stands as is.
   // Paint is not enforcement (§3 r5): the row lock stops it being OFFERED, this stops it being
   // DONE. refreshAll because the <select> has already moved in the DOM and nothing was written.
   if(typeof _p4ArchivedDecisionRound==='function'){ const _ar=_p4ArchivedDecisionRound(u,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); try{ refreshAll(); }catch(_){ } return; } }

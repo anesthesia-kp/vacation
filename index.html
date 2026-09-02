@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 167;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 168;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -1339,19 +1339,24 @@ function p4RoundWinnersOn(wk){
 // user permanently owns that week — they cannot re-bid it and no later bid can
 // displace them, regardless of priority.
 // [build 133 · lead admin] The ANNOUNCED round decision (if any) that currently binds this
-// user+week. A round win binds for the rest of the year. A round denial binds only while
-// the exact denied bid is still present — Start Round retires it, and a fresh re-bid in a
-// later round (different value) is a new, live bid. Reads only the PUBLISHED archives
+// user+week. A round win binds for the rest of the year. Reads only the PUBLISHED archives
 // (world-readable phases doc), so nothing unannounced ever leaks through this path.
+// [168 · §174] A round DENIAL binds only while THAT round is still the current one. Start Round
+// deletes every denied bid before it advances p4Round (one atomic batch, admin), so any bid on
+// this user+week in a later round is new by construction — whatever its value. The old test
+// compared VALUES (a live bid carries no round stamp), which made a same-value re-bid in a later
+// round look like the retired denial: frozen, invisible, un-decidable — and the owner's case,
+// "lower demand or more capacity in a later round", was refused at the door. The last round is
+// never followed by Start Round, so its denials keep binding through Complete Phase 4.
 function p4AnnouncedDecision(user,wk){
   if(Number(phasesData.currentPhase||1)!==4) return null;
   const rounds=phasesData.p4Rounds||{};
+  const curR=Number(phasesData.p4Round||1);
   for(const r of Object.keys(rounds)){
     const a=rounds[r]||{};
     if(Array.isArray(a.approvals?.[wk])&&a.approvals[wk].includes(user)) return {round:r,status:'A'};
-    if(Array.isArray(a.denials?.[wk])&&a.denials[wk].includes(user)){
-      const av=a.schedule?.[user]?.[wk];
-      if(data[user]?.[wk]!==undefined&&JSON.stringify(data[user][wk])===JSON.stringify(av)) return {round:r,status:'D'};
+    if(Number(r)===curR&&Array.isArray(a.denials?.[wk])&&a.denials[wk].includes(user)){
+      if(data[user]?.[wk]!==undefined) return {round:r,status:'D'};
     }
   }
   return null;
@@ -2623,25 +2628,9 @@ window.confirmPriority=async function(){
   if(getPriorPhaseWinners(wk).has(user)){ showCenterAlert("You already won this week in an earlier phase or Phase 4 round — it's locked in for you."); window.closeModal(); return; }
   { const _ad=p4AnnouncedDecision(user,wk); // [133] announced denial = frozen until it retires at the next round
     if(_ad&&_ad.status==='D'){ showCenterAlert("This bid was denied in Phase 4: Round "+_ad.round+" — it clears when the next round opens, and you can place a fresh bid then."); window.closeModal(); return; } }
-  // [build 131 · rolling Phase 4] Re-bidding a round-denied week is allowed — but not with the
-  // EXACT bid the results e-mail already denied. Same value = same answer; the engine treats it
-  // as dead, so submitting it would silently do nothing but look placed. Checked at confirm
-  // time (L-3 pattern) so a two-tab race can't slip it through a stale dropdown.
-  // [build 134 · AUDIT] The comment above PROMISED this block since 131, but no code ever
-  // compared the CANDIDATE value to the archived denial — p4AnnouncedDecision reads the
-  // (retired, absent) live bid, so it passed for ANY value. A same-value re-bid then saved
-  // and instantly re-froze as the old denial: uncancellable, uneditable, dropped from My
-  // Bids yet still consuming the bid number and a cap slot forever. This is the real gate.
-  { const _rounds=phasesData.p4Rounds||{};
-    const _cand=val==="NP"?"NP":(val.includes(',')?val.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n)):parseInt(val));
-    for(const _r of Object.keys(_rounds)){
-      const _a=_rounds[_r]||{};
-      if(Array.isArray(_a.denials?.[wk])&&_a.denials[wk].includes(user)){
-        const _av=_a.schedule?.[user]?.[wk];
-        if(_av!==undefined&&JSON.stringify(_cand)===JSON.stringify(_av)){ showCenterAlert("This exact bid was already denied on this week in Phase 4: Round "+_r+" — same bid, same answer. Pick a different bid value for your fresh try."); window.closeModal(); return; }
-      }
-    }
-  }
+  // [168 · §174] The "same bid, same answer" guard that stood here (131/134) is GONE: it existed only
+  // because p4AnnouncedDecision recognised a retired denial by VALUE. Now a denial binds only while its
+  // round is current, so a later-round re-bid — same value or not — is a fresh, live bid.
   // [build 137 · BF] Week-category floor re-check at confirm time (L-3 pattern) — the floor
   // comes from admin settings; NP is the weakest bid so any numeric floor blocks it here too.
   { const _bfF=bfFloorFor(wk);
