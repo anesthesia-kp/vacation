@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 166;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 167;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -1543,11 +1543,21 @@ function _laWallToMs(y,mo,d,h,mi){ const guess=Date.UTC(y,mo-1,d,h,mi); const p=
 function _inQuiet(h,qs,qe){ return (qs<qe)?(h>=qs&&h<qe):(h>=qs||h<qe); }
 function _quietAdjustExpiry(expiryMs,r){ if(!r.quietEnabled) return expiryMs; const p=_laParts(expiryMs); if(!_inQuiet(p.hour,r.quietStart,r.quietEnd)) return expiryMs; let y=p.year,mo=p.month,d=p.day; if(p.hour>=r.quietEnd){ const np=_laParts(_laWallToMs(p.year,p.month,p.day,12,0)+86400000); y=np.year;mo=np.month;d=np.day; } return _laWallToMs(y,mo,d,r.quietEnd,0); }
 function timerResetHours(phaseStartMs,nowMs){ const r=getTimerRules(); const st=r.stages; const elapsedDays=(nowMs-(phaseStartMs||nowMs))/86400000; let base=st.length?st[0].hours:48; for(const s of st){ if(elapsedDays>=(s.days||0)) base=s.hours; } let hours=base; if(r.quietEnabled && base<=(r.quietWhenHoursLE||6)){ const adj=_quietAdjustExpiry(nowMs+base*3600000,r); hours=(adj-nowMs)/3600000; } return Math.max(0.05, Math.round(hours*100)/100); }
-function timerPhaseStartMs(){ try{ const cur=Number((typeof phasesData!=='undefined'&&phasesData.currentPhase)||1); const b=(typeof phasesData!=='undefined'&&phasesData.phaseBeganAt)?phasesData.phaseBeganAt[cur]:null; return b||(timerData&&timerData.lastChange)||Date.now(); }catch(e){ return Date.now(); } }
+// [322 · P-2] ★ BOTH pages (twin). When did the OPEN window begin? Phases 1–3: phaseBeganAt[N]. Phase 4: the
+// round's own stamp (p4RoundBeganAt[p4Round], written by Begin Phase 4 for round 1 and by ▶ Start Round for
+// every later round), falling back to phaseBeganAt[4] for a round begun before this build or restored from an
+// older backup — no stamp → exactly the 321/166 answer. Every reader of a window's age asks this, never the map.
+function _windowStartMs(){
+  const cur=Number(phasesData.currentPhase||1); const pb=(phasesData.phaseBeganAt||{})[cur]||null;
+  if(cur!==4) return pb;
+  const rb=(phasesData.p4RoundBeganAt||{})[Number(phasesData.p4Round||1)];
+  return (typeof rb==='number'&&rb>0)?rb:pb;
+}
+function timerPhaseStartMs(){ try{ const b=(typeof phasesData!=='undefined')?_windowStartMs():null; return b||(timerData&&timerData.lastChange)||Date.now(); }catch(e){ return Date.now(); } } // [322 · P-2] asks _windowStartMs (round-aware); until 321/166 it read the phase stamp alone
 // Current BASE reset length (one of 48/24/12/6/3) for right now, from the stages + elapsed.
 function currentStageHours(){ const r=getTimerRules(); const st=r.stages; const elapsedDays=(Date.now()-timerPhaseStartMs())/86400000; let base=st.length?st[0].hours:48; for(const s of st){ if(elapsedDays>=(s.days||0)) base=s.hours; } return base; }
 function fmtElapsed(ms){ if(!(ms>0)) ms=0; const tm=Math.floor(ms/60000); const d=Math.floor(tm/1440), h=Math.floor((tm%1440)/60), mi=tm%60; return d+'d '+h+'h '+mi+'m'; }
-function updatePhaseOpen(){ const el=document.getElementById('phaseOpenFor'); if(!el) return; const cur=Number((phasesData&&phasesData.currentPhase)||1); const began=(phasesData&&phasesData.phaseBeganAt)?phasesData.phaseBeganAt[cur]:null; const completed=!!(phasesData&&phasesData.completedPhases&&phasesData.completedPhases[cur]); const expired=(typeof isAuctionClosed==='function')&&isAuctionClosed(); const open=began&&(phasesData&&(phasesData.phase1Started||cur>1))&&!completed&&!expired; el.textContent=open?(_phaseWindowLabel()+' has been open for '+fmtElapsed(Date.now()-began)):''; } // [166] label only; the round's own start is Build 2
+function updatePhaseOpen(){ const el=document.getElementById('phaseOpenFor'); if(!el) return; const cur=Number((phasesData&&phasesData.currentPhase)||1); const began=phasesData?_windowStartMs():null; const completed=!!(phasesData&&phasesData.completedPhases&&phasesData.completedPhases[cur])||(cur===4&&!!(phasesData.p4Rounds||{})[Number(phasesData.p4Round||1)]); const expired=(typeof isAuctionClosed==='function')&&isAuctionClosed(); const open=began&&(phasesData&&(phasesData.phase1Started||cur>1))&&!completed&&!expired; el.textContent=open?(_phaseWindowLabel()+' has been open for '+fmtElapsed(Date.now()-began)):''; } // [322 · P-2] the open ROUND's start in Phase 4; a completed round is not open either (was [166] label only)
 try{ setInterval(function(){ try{ updatePhaseOpen(); }catch(e){} }, 20000); }catch(e){}
 // Periodic outbid-alert relay: freshly-queued alerts are too young to sweep at
 // queue-write time, so without a periodic re-check they would sit until the next
@@ -1572,7 +1582,7 @@ function renderTimerRulesInfo(){
   let quiet='';
   if(r.quietEnabled){ quiet=`<p style="margin:8px 0 0">Once the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between <strong>${fmtHour12(r.quietStart)}</strong> and <strong>${fmtHour12(r.quietEnd)}</strong> Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.</p>`; }
   let owHtml='';
-  if(r.openingWindow){ owHtml=`<p style="margin:0 0 6px"><strong>Each phase opens with a ${r.openingWindow.days}-day window:</strong> the timer counts down continuously (bids do NOT reset it) until <strong>${(st[0]||{}).hours||48} hours</strong> remain — then the reset rules below take over.</p>`; }
+  if(r.openingWindow){ owHtml=`<p style="margin:0 0 6px"><strong>Each phase or round opens with a ${r.openingWindow.days}-day window:</strong> the timer counts down continuously (bids do NOT reset it) until <strong>${(st[0]||{}).hours||48} hours</strong> remain — then the reset rules below take over.</p>`; }
   // [build 274 · V3] The reset sentence follows the admin-selected mode, so bidders
   // always see the rule actually in force. Mode 1 keeps the classic wording exactly.
   const resetSentence=(function(){

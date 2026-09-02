@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 321;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 322;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -3706,7 +3706,7 @@ function computeBadBehavior(){
     const flags=_fpAnalyzePhase(ph.phase,ph.events,!ph.closed);
     if(!ph.closed){
       // Slow starters — current phase only: open 24h+ and still no current-phase bids.
-      const began=phasesData.phaseBeganAt?.[cur];
+      const began=_windowStartMs(); // [322 · P-2] "open 24h+" counts from the ROUND's start in Phase 4
       if(began&&phase1Started()&&!phasesData.completedPhases?.[cur]&&(Date.now()-began)>=24*3600000){
         for(const u of names){
           const has=_hasOpenRoundBid(u); // [319 · P-1] a round-1 win is not a round-2 bid
@@ -3875,7 +3875,7 @@ function renderBidChart(){
   const cur=Number(phasesData.currentPhase||1);
   const ph=document.getElementById('bcPhase'); if(ph) ph.textContent=_phaseWindowLabel().replace(/^Phase /,''); // [319 · P-6] markup already says "Phase "
   const events=(changesLog||[]).filter(e=>e&&typeof e.ts==='number'&&!isDecisionEntry(e)&&!isSystemEntry(e)&&e.ts>=(changesResetAt||0));
-  const began=phasesData.phaseBeganAt?.[cur]
+  const began=_windowStartMs() // [322 · P-2] the chart spans the open ROUND in Phase 4
     || (events.length?Math.min(...events.map(e=>e.ts)):Date.now()-3600000);
   const now=Date.now();
   const spanMs=Math.max(now-began,3600000); // at least a 1h window
@@ -6001,7 +6001,11 @@ async function _commitBeginPhase(next){
     // [build 255] (Re)beginning Phase 4 starts the round machinery fresh: Round 1, no
     // archives, no sent stamps — stale round records from a rehearsal or an abandoned
     // run must never lock winners into a new year.
-    if(next===4){ _phasePayload.p4Round=1; _phasePayload.p4Rounds=deleteField(); _phasePayload.p4RoundResultsSent=deleteField(); }
+    if(next===4){ _phasePayload.p4Round=1; _phasePayload.p4Rounds=deleteField(); _phasePayload.p4RoundResultsSent=deleteField();
+      // [322 · O-1] Round 1 begins when Phase 4 begins — the same instant as phaseBeganAt[4]. Merge deep-merges
+      // maps, so a stale [2]/[3] from a rehearsal survives here; harmless — p4Round is 1 and the next ▶ Start
+      // Round overwrites [N+1] before anything reads it (_windowStartMs reads only the OPEN round's key).
+      _phasePayload.p4RoundBeganAt={1:_phasePayload.phaseBeganAt[next]}; }
     // [H6] Publish any staged snapshot in the SAME batch as the advance — the staff
     // engine reads prior winners from the public phases doc; no torn instant.
     if(Object.keys(_srvStaged).length){ // [269] staged snapshot judged from the SERVER read (a stale-empty mirror can no longer wipe a real staged snapshot unpublished)
@@ -7067,12 +7071,17 @@ window.startNextP4Round=function(){
         batch.set(bidLoweringsArchiveRef,{['p4r'+N]:_blSnap},{merge:true}); // [build 268 · BL] archive the finished round's usage
         batch.set(bidLoweringsRef,{}); // [build 268 · BL] every round gets the same fresh allowance (owner ruling)
       }
-      batch.set(phasesRef,{p4Round:N+1},{merge:true});
+      // [322 · O-1] A round opens like a phase: stamp WHEN this round began, exactly as Begin Phase stamps
+      // phaseBeganAt[N]. Without it every timer reader on both pages measured the window's age from the day
+      // Phase 4 began, so ▶ Start Round on day 20 armed the day-20 stage (3 h) and skipped the opening window.
+      const _rbAt=Date.now();
+      batch.set(phasesRef,{p4Round:N+1,p4RoundBeganAt:{...(phasesData.p4RoundBeganAt||{}),[N+1]:_rbAt}},{merge:true});
       try{ await batch.commit(); }
       catch(e){ toast('Could not start Round '+(N+1)+' — nothing was changed ('+(e?.message||e)+').','err'); return; }
       // Local-first: the batch advanced the round server-side; reflect it immediately so the
       // reopen gate (build 256) and the dashboard see Round N+1 before the listener echoes.
       phasesData.p4Round=N+1;
+      phasesData.p4RoundBeganAt={...(phasesData.p4RoundBeganAt||{}),[N+1]:_rbAt}; // [322 · O-1] the reopen below arms from this stamp before the listener echoes
       toast('▶ Phase 4: Round '+(N+1)+' — '+retire+' denied bid'+(retire!==1?'s':'')+' retired. Now pick the month(s) to open and reopen bidding.','ok');
       window.reopenBidding();
     }
@@ -10426,18 +10435,29 @@ function _laWallToMs(y,mo,d,h,mi){ const guess=Date.UTC(y,mo-1,d,h,mi); const p=
 function _inQuiet(h,qs,qe){ return (qs<qe)?(h>=qs&&h<qe):(h>=qs||h<qe); }
 function _quietAdjustExpiry(expiryMs,r){ if(!r.quietEnabled) return expiryMs; const p=_laParts(expiryMs); if(!_inQuiet(p.hour,r.quietStart,r.quietEnd)) return expiryMs; let y=p.year,mo=p.month,d=p.day; if(p.hour>=r.quietEnd){ const np=_laParts(_laWallToMs(p.year,p.month,p.day,12,0)+86400000); y=np.year;mo=np.month;d=np.day; } return _laWallToMs(y,mo,d,r.quietEnd,0); }
 function timerResetHours(phaseStartMs,nowMs){ const r=getTimerRules(); const st=r.stages; const elapsedDays=(nowMs-(phaseStartMs||nowMs))/86400000; let base=st.length?st[0].hours:48; for(const s of st){ if(elapsedDays>=(s.days||0)) base=s.hours; } let hours=base; if(r.quietEnabled && base<=(r.quietWhenHoursLE||6)){ const adj=_quietAdjustExpiry(nowMs+base*3600000,r); hours=(adj-nowMs)/3600000; } return Math.max(0.05, Math.round(hours*100)/100); }
-function timerPhaseStartMs(){ try{ const cur=Number((typeof phasesData!=='undefined'&&phasesData.currentPhase)||1); const b=(typeof phasesData!=='undefined'&&phasesData.phaseBeganAt)?phasesData.phaseBeganAt[cur]:null; return b||(timerData&&timerData.lastChange)||Date.now(); }catch(e){ return Date.now(); } }
+// [322 · P-2] ★ BOTH pages (twin). When did the OPEN window begin? Phases 1–3: phaseBeganAt[N]. Phase 4: the
+// round's own stamp (p4RoundBeganAt[p4Round], written by Begin Phase 4 for round 1 and by ▶ Start Round for
+// every later round), falling back to phaseBeganAt[4] for a round begun before this build or restored from an
+// older backup — no stamp → exactly the 321/166 answer. Every reader of a window's age asks this, never the map.
+function _windowStartMs(){
+  const cur=Number(phasesData.currentPhase||1); const pb=(phasesData.phaseBeganAt||{})[cur]||null;
+  if(cur!==4) return pb;
+  const rb=(phasesData.p4RoundBeganAt||{})[Number(phasesData.p4Round||1)];
+  return (typeof rb==='number'&&rb>0)?rb:pb;
+}
+function timerPhaseStartMs(){ try{ const b=(typeof phasesData!=='undefined')?_windowStartMs():null; return b||(timerData&&timerData.lastChange)||Date.now(); }catch(e){ return Date.now(); } } // [322 · P-2] asks _windowStartMs (round-aware); until 321/166 it read the phase stamp alone
 function fmtElapsed(ms){ if(!(ms>0)) ms=0; const tm=Math.floor(ms/60000); const d=Math.floor(tm/1440), h=Math.floor((tm%1440)/60), mi=tm%60; return d+'d '+h+'h '+mi+'m'; }
 // The BASE reset length for right now (one of 48/24/12/6/3) from the stages + elapsed.
 function currentStageHours(){ const r=getTimerRules(); const st=r.stages; const elapsedDays=(Date.now()-timerPhaseStartMs())/86400000; let base=st.length?st[0].hours:48; for(const s of st){ if(elapsedDays>=(s.days||0)) base=s.hours; } return base; }
 function updatePhaseOpen(){
   const cur=Number((phasesData&&phasesData.currentPhase)||1);
-  const began=(phasesData&&phasesData.phaseBeganAt)?phasesData.phaseBeganAt[cur]:null;
-  const completed=!!(phasesData&&phasesData.completedPhases&&phasesData.completedPhases[cur]);
+  const began=phasesData?_windowStartMs():null; // [322 · P-2] the open ROUND's start in Phase 4
+  const completed=!!(phasesData&&phasesData.completedPhases&&phasesData.completedPhases[cur])
+    ||(cur===4&&!!(phasesData.p4Rounds||{})[Number(phasesData.p4Round||1)]); // [322 · P-2] a completed round is not open either (VC appendix)
   const expired=!!(timerData&&timerData.enabled&&timerData.lastChange&&(getDurationMs()-(Date.now()-timerData.lastChange))<=0);
   const open=began&&(phasesData&&(phasesData.phase1Started||cur>1))&&!completed&&!expired;
   const el=document.getElementById('phaseOpenFor');
-  if(el) el.textContent=open?('Phase '+cur+' has been open for '+fmtElapsed(Date.now()-began)):'';
+  if(el) el.textContent=open?(_phaseWindowLabel()+' has been open for '+fmtElapsed(Date.now()-began)):''; // [322 · P-2] names the round (staff 166 already did)
   const ri=document.getElementById('timerResetInfo');
   if(ri) ri.textContent=(open && timerData && timerData.enabled)?(openingWindowActive()?('Opening window — bids do not reset the timer until '+stage0Hours()+' hours remain.'):('Each bid now resets the timer to '+currentStageHours()+' hours.')):'';
 }
@@ -10483,7 +10503,7 @@ function renderTimerRules(){
   for(let i=1;i<=4;i++){ const s=st[i]||{days:[7,10,12,14][i-1],hours:[24,12,6,3][i-1],enabled:false}; const on=s.enabled!==false; rows+=row(`<label style="display:flex;align-items:center;gap:5px;cursor:pointer;color:var(--t2)" title="Untick to skip this step — the countdown then keeps the previous step's reset length"><input type="checkbox" id="tr_e${i}" ${on?'checked':''}></label><span style="color:var(--t2)${on?'':';opacity:.5'}">After</span> ${dayInp('tr_d'+i,s.days)} <span style="color:var(--t2)${on?'':';opacity:.5'}">days,</span><span${on?'':' style="opacity:.5"'}>reset to</span> ${hoursSel('tr_h'+i,s.hours)}${on?'':' <span style="font-size:11px;color:var(--t3)">(off)</span>'}`); }
   const ow=r.openingWindow;
   const owRow=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
-    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t1);font-weight:600;cursor:pointer"><input type="checkbox" id="tr_ow" ${ow?'checked':''}> Opening window (every phase)</label>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t1);font-weight:600;cursor:pointer"><input type="checkbox" id="tr_ow" ${ow?'checked':''}> Opening window (every phase or round)</label>
     <div style="font-size:12.5px;color:var(--t2);margin-top:8px;line-height:1.7"><span>Start each phase with a timer of</span> ${dayInp('tr_owd',ow?ow.days:7)} <span>days. It counts down in days + hours, continuously — bids do <strong>not</strong> reset it — until <strong>${(st[0]||{}).hours||48} hours</strong> remain. From then on it shows hours only and every bid change resets it per the rules above. Applies whenever a phase is begun.</span></div>
     ${(ow&&ow.days*24<=((st[0]||{}).hours||48))?`<div style="margin-top:6px;font-size:12px;color:var(--red)">⚠️ This window (${ow.days} day${ow.days!==1?'s':''} = ${ow.days*24}h) is not longer than the ${(st[0]||{}).hours||48}h starting reset, so it has no effect — bids reset the timer from the start. Set more days than ${Math.ceil(((st[0]||{}).hours||48)/24)} to use it.</div>`:''}
   </div>`;
@@ -10778,7 +10798,7 @@ window.toggleTimerEnabled=function(){
       let payload={enabled:nv,lastChange:nv?timerData.lastChange:null};
       if(nv&&!timerData.lastChange){
         const owr=getTimerRules().openingWindow;
-        const began=(phasesData.phaseBeganAt||{})[Number(phasesData.currentPhase||1)];
+        const began=_windowStartMs(); // [322 · P-2] retro-arm from the open ROUND's start in Phase 4 (L8 appendix)
         if(owr&&began
            &&(owr.days*86400000-(Date.now()-began))>stage0Hours()*3600000){
           payload={enabled:true,lastChange:began,durationHours:owr.days*24};
@@ -10803,8 +10823,13 @@ window._reopenCommit=async function(){
   const _n=Date.now();
   const owr=getTimerRules().openingWindow;
   const payload={biddingClosed:false};
-  if(timerData?.enabled===true){ payload.lastChange=_n; payload.durationHours=openingWindowActive()&&owr?owr.days*24:timerResetHours(timerPhaseStartMs(),_n); }
-  try{ await setDoc(timerRef,payload,{merge:true}); toast('↩ '+_phaseWindowLabel(cur)+' bidding reopened','ok'); }
+  // [322 · O-1] A FRESH ROUND arms like a phase: Start Round stamped the round and nothing has armed the countdown
+  // since (lastChange predates the stamp) → opening window if configured, else the starting reset. A later reopen
+  // inside the same round keeps today's re-arm. Phases 1–3 never enter this branch (no stamp).
+  const _ws=_windowStartMs();
+  const _freshRound=cur===4&&!!((phasesData.p4RoundBeganAt||{})[Number(phasesData.p4Round||1)])&&!(Number(timerData?.lastChange)>=_ws);
+  if(timerData?.enabled===true){ payload.lastChange=_n; payload.durationHours=_freshRound?(owr?owr.days*24:timerResetHours(_n,_n)):(openingWindowActive()&&owr?owr.days*24:timerResetHours(timerPhaseStartMs(),_n)); }
+  try{ await setDoc(timerRef,payload,{merge:true}); toast((_freshRound&&timerData?.enabled===true)?('▶ '+_phaseWindowLabel(cur)+' — bidding is open ('+(owr?('opening window: '+owr.days+' days, no timer resets until '+stage0Hours()+'h remain'):('timer reset to '+stage0Hours()+'h'))+')'):('↩ '+_phaseWindowLabel(cur)+' bidding reopened'),'ok'); }
   catch(e){ toast('Could not reopen bidding — '+(e?.message||e),'err'); }
 };
 // [build 263] The "reopen without changing locks" override was removed. Smart Lock (phases 1-3)
