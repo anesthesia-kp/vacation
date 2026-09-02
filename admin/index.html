@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 319;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 321;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -6819,7 +6819,32 @@ window.completeP4Round=function(){
       const _i2d=_i2DisqualifiedSet();
       for(const wk of Object.keys(apSnap)){ if(Array.isArray(apSnap[wk])) apSnap[wk]=apSnap[wk].filter(u=>snap[u]&&snap[u][wk]!==undefined&&_isScorableBid(snap[u][wk])&&!_i2d.has(u+'|'+wk)); }
       for(const wk of Object.keys(denSnap)){ if(Array.isArray(denSnap[wk])) denSnap[wk]=denSnap[wk].filter(u=>snap[u]&&snap[u][wk]!==undefined); }
+      // [321 · R-1] Freeze this ROUND's FTE header exactly as Complete Phase freezes a phase's (the block
+      // above completePhase's _snapPayload, copied with one change). A round archive carried no fteHead, so
+      // the Round-N report and the A/D "Round N (locked)" card re-read TODAY's cap and the LIVE engine —
+      // raising a week during Round 3 moved the Round 1 document, and a Round-2 projected winner was counted
+      // in Round 1's header (L4 F1 · L5 F-2 · VB §1). The ONE change: the cumulative here is phases 1–3 PLUS
+      // every EARLIER round PLUS this round's own approvals — every key below this round's fractional key
+      // (3.0N) in _cpWithRounds(), all announced by construction (Start Round N needs Round N-1's results
+      // sent) — valued at the FTE and capacity in force right now. Same field names as a phase's, so
+      // phaseFteHeader reads both alike; a round archived before 321 has no fteHead and falls to the
+      // backfill there, never throws.
+      const fteHeadSnap={}, fteHeadPhaseSnap={};
+      { const cpNow=Object.fromEntries(Object.entries(_cpWithRounds()).filter(([k])=>Number(k)<Number(_p4RoundKey(N))));
+        mondays.forEach(d=>{ const wk=dateKey(d);
+          const cumSet=new Set(), priorSet=new Set();
+          for(const ph of Object.keys(cpNow)){ const arr=cpNow[ph]?.approvals?.[wk]; if(Array.isArray(arr)) arr.forEach(u=>{cumSet.add(u); priorSet.add(u);}); }
+          const a=apSnap[wk]; if(Array.isArray(a)) a.forEach(u=>cumSet.add(u));
+          const ownSet=new Set([...(Array.isArray(a)?a:[])].filter(u=>!priorSet.has(u)));
+          let cf=0; cumSet.forEach(u=>{cf+=getUserFTE(u);});
+          let of=0; ownSet.forEach(u=>{of+=getUserFTE(u);});
+          const cap=getSlots(wk); const R=x=>Math.round(x*10)/10;
+          fteHeadSnap[wk]={approved:R(cf), available:R(cap-cf), cap};
+          fteHeadPhaseSnap[wk]={approved:R(of), available:R(cap-of), cap};
+        });
+      }
       const _payload={completedAt:Date.now(),approvals:apSnap,denials:denSnap,schedule:snap,
+        fteHead:fteHeadSnap, fteHeadPhase:fteHeadPhaseSnap, // [321 · R-1] frozen CUMULATIVE / ROUND-OWN header per week (immutable)
         ...(typeof serializeProjections==='function'?{projections:serializeProjections()}:{})}; // [295 · DB-1 · §71] the owner's look-back rule: bid + PROJECTION + result — rounds now archive all three, like phases (typeof = extracted-test sandbox convention; always present in the real page)
       // Stage ADMIN-ONLY (privacy, H6 lineage): the archive publishes when results are sent.
       try{ await setDoc(phaseStagingRef,{pendingP4Rounds:{[N]:_payload}},{merge:true}); }
@@ -7248,16 +7273,18 @@ function finalFteForWeek(wk, apPre){ // L-6: accept precomputed approvals to avo
 // Approvals reset each phase (see _commitBeginPhase), so each completed phase's stored
 // approvals are its own new winners; the cumulative is the union through phase N.
 function phaseFteHeader(phaseN, wk){
-  const cp=phasesData.completedPhases||{};
-  const snap=cp[phaseN]||{};
+  // [321 · R-1] Rounds fold in under fractional keys (3.01, 3.02, …) and now carry their own frozen header,
+  // so read the MERGED map: a round key was never in completedPhases, so a round report always fell to the
+  // backfill at today's cap. Integer keys resolve exactly as before (perPhaseApprovedList is untouched).
+  const cp=_cpWithRounds(); const snap=cp[phaseN]||{};
   const cumF = snap.fteHead && snap.fteHead[wk];
   const phF  = snap.fteHeadPhase && snap.fteHeadPhase[wk];
   if(cumF && phF) return {cum:cumF, phase:phF};
   const cumSet=new Set(), priorSet=new Set();
   for(const p of Object.keys(cp)){
-    const n=Number(p); if(n>phaseN) continue;
+    const n=Number(p); if(n>Number(phaseN)) continue; // [321 · R-1] numeric — a round key arrives as the string '3.01'
     const arr=cp[p]?.approvals?.[wk];
-    if(Array.isArray(arr)) arr.forEach(u=>{ cumSet.add(u); if(n<phaseN) priorSet.add(u); });
+    if(Array.isArray(arr)) arr.forEach(u=>{ cumSet.add(u); if(n<Number(phaseN)) priorSet.add(u); });
   }
   const ownSet=new Set([...cumSet].filter(u=>!priorSet.has(u)));
   const cap=getSlots(wk); const R=x=>Math.round(x*10)/10;
@@ -7375,6 +7402,12 @@ function bidsByWeekModel(scope, includeEmpty){
         // [319 · R-2] the open round's own bids read P4:Rn too — never a bare P4 (§152)
         bpLabel=(cur===4&&(_archRound!==null||Number(bp)===4))?_bidPhaseLabel(bp,_archRound):null;
       }
+      // [321 · R-3] Between ✓ Complete Phase N and ▶ Begin Phase N+1 the finished phase is still `cur`, so
+      // `bp<cur` said "open" and the row was re-projected LIVE — lowering capacity in that gap (where the owner
+      // says he will) relabelled an approved winner's projection UNDER REVIEW / LOSE in the current/all report
+      // and its exports (L5 F-1 · VB §3). The archive is in the merged view from the moment Complete Phase
+      // succeeds (staged ∪ published), so read it. Open phases: completedPhases[cur] never exists → bp<cur.
+      const _closedPh=bp<cur||(bp===cur&&!!(phasesData.completedPhases||{})[cur]);
       let outcome, projected;
       if(!snapMode&&_archRound!==null){
         const ra=(phasesData.p4Rounds||{})[_archRound]||{};
@@ -7386,7 +7419,7 @@ function bidsByWeekModel(scope, includeEmpty){
         // decided it -- a row reading 'winning' for a bid its round recorded as 'review'. Same
         // family as D2 and F-9. Ask the round.
         projected=_recProj(_p4RoundKey(_archRound),wk,u);
-      } else if(bp<cur){
+      } else if(_closedPh){ // [321 · R-3] was bp<cur
         const phSnap=cpAll[lockedRound!==null?lockedKey:bp]||{};
         const phAp=Array.isArray(phSnap.approvals?.[wk])?phSnap.approvals[wk]:[];
         const phDen=Array.isArray(phSnap.denials?.[wk])?phSnap.denials[wk]:[];
@@ -7409,7 +7442,7 @@ function bidsByWeekModel(scope, includeEmpty){
       // or once its phase completed (every bid is decided before completion).
       // Undecided current-phase bids show a dash in the Result column; their
       // status lives in the Projected column instead.
-      const decided=bp<cur||outcome==='approved'||outcome==='denied';
+      const decided=_closedPh||outcome==='approved'||outcome==='denied'; // [321 · R-3] was bp<cur
       bids.push({user:u,bid:bidLblAdmin(p),phase:bpLabel||bp,outcome,projected,decided,score:pScore(p)});
     }
     // ── [§149] SCOPE 'all' MUST SHOW EVERY BID EVER PLACED — INCLUDING THE ONES THE PHASE
@@ -7481,7 +7514,7 @@ function bidsByWeekModel(scope, includeEmpty){
     // excluded here; its effect is already in the cumulative line).
     let wkFte, wkByPhase;
     if(snapMode&&lockedPhase!==null){ wkFte=phaseFteHeader(lockedPhase,wk).cum; wkByPhase=perPhaseApprovedList(wk,lockedPhase,false); }
-    else if(snapMode){ wkFte=finalFteForWeek(wk, ap); wkByPhase=perPhaseApprovedList(wk,Number(phasesData.currentPhase||1)-1,false); } // [256] round scope: live FTE header (rounds have no frozen header)
+    else if(snapMode){ wkFte=phaseFteHeader(lockedKey,wk).cum; wkByPhase=perPhaseApprovedList(wk,Number(phasesData.currentPhase||1)-1,false); } // [321 · R-1] round scope: the ROUND's frozen header (was finalFteForWeek — today's cap and the live engine under a "Round N (completed)" label). A round archived before 321 has no fteHead and gets the same backfill a legacy phase gets: archived approvals through that round at today's cap — never a live projected winner.
     else { wkFte=finalFteForWeek(wk, ap); wkByPhase=perPhaseApprovedList(wk,Number(phasesData.currentPhase||1)-1,false); } // L-6: reuse the ap computed once above
     groups.push({wk,wn,date:`${MS[d.getMonth()]} ${d.getDate()}`,type:weekTypeLabel(wk,d),bids,fte:wkFte,byPhase:wkByPhase});
   });
@@ -8170,6 +8203,12 @@ window.renderAppDenials=function(){
       // only the OPEN round's working set (earlier rounds' winners re-listed forever before
       // this); a completed round's view shows exactly that round's decisions.
       const _arch=(cur===4)?_p4ArchivedDecisionRound(u,wk):null;
+      // [321 · R-3] D3's rule (the row lock below) applied to the row's RESULT and PROJECTION: a phase is closed
+      // when it is earlier than the current one OR itself completed. Between Complete Phase and Begin Phase the
+      // old `bidPh<cur` fell to the live engine, so lowering capacity there showed an approved winner as
+      // "proj: UNDER REVIEW ✓ APPROVED" (L5 F-1 · VB §3). The archive is in the merged view from the moment
+      // Complete Phase succeeds. Open phases are unchanged: completedPhases[cur] never exists for one.
+      const _closedPh=bidPh<cur||(bidPh===cur&&!!(phasesData.completedPhases||{})[cur]);
       const matchesPhase = phaseFilter==='all' ? true
         : (mm ? bidPh===Number(mm[1])
         : (mr ? _arch===Number(mr[1])
@@ -8179,7 +8218,7 @@ window.renderAppDenials=function(){
       if(_arch!==null){
         const ra=(phasesData.p4Rounds||{})[_arch]||{};
         outcome=(Array.isArray(ra.approvals?.[wk])&&ra.approvals[wk].includes(u))?'approved':'denied';
-      } else if(bidPh<cur){
+      } else if(_closedPh){ // [321 · R-3] was bidPh<cur
         // Historical bid — resolve from that phase's snapshot
         const phSnap=phasesData.completedPhases?.[bidPh]||{};
         const phAp=Array.isArray(phSnap.approvals?.[wk])?phSnap.approvals[wk]:[];
@@ -8199,7 +8238,7 @@ window.renderAppDenials=function(){
       // order — exactly the completed-phase mis-ordering the owner reported. The report already
       // reconstructs it from the phase snapshot; do the same, cached per render.
       let proj;
-      if(bidPh<cur||_arch!==null){
+      if(_closedPh||_arch!==null){ // [321 · R-3] was bidPh<cur — _adSnapProj(bidPh) is the recorded projection
         // [312 · D2 · owner-found] An ARCHIVED ROUND row used to ask for phase 4's projection.
         // Its archive lives under the round's own key in _cpWithRounds (_p4RoundKey), and while
         // Phase 4 is still running there is nothing under key 4 at all — so every P4:Rn row fell
@@ -8215,7 +8254,7 @@ window.renderAppDenials=function(){
       // drawn at all, and they were still asking the LIVE decision docs, which a closed phase
       // no longer answers for. So every historical row showed its PROJECTION and no result.
       // Derive them from `outcome`, exactly as the archived-round branch has always done.
-      const _hist=_arch!==null||bidPh<cur;
+      const _hist=_arch!==null||_closedPh; // [321 · R-3] was bidPh<cur
       entries.push({wk,user:u,priority:p,outcome,phase:_arch!==null?('4:R'+_arch):bidPh,phaseLbl:_bidPhaseLabel(bidPh,_arch),approved:_hist?outcome==='approved':approvedHere.includes(u),denied:_hist?outcome==='denied':deniedHere.includes(u),proj,_arch});
     }
     // ── [§150] The loop above reads the LIVE schedule, which §71's boundary scrub has emptied
@@ -8351,6 +8390,13 @@ window.renderAppDenials=function(){
       const m=wkDate(wk);
       const a=ap[wk]||{fteWon:0};
       const cap=getSlots(wk);
+      // [321 · R-1] A LOCKED view — "Phase N (locked)" or "Phase 4: Round N (locked)" — is a document of record,
+      // so its card header is the FTE line frozen when that phase or round completed (phaseFteHeader: fteHead,
+      // or the backfill for an archive older than the freeze). It printed today's cap and the live ledger under
+      // a locked label (VB §1: "Phase 3 (locked)" said Cap 2 while Phase 3's own record said cap 1). The word is
+      // "Approved", not "Winning": a closed window has decisions, not projections. Live views print today's line.
+      const _hmm=String(phaseFilter).match(/^ph(\d+)$/), _hmr=String(phaseFilter).match(/^p4r(\d+)$/);
+      const _fh=(_hmm||_hmr)?phaseFteHeader(_hmm?Number(_hmm[1]):_p4RoundKey(_hmr[1]),wk).cum:null;
       // [300 · H-1] "Remaining" is a CAPACITY answer, so it comes from the ledger. "Winning"
       // below stays on the frozen projection, which is what it means (§77/§82b).
       const remaining=weekLedger(wk,ap).remainingFte;
@@ -8365,7 +8411,7 @@ window.renderAppDenials=function(){
             <td colspan="4">
               <div class="dr-card-head-info">
                 <div class="dr-week">${wLabel(m)} <span style="color:var(--t2);font-size:11px">(${wRange(m)})</span></div>
-                <div style="font-size:11px;color:var(--t2)">Cap: ${cap} · Winning: ${a.fteWon} · <span style="color:${remaining<0?'var(--red)':'var(--t2)'}">Remaining: ${remaining}</span></div>
+                <div style="font-size:11px;color:var(--t2)">${_fh?`Cap: ${_fh.cap} · Approved: ${_fh.approved} · <span style="color:${_fh.available<0?'var(--red)':'var(--t2)'}">Remaining: ${_fh.available}</span> <span style="color:var(--t3)">(as of completion)</span>`:`Cap: ${cap} · Winning: ${a.fteWon} · <span style="color:${remaining<0?'var(--red)':'var(--t2)'}">Remaining: ${remaining}</span>`}</div>
               </div>
             </td>
             <td><button class="btn btn-ghost" style="padding:2px 8px;font-size:10px" onclick="toggleWeekPriorPhase(this)">📋 Prior Phase Results</button></td>
@@ -9342,6 +9388,11 @@ async function _reconcileStaleDenials(wk){
 // it just has to be a seen choice. Returns [{wk,user,proj,decision}].
 function _allStaleDenials(){
   const out=[];
+  // [321 · R-3] A COMPLETED current phase has no live decisions to contradict — its record is the archive,
+  // and the engine under a since-lowered cap would only manufacture "projects LOSE but is APPROVED" for a
+  // winner the archive already recorded (L5 F-1, cap 0). The Complete Phase dialog is unaffected: it reads
+  // this while the phase is still UNcompleted, and its action-time gate refuses on completedPhases[cur].
+  if((phasesData.completedPhases||{})[Number(phasesData.currentPhase||1)]) return out;
   try{
     const nat=computeApprovals(true);
     mondays.forEach(d=>{ const wk=dateKey(d);
@@ -9365,6 +9416,7 @@ function _allStaleDenials(){
 // week's capacity and can push a legitimately-winning colleague out.
 function _allStaleApprovals(){
   const out=[];
+  if((phasesData.completedPhases||{})[Number(phasesData.currentPhase||1)]) return out; // [321 · R-3] see _allStaleDenials
   try{
     const nat=computeApprovals(true);
     mondays.forEach(d=>{ const wk=dateKey(d);
