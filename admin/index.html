@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 324;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 325;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -165,6 +165,7 @@ code,kbd,.mono{font-family:'Geist Mono',monospace}
 /* Pills */
 .pill{display:inline-flex;align-items:center;padding:2px 7px;font-size:11px;font-weight:600;font-family:'Geist Mono',monospace}
 .p-green{background:var(--green-d);color:var(--green)}.p-red{background:var(--red-d);color:var(--red)}.p-blue{background:var(--blue-d);color:var(--blue)}.p-yellow{background:var(--yellow-d);color:var(--yellow)}.p-orange{background:rgba(249,115,22,.1);color:var(--orange)}
+.ub-chip{display:inline-block;font-family:'Geist Mono',monospace;font-weight:700;font-size:11.5px;padding:2px 8px;border-radius:7px;margin:2px;border:1px solid transparent;cursor:default}.ub-rem{background:var(--green-d);color:var(--green);border-color:rgba(34,197,94,.3)}.ub-won{background:var(--red-d);color:var(--red);border-color:rgba(239,68,68,.3)}.ub-live{background:var(--yellow-d);color:var(--yellow);border-color:rgba(234,179,8,.35)}
 
 /* Table */
 table{width:100%;border-collapse:collapse;font-size:12px}
@@ -440,6 +441,7 @@ thead th{color:var(--t2)}
       <div class="nav-section">People</div>
       <a onclick="nav('users',this)">👤 Users</a>
       <a onclick="nav('lowerings',this)">🔽 Bid Lowerings</a>
+      <a onclick="nav('userbids',this)">🎟️ User Bids</a>
       <a onclick="nav('whitelist',this)">📌 Whitelist Tracker</a>
       <div class="nav-section">Settings</div>
       <a onclick="nav('slots',this)">📆 FTE Availability</a>
@@ -806,6 +808,18 @@ thead th{color:var(--t2)}
         <div style="overflow-x:auto;max-height:480px;overflow-y:auto;border:1px solid var(--b1)">
           <table><thead id="blUsageHead"></thead><tbody id="blUsageBody"></tbody></table>
         </div>
+      </div>
+    </div>
+
+    <!-- USER BIDS [325 · §178] — READ-ONLY: which bid numbers (1–10) each user has used and which
+         remain; a used number is WON (gone for good) or LIVE (tied up by a current-phase bid). The
+         rule is a port of the staff site's bidPoolInfo and test-325 proves the two agree. Reads
+         only what the page already holds — no listener, no Firestore read, no write. -->
+    <div class="panel" id="panel-userbids">
+      <div class="page-head"><div class="page-title">🎟️ User Bids</div><div class="page-sub">Which bid numbers each user has left. A number is used by a <strong>live bid this phase</strong> (it comes back next phase if the bid doesn't win — denied bids included, until the phase closes) or by a <strong>week already won</strong> (gone for good). NP bids never use a number. Same rule the users see on their own page; hover a used number for the week it's on.</div></div>
+      <div id="ubSummary" style="margin-bottom:12px"></div>
+      <div style="overflow-x:auto;max-height:640px;overflow-y:auto;border:1px solid var(--b1)">
+        <table><thead><tr><th>Initials</th><th>Full Name</th><th>Remaining</th><th>Used</th><th style="text-align:center">NP bids this phase</th><th style="text-align:center">Left</th></tr></thead><tbody id="ubBody"></tbody></table>
       </div>
     </div>
 
@@ -2104,6 +2118,7 @@ window.nav = function(id, el) {
   if(id==='users'&&typeof renderUsersCombined==='function') renderUsersCombined();
   if(id==='whitelist'&&typeof renderWhitelistTracker==='function') renderWhitelistTracker();
   if(id==='lowerings'&&typeof renderBidLowerings==='function') renderBidLowerings(); // [build 268 · BL]
+  if(id==='userbids'&&typeof renderUserBids==='function') renderUserBids(); // [325 · §178]
 };
 
 // ── Helpers ──
@@ -3300,6 +3315,7 @@ function refreshAll(){
     if(isOn('changelog')) renderChangelog();
     if(isOn('users') && typeof renderUsersCombined==='function') renderUsersCombined();
     if(isOn('slots') && typeof renderSlotsPanel==='function') renderSlotsPanel();
+    if(isOn('userbids') && typeof renderUserBids==='function') renderUserBids(); // [325 · §178]
     updateStats();
     syncControls();
   });
@@ -11205,6 +11221,82 @@ window.saveBidLowerings=async function(){
     onCancel:()=>renderBidLowerings()
   });
 };
+// ── [325 · §178] User Bids — a READ-ONLY per-user view of bid numbers used / remaining ──────────
+// THE RULE is a port of the staff site's bidPoolInfo (index.html), so the admin never sees a
+// different answer than the user does: a number is used by any current-phase bid — denied ones
+// included, they stay tied up until the phase closes — or by a week WON in an earlier phase; NP
+// never uses a number; a Phase 4 round win stays on the live board and so counts. On top of that
+// rule this page CLASSIFIES each used number: WON (an earlier-phase approval, or a Phase 4 round
+// approval — gone for good) or LIVE (a current-phase bid — it returns if the bid does not win).
+// A phase that is completed but not yet begun-past still counts as current, exactly as on the
+// staff page, so its approvals show as LIVE until the next phase begins.
+// test-325-user-bids.mjs runs this and the staff function on the same fixtures and fails if the
+// used / remaining / NP answers differ. Reads only what the page already holds (scheduleData,
+// phasesData, names, usernamesData) — no listener, no Firestore read, no write.
+function _ubNums(p){ return p==="NP"?[]:(Array.isArray(p)?p:[p]).map(Number).filter(n=>!isNaN(n)); }
+function adminBidPoolInfo(u){
+  const cur=Number(phasesData.currentPhase||1);
+  const won=new Map();   // number → week key it was won on
+  const live=new Map();  // number → week key of the current-phase bid holding it
+  let npCount=0;
+  const cp=phasesData.completedPhases||{};
+  for(const ph of Object.keys(cp)){
+    if(Number(ph)>=cur) continue;
+    const ap=cp[ph]?.approvals||{}; const bids=cp[ph]?.schedule?.[u]||{};
+    for(const wk of Object.keys(bids)){
+      if(!(Array.isArray(ap[wk])&&ap[wk].includes(u))) continue;
+      _ubNums(bids[wk]).forEach(n=>{ if(!won.has(n)) won.set(n,wk); });
+    }
+  }
+  const uw=scheduleData[u]||{};
+  for(const wk of Object.keys(uw)){
+    const p=uw[wk]; if(p===undefined||!isCurrentPhaseBidAdmin(u,wk)) continue;
+    if(p==="NP"){ npCount++; continue; }
+    const roundWin=cur===4&&p4RoundWinnersOn(wk).includes(u);
+    _ubNums(p).forEach(n=>{ if(roundWin){ if(!won.has(n)) won.set(n,wk); } else if(!live.has(n)) live.set(n,wk); });
+  }
+  for(const n of won.keys()) live.delete(n); // a number is one thing: won outranks live
+  const used=[...new Set([...won.keys(),...live.keys()])].sort((a,b)=>a-b);
+  const all=[1,2,3,4,5,6,7,8,9,10]; // the pool, same literal as the staff page
+  const remaining=all.filter(n=>!won.has(n)&&!live.has(n));
+  return {used,remaining,won,live,npCount};
+}
+function renderUserBids(){
+  const body=document.getElementById('ubBody'), sum=document.getElementById('ubSummary');
+  if(!body) return;
+  const roster=[...(names||[])].sort();
+  const cur=Number(phasesData.currentPhase||1);
+  const chip=(n,kind,title)=>'<span class="ub-chip ub-'+kind+'"'+(title?' title="'+esc(title)+'"':'')+'>'+n+'</span>';
+  const none=t=>'<span style="color:var(--t3);font-size:11.5px">'+t+'</span>';
+  let low=0, out=0, npTotal=0;
+  const rows=roster.map(u=>{
+    const p=adminBidPoolInfo(u);
+    if(p.remaining.length<=2) low++;
+    if(!p.remaining.length) out++;
+    npTotal+=p.npCount;
+    const rem=p.remaining.length?p.remaining.map(n=>chip(n,'rem')).join(''):none('none');
+    const used=p.used.length?p.used.map(n=>p.won.has(n)
+      ?chip(n,'won','Won on the week of '+fmtWk(p.won.get(n))+' — gone for good')
+      :chip(n,'live','Live bid on the week of '+fmtWk(p.live.get(n))+' — comes back if it does not win')).join(''):none('none yet');
+    return '<tr><td class="mono"><strong>'+esc(u)+'</strong></td><td>'+esc(usernamesData?.[u]||'')+'</td>'
+      +'<td>'+rem+'</td><td>'+used+'</td>'
+      +'<td style="text-align:center">'+(p.npCount||'—')+'</td>'
+      +'<td style="text-align:center;font-weight:700;color:'+(p.remaining.length<=2?'var(--red)':'var(--t1)')+'">'+p.remaining.length+'</td></tr>';
+  });
+  body.innerHTML=rows.join('')||'<tr><td colspan="6" style="text-align:center;color:var(--t2);padding:20px">No users on the roster yet.</td></tr>';
+  if(sum){
+    const phaseTxt=!phasesData.phase1Started?'Before Phase 1 — every user still has all ten numbers.'
+      :(cur===4?'Phase 4, Round '+Number(phasesData.p4Round||1):'Phase '+cur);
+    sum.innerHTML='<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;background:var(--card);border:1px solid var(--b1);border-radius:10px;padding:12px 14px">'
+      +'<div style="font-size:12px;font-weight:600;color:var(--t1)">'+esc(phaseTxt)+'</div>'
+      +'<div style="font-size:22px;font-weight:800;color:'+(low?'var(--red)':'var(--t3)')+'">'+low+'<span style="font-size:12px;font-weight:600;color:var(--t2)"> running low (2 or fewer left)</span></div>'
+      +'<div style="font-size:22px;font-weight:800;color:'+(out?'var(--red)':'var(--t3)')+'">'+out+'<span style="font-size:12px;font-weight:600;color:var(--t2)"> with none left</span></div>'
+      +'<div style="font-size:12px;color:var(--t2)">'+roster.length+' users · '+npTotal+' NP bid'+(npTotal!==1?'s':'')+' this phase</div>'
+      +'<div style="margin-left:auto;font-size:11.5px;color:var(--t2)"><span class="ub-chip ub-rem">n</span> remaining &nbsp;<span class="ub-chip ub-won">n</span> won — gone for good &nbsp;<span class="ub-chip ub-live">n</span> live bid this phase — returns if it loses</div>'
+      +'</div>';
+  }
+}
+window.renderUserBids=renderUserBids;
 // ── Whitelist Tracker [2026-07-26] ───────────────────────────────────────────
 // Self-contained: reads the roster (names/usernames/loginEmails) + the whitelistConfirm doc,
 // renders who has self-confirmed adding the auction sender to contacts, and sends the ask/reminder
