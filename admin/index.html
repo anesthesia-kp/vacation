@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 326;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 327;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -165,7 +165,7 @@ code,kbd,.mono{font-family:'Geist Mono',monospace}
 /* Pills */
 .pill{display:inline-flex;align-items:center;padding:2px 7px;font-size:11px;font-weight:600;font-family:'Geist Mono',monospace}
 .p-green{background:var(--green-d);color:var(--green)}.p-red{background:var(--red-d);color:var(--red)}.p-blue{background:var(--blue-d);color:var(--blue)}.p-yellow{background:var(--yellow-d);color:var(--yellow)}.p-orange{background:rgba(249,115,22,.1);color:var(--orange)}
-.ub-chip{display:inline-block;font-family:'Geist Mono',monospace;font-weight:700;font-size:11.5px;padding:2px 8px;border-radius:7px;margin:2px;border:1px solid transparent;cursor:default}.ub-rem{background:var(--green-d);color:var(--green);border-color:rgba(34,197,94,.3)}.ub-won{background:var(--red-d);color:var(--red);border-color:rgba(239,68,68,.3)}.ub-live{background:#fff4bf;color:#5c4300;border-color:#e3c65a}.ub-chip.ub-key{font-family:inherit;font-weight:600;cursor:default}
+.ub-chip{display:inline-block;font-family:'Geist Mono',monospace;font-weight:700;font-size:11.5px;padding:2px 8px;border-radius:7px;margin:2px;border:1px solid transparent;cursor:default}.ub-rem{background:var(--green-d);color:var(--green);border-color:rgba(34,197,94,.3)}.ub-won{background:var(--red-d);color:var(--red);border-color:rgba(239,68,68,.3)}.ub-live{background:#fff4bf;color:#5c4300;border-color:#e3c65a}.ub-held{background:rgba(126,147,165,.16);color:var(--t2);border-color:rgba(126,147,165,.45);text-decoration:line-through}.ub-act{cursor:pointer}.ub-act:hover{filter:brightness(.92)}.ub-chip.ub-key{font-family:inherit;font-weight:600;cursor:default}
 
 /* Table */
 table{width:100%;border-collapse:collapse;font-size:12px}
@@ -816,7 +816,7 @@ thead th{color:var(--t2)}
          rule is a port of the staff site's bidPoolInfo and test-325 proves the two agree. Reads
          only what the page already holds — no listener, no Firestore read, no write. -->
     <div class="panel" id="panel-userbids">
-      <div class="page-head"><div class="page-title">🎟️ User Bids</div><div class="page-sub">Which bid numbers each user has left. A number is used by a <strong>live bid this phase</strong> (it comes back next phase if the bid doesn't win — denied bids included, until the phase closes) or by a <strong>week already won</strong> (gone for good). NP bids never use a number. Same rule the users see on their own page; hover a used number for the week it's on.</div></div>
+      <div class="page-head"><div class="page-title">🎟️ User Bids</div><div class="page-sub">Which bid numbers each user has left. A number is used by a <strong>live bid this phase</strong> (it comes back next phase if the bid doesn't win — denied bids included, until the phase closes) or by a <strong>week already won</strong> (gone for good). NP bids never use a number. Same rule the users see on their own page; hover a used number for the week it's on. <strong>To take a number away from a user, click one of their green numbers</strong> — it is withheld until you click it again to release it; the user just sees it gone.</div></div>
       <div id="ubSummary" style="margin-bottom:12px"></div>
       <div style="overflow-x:auto;max-height:640px;overflow-y:auto;border:1px solid var(--b1)">
         <table><thead><tr><th>Initials</th><th>Full Name</th><th>Remaining</th><th>Used</th><th style="text-align:center">NP bids this phase</th></tr></thead><tbody id="ubBody"></tbody></table>
@@ -1387,6 +1387,7 @@ const welcomeLogRef = doc(db,"vacations","welcomeLog"); // {sent:{<addrKey>:true
 // Current-window usage: {USER:{used:n}} — user-writable own-key-only (isBidDoc rules gates:
 // own keys + timer + biddingClosed), cleared wherever worstBids clears (phase/round/reset).
 const bidLoweringsRef = doc(db,"vacations","bidLowerings");
+const bidHoldsRef = doc(db,"vacations","bidHolds"); // [327 · §180] {USER:{"n":{at}}} — numbers withheld from a user by the admin
 // History for the admin tracking table: {p1:{USER:{used:n}},…,p4r2:{…}} — admin-only write.
 const bidLoweringsArchiveRef = doc(db,"vacations","bidLoweringsArchive");
 const passwordsRef = doc(db,"vacations","passcodes");
@@ -1508,6 +1509,7 @@ let _phasesReady=false; // [build 222] set by the phases snapshot; gates ARMING 
 let _slotsReady=false, _approvalsReady=false, _deniedReady=false, _scheduleReady=false;
 let changesLog=[], changesDecisionsLog=[], changesResetAt=0, adminSettings={emailNotifsEnabled:true}, timerData={enabled:false,lastChange:null};
 let bidLoweringsData={}, bidLoweringsArchiveData={}; // [build 268 · BL]
+let bidHoldsData={}; // [327 · §180]
 function getReviewThreshold(){ const raw=adminSettings?.reviewThreshold; if(raw===undefined||raw===null)return 0.5; const n=Number(raw); if(isNaN(n))return 0.5; const clamped=Math.max(0,Math.min(2,n)); return Math.round(clamped*10)/10; }
 // Returns the FTE of the lowest-FTE user in the roster. Used by the auto-lock rule.
 function getLowestFTE(){ let m=Infinity; for(const u of names){ const f=getUserFTE(u); if(f<m) m=f; } return m===Infinity?1:m; }
@@ -1895,6 +1897,7 @@ onSnapshot(passwordsRef,snap=>{ passwordsData=snap.exists()?snap.data():{}; cons
 let whitelistConfirmData={};
 onSnapshot(whitelistConfirmRef, snap=>{ whitelistConfirmData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-whitelist'); if(p&&p.classList.contains('on')&&typeof renderWhitelistTracker==='function') renderWhitelistTracker(); if(typeof renderNextStep==='function') renderNextStep(); });
 onSnapshot(bidLoweringsRef, snap=>{ bidLoweringsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-lowerings'); if(p&&p.classList.contains('on')&&typeof renderBidLowerings==='function') renderBidLowerings(); }); // [build 268 · BL]
+onSnapshot(bidHoldsRef, snap=>{ bidHoldsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-userbids'); if(p&&p.classList.contains('on')&&typeof renderUserBids==='function') renderUserBids(); }); // [327 · §180]
 onSnapshot(bidLoweringsArchiveRef, snap=>{ bidLoweringsArchiveData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-lowerings'); if(p&&p.classList.contains('on')&&typeof renderBidLowerings==='function') renderBidLowerings(); }); // [build 268 · BL]
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
   onSnapshot(fteRef, snap=>{ fteData=snap.exists()?snap.data():{}; refreshAll(); });
@@ -3470,7 +3473,7 @@ window.renderLockSummary=renderLockSummary;
 // see decisions mid-phase (privacy rule), and both sites must count the same.
 function isDecisionEntry(e){
   const a=String((e&&(e.action||e.type))||'');
-  return /approve|deny|denied|revoke/i.test(a);
+  return /approve|deny|denied|revoke/i.test(a) || /^admin-(hold|release)$/i.test(String((e&&e.type)||'')); // [327 · §180] hold reasons stay admin-only
 }
 // [CL-1/CL-2] A SYSTEM entry is an admin action that is not a bid change at all — a timer
 // mode change, a restore, a user removal, an FTE edit. adminLog has always written these
@@ -4953,7 +4956,7 @@ window._runSimulationNow=async function(){
     // Weeks the user already won in previous phases — cannot bid on these again
     const priorWonWeeks=new Set();
     // Priority numbers permanently consumed by prior-phase wins
-    const priorUsedPrios=new Set();
+    const priorUsedPrios=new Set((typeof _adminHeldNums==='function')?_adminHeldNums(user):[]); // [327 · RA-9 #7] withheld numbers are unavailable to the simulator too
     const cp=phasesData.completedPhases||{};
     for(const phNum of Object.keys(cp)){
       if(Number(phNum)>=cur) continue;
@@ -5161,7 +5164,7 @@ window.clearEverything=function(){
       openConfirm({
         title:'🚨 Final Confirmation',
         body:`<div style="font-size:15px;font-weight:700;color:var(--red);text-align:center">Are you absolutely sure?</div>
-              <div style="text-align:center;margin-top:10px;color:var(--t2);font-size:13px">This will remove all bids, all admin approvals, all denials, all phase history, and all locks for every user. There is no recovery.</div>
+              <div style="text-align:center;margin-top:10px;color:var(--t2);font-size:13px">This will remove all bids, all admin approvals, all denials, all phase history, all locks, and all withheld bid numbers for every user. There is no recovery.</div>
               <div style="text-align:center;margin-top:12px">
                 <div style="font-size:12px;color:var(--t2);margin-bottom:6px">Type <strong style="color:var(--red)">RESET</strong> to confirm:</div>
                 <input type="text" id="resetTypeInput" class="inp" style="width:140px;text-align:center;text-transform:uppercase" autocomplete="off">
@@ -5209,6 +5212,7 @@ window.clearEverything=function(){
               // [build 268 · BL] New auction → fresh lowering usage AND fresh history.
               // The ALLOWANCE (adminSettings.bidLowerings) survives reset like the floors.
               ...(typeof bidLoweringsRef!=='undefined'?[setDoc(bidLoweringsRef,{}),setDoc(bidLoweringsArchiveRef,{})]:[]),
+              ...(typeof bidHoldsRef!=='undefined'?[setDoc(bidHoldsRef,{})]:[]), // [327 · §181] a hold lives within one auction cycle — a new auction starts with none
             ]);
             // No adminLog here — logging the wipe would itself put the fresh
             // change counters at 1 instead of 0.
@@ -9481,8 +9485,9 @@ function _adminCountedWeeks(u,exceptWk){
 }
 // Bid numbers this user spent by WINNING in earlier phases — permanently consumed
 // (admin twin of getPriorPhaseUsedPriorities). Losses/denials release their number.
+function _adminHeldNums(u){ const h=(typeof bidHoldsData!=='undefined'&&bidHoldsData&&bidHoldsData[u])||{}; return Object.keys(h).map(Number).filter(n=>Number.isInteger(n)&&n>=1&&n<=10); } // [327 · §180] twin of the staff heldBidNums
 function _adminPriorUsedPriorities(u){
-  const out=[]; const cur=Number(phasesData.currentPhase||1); const cp=phasesData.completedPhases||{};
+  const out=(typeof _adminHeldNums==='function')?[..._adminHeldNums(u)]:[]; const cur=Number(phasesData.currentPhase||1); const cp=phasesData.completedPhases||{}; // [327 · §180] held numbers are permanently used · typeof: extracted-code sandboxes (build 266 convention)
   for(const ph of Object.keys(cp)){
     if(Number(ph)>=cur) continue;
     const phAp=cp[ph]?.approvals||{}, phSched=cp[ph]?.schedule||{};
@@ -9563,6 +9568,24 @@ function refuseAdminFloor(u,wk,val,why,after){
 }
 // [291 · ES-1] The explanation dialog. Both buttons just dismiss; nothing is ever written
 // from here. `after` = the caller's redraw (same contract as guardAdminBid's onCancel).
+// [327 · §180 · RA-9 #4] A WITHHELD number is a hard refusal on every admin bid-entry path, like a
+// duplicate: the admin's own hold must be released on User Bids first, so a held number is never on
+// a live bid (and never hides behind a yellow chip with no way to release it).
+function _adminHoldFatal(u,val){
+  if(val==='NP') return [];
+  const nums=String(val).split(',').map(p=>parseInt(p.trim(),10)).filter(n=>!isNaN(n));
+  const held=(typeof _adminHeldNums==='function')?_adminHeldNums(u):[];
+  return nums.filter(n=>held.includes(n));
+}
+function refuseAdminHold(u,wk,val,held,after){
+  const _done=()=>{ try{ if(typeof after==='function') after(); else refreshAll(); }catch(_){} };
+  openConfirm({
+    title:'🚫 Withheld number — nothing saved',
+    body:`<div>Bid number${held.length>1?'s':''} <strong>${esc(held.join(', '))}</strong> ${held.length>1?'are':'is'} <strong>withheld from ${esc(u)}</strong> — by you, on the User Bids page.</div>
+          <div class="cmodal-warn" style="margin-top:8px">To place it, release the number on User Bids first (click its grey chip), then enter the bid here.</div>`,
+    okText:'OK', danger:false, onConfirm:_done, onCancel:_done
+  });
+}
 function refuseAdminDup(u,wk,val,clashes,after){
   const _done=()=>{ try{ if(typeof after==='function') after(); else refreshAll(); }catch(_){} };
   const lines=clashes.map(c=>'<li>Bid <strong>'+c.n+'</strong> is already '+esc(u)+"'s bid on <strong>"+esc(wLabel(wkDate(c.wk)))+'</strong> this phase.</li>').join('');
@@ -9619,6 +9642,7 @@ function guardAdminBid(u,wk,val,isNew,proceed,onCancel){
   // precedent) -- in the real page adminDupFatal always exists (same module).
   const _dup=(typeof adminDupFatal==='function')?adminDupFatal(u,wk,String(val)):[];
   if(_dup.length){ refuseAdminDup(u,wk,val,_dup,onCancel); return; }
+  { const _h=(typeof _adminHoldFatal==='function')?_adminHoldFatal(u,String(val)):[]; if(_h.length){ refuseAdminHold(u,wk,val,_h,onCancel); return; } } // [327 · RA-9 #4]
   // [296 · §72] below-floor / NP-off: hard refusal, same contract as duplicates.
   const _flF=(typeof adminFloorFatal==='function')?adminFloorFatal(u,wk,String(val)):null;
   if(_flF){ refuseAdminFloor(u,wk,val,_flF,onCancel); return; }
@@ -9755,6 +9779,7 @@ window._adminChangePriorityRaw=async function(u,wk,val,_atOpen){
   // code test sandboxes only -- in the real page adminDupFatal always exists.
   const _dupR=(typeof adminDupFatal==='function')?adminDupFatal(u,wk,String(val)):[];
   if(_dupR.length){ toast('🚫 Not saved — '+u+' already has bid '+[...new Set(_dupR.map(c=>c.n))].join(', ')+' on another week this phase. A duplicated number makes BOTH weeks lose; change the other week first.','err'); try{ refreshAll(); }catch(_){ } return; }
+  { const _hR=(typeof _adminHoldFatal==='function')?_adminHoldFatal(u,String(val)):[]; if(_hR.length){ toast('🚫 Not saved — '+_hR.join(', ')+' is withheld from '+u+' (release it on User Bids first). Nothing changed.','err'); try{ refreshAll(); }catch(_){ } return; } } // [327 · RA-9 #4]
   // [292 · RA-M1] Phase-identity guard for the manual-edit dialogs: a confirm left open
   // across a phase/round boundary must not re-tag an archived bid as a live new-phase bid
   // (line below stamps bidPhase with the phase CURRENT AT CLICK TIME). Callers pass the
@@ -9873,6 +9898,7 @@ window.adminAddSelection=function(){
   // typeof guard for extracted-code test sandboxes only (build 266 precedent).
   { const _dupA=(typeof adminDupFatal==='function')?adminDupFatal(u,wk,String(pv)):[];
     if(_dupA.length){ refuseAdminDup(u,wk,pv,_dupA); return; } }
+  { const _hA=(typeof _adminHoldFatal==='function')?_adminHoldFatal(u,String(pv)):[]; if(_hA.length){ refuseAdminHold(u,wk,pv,_hA); return; } } // [327 · RA-9 #4]
   // [296 · §72] below-floor / NP-off refused outright — adding OR replacing.
   { const _flA=(typeof adminFloorFatal==='function')?adminFloorFatal(u,wk,String(pv)):null;
     if(_flA){ refuseAdminFloor(u,wk,pv,_flA); return; } }
@@ -9931,6 +9957,7 @@ window.adminAddSelection=function(){
       // cannot see it, and the engine would then score BOTH weeks as no-bid.
       { const _d2=(typeof adminDupFatal==='function')?adminDupFatal(u,wk,String(pv)):[];
         if(_d2.length){ toast('🚫 Not added — '+u+' now has bid '+[...new Set(_d2.map(c=>c.n))].join(', ')+' on another week (it arrived while this dialog was open). Nothing was written.','err'); try{ refreshAll(); }catch(_){ } return; } }
+      { const _h2=(typeof _adminHoldFatal==='function')?_adminHoldFatal(u,String(pv)):[]; if(_h2.length){ toast('🚫 Not added — '+_h2.join(', ')+' is withheld from '+u+' (release it on User Bids first). Nothing was written.','err'); try{ refreshAll(); }catch(_){ } return; } } // [327 · RA-9 #4]
       { const _f2=(typeof adminFloorFatal==='function')?adminFloorFatal(u,wk,String(pv)):null; // [296 · §72]
         if(_f2){ toast('🚫 Not added — the value violates the week\'s floor or the NP-phase rule (§72: absolute). Nothing was written.','err'); try{ refreshAll(); }catch(_){ } return; } }
       const _prev=snapshotSchedule();
@@ -10240,7 +10267,7 @@ function normalizeEntry(c){
   // pill can treat it as its own kind, and keep the raw type so the row can be worded.
   const system=isSystemEntry(c);
   if(system) action='system';
-  return { actor, action, system, type:raw, user:c.user||'—', weekKey:c.weekKey, bidValue:c.bidValue, ts:c.ts };
+  return { actor, action, system, type:raw, user:c.user||'—', weekKey:c.weekKey, bidValue:c.bidValue, ts:c.ts, reason:c.reason }; // [327 · §180] the hold reason survives normalization (found in the browser walk: it was dropped here)
 }
 
 function fmtRelative(ts){
@@ -10272,6 +10299,8 @@ function systemActionText(e){
   if(t==='admin-restore-user') return who?`Admin restored <strong>${who}</strong> from a backup`:'Admin restored a user from a backup';
   if(t==='admin-fte-snap') return 'Admin snapped FTE values to the 0.1 grid';
   if(t==='admin-fte-bulk') return 'Admin bulk-set an FTE value';
+  if(t==='admin-hold') return 'Admin <strong>withheld</strong> bid number <strong>'+esc(String(e.bidValue??''))+'</strong> from <strong>'+who+'</strong>'+(e.reason?' — '+esc(e.reason):''); // [327 · §180]
+  if(t==='admin-release') return 'Admin <strong>released</strong> bid number <strong>'+esc(String(e.bidValue??''))+'</strong> to <strong>'+who+'</strong>'+(e.reason?' — '+esc(e.reason):''); // [327 · §180]
   const words=t.replace(/^admin-/,'').replace(/-/g,' ');
   return `Admin — ${esc(words||'system action')}`;
 }
@@ -10373,7 +10402,7 @@ function renderChangelog(){
         return `<div class="cl-row">
         <div class="cl-time" title="${fmtAbsTime(e.ts)}">${fmtRelative(e.ts)}</div>
         <div class="cl-pills">${actorPill(e)} ${actionPill('system')}</div>
-        <div class="cl-text">${systemActionText(e)}${bidLabel(e.bidValue)}</div>
+        <div class="cl-text">${systemActionText(e)}${/^admin-(hold|release)$/.test(String(e.type||''))?'':bidLabel(e.bidValue)}</div>
       </div>`;
       }
       const wkStr = e.weekKey ? (()=>{try{return wLabel(wkDate(e.weekKey));}catch(_){return e.weekKey;}})() : '—';
@@ -10393,7 +10422,7 @@ function renderChangelog(){
   }).join('');
 }
 
-async function adminLog(u,wk,type,bidValue){
+async function adminLog(u,wk,type,bidValue,extra){ // [327 · §180] extra: fields merged into the entry (the hold reason)
   const action = type.replace(/^admin-/,'')
     .replace(/^add$/,'added').replace(/^remove$/,'removed').replace(/^edit$/,'edited');
   // id field guarantees uniqueness — arrayUnion deduplicates by value equality,
@@ -10404,6 +10433,7 @@ async function adminLog(u,wk,type,bidValue){
   // without having to guess from the filler values.
   if(String(wk||'')==='ALL') entry.scope='system';
   if(bidValue!==undefined) entry.bidValue=bidValue;
+  if(extra&&typeof extra==='object') Object.assign(entry,extra); // [327 · §180]
   // [AUDIT 2026-07-25 #3] Approve/deny/revoke entries go to an ADMIN-ONLY doc, never to
   // vacations/changes. `changes` is world-readable and already sits in every staff
   // browser, so writing decisions there streamed the live winner/loser list mid-phase —
@@ -11256,10 +11286,14 @@ function adminBidPoolInfo(u){
     _ubNums(p).forEach(n=>{ if(roundWin){ if(!won.has(n)) won.set(n,wk); } else if(!live.has(n)) live.set(n,wk); });
   }
   for(const n of won.keys()) live.delete(n); // a number is one thing: won outranks live
-  const used=[...new Set([...won.keys(),...live.keys()])].sort((a,b)=>a-b);
+  // [327 · §180] HELD: withheld by the admin. Permanently used (the staff helper folds it in the
+  // same way), classified after won and live so a number on a bid keeps its bid's colour.
+  const held=new Map();
+  for(const n of _adminHeldNums(u)){ if(!won.has(n)&&!live.has(n)) held.set(n,(((typeof bidHoldsData!=='undefined'&&bidHoldsData&&bidHoldsData[u])||{})[String(n)]||{}).at||null); }
+  const used=[...new Set([...won.keys(),...live.keys(),...held.keys()])].sort((a,b)=>a-b);
   const all=[1,2,3,4,5,6,7,8,9,10]; // the pool, same literal as the staff page
-  const remaining=all.filter(n=>!won.has(n)&&!live.has(n));
-  return {used,remaining,won,live,npCount};
+  const remaining=all.filter(n=>!won.has(n)&&!live.has(n)&&!held.has(n));
+  return {used,remaining,won,live,held,npCount};
 }
 function renderUserBids(){
   const body=document.getElementById('ubBody'), sum=document.getElementById('ubSummary');
@@ -11268,16 +11302,18 @@ function renderUserBids(){
   const cur=Number(phasesData.currentPhase||1);
   const chip=(n,kind,title)=>'<span class="ub-chip ub-'+kind+'"'+(title?' title="'+esc(title)+'"':'')+'>'+n+'</span>';
   const none=t=>'<span style="color:var(--t3);font-size:11.5px">'+t+'</span>';
-  let low=0, out=0, npTotal=0;
+  let low=0, out=0, npTotal=0, heldTotal=0;
   const rows=roster.map(u=>{
     const p=adminBidPoolInfo(u);
+    heldTotal+=p.held.size;
     if(p.remaining.length<=2) low++;
     if(!p.remaining.length) out++;
     npTotal+=p.npCount;
-    const rem=p.remaining.length?p.remaining.map(n=>chip(n,'rem')).join(''):none('none');
+    const rem=p.remaining.length?p.remaining.map(n=>'<span class="ub-chip ub-rem ub-act" title="Click to withhold '+n+' from '+esc(u)+'" data-u="'+esc(u)+'" data-n="'+n+'" onclick="ubHold(this.dataset.u,this.dataset.n)">'+n+'</span>').join(''):none('none');
     const used=p.used.length?p.used.map(n=>p.won.has(n)
       ?chip(n,'won','Won on the week of '+fmtWk(p.won.get(n))+' — gone for good')
-      :chip(n,'live','Live bid on the week of '+fmtWk(p.live.get(n))+' — comes back if it does not win')).join(''):none('none yet');
+      :p.live.has(n)?chip(n,'live','Live bid on the week of '+fmtWk(p.live.get(n))+' — comes back if it does not win')
+      :'<span class="ub-chip ub-held ub-act" title="Withheld by the admin'+(p.held.get(n)?' since '+new Date(p.held.get(n)).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'')+' — click to release" data-u="'+esc(u)+'" data-n="'+n+'" onclick="ubRelease(this.dataset.u,this.dataset.n)">'+n+'</span>').join(''):none('none yet');
     return '<tr><td class="mono"><strong>'+esc(u)+'</strong></td><td>'+esc(usernamesData?.[u]||'')+'</td>'
       +'<td>'+rem+'</td><td>'+used+'</td>'
       +'<td style="text-align:center">'+(p.npCount||'—')+'</td></tr>';
@@ -11290,12 +11326,59 @@ function renderUserBids(){
       +'<div style="font-size:12px;font-weight:600;color:var(--t1)">'+esc(phaseTxt)+'</div>'
       +'<div style="font-size:22px;font-weight:800;color:'+(low?'var(--red)':'var(--t3)')+'">'+low+'<span style="font-size:12px;font-weight:600;color:var(--t2)"> running low (2 or fewer left)</span></div>'
       +'<div style="font-size:22px;font-weight:800;color:'+(out?'var(--red)':'var(--t3)')+'">'+out+'<span style="font-size:12px;font-weight:600;color:var(--t2)"> with none left</span></div>'
-      +'<div style="font-size:12px;color:var(--t2)">'+roster.length+' users · '+npTotal+' NP bid'+(npTotal!==1?'s':'')+' this phase</div>'
-      +'<div style="margin-left:auto;font-size:11.5px;color:var(--t2)"><span class="ub-chip ub-key ub-rem">remaining</span> <span class="ub-chip ub-key ub-won">won — gone for good</span> <span class="ub-chip ub-key ub-live">live this phase — returns if it loses</span></div>'
+      +'<div style="font-size:12px;color:var(--t2)">'+roster.length+' users · '+npTotal+' NP bid'+(npTotal!==1?'s':'')+' this phase'+(heldTotal?' · '+heldTotal+' number'+(heldTotal!==1?'s':'')+' withheld':'')+'</div>'
+      +'<div style="margin-left:auto;font-size:11.5px;color:var(--t2)"><span class="ub-chip ub-key ub-rem">remaining — click to withhold</span> <span class="ub-chip ub-key ub-won">won — gone for good</span> <span class="ub-chip ub-key ub-live">live this phase — returns if it loses</span> <span class="ub-chip ub-key ub-held">withheld by admin — click to release</span></div>'
       +'</div>';
   }
 }
 window.renderUserBids=renderUserBids;
+// ── [327 · §180] Withhold / release a bid number ─────────────────────────────────────────
+// A hold is a REAL write (vacations/bidHolds — admin-only by rules; read by both pages through
+// the "permanently used" helpers). Every one passes through a dialog, and the GUARD at the
+// moment of action is the enforcement (§3 rule 5): only a number the user still has can be
+// withheld; only a withheld number can be released. The reason goes to the admin-only decisions
+// log — never to the world-readable changes doc (isDecisionEntry routes admin-hold/release).
+// Writes use setDoc(merge) with nested maps: a dotted path like "AB.7" is not a legal field path.
+window.ubHold=function(u,n){
+  n=Number(n);
+  const p=adminBidPoolInfo(u);
+  if(!p.remaining.includes(n)){ toast(n+' is not one of '+u+"'s remaining numbers — only a number the user still has can be withheld.",'err'); renderUserBids(); return; }
+  openConfirm({
+    title:'⛔ Withhold bid number '+n+' from '+esc(u)+'?',
+    body:'<div><strong>'+esc(u)+'</strong> will no longer be able to bid <strong style="font-family:var(--mono)">'+n+'</strong>. On their page it simply shows as already used — greyed out in the dropdown, red in "Bids already used" — with no notice; tell them yourself. It stays withheld through every phase until you release it here.</div>'
+      +'<div style="margin-top:10px"><div style="font-size:12px;color:var(--t2);margin-bottom:6px">Reason (recorded in the Change Log, admin-only):</div><input type="text" id="ubReasonInput" class="inp" style="width:100%" maxlength="200" autocomplete="off" placeholder="e.g. week granted outside the auction"></div>',
+    okText:'Withhold '+n, danger:true,
+    onConfirm:async()=>{
+      const reason=(document.getElementById('ubReasonInput')?.value||'').trim();
+      if(!reason){ toast('Not withheld — a reason is required (it is the only record of why).','warn'); return; }
+      const p2=adminBidPoolInfo(u); // re-check at write time: a bid can arrive while the dialog sits open
+      if(!p2.remaining.includes(n)){ toast('Not withheld — '+n+' is no longer free for '+u+' (a bid arrived while the dialog was open). Nothing changed.','err'); renderUserBids(); return; }
+      try{ await setDoc(bidHoldsRef,{[u]:{[String(n)]:{at:Date.now()}}},{merge:true}); }
+      catch(e){ toast('⚠️ NOT withheld — the write was rejected ('+(e?.code||e?.message||e)+'). Nothing changed.','err'); return; }
+      await adminLog(u,'ALL','admin-hold',n,{reason});
+      toast('⛔ '+n+' withheld from '+u,'warn');
+      renderUserBids();
+    }
+  });
+};
+window.ubRelease=function(u,n){
+  n=Number(n);
+  if(!_adminHeldNums(u).includes(n)){ toast(n+' is not withheld from '+u+'.','err'); renderUserBids(); return; }
+  openConfirm({
+    title:'↩ Release bid number '+n+' to '+esc(u)+'?',
+    body:'<div><strong style="font-family:var(--mono)">'+n+'</strong> goes back into <strong>'+esc(u)+"</strong>'s pool immediately.</div>"
+      +'<div style="margin-top:10px"><div style="font-size:12px;color:var(--t2);margin-bottom:6px">Note for the Change Log (optional):</div><input type="text" id="ubReasonInput" class="inp" style="width:100%" maxlength="200" autocomplete="off"></div>',
+    okText:'Release '+n, danger:false,
+    onConfirm:async()=>{
+      const reason=(document.getElementById('ubReasonInput')?.value||'').trim();
+      try{ await setDoc(bidHoldsRef,{[u]:{[String(n)]:deleteField()}},{merge:true}); }
+      catch(e){ toast('⚠️ NOT released — the write was rejected ('+(e?.code||e?.message||e)+'). Nothing changed.','err'); return; }
+      await adminLog(u,'ALL','admin-release',n,reason?{reason}:undefined);
+      toast('↩ '+n+' released to '+u,'ok');
+      renderUserBids();
+    }
+  });
+};
 // ── Whitelist Tracker [2026-07-26] ───────────────────────────────────────────
 // Self-contained: reads the roster (names/usernames/loginEmails) + the whitelistConfirm doc,
 // renders who has self-confirmed adding the auction sender to contacts, and sends the ask/reminder
@@ -11561,6 +11644,7 @@ window.removeUser=function(u){
           // doesn't inherit the departed person's username. (loginEmails already
           // cleared above — that's what stops the old Google login from working.)
           updateDoc(usernamesRef,{[u]:deleteField()}).catch(()=>{}),
+          updateDoc(bidHoldsRef,{[u]:deleteField()}).catch(()=>{}), // [327 · RA-9 #3] a reused-initials new hire must not inherit a hold
         ]);
         // Remove user from each week's approvals array — arrayRemove PER WEEK, never a whole-array
         // rewrite from the local cache. [build 245 · M2] A merge:true with a rebuilt array replaces
@@ -11633,6 +11717,7 @@ window.deleteAllUsers=function(){
               setDoc(worstBidsRef,{}), setDoc(bidTimesRef,{}), setDoc(fteRef,_keepFte),
               setDoc(bidPhaseRef,{}), setDoc(approvalsRef,{}), setDoc(deniedRef,{}),
               setDoc(changesArchiveRef,{}),
+              ...(typeof bidHoldsRef!=='undefined'?[setDoc(bidHoldsRef,{})]:[]), // [327 · §181] no roster, no holds
               ...(typeof bidLoweringsRef!=='undefined'?[setDoc(bidLoweringsRef,{}),setDoc(bidLoweringsArchiveRef,{})]:[]), // [build 268 · BL] roster wipe clears usage + history (spread-guard = sandbox convention)
 
               // Also wipe the shared Google-login map and custom display names, so a
@@ -12631,7 +12716,9 @@ async function _doFullRestore(f){
       return;
     }
   }
-  // Deliberately NOT restored: mailQueue (cleared — stale entries re-send e-mails),
+  // Deliberately NOT restored: bidHolds (kept current — [327 · §180] a hold is the admin's standing
+  // decision, permanent until released on User Bids; a restore must not silently re-impose or lift one),
+  // mailQueue (cleared — stale entries re-send e-mails),
   // welcomeLog (kept current — an older log re-welcomes users), adminAccess (kept
   // current — a stale list could lock the restoring admin out mid-flight),
   // mailStats (kept current — [build 265 · B4] the meter mirrors the EmailJS account,
@@ -12881,13 +12968,13 @@ function _backupThen(label,fn){
 // the auction lifecycle by design — per the admin's decision [28 Jul 2026] it is neither
 // backed up, restored, nor cleared by Reset Auction; confirmations simply persist).
 function _backupDocMap(){
-  return {schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesDecisions:changesDecisionsRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,welcomeLog:welcomeLogRef,mailQueue:mailQueueRef,mailStats:mailStatsRef,slcMap:slcRef,adminAccess:adminAccessRef,passcodes:doc(db,'vacations','passcodes'),signInMisses:signInMissesRef,slots:doc(db,'vacations','slots'),bidLowerings:bidLoweringsRef,bidLoweringsArchive:bidLoweringsArchiveRef}; // [build 268 · BL] usage + history ARE auction state
+  return {bidHolds:bidHoldsRef, /* [327 · §180] */ schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesDecisions:changesDecisionsRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,welcomeLog:welcomeLogRef,mailQueue:mailQueueRef,mailStats:mailStatsRef,slcMap:slcRef,adminAccess:adminAccessRef,passcodes:doc(db,'vacations','passcodes'),signInMisses:signInMissesRef,slots:doc(db,'vacations','slots'),bidLowerings:bidLoweringsRef,bidLoweringsArchive:bidLoweringsArchiveRef}; // [build 268 · BL] usage + history ARE auction state
 }
 // [build 268 · BL] Documents born in build 268: ABSENT from every pre-268 backup. The H13
 // gate treats an absent key as unusable (build-215 rule) — correct for documents that have
 // always existed, but it would refuse EVERY older backup forever. For these two only,
 // absence restores as {} (the truthful pre-feature state: no usage had occurred).
-const RESTORE_ABSENT_OK_268=new Set(['bidLowerings','bidLoweringsArchive']);
+const RESTORE_ABSENT_OK_268=new Set(['bidLowerings','bidLoweringsArchive']); // [327 · RA-9 #1] bidHolds is backed up but NOT restored (kept current, like adminAccess) — see _doFullRestore
 // Fetch every backed-up document once. Same semantics both pathways rely on:
 // exists → data, missing → null, fetch error → 'FETCH-FAILED: …' marker + fails count.
 //

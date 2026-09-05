@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 168;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 169;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -693,6 +693,7 @@ const bidTimesRef   = doc(db,"vacations","bidTimes");
 // TODO FB-5, because no pre-sign-in code reads it any more.
 // NOT touched: the ADMIN page still uses this document (clear one password, clear all,
 // Reset Auction) and adminSettings.passcodesEnabled stays as a stored field.
+const bidHoldsRef = doc(db,"vacations","bidHolds"); // [169 · §180] {USER:{"n":{at}}} — numbers the admin has withheld; admin-only write
 const bidLoweringsRef = doc(db,"vacations","bidLowerings"); // [build 139 · BL] {USER:{used:n}} — current phase/round lowering usage
 const usernamesRef  = doc(db,"vacations","usernames"); // {initials: customDisplayName}
 const loginEmailsRef = doc(db,"vacations","loginEmails"); // {INITIALS: google-email} — Google login mapping
@@ -729,6 +730,7 @@ let changesData={log:[]}, unsubSchedule=null;
 // admin setting loads (prevents the spurious password box when passwords are off).
 let emailsData={}, bestBidsData={}, fteData={}, adminSettings={emailNotifsEnabled:true,passcodesEnabled:false}, bidTimesData={}, approvalsData={}, usernamesData={};
 let bidLoweringsData={}; // [build 139 · BL]
+let bidHoldsData={}; // [169 · §180] withheld numbers, per user — read only; joins the permanently-used set below
 let loginEmailsData={}; // {INITIALS: google-email} shared doc mapping Google accounts to accounts
 
 // Returns the current review/draw threshold — the maximum FTE overage allowed
@@ -2860,8 +2862,16 @@ function myCountedWeeks(user){
 
 // Returns the set of priority numbers this user "used up" in prior phases
 // by winning (admin-approved). Losses/denials return the number for reuse.
+// [169 · §180] Numbers the admin has WITHHELD from this user (vacations/bidHolds — admin-only
+// write). They join the permanently-used set here, so the pool, the dropdown and the write-time
+// guard all treat a held number exactly like one consumed by a prior-phase win — it simply is
+// not there. Permanent until the admin releases it; no notice on this page (owner ruling).
+function heldBidNums(user){
+  const h=(typeof bidHoldsData!=='undefined'&&bidHoldsData&&bidHoldsData[user])||{}; // typeof: extracted-code sandboxes (build 266 convention)
+  return Object.keys(h).map(Number).filter(n=>Number.isInteger(n)&&n>=1&&n<=10);
+}
 function getPriorPhaseUsedPriorities(user){
-  const out=[];
+  const out=[...heldBidNums(user)]; // [169 · §180]
   const cur=Number(phasesData.currentPhase||1);
   const cp=phasesData.completedPhases||{};
   for(const phNum of Object.keys(cp)){
@@ -3702,6 +3712,7 @@ function _subscribeSensitiveOnce(){
   _sensitiveUnsubs.push(onSnapshot(changesRef,snap=>{ changesData=snap.exists()?snap.data():{log:[]}; if(!changesData.log)changesData.log=[]; scheduleRender(); }));
   _sensitiveUnsubs.push(onSnapshot(bestBidsRef,snap=>{ bestBidsData=snap.exists()?snap.data():{}; }));
   _sensitiveUnsubs.push(onSnapshot(bidLoweringsRef,snap=>{ bidLoweringsData=snap.exists()?snap.data():{}; }));
+  _sensitiveUnsubs.push(onSnapshot(bidHoldsRef,snap=>{ bidHoldsData=snap.exists()?snap.data():{}; scheduleRender(); })); // [169 · §180] the pool and the bid dialog read this through getPriorPhaseUsedPriorities
   _sensitiveUnsubs.push(onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; if(typeof popcornRefresh==='function') popcornRefresh(); scheduleRender(); }));
   _sensitiveUnsubs.push(onSnapshot(whitelistConfirmRef, _wlOnSnap));
   _sensitiveUnsubs.push(onSnapshot(welcomeLogRef, snap=>{ welcomeLogData=snap.exists()?snap.data():{}; }));
@@ -3725,7 +3736,7 @@ function _unsubscribeSensitive(){
   // [build 151 · FB-5 stage 2] Same reasoning for the board caches now torn down above:
   // the board is hidden while signed out, and a listener rejected under the anonymous
   // session never retries — so nothing may survive on stale data into the next session.
-  changesData={log:[]}; bestBidsData={}; bidLoweringsData={}; bidTimesData={};
+  changesData={log:[]}; bestBidsData={}; bidLoweringsData={}; bidHoldsData={}; bidTimesData={}; // [169 · RA-9 #5] bidHolds joins the teardown
   welcomeLogData={}; whitelistConfirmData={}; _whitelistLoaded=false;
   // [build 152] batch 2's caches — same rule. slots also re-zeroes weekMeta capacity.
   locksData={globalLock:false,weeks:{}}; fteData={}; bidPhaseData={}; slotsData={};
