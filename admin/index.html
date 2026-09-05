@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 327;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 328;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -165,7 +165,7 @@ code,kbd,.mono{font-family:'Geist Mono',monospace}
 /* Pills */
 .pill{display:inline-flex;align-items:center;padding:2px 7px;font-size:11px;font-weight:600;font-family:'Geist Mono',monospace}
 .p-green{background:var(--green-d);color:var(--green)}.p-red{background:var(--red-d);color:var(--red)}.p-blue{background:var(--blue-d);color:var(--blue)}.p-yellow{background:var(--yellow-d);color:var(--yellow)}.p-orange{background:rgba(249,115,22,.1);color:var(--orange)}
-.ub-chip{display:inline-block;font-family:'Geist Mono',monospace;font-weight:700;font-size:11.5px;padding:2px 8px;border-radius:7px;margin:2px;border:1px solid transparent;cursor:default}.ub-rem{background:var(--green-d);color:var(--green);border-color:rgba(34,197,94,.3)}.ub-won{background:var(--red-d);color:var(--red);border-color:rgba(239,68,68,.3)}.ub-live{background:#fff4bf;color:#5c4300;border-color:#e3c65a}.ub-held{background:rgba(126,147,165,.16);color:var(--t2);border-color:rgba(126,147,165,.45);text-decoration:line-through}.ub-act{cursor:pointer}.ub-act:hover{filter:brightness(.92)}.ub-chip.ub-key{font-family:inherit;font-weight:600;cursor:default}
+.ub-chip{display:inline-block;font-family:'Geist Mono',monospace;font-weight:700;font-size:11.5px;padding:2px 8px;border-radius:7px;margin:2px;border:1px solid transparent;cursor:default}.ub-rem{background:var(--green-d);color:var(--green);border-color:rgba(34,197,94,.3)}.ub-won{background:var(--red-d);color:var(--red);border-color:rgba(239,68,68,.3)}.ub-live{background:#fff4bf;color:#5c4300;border-color:#e3c65a}.ub-held{background:rgba(126,147,165,.16);color:var(--t2);border-color:rgba(126,147,165,.45);text-decoration:line-through}.ub-behind{border-style:dashed;border-color:rgba(126,147,165,.8);text-decoration:line-through}.ub-act{cursor:pointer}.ub-act:hover{filter:brightness(.92)}.ub-chip.ub-key{font-family:inherit;font-weight:600;cursor:default}
 
 /* Table */
 table{width:100%;border-collapse:collapse;font-size:12px}
@@ -3786,7 +3786,7 @@ window.computeBadBehavior=computeBadBehavior;
 //             to fight for at least one of their losing weeks.
 // Draws/reviews count as live chances, so those users are not flagged.
 function availableNumbersFor(u){
-  const used=new Set();
+  const used=new Set(_adminHeldNums(u)); // [328 · §183 · RA-10 F2] a withheld number is not "left" (unguarded on purpose, like adminBidPoolInfo — a sandbox without the helper must FAIL, not pass)
   const cp=phasesData.completedPhases||{};
   for(const n of Object.keys(cp)){
     const sn=cp[n]||{}; const apn=sn.approvals||{}; const sch=(sn.schedule||{})[u]||{};
@@ -11290,10 +11290,16 @@ function adminBidPoolInfo(u){
   // same way), classified after won and live so a number on a bid keeps its bid's colour.
   const held=new Map();
   for(const n of _adminHeldNums(u)){ if(!won.has(n)&&!live.has(n)) held.set(n,(((typeof bidHoldsData!=='undefined'&&bidHoldsData&&bidHoldsData[u])||{})[String(n)]||{}).at||null); }
+  // [328 · §183 · RA-10 F1] HELD BEHIND a bid: withheld AND on a won/live number. The hold is in force
+  // (both pages' helpers still refuse the number) but a bid carries it anyway — a restore re-placed an
+  // older bid, or a page wrote before it saw the hold. Never hidden: rendered, counted and releasable.
+  // used / remaining / held are unchanged by this map (the number is already won or live).
+  const heldBehind=new Map();
+  for(const n of _adminHeldNums(u)){ if(won.has(n)||live.has(n)) heldBehind.set(n,{on:won.has(n)?'won':'live',wk:won.has(n)?won.get(n):live.get(n),at:(((typeof bidHoldsData!=='undefined'&&bidHoldsData&&bidHoldsData[u])||{})[String(n)]||{}).at||null}); }
   const used=[...new Set([...won.keys(),...live.keys(),...held.keys()])].sort((a,b)=>a-b);
   const all=[1,2,3,4,5,6,7,8,9,10]; // the pool, same literal as the staff page
   const remaining=all.filter(n=>!won.has(n)&&!live.has(n)&&!held.has(n));
-  return {used,remaining,won,live,held,npCount};
+  return {used,remaining,won,live,held,heldBehind,npCount};
 }
 function renderUserBids(){
   const body=document.getElementById('ubBody'), sum=document.getElementById('ubSummary');
@@ -11302,15 +11308,18 @@ function renderUserBids(){
   const cur=Number(phasesData.currentPhase||1);
   const chip=(n,kind,title)=>'<span class="ub-chip ub-'+kind+'"'+(title?' title="'+esc(title)+'"':'')+'>'+n+'</span>';
   const none=t=>'<span style="color:var(--t3);font-size:11.5px">'+t+'</span>';
-  let low=0, out=0, npTotal=0, heldTotal=0;
+  let low=0, out=0, npTotal=0, heldTotal=0, behindTotal=0;
+  const since=at=>at?' since '+new Date(at).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';
   const rows=roster.map(u=>{
     const p=adminBidPoolInfo(u);
-    heldTotal+=p.held.size;
+    heldTotal+=p.held.size+p.heldBehind.size; behindTotal+=p.heldBehind.size; // [328 · §183] a hold behind a bid is still a hold
+    // [328 · §183 · RA-10 F1] the bid's own colour, the hold's strike-through, and the release click
+    const behind=n=>{ const b=p.heldBehind.get(n); return '<span class="ub-chip ub-'+b.on+' ub-behind ub-act" title="'+esc((b.on==='won'?'Won on the week of ':'Live bid on the week of ')+fmtWk(b.wk)+' — AND withheld by the admin'+since(b.at)+'. The hold is in force but this number was placed anyway (a restore, or a page that had not yet seen the hold). '+(b.on==='won'?'Click to release the hold — the number stays consumed by the win either way.':'Click to release the hold; to keep it, change or remove the bid in Edit Selections.'))+'" data-u="'+esc(u)+'" data-n="'+n+'" onclick="ubRelease(this.dataset.u,this.dataset.n)">'+n+'</span>'; };
     if(p.remaining.length<=2) low++;
     if(!p.remaining.length) out++;
     npTotal+=p.npCount;
     const rem=p.remaining.length?p.remaining.map(n=>'<span class="ub-chip ub-rem ub-act" title="Click to withhold '+n+' from '+esc(u)+'" data-u="'+esc(u)+'" data-n="'+n+'" onclick="ubHold(this.dataset.u,this.dataset.n)">'+n+'</span>').join(''):none('none');
-    const used=p.used.length?p.used.map(n=>p.won.has(n)
+    const used=p.used.length?p.used.map(n=>p.heldBehind.has(n)?behind(n):p.won.has(n)
       ?chip(n,'won','Won on the week of '+fmtWk(p.won.get(n))+' — gone for good')
       :p.live.has(n)?chip(n,'live','Live bid on the week of '+fmtWk(p.live.get(n))+' — comes back if it does not win')
       :'<span class="ub-chip ub-held ub-act" title="Withheld by the admin'+(p.held.get(n)?' since '+new Date(p.held.get(n)).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'')+' — click to release" data-u="'+esc(u)+'" data-n="'+n+'" onclick="ubRelease(this.dataset.u,this.dataset.n)">'+n+'</span>').join(''):none('none yet');
@@ -11326,8 +11335,8 @@ function renderUserBids(){
       +'<div style="font-size:12px;font-weight:600;color:var(--t1)">'+esc(phaseTxt)+'</div>'
       +'<div style="font-size:22px;font-weight:800;color:'+(low?'var(--red)':'var(--t3)')+'">'+low+'<span style="font-size:12px;font-weight:600;color:var(--t2)"> running low (2 or fewer left)</span></div>'
       +'<div style="font-size:22px;font-weight:800;color:'+(out?'var(--red)':'var(--t3)')+'">'+out+'<span style="font-size:12px;font-weight:600;color:var(--t2)"> with none left</span></div>'
-      +'<div style="font-size:12px;color:var(--t2)">'+roster.length+' users · '+npTotal+' NP bid'+(npTotal!==1?'s':'')+' this phase'+(heldTotal?' · '+heldTotal+' number'+(heldTotal!==1?'s':'')+' withheld':'')+'</div>'
-      +'<div style="margin-left:auto;font-size:11.5px;color:var(--t2)"><span class="ub-chip ub-key ub-rem">remaining — click to withhold</span> <span class="ub-chip ub-key ub-won">won — gone for good</span> <span class="ub-chip ub-key ub-live">live this phase — returns if it loses</span> <span class="ub-chip ub-key ub-held">withheld by admin — click to release</span></div>'
+      +'<div style="font-size:12px;color:var(--t2)">'+roster.length+' users · '+npTotal+' NP bid'+(npTotal!==1?'s':'')+' this phase'+(heldTotal?' · '+heldTotal+' number'+(heldTotal!==1?'s':'')+' withheld'+(behindTotal?' ('+behindTotal+' behind a bid)':''):'')+'</div>'
+      +'<div style="margin-left:auto;font-size:11.5px;color:var(--t2)"><span class="ub-chip ub-key ub-rem">remaining — click to withhold</span> <span class="ub-chip ub-key ub-won">won — gone for good</span> <span class="ub-chip ub-key ub-live">live this phase — returns if it loses</span> <span class="ub-chip ub-key ub-held">withheld by admin — click to release</span> <span class="ub-chip ub-key ub-live ub-behind">withheld AND on a bid — click to release</span></div>'
       +'</div>';
   }
 }
@@ -11366,7 +11375,9 @@ window.ubRelease=function(u,n){
   if(!_adminHeldNums(u).includes(n)){ toast(n+' is not withheld from '+u+'.','err'); renderUserBids(); return; }
   openConfirm({
     title:'↩ Release bid number '+n+' to '+esc(u)+'?',
-    body:'<div><strong style="font-family:var(--mono)">'+n+'</strong> goes back into <strong>'+esc(u)+"</strong>'s pool immediately.</div>"
+    body:'<div>'+(adminBidPoolInfo(u).heldBehind?.has(n)
+      ?'The hold on <strong style="font-family:var(--mono)">'+n+'</strong> is lifted. The number stays on the bid it is already on — it does not return to <strong>'+esc(u)+"</strong>'s pool." // [328 · §183] a hold behind a bid
+      :'<strong style="font-family:var(--mono)">'+n+'</strong> goes back into <strong>'+esc(u)+"</strong>'s pool immediately.")+'</div>'
       +'<div style="margin-top:10px"><div style="font-size:12px;color:var(--t2);margin-bottom:6px">Note for the Change Log (optional):</div><input type="text" id="ubReasonInput" class="inp" style="width:100%" maxlength="200" autocomplete="off"></div>',
     okText:'Release '+n, danger:false,
     onConfirm:async()=>{
