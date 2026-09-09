@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 333;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 334;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -6492,19 +6492,20 @@ ${bullets([
 ${B('RULES AND REMINDERS OF THE AUCTION')}
 ${bullets([
   `Vacation selections are now called "bids" — the process works like an auction, where user bids compete for limited slots`,
-  `Enter your bids early, it benefits everyone`,
-  `Sniping is not possible, do not try it`,
   `The auction has 4 phases — similar to the rounds in previous years`,
   `Phase 1 includes only the high-demand weeks; all remaining weeks open starting in Phase 2`,
   ...capBullets,
-  `A combined bid like 1/2/3 uses bids 1, 2, and 3 at once`,
+  `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
+  `You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest`,
   `Each number can only be used once, numbers from weeks that were approved in earlier phases are unavailable to be used again`,
   `Bids that do not win are returned to you when the next phase begins.`,
+  `A combined bid like 1/2/3 uses bids 1, 2, and 3 at once`,
   npPhasesDescription(),
   ...prioLockBullets(), // [build 268 · BL/COPY] Option A wording, allowance-derived
   ...bfRulesBullets(),
-  `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
   `Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
+  `Enter your bids early, it benefits everyone`,
+  `Sniping is not possible, do not try it`,
   `Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly`
 ])}
 
@@ -7963,7 +7964,9 @@ const CAPACITY_DEF_TEXT='Available = capacity minus approved winners; pending bi
 // row's own Available is at or above that week's Smart Lock Control (getSlc — Smart Lock would leave it
 // open), RED when below it (Smart Lock would lock it). Judged on THIS report's Available — approved
 // winners only — never on Smart Lock's live figure, which also counts projected bids mid-phase.
-const CAPACITY_LEGEND_TEXT='Week label: green = available at or above its Smart Lock Control (stays open) · red = below it (Smart Lock locks it)';
+const CAPACITY_LEGEND_GREEN='green = available at or above its Smart Lock Control (stays open)';
+const CAPACITY_LEGEND_RED='red = below it (Smart Lock locks it)';
+const CAPACITY_LEGEND_TEXT='Week label: '+CAPACITY_LEGEND_GREEN+' · '+CAPACITY_LEGEND_RED; // plain form (CSV / text); the band and Excel colour each half [334 · §192 addendum]
 function _capacityWeekOpen(r){ return r.avail>=getSlc(r.wk); }
 function _capacityWeekRows(){
   const R=function(x){ return Math.round(x*10)/10; };
@@ -8001,10 +8004,13 @@ window.exportCapacityByWeek=function(format){
       const S_STAMP={font:{sz:10,color:{rgb:'587690'}}};
       const S_COLHEAD={fill:{fgColor:{rgb:'F1F5F9'}},font:{bold:true,sz:10,color:{rgb:'334155'}},border:BORDER};
       const S_CELL={font:{sz:10,color:{rgb:'0F172A'}},border:BORDER};
-      const S_LEGEND={font:{sz:10,italic:true,color:{rgb:'334155'}}};
+      const S_LEGEND_G={font:{sz:10,italic:true,bold:true,color:{rgb:'047857'}}}, S_LEGEND_R={font:{sz:10,italic:true,bold:true,color:{rgb:'B91C1C'}}}; // [334] one row per colour
       // [333 · §192] the colour lives on the week label; Available is a plain centred number
-      const wkStyle=function(r){ return {font:{bold:true,sz:10,color:{rgb:_capacityWeekOpen(r)?'047857':'B91C1C'}},border:BORDER}; };
-      const availStyle=function(a){ return S_NUM; };
+      const rowRgb=function(r){ return _capacityWeekOpen(r)?'047857':'B91C1C'; };
+      const wkStyle=function(r){ return {font:{bold:true,sz:10,color:{rgb:rowRgb(r)}},border:BORDER}; };
+      // [334 · §192 addendum] Date and Available carry the row colour too (not bold — the label stays the anchor)
+      const dateStyle=function(r){ return {font:{sz:10,color:{rgb:rowRgb(r)}},border:BORDER}; };
+      const availStyle=function(r){ return {font:{sz:10,color:{rgb:rowRgb(r)}},alignment:{horizontal:'center'},border:BORDER}; };
       const S_NUM={font:{sz:10,color:{rgb:'0F172A'}},alignment:{horizontal:'center'},border:BORDER};
       const cols=['Week #','Date','Type','Capacity','Taken (FTE)','Available','Approved winners'];
       const aoa=[]; const styles=[]; const merges=[]; const rowHts=[];
@@ -8013,15 +8019,17 @@ window.exportCapacityByWeek=function(format){
       merges.push({s:{r:0,c:0},e:{r:0,c:cols.length-1}});
       push([CAPACITY_DEF_TEXT.toUpperCase()],[S_DEF],20);
       merges.push({s:{r:1,c:0},e:{r:1,c:cols.length-1}});
-      push([CAPACITY_LEGEND_TEXT],[S_LEGEND]); // [333 · §192]
+      push(['Week label: '+CAPACITY_LEGEND_GREEN],[S_LEGEND_G]); // [333 · §192 · 334 addendum: coloured, one row per colour]
       merges.push({s:{r:2,c:0},e:{r:2,c:cols.length-1}});
-      push(['Exported '+stamp+' · '+rows.length+' weeks · taken '+totTaken+' of '+totCap+' FTE-weeks'],[S_STAMP]);
+      push(['Week label: '+CAPACITY_LEGEND_RED],[S_LEGEND_R]);
       merges.push({s:{r:3,c:0},e:{r:3,c:cols.length-1}});
+      push(['Exported '+stamp+' · '+rows.length+' weeks · taken '+totTaken+' of '+totCap+' FTE-weeks'],[S_STAMP]);
+      merges.push({s:{r:4,c:0},e:{r:4,c:cols.length-1}});
       push([]);
       push(cols,cols.map(function(){ return S_COLHEAD; }));
       rows.forEach(function(r){
         push(['W'+r.wn,r.date,r.type||'',String(r.cap),String(r.taken),String(r.avail),r.winners.map(fteName).join(', ')],
-             [wkStyle(r),S_CELL,S_CELL,S_NUM,S_NUM,availStyle(r.avail),S_CELL]);
+             [wkStyle(r),dateStyle(r),S_CELL,S_NUM,S_NUM,availStyle(r),S_CELL]);
       });
       const ws=XLSX.utils.aoa_to_sheet(aoa);
       styles.forEach(function(rowSt,r){ rowSt.forEach(function(s,c){
@@ -8054,14 +8062,17 @@ window.exportCapacityByWeek=function(format){
   // one line that stops a mid-phase reading from being taken as exact.
   const isView=format==='view';
   // [333 · §192] Available is plain text; the week label is green (at/above its Smart Lock Control) or red (below).
-  const availCell=function(a){ return '<td style="text-align:center">'+a+'</td>'; };
+  // [334 · §192 addendum] Date and Available take the SAME colour as the week label (the Smart Lock rule, not the sign).
+  const rowColor=function(r){ return _capacityWeekOpen(r)?'#047857':'#b91c1c'; };
+  const dateCell=function(r){ return '<td style="color:'+rowColor(r)+'">'+r.date+'</td>'; };
+  const availCell=function(r){ return '<td style="text-align:center;color:'+rowColor(r)+'">'+r.avail+'</td>'; };
   const wkCell=function(r){ const open=_capacityWeekOpen(r); return '<td><strong style="color:'+(open?'#047857':'#b91c1c')+'" title="Available '+r.avail+' vs Smart Lock Control '+getSlc(r.wk)+' — '+(open?'stays open':'Smart Lock locks it')+'">W'+r.wn+'</strong></td>'; };
-  const body='<div class="wk"><div class="wk-head">Available capacity by week<span class="fte">'+CAPACITY_DEF_TEXT+'</span><span class="fte">'+CAPACITY_LEGEND_TEXT+'</span></div>'
+  const body='<div class="wk"><div class="wk-head">Available capacity by week<span class="fte">'+CAPACITY_DEF_TEXT+'</span><span class="fte">Week label: <b style="color:#86efac">'+CAPACITY_LEGEND_GREEN+'</b> · <b style="color:#fca5a5">'+CAPACITY_LEGEND_RED+'</b></span></div>'
     +'<table><thead><tr><th>Week</th><th>Date</th><th>Type</th><th>Capacity</th><th>Taken (FTE)</th><th>Available</th><th>Approved winners</th></tr></thead><tbody>'
     +rows.map(function(r){
-      return '<tr>'+wkCell(r)+'<td>'+r.date+'</td><td>'+(r.type||'')+'</td>'
+      return '<tr>'+wkCell(r)+dateCell(r)+'<td>'+(r.type||'')+'</td>'
         +'<td style="text-align:center">'+r.cap+'</td><td style="text-align:center">'+r.taken+'</td>'
-        +availCell(r.avail)
+        +availCell(r)
         +'<td style="white-space:normal">'+(r.winners.length?r.winners.map(fteName).join(', '):'<span style="color:#94a3b8">—</span>')+'</td></tr>';
     }).join('')
     +'</tbody></table></div>';
