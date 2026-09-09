@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 330;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 331;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1035,8 +1035,8 @@ thead th{color:var(--t2)}
               UNDER REVIEW — either a tie (each tied user must fit within this amount) or a single
               user over cap by this amount — instead of an automatic loss. Range 0.0–2.0, step 0.1. Default 0.5.
               <br>You can adjust this setting between phases.
-              It locks while the <em>current</em> phase has bids; once a phase completes (and before the
-              next phase takes bids) you can change it. Past phases are unaffected — their results are frozen at
+              It locks while a phase is running; once a phase completes and its results are sent (and before the
+              next phase begins) you can change it. Past phases are unaffected — their results are frozen at
               completion — so a change only applies to the current and later phases.
             </div>
           </div>
@@ -3977,7 +3977,7 @@ window.openSummaryTab=function(kind){
       const rows=(byUser[u]||[]).sort((a,b)=>a.g.wk.localeCompare(b.g.wk));
       const inner=rows.length
         ? `<table><thead><tr><th>Week</th><th>Date</th><th>Type</th><th>Bid</th><th>Phase</th><th>Projected</th><th>Result</th></tr></thead><tbody>${
-            rows.map(({g,b})=>`<tr><td><strong>W${g.wn}</strong></td><td>${g.date}</td><td>${g.type||''}</td><td>${b.bid}</td><td>P${b.phase}</td><td>${projChipHtml(b.projected)}</td><td>${resultCellHtml(b)}</td></tr>`).join('')
+            rows.map(({g,b})=>`<tr><td><strong>W${g.wn}</strong></td><td>${g.date}</td><td>${g.type||''}</td><td>${esc(b.bid)}</td><td>P${b.phase}</td><td>${projChipHtml(b.projected)}</td><td>${resultCellHtml(b)}</td></tr>`).join('')
           }</tbody></table>`
         : `<div style="border:1px solid #e2e8f0;border-top:none;padding:8px 10px;font-size:12px;color:#94a3b8">No bids for this selection.</div>`;
       const won=rows.filter(({b})=>b.outcome==='approved').length;
@@ -4345,15 +4345,19 @@ function syncControls(){
       rTx.value=cur.toFixed(1);
     }
     const cur=Number(phasesData.currentPhase||1);
-    const hasBids=anyCurrentPhaseBidsExist();
-    rSl.disabled=hasBids;
-    rTx.disabled=hasBids;
+    // [331 · RA-11 F3] One lock, the gap rule (cfgUnlockedNow — the same rule the other frozen dials
+    // and firestore.rules use). The older anyCurrentPhaseBidsExist() lock stayed true in EVERY real
+    // gap (winners' bids keep the phase tag; losers retire only at the next Begin), so the dial
+    // never unlocked after Phase 1 began — the caption, the rules and §177 all promised it would.
+    const locked=!cfgUnlockedNow();
+    rSl.disabled=locked;
+    rTx.disabled=locked;
     if(rSt){
-      if(hasBids){
-        rSt.textContent='🔒 Locked while Phase '+cur+' has bids — you can adjust it between phases.';
+      if(locked){
+        rSt.textContent='🔒 Locked while Phase '+cur+' is running — editable between phases, once results are sent.';
         rSt.style.color='var(--red)';
       } else {
-        rSt.textContent='✏️ Editable now — no bids in the current phase.';
+        rSt.textContent=phase1Started()?'✏️ Editable now — between phases (results sent).':'✏️ Editable now — Phase 1 has not begun.';
         rSt.style.color='var(--green)';
       }
     }
@@ -4405,7 +4409,7 @@ function _syncReviewThresholdFromSaved(){ const v=getReviewThreshold(); const sl
 // value, then save. Cancel reverts the controls to the saved value.
 window._confirmSaveReviewThreshold=function(){
   if(!cfgUnlockedNow()){ toast('🔒 The FTE overage is locked while a phase is running — editable between phases, once results are sent.','err'); _syncReviewThresholdFromSaved(); return; } // [build 268 · FRZ8/GAP]
-  if(anyCurrentPhaseBidsExist()){ toast('Locked while the current phase has bids — adjust it between phases','warn'); _syncReviewThresholdFromSaved(); return; }
+  // [331 · RA-11 F3] the second gate (anyCurrentPhaseBidsExist) is gone: it was true in every real gap.
   const tx=document.getElementById("reviewThresholdText");
   const raw=Number(tx?.value);
   if(isNaN(raw)){ toast('Invalid value','warn'); _syncReviewThresholdFromSaved(); return; }
@@ -7684,6 +7688,7 @@ function _bannerHeights(aoa, mergedRowSet, cols, rowHts){
 function openReportTab(title,phaseLabel,subtitle,bodyHtml,autoPrint){
   const w=window.open('','_blank');
   if(!w){ toast('Pop-up blocked — allow pop-ups for this site','warn'); return false; }
+  w.opener=null; // [331 · RA-11 F1] a report window is a document, never a door back into the admin page
   // The phase is rendered as a large badge right in the heading — it is the
   // single most important piece of context on every report.
   w.document.write(`<!doctype html><html><head><title>${title} — ${phaseLabel}</title><style>${REPORT_CSS}</style></head><body>
@@ -7831,7 +7836,7 @@ window.exportPhaseResults=function(format,scopeOverride){
   const sections=groups.map(g=>{
     const nCol=showPhaseCol?5:4;
     const rows=g.bids.length
-      ? g.bids.map(b=>`<tr><td><strong>${b.user}</strong> <span style="color:#587690;font-size:11px">(${(+getUserFTE(b.user)).toFixed(1)})</span></td><td>${b.bid}</td>${showPhaseCol?`<td>P${b.phase}</td>`:''}<td>${projChipHtml(b.projected)}</td><td>${resultCellHtml(b)}</td></tr>`).join('')
+      ? g.bids.map(b=>`<tr><td><strong>${b.user}</strong> <span style="color:#587690;font-size:11px">(${(+getUserFTE(b.user)).toFixed(1)})</span></td><td>${esc(b.bid)}</td>${showPhaseCol?`<td>P${b.phase}</td>`:''}<td>${projChipHtml(b.projected)}</td><td>${resultCellHtml(b)}</td></tr>`).join('')
       : `<tr><td colspan="${nCol}" style="color:#94a3b8;font-size:12px">No bids this week.</td></tr>`;
     return `<div class="wk">${wkHeadHtml(g)}
       <table><thead><tr><th>User</th><th>Bid</th>${showPhaseCol?'<th>Phase</th>':''}<th>Projected</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table></div>`;
@@ -7932,7 +7937,7 @@ window.exportUserSummary=function(format,scopeOverride){
     const won=rows.filter(({b})=>b.outcome==='approved').length;
     const inner=rows.length
       ? `<table><thead><tr><th>Week</th><th>Date</th><th>Type</th><th>Bid</th>${showPhaseCol?'<th>Phase</th>':''}<th>Projected</th><th>Result</th></tr></thead><tbody>${
-          rows.map(({g,b})=>`<tr><td><strong>W${g.wn}</strong></td><td>${g.date}</td><td>${g.type||''}</td><td>${b.bid}</td>${showPhaseCol?`<td>P${b.phase}</td>`:''}<td>${projChipHtml(b.projected)}</td><td>${resultCellHtml(b)}</td></tr>`).join('')
+          rows.map(({g,b})=>`<tr><td><strong>W${g.wn}</strong></td><td>${g.date}</td><td>${g.type||''}</td><td>${esc(b.bid)}</td>${showPhaseCol?`<td>P${b.phase}</td>`:''}<td>${projChipHtml(b.projected)}</td><td>${resultCellHtml(b)}</td></tr>`).join('')
         }</tbody></table>`
       : `<div style="border:1px solid #e2e8f0;border-top:none;padding:8px 10px;font-size:12px;color:#94a3b8">No bids for this selection.</div>`;
     return `<div class="wk"><div class="wk-head">${u}<span class="fte">FTE ${getUserFTE(u)} · ${rows.length} bid${rows.length!==1?'s':''} · ${won} approved</span></div>${inner}</div>`;
@@ -8167,6 +8172,7 @@ window.exportDashboard=function(format){
   const tbody=dataRows.map(r=>`<tr>${r.map((c,i)=>`<td${i>=6?' style="font-size:10px"':''}>${c}</td>`).join('')}</tr>`).join('');
   const w=window.open('','_blank');
   if(!w){ toast('Pop-up blocked — allow pop-ups for this site','warn'); return; }
+  w.opener=null; // [331 · RA-11 F1]
   w.document.write(`<!doctype html><html><head><title>Vacation Auction Dashboard — ${exportLabel}</title>
     <style>
       body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:24px;color:#0f172a}
