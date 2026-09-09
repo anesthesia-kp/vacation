@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 169;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 170;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -698,6 +698,8 @@ const bidLoweringsRef = doc(db,"vacations","bidLowerings"); // [build 139 · BL]
 const usernamesRef  = doc(db,"vacations","usernames"); // {initials: customDisplayName}
 const loginEmailsRef = doc(db,"vacations","loginEmails"); // {INITIALS: google-email} — Google login mapping
 const welcomeLogRef = doc(db,"vacations","welcomeLog"); // {sent:{<addrKey>:true}} — which addresses already got a welcome THIS auction cycle (cleared by Reset Auction)
+const loginLogRef   = doc(db,"vacations","loginLog");   // [170 · §189] {INITIALS:{at,phase,round}} — each user's LAST sign-in; written here (own key only), read by the admin's User Activity page
+const mailLogRef    = doc(db,"vacations","mailLog");    // [170 · §189] {INITIALS:{at,to,kind,ok,err}} — each user's LAST e-mail and whether it sent; written beside every send on both pages, read by the admin only
 const adminAccessRef = doc(db,"vacations","adminAccess"); // {emails:[...]} — Vacation Admin allow-list (shared with vacation admin site)
 // Built-in admins that work while the adminAccess list is empty — MUST match the
 // isDefaultAdmin() list in firestore.rules, stored lower-cased.
@@ -2020,7 +2022,7 @@ async function relayMailQueue(){
         }catch(_){ _mqRelease(qid); continue; } // [H14] we hold the claim — release it
         if(typeof emailjs==='undefined'){ _mqRelease(qid); continue; } // [H14] belt-and-braces (guarded at entry too)
         if(isWelcome && _welcomed(wkey)){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; } // re-check after the claim settle
-        for(const to of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:to,changes:e.body||''}); trackEmailSent(); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); }
+        for(const to of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:to,changes:e.body||''}); }catch(err){ _mailLogNote(e.user,to,isWelcome?'welcome':'outbid alert',false,err); throw err; } trackEmailSent(); _mailLogNote(e.user,to,isWelcome?'welcome':'outbid alert',true); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); } // [170 · §189] the log note rethrows, so the strike-count path below is unchanged
         // Mark the welcome log after a confirmed relay send so no other page re-sends it.
         if(isWelcome && wkey){ try{ await setDoc(welcomeLogRef,{sent:{[wkey]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[wkey]=true; }catch(_){} }
         // Terminal delete with one retry — a lost delete after a successful send would
@@ -3622,7 +3624,7 @@ async function sendEmailNotifications(prevSnap,newSnap,actor){
       try{ await setDoc(mailQueueRef,{[qid]:{user,body:bodyText,ts:Date.now()}},{merge:true}); }catch(_){}
       try{
         if(typeof emailjs!=="undefined"){
-          for(const to of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:to,changes:bodyText}); trackEmailSent(); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); }
+          for(const to of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:to,changes:bodyText}); }catch(err){ _mailLogNote(user,to,'outbid alert',false,err); throw err; } trackEmailSent(); _mailLogNote(user,to,'outbid alert',true); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); } // [170 · §189] log note rethrows — the entry stays queued exactly as before
           updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
         }
       }catch(_){/* leave queued — admin panel will send it */}
@@ -3931,6 +3933,42 @@ async function _refreshOtherSystems(){
 }
 window._refreshOtherSystems=_refreshOtherSystems; // exposed for testing
 
+// ── [170 · §189] Last-login record ────────────────────────────────────────────────────────
+// One merge write per COMPLETED sign-in, keyed by the user's own initials (the rules confine a
+// registered user to exactly that key). It runs AFTER the board is on screen, is never awaited
+// and never throws: a refused, slow or failed write changes nothing the user sees. The phase is
+// whatever the phases doc says right now — before Phase 1 has begun it records 0 ("before Phase
+// 1"), in Phase 4 it carries the round; not loaded yet → null, which the admin shows as "—".
+function _loginRecord(phases,now){
+  const cur=(phases&&phases.currentPhase!=null)?Number(phases.currentPhase):NaN;
+  if(isNaN(cur)) return {at:now,phase:null,round:null};
+  const pre=(cur===1&&!(phases&&phases.phase1Started));
+  const rd=(cur===4)?Number((phases&&phases.p4Round)||1):null;
+  return {at:now,phase:pre?0:cur,round:(rd!=null&&!isNaN(rd))?rd:null};
+}
+function _recordLogin(user){
+  try{
+    if(!user) return;
+    const rec=_loginRecord((typeof phasesData!=='undefined')?phasesData:null,Date.now());
+    const p=setDoc(loginLogRef,{[user]:rec},{merge:true});
+    if(p&&typeof p.catch==='function') p.catch(function(){});
+  }catch(_){}
+}
+// ── [170 · §189] Last-e-mail record ───────────────────────────────────────────────────────
+// One entry per RECIPIENT user — {at,to,kind,ok,err} — overwritten by every send from either
+// page, success or failure, so the admin sees the latest outcome. Called beside the send, never
+// awaited, never throws: it can neither delay nor fail a delivery. (The rules let a registered
+// user touch one entry per write, the same containment as the mail queue.)
+function _mailLogNote(user,to,kind,ok,err){
+  try{
+    if(!user) return;
+    const rec={at:Date.now(),to:String(to||''),kind:String(kind||'mail'),ok:!!ok};
+    if(!ok){ const e=err||{}; rec.err=String(e.text||e.message||e.status||e||'failed').slice(0,120); }
+    const p=setDoc(mailLogRef,{[user]:rec},{merge:true});
+    if(p&&typeof p.catch==='function') p.catch(function(){});
+  }catch(_){}
+}
+
 function completeSignIn(){
   try{ if(document.getElementById("rememberMe")?.checked) localStorage.setItem(REMEMBER_KEY,selectedSignInName); else localStorage.removeItem(REMEMBER_KEY); }catch(_){}
   personSelect.value=selectedSignInName; personSelect.disabled=true;
@@ -3952,6 +3990,7 @@ function completeSignIn(){
   mainContainer.style.display="block";
   startListening();
   startCountdownTick();
+  _recordLogin(selectedSignInName); // [170 · §189] last-login record — fire-and-forget, after the board is shown
   // Google-account welcome: the FIRST login with a given Google address gets exactly
   // one welcome to that address. It is keyed by the address, so if admin later changes
   // a user's Google account, the new account is welcomed on its first login. Reset
@@ -4117,8 +4156,8 @@ async function sendWelcomeEmail(user,email,key){
   try{ await setDoc(mailQueueRef,{[qid]:{user,to:email,wkey:key,body,ts:Date.now()}},{merge:true}); }catch(_){}
   try{
     if(typeof emailjs!=="undefined"){
-      await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body});
-      trackEmailSent();
+      try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body}); }catch(err){ _mailLogNote(user,email,'welcome',false,err); throw err; } // [170 · §189] rethrows — the queue/retry path is unchanged
+      trackEmailSent(); _mailLogNote(user,email,'welcome',true);
       try{ await setDoc(welcomeLogRef,{sent:{[key]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[key]=true; }catch(_){}
       updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
     }

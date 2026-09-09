@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 329;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 330;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -442,6 +442,7 @@ thead th{color:var(--t2)}
       <a onclick="nav('users',this)">👤 Users</a>
       <a onclick="nav('lowerings',this)">🔽 Bid Lowerings</a>
       <a onclick="nav('userbids',this)">🎟️ User Bids</a>
+      <a onclick="nav('activity',this)">👣 User Activity</a>
       <a onclick="nav('whitelist',this)">📌 Whitelist Tracker</a>
       <div class="nav-section">Settings</div>
       <a onclick="nav('slots',this)">📆 FTE Availability</a>
@@ -820,6 +821,19 @@ thead th{color:var(--t2)}
       <div id="ubSummary" style="margin-bottom:12px"></div>
       <div style="overflow-x:auto;max-height:640px;overflow-y:auto;border:1px solid var(--b1)">
         <table><thead><tr><th>Initials</th><th>Full Name</th><th>Remaining</th><th>Used</th><th style="text-align:center">NP bids this phase</th></tr></thead><tbody id="ubBody"></tbody></table>
+      </div>
+    </div>
+
+    <!-- USER ACTIVITY [330 · §189] — READ-ONLY tracking view: each user's last sign-in (date · time · phase,
+         recorded by the staff site at sign-in), the bids they hold in the current phase (same live-bid rule
+         as User Bids, so the two pages agree), and the last e-mail sent to them with its outcome (recorded
+         beside every send on both pages). The only writes on this page are the Clear button's two
+         admin-only wipes of the logs themselves. No auction state is touched. -->
+    <div class="panel" id="panel-activity">
+      <div class="page-head"><div class="page-title">👣 User Activity</div><div class="page-sub">Who has signed in, who is bidding, and whether their e-mail is getting through. <strong>Last sign-in</strong> is recorded by the site each time a user completes sign-in (the phase is the one open at that moment). <strong>Bids this phase</strong> counts the user's live bids in the current phase — Phase 4: the current round — and hover shows the weeks. <strong>Last e-mail</strong> is the most recent message sent to that user from either site and whether it went out. Logins and e-mails from before this build are not recorded.</div></div>
+      <div id="uaSummary" style="margin-bottom:12px"></div>
+      <div style="overflow-x:auto;max-height:640px;overflow-y:auto;border:1px solid var(--b1)">
+        <table><thead><tr><th>Initials</th><th>Full Name</th><th>Last sign-in</th><th style="text-align:center">Bids this phase</th><th>Last e-mail</th></tr></thead><tbody id="uaBody"></tbody></table>
       </div>
     </div>
 
@@ -1383,6 +1397,8 @@ window.syncEmailToUser=async function(){
   toast(ok?'🔑 Login map synced ('+Object.keys(_buildEmailToUser()).length+' addresses)':'Sync failed — make sure you are signed in as admin', ok?'ok':'err');
 };
 const welcomeLogRef = doc(db,"vacations","welcomeLog"); // {sent:{<addrKey>:true}} — addresses already welcomed THIS cycle (cleared by Reset Auction)
+const loginLogRef   = doc(db,"vacations","loginLog");   // [330 · §189] {INITIALS:{at,phase,round}} — each user's LAST sign-in, written by the staff site (own key only); admin-read; cleared by Reset Auction and by User Activity's Clear
+const mailLogRef    = doc(db,"vacations","mailLog");    // [330 · §189] {INITIALS:{at,to,kind,ok,err}} — each user's LAST e-mail and whether it sent, written beside every send on both pages; admin-read; cleared with loginLog
 // [build 268 · BL] Bid Lowerings — sanctioned per-phase bid DECREASES (mistake-fixing).
 // Current-window usage: {USER:{used:n}} — user-writable own-key-only (isBidDoc rules gates:
 // own keys + timer + biddingClosed), cleared wherever worstBids clears (phase/round/reset).
@@ -1898,6 +1914,10 @@ let whitelistConfirmData={};
 onSnapshot(whitelistConfirmRef, snap=>{ whitelistConfirmData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-whitelist'); if(p&&p.classList.contains('on')&&typeof renderWhitelistTracker==='function') renderWhitelistTracker(); if(typeof renderNextStep==='function') renderNextStep(); });
 onSnapshot(bidLoweringsRef, snap=>{ bidLoweringsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-lowerings'); if(p&&p.classList.contains('on')&&typeof renderBidLowerings==='function') renderBidLowerings(); }); // [build 268 · BL]
 onSnapshot(bidHoldsRef, snap=>{ bidHoldsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-userbids'); if(p&&p.classList.contains('on')&&typeof renderUserBids==='function') renderUserBids(); }); // [327 · §180]
+// [330 · §189] The two activity logs — admin-read docs, painted only while User Activity is open.
+let loginLogData={}, mailLogData={};
+onSnapshot(loginLogRef, snap=>{ loginLogData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-activity'); if(p&&p.classList.contains('on')&&typeof renderUserActivity==='function') renderUserActivity(); });
+onSnapshot(mailLogRef,  snap=>{ mailLogData=snap.exists()?snap.data():{};  const p=document.getElementById('panel-activity'); if(p&&p.classList.contains('on')&&typeof renderUserActivity==='function') renderUserActivity(); });
 onSnapshot(bidLoweringsArchiveRef, snap=>{ bidLoweringsArchiveData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-lowerings'); if(p&&p.classList.contains('on')&&typeof renderBidLowerings==='function') renderBidLowerings(); }); // [build 268 · BL]
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
   onSnapshot(fteRef, snap=>{ fteData=snap.exists()?snap.data():{}; refreshAll(); });
@@ -2067,7 +2087,7 @@ async function processMailQueue(minAgeMs){
           if(_f.ts!==e.ts){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
         }catch(_){ _mqRelease(qid); continue; } // [H14] we hold the claim — release it
         if(isWelcome && _welcomed(wkey)){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; } // re-check after claim
-        for(const email of recips){ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:e.body||''}); trackEmailSent(); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(email)}).catch(()=>{}); }
+        for(const email of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:e.body||''}); }catch(err){ _mailLogNote(e.user,email,isWelcome?'welcome':'outbid alert',false,err); throw err; } trackEmailSent(); _mailLogNote(e.user,email,isWelcome?'welcome':'outbid alert',true); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(email)}).catch(()=>{}); } // [330 · §189] the log note rethrows, so the strike-count path below is unchanged
         if(isWelcome && wkey){ try{ await setDoc(welcomeLogRef,{sent:{[wkey]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[wkey]=true; }catch(_){} }
         // Terminal delete with one retry: if this write is lost after a successful send,
         // the entry becomes re-eligible after claim expiry and every recipient gets the
@@ -2122,6 +2142,7 @@ window.nav = function(id, el) {
   if(id==='whitelist'&&typeof renderWhitelistTracker==='function') renderWhitelistTracker();
   if(id==='lowerings'&&typeof renderBidLowerings==='function') renderBidLowerings(); // [build 268 · BL]
   if(id==='userbids'&&typeof renderUserBids==='function') renderUserBids(); // [325 · §178]
+  if(id==='activity'&&typeof renderUserActivity==='function') renderUserActivity(); // [330 · §189]
 };
 
 // ── Helpers ──
@@ -5204,6 +5225,9 @@ window.clearEverything=function(){
               // New auction cycle → clear the welcome-e-mail log so each user can
               // receive their one welcome per account again next cycle.
               setDoc(doc(db,"vacations","welcomeLog"),{sent:{}}),
+              // [330 · §189] New cycle → fresh sign-in and e-mail records on User Activity.
+              setDoc(loginLogRef,{}),
+              setDoc(mailLogRef,{}),
               // Drain the outbox too, so no leftover welcome/alert can fire after a reset.
               setDoc(mailQueueRef,{}),
               // [H6 REDESIGN] Drop any staged (unpublished) phase snapshot — a fresh auction
@@ -6316,6 +6340,19 @@ function initAppDenialsFilters(){
 // Every e-mail counts against the EmailJS monthly quota — track it (both sites
 // increment the same per-month counter; the dashboard meter reads it).
 const mailStatsRef = doc(db,"vacations","mailStats");
+// ── [330 · §189] Last-e-mail record (staff twin: index.html _mailLogNote) ───────────────
+// One entry per RECIPIENT user — {at,to,kind,ok,err} — overwritten by every send from either
+// page, success or failure, so User Activity shows the latest outcome. Called beside the send,
+// never awaited, never throws: it can neither delay nor fail a delivery.
+function _mailLogNote(user,to,kind,ok,err){
+  try{
+    if(!user) return;
+    const rec={at:Date.now(),to:String(to||''),kind:String(kind||'mail'),ok:!!ok};
+    if(!ok){ const e=err||{}; rec.err=String(e.text||e.message||e.status||e||'failed').slice(0,120); }
+    const p=setDoc(mailLogRef,{[user]:rec},{merge:true});
+    if(p&&typeof p.catch==='function') p.catch(function(){});
+  }catch(_){}
+}
 // EmailJS's monthly quota resets on the 22nd (the account's billing day), NOT
 // on the 1st — count within the same window so the meter matches their dashboard.
 function emailCycleKey(){
@@ -6345,8 +6382,8 @@ async function adminSendEmail(user,subject,body,skip){
     if(skip && skip.has(email)) continue; // already delivered on a prior run — never re-send to it
     try{
       await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body});
-      trackEmailSent(); ok++; sent.push(email);
-    }catch(e){ console.warn('Email failed:',e); fail++; }
+      trackEmailSent(); ok++; sent.push(email); _mailLogNote(user,email,String(subject||'admin mail').slice(0,40),true); // [330 · §189]
+    }catch(e){ console.warn('Email failed:',e); fail++; _mailLogNote(user,email,String(subject||'admin mail').slice(0,40),false,e); } // [330 · §189]
   }
   return {ok,fail,sent};
 }
@@ -6492,8 +6529,8 @@ async function sendWelcomeEmail(user,email,key){
   try{ await setDoc(mailQueueRef,{[qid]:{user,to:email,wkey:key,body,ts:Date.now()}},{merge:true}); }catch(_){}
   try{
     if(typeof emailjs!=="undefined"){
-      await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body});
-      trackEmailSent();
+      try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body}); }catch(err){ _mailLogNote(user,email,'welcome',false,err); throw err; } // [330 · §189] rethrows — the queue/retry path is unchanged
+      trackEmailSent(); _mailLogNote(user,email,'welcome',true);
       try{ await setDoc(welcomeLogRef,{sent:{[key]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[key]=true; }catch(_){}
       updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
     }
@@ -10035,6 +10072,61 @@ window.adminClearEmail=function(u){
     }
   });
 };
+// ── [330 · §189] Disable KP e-mail for a user ─────────────────────────────────────────────
+// The admin's version of the user's own "No thanks": the entry becomes "__skip__" (shown as
+// "none" — never prompted again, no more KP-address mail; the Google address still gets every
+// alert), and the address that WAS on file receives one plain note saying so and naming the
+// Google address. Order matters: the opt-out is WRITTEN FIRST, the note sent after, so a mail
+// failure can never leave the address subscribed. No address on file → "none" is set and nothing
+// is sent (nowhere to send it). Already "none" → nothing to do. Admin-initiated, like results
+// mail: it does not consult the outbid-alert or welcome switches. Recorded in mailLog either way.
+function _unsubscribeNoteBody(user,oldKp,google){
+  const g=String(google||'').trim();
+  return `Hi ${user},
+
+This address (${oldKp}) has been unsubscribed from Vacation Auction e-mail alerts.
+
+`+(g.includes('@')
+  ? `You will continue to receive all auction notifications at your Google address on record: ${g}.`
+  : `Please contact your admin to confirm where your auction notifications should go.`)
++`
+
+If you would like KP alerts again later, ask your admin to add the address back.`;
+}
+async function sendUnsubscribeNote(user,addr,google){
+  const body=_unsubscribeNoteBody(user,addr,google);
+  if(typeof emailjs==='undefined'){ _mailLogNote(user,addr,'unsubscribe',false,'mailer not loaded'); toast('⚠️ KP e-mail is OFF for '+user+', but the note to '+addr+' could not be sent (mailer not loaded on this page).','warn'); return false; }
+  try{
+    await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:addr,changes:body});
+    trackEmailSent(); _mailLogNote(user,addr,'unsubscribe',true);
+    toast('✉️ Unsubscribe note sent to '+addr,'ok'); return true;
+  }catch(err){
+    _mailLogNote(user,addr,'unsubscribe',false,err);
+    toast('⚠️ KP e-mail is OFF for '+user+', but the note to '+addr+' could not be sent ('+(err?.text||err?.message||err?.status||'send failed')+').','warn'); return false;
+  }
+}
+window.adminDisableEmail=function(u){
+  const prev=String(emailsData?.[u]||'').trim().toLowerCase();
+  if(prev==='__skip__'){ toast('KP e-mail is already off for '+u+' — nothing to change.','ok'); return; }
+  const hadAddr=!!(prev&&prev.includes('@'));
+  const google=String(loginEmailsData?.[u]||'').trim().toLowerCase();
+  openConfirm({
+    title:'🔕 Disable KP E-mail',
+    body:`<div>Turn KP e-mail <strong>off</strong> for <strong>${esc(u)}</strong>?</div>
+          <div style="margin-top:6px;color:var(--t2);font-size:12.5px">Current KP address: <strong style="font-family:var(--mono)">${hadAddr?esc(prev):'none saved'}</strong></div>
+          <div class="cmodal-warn" style="margin-top:8px">${hadAddr
+            ? 'The address is removed and shows as <strong>none</strong>; '+esc(u)+' is never asked for a KP e-mail again, and <strong>one note goes to '+esc(prev)+'</strong> saying it is unsubscribed and that alerts continue at '+(google.includes('@')?'<span style="font-family:var(--mono)">'+esc(google)+'</span>':'their Google address')+'.'
+            : 'No KP address is on file, so nothing is sent — '+esc(u)+' is simply never asked for a KP e-mail again (shows as <strong>none</strong>).'}
+          Alerts keep going to their Google login e-mail. To turn KP e-mail back on later, Save a KP address for them.</div>`,
+    okText:'🔕 Disable KP e-mail', danger:true,
+    onConfirm:async()=>{
+      try{ await setDoc(emailsRef,{[u]:'__skip__'},{merge:true}); }
+      catch(e){ toast('⚠️ NOT disabled — the write was rejected ('+(e?.code||e?.message||e)+'). Nothing changed, no note sent.','err'); return; }
+      toast('🔕 KP e-mail off for '+u,'warn');
+      if(hadAddr) await sendUnsubscribeNote(u,prev,google);
+    }
+  });
+};
 // Primary / Google login e-mail — this is what signs the user in AND the first
 // alert recipient. Stored in the loginEmails doc (user → address).
 window.adminSaveLoginEmail=async function(u){
@@ -11148,7 +11240,8 @@ function renderUsersCombined(){
         <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearLoginEmail('${_jsq(n)}')">Clear</button></td>
       <td style="white-space:nowrap"><input type="email" id="em_${n}" class="inp" autocomplete="off" style="width:190px" value="${skip?'':esc(em)}" placeholder="KP e-mail">${skip?' <span class="pill p-yellow">none</span>':''}
         <button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveEmail('${_jsq(n)}')">Save</button>
-        <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearEmail('${_jsq(n)}')">Clear</button></td>
+        <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminClearEmail('${_jsq(n)}')">Clear</button>
+        <button class="btn" style="padding:3px 8px;font-size:11px" onclick="adminDisableEmail('${_jsq(n)}')" title="Turn KP e-mail off for this user: the address is removed, they are never prompted for one again, and the old address gets a note saying so">🔕 Disable</button></td>
       <td><button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="removeUser('${_jsq(n)}')">🗑 Delete</button></td>
     </tr>`;
   }).join('');
@@ -11391,6 +11484,96 @@ window.ubRelease=function(u,n){
       await adminLog(u,'ALL','admin-release',n,reason?{reason}:undefined);
       toast('↩ '+n+' released to '+u,'ok');
       renderUserBids();
+    }
+  });
+};
+// ── [330 · §189] User Activity — a READ-ONLY tracking view ───────────────────────────────────
+// One row per roster user from data the page already holds (scheduleData, phasesData, deniedData,
+// usernamesData) plus the two admin-read logs: loginLog (written by the staff site at sign-in) and
+// mailLog (written beside every send on both pages). "Bids this phase" uses isCurrentPhaseBidAdmin
+// — the same live-bid rule as User Bids — with a Phase 4 round WIN counted as decided, not active.
+// test-330-user-activity.mjs runs _activityRows and the labels on fixtures. The only writes on this
+// page are clearActivityLogs' two admin-only wipes of the logs themselves.
+function _activityPhaseLabel(rec){
+  if(!rec||rec.phase==null||isNaN(Number(rec.phase))) return '—';
+  const p=Number(rec.phase);
+  if(p===0) return 'before Phase 1';
+  if(p===4) return 'Phase 4 · Round '+Number(rec.round||1);
+  return 'Phase '+p;
+}
+function _activityWhen(ts){
+  if(typeof ts!=='number'||!(ts>0)) return '—';
+  const d=new Date(ts);
+  return d.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' '+d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+}
+function _activityLiveBids(u){
+  const cur=Number(phasesData.currentPhase||1); const uw=scheduleData[u]||{}; const out=[];
+  for(const wk of Object.keys(uw)){
+    const p=uw[wk]; if(p===undefined||p===null||!isCurrentPhaseBidAdmin(u,wk)) continue;
+    if(cur===4&&p4RoundWinnersOn(wk).includes(u)) continue; // a round win is decided — no longer competing
+    out.push({wk,p,denied:Array.isArray(deniedData[wk])&&deniedData[wk].includes(u)});
+  }
+  return out.sort((a,b)=>a.wk<b.wk?-1:a.wk>b.wk?1:0);
+}
+function _activityRows(){
+  const cur=Number(phasesData.currentPhase||1); const round=cur===4?Number(phasesData.p4Round||1):null;
+  const roster=[...(names||[])].sort();
+  return roster.map(u=>{
+    const lg=(loginLogData||{})[u]; const ml=(mailLogData||{})[u];
+    const login=(lg&&typeof lg.at==='number'&&lg.at>0)?lg:null;
+    const mail=(ml&&typeof ml.at==='number'&&ml.at>0)?ml:null;
+    const bids=_activityLiveBids(u);
+    const inThisPhase=!!(login&&Number(login.phase)===cur&&(cur!==4||Number(login.round||1)===round));
+    return {u,name:(usernamesData||{})[u]||'',login,inThisPhase,bids,noBids:bids.length===0,mail};
+  });
+}
+let _activitySort='name';
+window.setActivitySort=function(k){ _activitySort=(k==='login'||k==='mail')?k:'name'; renderUserActivity(); };
+function renderUserActivity(){
+  const body=document.getElementById('uaBody'), sum=document.getElementById('uaSummary');
+  if(!body) return;
+  const rows=_activityRows();
+  const cur=Number(phasesData.currentPhase||1);
+  const here=cur===4?'Phase 4 · Round '+Number(phasesData.p4Round||1):'Phase '+cur;
+  if(_activitySort==='login') rows.sort((a,b)=>((b.login?b.login.at:0)-(a.login?a.login.at:0))||(a.u<b.u?-1:1));
+  else if(_activitySort==='mail') rows.sort((a,b)=>((b.mail?b.mail.at:0)-(a.mail?a.mail.at:0))||(a.u<b.u?-1:1));
+  const none=t=>'<span style="color:var(--t3);font-size:11.5px">'+t+'</span>';
+  const loggedIn=rows.filter(r=>r.inThisPhase).length, everIn=rows.filter(r=>r.login).length;
+  const noBids=rows.filter(r=>r.noBids).map(r=>r.u);
+  const failed=rows.filter(r=>r.mail&&!r.mail.ok).map(r=>r.u);
+  const sortBtn=(k,label)=>'<button class="btn'+(_activitySort===k?' btn-primary':'')+'" style="padding:3px 9px;font-size:11px" onclick="setActivitySort(\''+k+'\')">'+label+'</button>';
+  if(sum) sum.innerHTML=
+    '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-size:12.5px">'
+    +'<div><strong>Signed in during '+esc(here)+':</strong> '+loggedIn+' of '+rows.length+(everIn!==loggedIn?' <span style="color:var(--t3)">('+everIn+' ever recorded)</span>':'')+'</div>'
+    +'<div><strong>No bids this phase:</strong> '+(noBids.length?'<span class="pill p-red">'+noBids.length+'</span> <span style="font-family:var(--mono)">'+noBids.map(esc).join(', ')+'</span>':'<span class="pill p-green">0</span>')+'</div>'
+    +(failed.length?'<div><strong>Last e-mail failed:</strong> <span class="pill p-red">'+failed.length+'</span> <span style="font-family:var(--mono)">'+failed.map(esc).join(', ')+'</span></div>':'')
+    +'<div style="margin-left:auto;display:flex;gap:6px;align-items:center"><span style="color:var(--t3);font-size:11px">Sort:</span>'+sortBtn('name','A–Z')+sortBtn('login','Last sign-in')+sortBtn('mail','Last e-mail')
+    +'<button class="btn btn-danger" style="padding:3px 9px;font-size:11px;margin-left:10px" onclick="clearActivityLogs()" title="Wipe the sign-in and e-mail records (for example, rehearsal history before go-live). Bids are not touched.">🧹 Clear records…</button></div>'
+    +'</div>';
+  const bidCell=r=>{
+    if(!r.bids.length) return '<span class="pill p-red" title="No live bid in the current phase">no bids this phase</span>';
+    const t=r.bids.map(b=>fmtWk(b.wk)+' · '+(b.p==='NP'?'NP':(Array.isArray(b.p)?b.p.join('/'):b.p))+(b.denied?' (denied)':'')).join('\n');
+    return '<span class="pill p-green" title="'+esc(t)+'">'+r.bids.length+'</span>';
+  };
+  const loginCell=r=>r.login?'<span style="white-space:nowrap">'+esc(_activityWhen(r.login.at))+'</span> <span style="color:var(--t2)">· '+esc(_activityPhaseLabel(r.login))+'</span>':none('never recorded');
+  const mailCell=r=>{ if(!r.mail) return none('none recorded');
+    const k=esc(String(r.mail.kind||'mail')); const to=esc(String(r.mail.to||''));
+    return '<span style="white-space:nowrap">'+esc(_activityWhen(r.mail.at))+'</span> <span style="color:var(--t2)">· '+k+'</span> '
+      +(r.mail.ok?'<span class="pill p-green" title="Sent to '+to+'">✓ sent</span>':'<span class="pill p-red" title="'+esc(String(r.mail.err||'failed'))+'">✗ failed</span>')
+      +' <span class="mono" style="font-size:11px;color:var(--t3)">'+to+'</span>'; };
+  body.innerHTML=rows.map(r=>'<tr><td class="mono"><strong>'+esc(r.u)+'</strong></td><td>'+esc(r.name)+'</td><td>'+loginCell(r)+'</td><td style="text-align:center">'+bidCell(r)+'</td><td>'+mailCell(r)+'</td></tr>').join('')
+    ||'<tr><td colspan="5" style="color:var(--t3)">No users on the roster.</td></tr>';
+}
+window.renderUserActivity=renderUserActivity;
+window.clearActivityLogs=function(){
+  openConfirm({
+    title:'🧹 Clear sign-in and e-mail records',
+    body:'<div>Wipe the recorded <strong>last sign-in</strong> and <strong>last e-mail</strong> for every user? New sign-ins and e-mails start recording again immediately.</div><div class="cmodal-warn" style="margin-top:8px">This clears records only — no bids, approvals, settings or e-mail addresses change. Use it to drop rehearsal history before the real auction.</div>',
+    okText:'🧹 Clear records', danger:true,
+    onConfirm:async()=>{
+      try{ await setDoc(loginLogRef,{}); await setDoc(mailLogRef,{}); toast('🧹 Sign-in and e-mail records cleared','ok'); }
+      catch(e){ toast('⚠️ Not cleared — the write was rejected ('+(e?.code||e?.message||e)+').','err'); }
+      renderUserActivity();
     }
   });
 };

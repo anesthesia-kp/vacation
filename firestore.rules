@@ -147,8 +147,12 @@ service cloud.firestore {
     // anything: the staff sites never reference changesArchive, and the admin sites
     // subscribe to it in the same block as approvals/denials/phaseStaging, which are
     // gated exactly this way already.
+    // [330 · §189, 9 Sep 2026] 'loginLog' and 'mailLog' added: who signed in when, and
+    // what was last e-mailed to whom. Only the admin's User Activity page reads them; the
+    // staff site only WRITES (merge-writes need no read). Without this line both would
+    // fall through to the world-readable default. Their write clauses are below.
     function isAdminReadDoc(docId) {
-      return docId in ['approvals', 'denials', 'changesDecisions', 'phaseStaging', 'changesArchive'];
+      return docId in ['approvals', 'denials', 'changesDecisions', 'phaseStaging', 'changesArchive', 'loginLog', 'mailLog'];
     }
 
     // ── Vacation Auction collection ───────────────────────────────────────────
@@ -480,10 +484,27 @@ service cloud.firestore {
                            && request.resource.data.diff(resource.data).affectedKeys().size() == 1)
                        || (request.method == 'create'
                            && request.resource.data.keys().size() == 1)))))
+                   // [330 · §189, 9 Sep 2026] Last-login record: {INITIALS:{at,phase,round}}. The
+                   // staff site merge-writes the signed-in user's OWN key once per completed sign-in;
+                   // a registered user may write only that key (writesOnlyOwnKeys — the emails /
+                   // whitelistConfirm guard), so nobody can forge or erase a colleague's sign-in.
+                   // Admin free (User Activity's Clear, Reset Auction). Read is admin-only above.
+                   || (docId == 'loginLog' && (isAdmin() || (isRegisteredUser() && writesOnlyOwnKeys())))
+                   // [330 · §189] Last-e-mail record: {INITIALS:{at,to,kind,ok,err}}, written beside
+                   // every send. A staff page relaying the outbox writes the RECIPIENT's key, not its
+                   // own, so own-key confinement cannot apply; the containment is the mail queue's —
+                   // a registered user may touch at most ONE entry per write, never wipe the doc.
+                   // Documented residual, same as the queue's: one other person's row could be forged
+                   // or cleared per write. Display-only data; nothing acts on it. Read is admin-only.
+                   || (docId == 'mailLog' && (isAdmin()
+                        || (isRegisteredUser()
+                             && (resource == null
+                                  ? request.resource.data.keys().size() <= 1
+                                  : request.resource.data.diff(resource.data).affectedKeys().size() <= 1))))
                    || (!isAdminOnlyDoc(docId) && !isBidDoc(docId) && !isRelayDoc(docId)
                         && docId != 'timer' && docId != 'signInMisses' && docId != 'emails'
                         && docId != 'changes' && docId != 'whitelistConfirm' && docId != 'welcomeLog'
-                        && docId != 'mailStats'
+                        && docId != 'mailStats' && docId != 'loginLog' && docId != 'mailLog'
                         && (isRegisteredUser() || isAdmin()));
     }
 
