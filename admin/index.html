@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 334;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 335;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -438,6 +438,7 @@ thead th{color:var(--t2)}
       <a onclick="nav('edits',this)">✏️ Edit Selections</a>
       <a onclick="nav('bestbids',this)">🔐 Priority Locks</a>
       <a onclick="nav('changelog',this)">📋 Change Log</a>
+      <a onclick="nav('capacity',this)">📅 Capacity</a>
       <div class="nav-section">People</div>
       <a onclick="nav('users',this)">👤 Users</a>
       <a onclick="nav('lowerings',this)">🔽 Bid Lowerings</a>
@@ -886,6 +887,18 @@ thead th{color:var(--t2)}
       <div id="changelogBody" style="max-height:620px;overflow-y:auto"></div>
       <!-- legacy table tbody for back-compat with refs, hidden -->
       <table style="display:none"><tbody id="changelogBody_legacy"></tbody></table>
+    </div>
+
+    <!-- CAPACITY [335 · §194] — the "Available Capacity by Week" report built into the site.
+         Same rows and same rule as the report (_capacityWeekRows / _capacityWeekOpen), same
+         colours; weeks always chronological; a filter (all / available / not available), never a
+         sort. Read-only: nothing here writes. -->
+    <div class="panel" id="panel-capacity">
+      <div class="page-head"><div class="page-title">📅 Capacity</div><div class="page-sub">Available capacity by week, live. <strong>Available</strong> = capacity minus approved winners; pending bids not counted — exact between phases; mid-phase, pending bids may still take more. Week, Date and Available are <strong style="color:#047857">green</strong> when Available is at or above the week's Smart Lock Control (stays open) and <strong style="color:#b91c1c">red</strong> when below it (Smart Lock locks it) — the same rule and colours as the Capacity report.</div></div>
+      <div id="capSummary" style="margin-bottom:12px"></div>
+      <div style="overflow-x:auto;max-height:640px;overflow-y:auto;border:1px solid var(--b1)">
+        <table><thead><tr><th>Week</th><th>Date</th><th>Type</th><th style="text-align:center">Capacity</th><th style="text-align:center">Taken (FTE)</th><th style="text-align:center">Available</th><th>Approved winners</th></tr></thead><tbody id="capBody"></tbody></table>
+      </div>
     </div>
 
     <!-- CONTROLS -->
@@ -2143,6 +2156,7 @@ window.nav = function(id, el) {
   if(id==='lowerings'&&typeof renderBidLowerings==='function') renderBidLowerings(); // [build 268 · BL]
   if(id==='userbids'&&typeof renderUserBids==='function') renderUserBids(); // [325 · §178]
   if(id==='activity'&&typeof renderUserActivity==='function') renderUserActivity(); // [330 · §189]
+  if(id==='capacity'&&typeof renderCapacityPage==='function') renderCapacityPage(); // [335 · §194]
 };
 
 // ── Helpers ──
@@ -3340,6 +3354,7 @@ function refreshAll(){
     if(isOn('users') && typeof renderUsersCombined==='function') renderUsersCombined();
     if(isOn('slots') && typeof renderSlotsPanel==='function') renderSlotsPanel();
     if(isOn('userbids') && typeof renderUserBids==='function') renderUserBids(); // [325 · §178]
+    if(isOn('capacity') && typeof renderCapacityPage==='function') renderCapacityPage(); // [335 · §194]
     updateStats();
     syncControls();
   });
@@ -8081,6 +8096,45 @@ window.exportCapacityByWeek=function(format){
     body, !isView);
   if(ok) toast(isView?'👁 Capacity report opened in a new tab':'📄 Preview opened — use browser "Print → Save as PDF"','ok');
 };
+
+// ── Capacity page [335 · §194] — the report built into the site. Same rows (_capacityWeekRows),
+// same rule (_capacityWeekOpen), same colours as the report; weeks ALWAYS chronological (the rows
+// come out of `mondays` in order and nothing here re-sorts them); a FILTER (all / available /
+// not available), never a sort — owner ruling 9 Sep 2026. Read-only. Every printed value is
+// escaped (RA-11 F1's shape): winners' initials and the week-type names are admin-typed.
+let _capFilter='all';
+window.setCapacityFilter=function(k){ _capFilter=(k==='open'||k==='closed')?k:'all'; renderCapacityPage(); };
+function _capacityFilterRows(rows,f){
+  if(f==='open') return rows.filter(_capacityWeekOpen);
+  if(f==='closed') return rows.filter(function(r){ return !_capacityWeekOpen(r); });
+  return rows.slice();
+}
+function renderCapacityPage(){
+  const body=document.getElementById('capBody'), sum=document.getElementById('capSummary');
+  if(!body) return;
+  const R=function(x){ return Math.round(x*10)/10; };
+  const all=_capacityWeekRows();
+  const nOpen=all.filter(_capacityWeekOpen).length, nClosed=all.length-nOpen;
+  let totCap=0, totTaken=0; all.forEach(function(r){ totCap+=r.cap; totTaken+=r.taken; });
+  const rows=_capacityFilterRows(all,_capFilter);
+  const fBtn=function(k,label,n){ return '<button class="btn'+(_capFilter===k?' btn-primary':'')+'" style="padding:3px 9px;font-size:11px" onclick="setCapacityFilter(\''+k+'\')">'+label+' <span style="opacity:.75">'+n+'</span></button>'; };
+  if(sum) sum.innerHTML=
+    '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-size:12.5px">'
+    +'<div><strong>Taken:</strong> '+R(totTaken)+' of '+R(totCap)+' FTE-weeks</div>'
+    +'<div><strong>Available:</strong> <span class="pill p-green">'+nOpen+'</span> <strong style="margin-left:10px">Not available:</strong> <span class="pill p-red">'+nClosed+'</span></div>'
+    +'<div style="margin-left:auto;display:flex;gap:6px;align-items:center"><span style="color:var(--t3);font-size:11px">Show:</span>'+fBtn('all','All',all.length)+fBtn('open','Available',nOpen)+fBtn('closed','Not available',nClosed)+'</div>'
+    +'</div>';
+  body.innerHTML=rows.map(function(r){
+    const open=_capacityWeekOpen(r), c=open?'#047857':'#b91c1c';
+    const tip='Available '+r.avail+' vs Smart Lock Control '+getSlc(r.wk)+' — '+(open?'stays open':'Smart Lock locks it');
+    return '<tr><td><strong style="color:'+c+'" title="'+esc(tip)+'">W'+esc(r.wn)+'</strong></td>'
+      +'<td style="color:'+c+'">'+esc(r.date)+'</td><td>'+esc(r.type||'')+'</td>'
+      +'<td style="text-align:center">'+esc(r.cap)+'</td><td style="text-align:center">'+esc(r.taken)+'</td>'
+      +'<td style="text-align:center;font-weight:600;color:'+c+'">'+esc(r.avail)+'</td>'
+      +'<td style="white-space:normal">'+(r.winners.length?r.winners.map(function(u){ return esc(fteName(u)); }).join(', '):'<span style="color:var(--t3)">—</span>')+'</td></tr>';
+  }).join('')||'<tr><td colspan="7" style="color:var(--t3)">No weeks match this filter.</td></tr>';
+}
+window.renderCapacityPage=renderCapacityPage;
 
 // ── Dashboard export (weekly summary as a table → Excel or PDF) ──
 // Mirrors the Weekly Summary's data selection, honoring the dashboard's phase
