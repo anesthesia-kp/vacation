@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 172;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 173;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -1883,7 +1883,7 @@ onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; _use
 // callback still only assigns on snap.exists().
 // (approvals listener removed 15 Jul 2026 — same privacy rule as denials: the
 // user site must not react to live admin decisions during the current phase.)
-onSnapshot(phasesRef,  snap=>{ phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{}}; renderPhaseLabel(); scheduleRender(); if(typeof updateSigninPhase==='function') updateSigninPhase(); });
+onSnapshot(phasesRef,  snap=>{ phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{}}; renderPhaseLabel(); scheduleRender(); if(typeof updateSigninPhase==='function') updateSigninPhase(); startCountdownTick(); }); // [173 · §195 audit] the closed statement is owned by renderCountdown — recompute it on every phase change too, so a Reset Auction clears it whichever of its writes lands first (and even when the timer doc does not change)
 // [build 152] bidPhase listener moved to _subscribeSensitiveOnce().
 // (denials listener removed 15 Jul 2026 — the user site must not react to live
 // admin decisions; denial outcomes reach users via completed-phase snapshots.)
@@ -2136,10 +2136,21 @@ function renderCountdown(){
   if(!biddingOpen()){
     banner.classList.remove("visible","urgent","warning");
     if(countdownInterval){clearInterval(countdownInterval);countdownInterval=null;}
+    // [173 · §195 · owner-found] A tab open ACROSS a Reset Auction kept the "Phase 4: Round N
+    // bidding is closed" statement beside "Bidding has not started yet": the banner is painted
+    // (and its label fixed) when a window closes, and its only clearing call sat BELOW this
+    // early return. Pre-launch there is no closed window — clear it here too.
+    _setPhaseClosedBanner(false);
     return;
   }
   if(!timerData.enabled||!timerData.lastChange){
-    banner.classList.remove("visible","urgent","warning"); return;
+    banner.classList.remove("visible","urgent","warning");
+    // [173 · §195 audit] Timer OFF is not "untouched": the site's own answer decides. An explicit
+    // Close (biddingClosed) keeps the statement — before this it never showed with the timer off;
+    // a timer switched off AFTER an expiry reopens bidding with no deadline, so the statement
+    // painted at the expiry must go — before this it stayed above a live board.
+    _setPhaseClosedBanner(isAuctionClosed());
+    return;
   }
   const DURATION=(timerData.durationHours||48)*3600000;
   const remaining=DURATION-(Date.now()-timerData.lastChange);
