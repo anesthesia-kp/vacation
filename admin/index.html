@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 335;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 336;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1083,6 +1083,20 @@ thead th{color:var(--t2)}
             <div class="trow-desc" id="acSummary">Loading…</div>
           </div>
           <button class="btn btn-primary" id="acEditBtn" style="flex:unset;white-space:nowrap" onclick="openAuctionCalendarEditor()">✏️ Edit</button>
+        </div>
+      </div>
+      <!-- DESTINATION OF THE DAY [336 · §196] — the staff sign-in screen's small round photo + place
+           name (100 places, one per calendar day, cycling). This switch is the only control: ON by
+           default (an absent key means on), OFF hides the pill for everyone on their next snapshot.
+           Nothing else reads this key; it is not a frozen fairness key, so it saves in any phase. -->
+      <div class="card">
+        <div class="card-title">🌍 Destination of the Day</div>
+        <div class="trow">
+          <div>
+            <div class="trow-label">Photo on the sign-in screen</div>
+            <div class="trow-desc">When ON, the staff sign-in screen shows a small round photo of a vacation destination with its name — a different one each day, the same for everyone, cycling through 100. When OFF, the sign-in screen shows nothing extra. Purely cosmetic: it never touches bids, phases or e-mail.</div>
+          </div>
+          <div class="tog" id="destinationTog" onclick="toggleDestinationOfDay()"></div>
         </div>
       </div>
       <!-- RESET AUCTION [build 247] — moved from the page header into its own collapsed card at
@@ -4326,6 +4340,8 @@ function syncControls(){
   if(gl) gl.className="tog"+(locksData.globalLock?" on":"");
   const et=document.getElementById("emailNotifsToggle");
   if(et) et.className="tog"+(adminSettings.emailNotifsEnabled!==false?" on":"");
+  const dt=document.getElementById("destinationTog"); // [336 · §196] absent key = on
+  if(dt) dt.className="tog"+(adminSettings.destinationOfDay!==false?" on":"");
   const ecd=document.getElementById("emailCycleDayInp");
   if(ecd&&document.activeElement!==ecd){ const d=parseInt(adminSettings?.emailCycleResetDay,10); ecd.value=(!isNaN(d)&&d>=1&&d<=28)?d:22; }
   if(typeof renderMailMeter==='function') renderMailMeter(); // keep "resets the Nth" in sync
@@ -4562,6 +4578,16 @@ window.setTimerResetMode=function(n){
       toast('⏱ Timer reset mode: '+NAMES[n],'ok');
     }
   });
+};
+// [336 · §196] Destination of the day — one click either way: nothing is at stake (a photo on the
+// sign-in screen), so no confirm dialog. Absent key = ON; the staff page reads the same key.
+window.toggleDestinationOfDay=async function(){
+  const cur=adminSettings.destinationOfDay!==false;
+  const next=!cur;
+  try{ await setDoc(adminRef,{destinationOfDay:next},{merge:true}); }
+  catch(e){ toast('Could not save the Destination of the Day switch ('+(e.code||'error')+') — nothing changed.','err'); return; }
+  try{ await adminLog('ALL','ALL',next?'admin-destination-on':'admin-destination-off'); }catch(_){}
+  toast(next?'🌍 Destination of the Day ON':'🌍 Destination of the Day OFF', next?'ok':'warn');
 };
 window.toggleEmailNotifs=async function(){
   const cur=adminSettings.emailNotifsEnabled!==false;
@@ -10474,6 +10500,8 @@ function systemActionText(e){
   if(t==='admin-restore-full') return 'Admin restored a <strong>full backup</strong>';
   if(t==='admin-restore-user') return who?`Admin restored <strong>${who}</strong> from a backup`:'Admin restored a user from a backup';
   if(t==='admin-fte-snap') return 'Admin snapped FTE values to the 0.1 grid';
+  if(t==='admin-destination-on') return 'Admin turned the sign-in <strong>Destination of the Day</strong> ON'; // [336 · §196]
+  if(t==='admin-destination-off') return 'Admin turned the sign-in <strong>Destination of the Day</strong> OFF'; // [336 · §196]
   if(t==='admin-fte-bulk') return 'Admin bulk-set an FTE value';
   if(t==='admin-hold') return 'Admin <strong>withheld</strong> bid number <strong>'+esc(String(e.bidValue??''))+'</strong> from <strong>'+who+'</strong>'+(e.reason?' — '+esc(e.reason):''); // [327 · §180]
   if(t==='admin-release') return 'Admin <strong>released</strong> bid number <strong>'+esc(String(e.bidValue??''))+'</strong> to <strong>'+who+'</strong>'+(e.reason?' — '+esc(e.reason):''); // [327 · §180]

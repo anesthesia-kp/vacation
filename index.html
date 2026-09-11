@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 173;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 174;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -283,6 +283,13 @@ select:focus{outline:none;border-color:#006ba6}
 .login-hero-year{font-size:clamp(3rem,6vw,4.6rem);font-weight:900;letter-spacing:.03em;line-height:.9}
 .login-hero-title{font-size:clamp(1.25rem,2.4vw,1.9rem);font-weight:800;line-height:1.2;margin-top:6px}
 .login-phase{margin-top:20px;font-size:.72rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:rgba(255,255,255,.82)}
+/* [174 · §196] Destination of the day — straight on the blue under the phase line (his look A, no tile): a small tilted photo, the place, its region. Nothing else. */
+.dest-pill{display:inline-flex;align-items:center;gap:14px;margin-top:22px;padding:0;color:#fff;text-decoration:none;align-self:flex-start;max-width:100%;transition:transform .15s}
+.dest-pill:hover{transform:translateY(-1px)}
+.dest-pill img{width:84px;height:64px;border-radius:8px;object-fit:cover;flex:none;display:block;background:#dbe6ef;transform:rotate(-2deg);box-shadow:0 4px 10px rgba(0,0,0,.25)}
+.dest-pill span{display:block;font-size:1rem;font-weight:800;line-height:1.15;letter-spacing:0;text-transform:none;text-align:left}
+.dest-pill small{display:block;font-size:.72rem;font-weight:600;opacity:.82;margin-top:2px;letter-spacing:0;text-transform:none;text-align:left}
+.dest-pill[hidden]{display:none}
 .login-form-panel{flex:1 1 58%;padding:36px 44px;display:flex;flex-direction:column;justify-content:center;overflow-y:auto}
 .login-form-inner{width:100%;max-width:380px;margin:0 auto}
 .login-form-panel input[type=text]:focus,.login-form-panel input[type=password]:focus{outline:none;border-color:#006ba6}
@@ -290,6 +297,7 @@ select:focus{outline:none;border-color:#006ba6}
   .login-card{flex-direction:column;width:100vw;height:100vh;overflow-y:auto}
   .login-hero-panel{flex:none;padding:34px 24px 26px;text-align:center;align-items:center}
   .login-form-panel{flex:1 0 auto;padding:28px 24px 40px;justify-content:flex-start}
+  .dest-pill{align-self:center;margin-top:16px;text-align:left} /* [174 · §196] phones too (his ruling) */
 }
 .priority-input{width:100%;padding:10px 13px;margin-bottom:16px;border:2px solid #9fb4c6;border-radius:10px;background:#eef2f6;color:#0a2540;font-size:.95rem;transition:border-color .2s}
 .priority-input:focus{outline:none;border-color:#006ba6}
@@ -375,6 +383,9 @@ body{zoom:1.15}
       <div class="login-hero-year" id="acYearHero">2027</div>
       <div class="login-hero-title">Anesthesia<br>Vacation Auction</div>
       <div id="signinPhaseLine" class="login-phase"></div>
+      <!-- [174 · §196] Destination of the day — painted by renderDestinationPill() once adminSettings has arrived;
+           hidden when the admin switch is off, before the settings arrive, or if the picture fails to load. -->
+      <a id="destPill" class="dest-pill" hidden target="_blank" rel="noopener"><img id="destPillImg" alt="" width="84" height="64" decoding="async"><div><span id="destPillName"></span><small id="destPillSub"></small></div></a>
     </div>
     <!-- RIGHT: form -->
     <div class="login-form-panel">
@@ -1702,7 +1713,7 @@ function _rbGateCheck(){
 // during the anonymous bootstrap it was rejected permission-denied (a dead, error-logging
 // listener that never recovers). The signed-in path (_subscribeSensitiveOnce + a getDoc)
 // covers it after login; _emailsReady already initializes true so sign-in never waits on it.
-onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _acCheckRemote(adminSettings); _rbGateCheck(); _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); }); // [build 136 · B5] config check first · [build 139 · GATE]
+onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _acCheckRemote(adminSettings); _rbGateCheck(); _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); if(typeof renderDestinationPill==='function') renderDestinationPill(); }); // [build 136 · B5] config check first · [build 139 · GATE] · [174 · §196] the destination pill follows this doc
 
 // ── Maximum bids per phase (admin-set; 'none' = no limit) ──
 // NP bids allowed this phase? Admin toggles per phase (Controls → NP Bids by
@@ -3917,6 +3928,156 @@ function updateSigninPhase(){
   el.textContent=_open?(_phaseWindowLabel()+" · Bidding open"):"Bidding closed"; // [166] names the round in Phase 4 // [135] no timing promises anywhere
 }
 window.updateSigninPhase=updateSigninPhase;
+// [174 · §196] DESTINATION OF THE DAY — a small round photo + the place name on the sign-in hero.
+// 100 places cycle from DEST_EPOCH (day 1 = Plitvice Lakes), one per CALENDAR day, the same for
+// everyone: the day count comes from the local calendar date through Date.UTC, so daylight-saving
+// days cannot shift it. adminSettings.destinationOfDay switches it off (absent = on). Pictures live
+// in img/destinations/ (credits in img/destinations/CREDITS.md); the pill links to the photo's
+// Commons page, which is the photographers' attribution. Every failure path hides the pill and
+// touches nothing else — this code reads one setting and writes nothing.
+const DEST_EPOCH = "2026-09-11";
+const DESTINATIONS = [
+{"d":1,"n":"Plitvice Lakes, Croatia","f":"001-plitvice-lakes-croatia.jpg","p":"https://commons.wikimedia.org/wiki/File:Plitvice_Lakes1.jpg","c":"Tesla Delacroix","l":"CC BY-SA 4.0"},
+{"d":2,"n":"Paris, France","f":"002-paris-france.jpg","p":"https://commons.wikimedia.org/wiki/File:Paris_-_The_Eiffel_Tower_in_spring_-_2307.jpg","c":"Jorge Royan","l":"CC BY-SA 3.0"},
+{"d":3,"n":"Lake Como, Italy","f":"003-lake-como-italy.jpg","p":"https://commons.wikimedia.org/wiki/File:Bellagio_(Como).jpg","c":"Luca Trombetta","l":"CC BY-SA 4.0"},
+{"d":4,"n":"New York City","f":"004-new-york-city.jpg","p":"https://commons.wikimedia.org/wiki/File:Liberty_Island_photo_Don_Ramey_Logan.jpg","c":"Don Ramey Logan","l":"CC BY 4.0"},
+{"d":5,"n":"Rome, Italy","f":"005-rome-italy.jpg","p":"https://commons.wikimedia.org/wiki/File:Colosseum_in_Rome-April_2007-1-_copie_2B.jpg","c":"Diliff","l":"CC BY-SA 2.5"},
+{"d":6,"n":"Waikiki, Oahu","f":"006-waikiki-oahu.jpg","p":"https://commons.wikimedia.org/wiki/File:Waikiki_Beach_from_Diamond_Head_2.jpg","c":"Cumulus Clouds","l":"CC BY 2.5"},
+{"d":7,"n":"London, England","f":"007-london-england.jpg","p":"https://commons.wikimedia.org/wiki/File:Big_Ben_at_sunset_-_2014-10-27_17-30.jpg","c":"Colin","l":"CC BY-SA 4.0"},
+{"d":8,"n":"Key West, Florida","f":"008-key-west-florida.jpg","p":"https://commons.wikimedia.org/wiki/File:Sunset_Key_and_Sailboats,_Florida,_2025.jpg","c":"Julian Lupyan","l":"CC0"},
+{"d":9,"n":"Petra, Jordan","f":"009-petra-jordan.jpg","p":"https://commons.wikimedia.org/wiki/File:Petra_,_Al-Khazneh_2.jpg","c":"Faraheed","l":"CC BY-SA 3.0"},
+{"d":10,"n":"Las Vegas, Nevada","f":"010-las-vegas-nevada.jpg","p":"https://commons.wikimedia.org/wiki/File:Las_Vegas_Strip_at_night,_2012.jpg","c":"Clément Bardot","l":"CC BY-SA 3.0"},
+{"d":11,"n":"Barcelona, Spain","f":"011-barcelona-spain.jpg","p":"https://commons.wikimedia.org/wiki/File:Sagrada_Familia,_Nativity_facade_(26)_(30489118703).jpg","c":"Richard Mortel from Riyadh, Saudi Arabia","l":"CC BY 2.0"},
+{"d":12,"n":"Aruba","f":"012-aruba.jpg","p":"https://commons.wikimedia.org/wiki/File:Fofoti_-_Eagle_Beach_Aruba_(WoA)_08.jpg","c":"Rarends297","l":"CC0"},
+{"d":13,"n":"Santorini, Greece","f":"013-santorini-greece.jpg","p":"https://commons.wikimedia.org/wiki/File:1000_Three_domes_of_Oia_in_Santorini_Photo_by_Giles_Laurent.jpg","c":"Giles Laurent","l":"CC BY-SA 4.0"},
+{"d":14,"n":"St. Augustine, Florida","f":"014-st-augustine-florida.jpg","p":"https://commons.wikimedia.org/wiki/File:San_Pablo_Bastion,_Castillo_de_San_Marcos.jpg","c":"Juliancolton","l":"CC BY-SA 4.0"},
+{"d":15,"n":"Giza, Egypt","f":"015-giza-egypt.jpg","p":"https://commons.wikimedia.org/wiki/File:All_Gizah_Pyramids.jpg","c":"Ricardo Liberato","l":"CC BY-SA 2.0"},
+{"d":16,"n":"Amalfi Coast, Italy","f":"016-amalfi-coast-italy.jpg","p":"https://commons.wikimedia.org/wiki/File:Positano_(Italy)_04.jpg","c":"Bernard Gagnon","l":"CC BY 4.0"},
+{"d":17,"n":"Tokyo, Japan","f":"017-tokyo-japan.jpg","p":"https://commons.wikimedia.org/wiki/File:Tokyo_Tower,_Minato_City.jpg","c":"David Kernan","l":"CC BY 4.0"},
+{"d":18,"n":"Turks and Caicos","f":"018-turks-and-caicos.jpg","p":"https://commons.wikimedia.org/wiki/File:Sunset_in_Grace_Bay,_Turks_and_Caicos_Islands.jpg","c":"Jason Boldero","l":"CC BY 2.0"},
+{"d":19,"n":"New Orleans, Louisiana","f":"019-new-orleans-louisiana.jpg","p":"https://commons.wikimedia.org/wiki/File:Jackson_Square.jpg","c":"Clark Mills","l":"Public domain"},
+{"d":20,"n":"Venice, Italy","f":"020-venice-italy.jpg","p":"https://commons.wikimedia.org/wiki/File:Canal_Grande_Chiesa_della_Salute_e_Dogana_dal_ponte_dell_Accademia.jpg","c":"This Photo was taken by Wolfgang Moroder. Feel free to use m","l":"CC BY-SA 3.0"},
+{"d":21,"n":"Victoria Falls, Zimbabwe","f":"021-victoria-falls-zimbabwe.jpg","p":"https://commons.wikimedia.org/wiki/File:Mosi-oa-Tunya,_Livingstone_(20260519-P1075700).jpg","c":"Matti Blume","l":"CC BY-SA 4.0"},
+{"d":22,"n":"Lisbon, Portugal","f":"022-lisbon-portugal.jpg","p":"https://commons.wikimedia.org/wiki/File:Torre_Bel%C3%A9m_April_2009-4a.jpg","c":"Alvesgaspar","l":"CC BY-SA 3.0"},
+{"d":23,"n":"Cinque Terre, Italy","f":"023-cinque-terre-italy.jpg","p":"https://commons.wikimedia.org/wiki/File:Manarola_NW_Cinque_Terre_Sep23_A7C_07233.jpg","c":"This Photo was taken by Timothy A. Gonsalves. Feel free to u","l":"CC BY-SA 4.0"},
+{"d":24,"n":"Charleston, South Carolina","f":"024-charleston-south-carolina.jpg","p":"https://commons.wikimedia.org/wiki/File:Rainbow_Row,_East_Bay_Street,_South_of_Broad,_Charleston,_SC.jpg","c":"w_lemay","l":"CC BY-SA 2.0"},
+{"d":25,"n":"Abu Dhabi, UAE","f":"025-abu-dhabi-uae.jpg","p":"https://commons.wikimedia.org/wiki/File:Sheikh_Zayed_Mosque_Silhouette.jpg","c":"PotatoWitch","l":"CC BY-SA 4.0"},
+{"d":26,"n":"Bali, Indonesia","f":"026-bali-indonesia.jpg","p":"https://commons.wikimedia.org/wiki/File:Tanah_Lot,_Bali,_Indonesia,_20220827_1008_1159.jpg","c":"Jakub Hałun","l":"CC BY-SA 4.0"},
+{"d":27,"n":"San Diego, California","f":"027-san-diego-california.jpg","p":"https://commons.wikimedia.org/wiki/File:California_sea_lion_in_La_Jolla_(70568).jpg","c":"Rhododendrites","l":"CC BY-SA 4.0"},
+{"d":28,"n":"Amsterdam, Netherlands","f":"028-amsterdam-netherlands.jpg","p":"https://commons.wikimedia.org/wiki/File:Water_reflection_of_canal_houses_at_blue_hour_in_Damrak_Amsterdam_the_Netherlands.jpg","c":"Basile Morin","l":"CC BY-SA 4.0"},
+{"d":29,"n":"Mont-Saint-Michel, France","f":"029-mont-saint-michel-france.jpg","p":"https://commons.wikimedia.org/wiki/File:MSM_sunset_02.JPG","c":"Benh LIEU SONG","l":"CC BY 2.5"},
+{"d":30,"n":"Grand Canyon, Arizona","f":"030-grand-canyon-arizona.jpg","p":"https://commons.wikimedia.org/wiki/File:Grand_Canyon_(Arizona,_USA),_South_Rim_nahe_Tusayan_--_2012_--_6040.jpg","c":"Dietmar Rabich","l":"CC BY-SA 4.0"},
+{"d":31,"n":"Dublin, Ireland","f":"031-dublin-ireland.jpg","p":"https://commons.wikimedia.org/wiki/File:Dublin_-_Guinness_Storehouse_-_20160507154437.jpg","c":"Dieglop","l":"CC BY-SA 4.0"},
+{"d":32,"n":"Miami Beach, Florida","f":"032-miami-beach-florida.jpg","p":"https://commons.wikimedia.org/wiki/File:Lifeguard_stand,_Miami_Beach.jpg","c":"Radomianin","l":"CC BY-SA 4.0"},
+{"d":33,"n":"Kyoto, Japan","f":"033-kyoto-japan.jpg","p":"https://commons.wikimedia.org/wiki/File:Kinkaku-ji_in_November_2016_-02.jpg","c":"Martin Falbisoner","l":"CC BY-SA 4.0"},
+{"d":34,"n":"Nashville, Tennessee","f":"034-nashville-tennessee.jpg","p":"https://commons.wikimedia.org/wiki/File:Nashville_skyline_2009.jpg","c":"Kaldari","l":"Public domain"},
+{"d":35,"n":"Florence, Italy","f":"035-florence-italy.jpg","p":"https://commons.wikimedia.org/wiki/File:Florence_Cathedral_seen_from_Piazzale_Michelangelo_night_dllu.jpg","c":"Dllu","l":"CC BY-SA 4.0"},
+{"d":36,"n":"St. Lucia","f":"036-st-lucia.jpg","p":"https://commons.wikimedia.org/wiki/File:PetitPiton.JPG","c":"Jayen466","l":"Public domain"},
+{"d":37,"n":"Bruges, Belgium","f":"037-bruges-belgium.jpg","p":"https://commons.wikimedia.org/wiki/File:Rozenhoedkaai_(canal)_and_Belfry_of_Bruges,_Bruges,_Belgium_(Ank_Kumar,_Infosys_Limited)_09.jpg","c":"Ank Kumar","l":"CC BY-SA 4.0"},
+{"d":38,"n":"Edinburgh, Scotland","f":"038-edinburgh-scotland.jpg","p":"https://commons.wikimedia.org/wiki/File:Historic_Edinburgh_skyline_(41195800844).jpg","c":"Mike McBey","l":"CC BY 2.0"},
+{"d":39,"n":"Angkor Wat, Cambodia","f":"039-angkor-wat-cambodia.jpg","p":"https://commons.wikimedia.org/wiki/File:Angkor_Wat_Sunrise_(209237385).jpeg","c":"Reinhard Onasch","l":"CC BY-SA 3.0"},
+{"d":40,"n":"Yellowstone, Wyoming","f":"040-yellowstone-wyoming.jpg","p":"https://commons.wikimedia.org/wiki/File:Yellowstone_National_Park_(WY,_USA),_Grand_Prismatic_Spring_--_2022_--_2514.jpg","c":"Dietmar Rabich","l":"CC BY-SA 4.0"},
+{"d":41,"n":"Athens, Greece","f":"041-athens-greece.jpg","p":"https://commons.wikimedia.org/wiki/File:Attica_06-13_Athens_50_View_from_Philopappos_-_Acropolis_Hill.jpg","c":"A.Savin","l":"CC BY-SA 3.0"},
+{"d":42,"n":"Tuscany, Italy","f":"042-tuscany-italy.jpg","p":"https://commons.wikimedia.org/wiki/File:Val_D_Orcia_Sunrise_(151505625).jpeg","c":"Giuseppe Paris","l":"CC BY 3.0"},
+{"d":43,"n":"Agra, India","f":"043-agra-india.jpg","p":"https://commons.wikimedia.org/wiki/File:Taj_Mahal,_Agra,_India_edit2.jpg","c":"Yann; edited by King of Hearts","l":"CC BY-SA 4.0"},
+{"d":44,"n":"Sydney, Australia","f":"044-sydney-australia.jpg","p":"https://commons.wikimedia.org/wiki/File:Sydney_Opera_House_-_Dec_2008.jpg","c":"Diliff","l":"CC BY-SA 3.0"},
+{"d":45,"n":"Kraków, Poland","f":"045-krakow-poland.jpg","p":"https://commons.wikimedia.org/wiki/File:Krakow_2024_030_St_Mary_Basilica_-_Tops_of_Towers.jpg","c":"Scotch Mist","l":"CC BY-SA 4.0"},
+{"d":46,"n":"Prague, Czech Republic","f":"046-prague-czech-republic.jpg","p":"https://commons.wikimedia.org/wiki/File:North_view_of_Charles_Bridge_from_M%C3%A1nes%C5%AFv_most,_Prague_20160808_1.jpg","c":"DXR","l":"CC BY-SA 4.0"},
+{"d":47,"n":"Bermuda","f":"047-bermuda.jpg","p":"https://commons.wikimedia.org/wiki/File:Bermuda_-_Horseshoe_Bay_Cove.jpg","c":"P. Hughes","l":"CC BY-SA 4.0"},
+{"d":48,"n":"Sedona, Arizona","f":"048-sedona-arizona.jpg","p":"https://commons.wikimedia.org/wiki/File:Cathedral_Rock_-_Sedona_AZ-1.jpg","c":"Terrydarc","l":"CC BY-SA 3.0"},
+{"d":49,"n":"Madrid, Spain","f":"049-madrid-spain.jpg","p":"https://commons.wikimedia.org/wiki/File:Palacio_Real_de_Madrid_-_13.jpg","c":"Carlos Delgado","l":"CC BY-SA 3.0"},
+{"d":50,"n":"Maldives","f":"050-maldives.jpg","p":"https://commons.wikimedia.org/wiki/File:MaldivesBungalows.jpg","c":"Hungryjacks77","l":"CC BY-SA 4.0"},
+{"d":51,"n":"Amboseli, Kenya","f":"051-amboseli-kenya.jpg","p":"https://commons.wikimedia.org/wiki/File:Amboseli_Park_-_Kilimanjaro_elephant.jpg","c":"Lafleursauvage","l":"CC BY-SA 4.0"},
+{"d":52,"n":"Bangkok, Thailand","f":"052-bangkok-thailand.jpg","p":"https://commons.wikimedia.org/wiki/File:Templo_Wat_Arun,_Bangkok,_Tailandia,_2013-08-22,_DD_37.jpg","c":"Diego Delso","l":"CC BY-SA 3.0"},
+{"d":53,"n":"Yosemite, California","f":"053-yosemite-california.jpg","p":"https://commons.wikimedia.org/wiki/File:Tunnel_View,_Yosemite_Valley,_Yosemite_NP_-_Diliff.jpg","c":"Diliff","l":"CC BY-SA 3.0"},
+{"d":54,"n":"Iceland","f":"054-iceland.jpg","p":"https://commons.wikimedia.org/wiki/File:Kirkjufell,_Iceland,_20240714_1631_0713.jpg","c":"Jakub Hałun","l":"CC BY 4.0"},
+{"d":55,"n":"Isle of Skye, Scotland","f":"055-isle-of-skye-scotland.jpg","p":"https://commons.wikimedia.org/wiki/File:The_Old_Man_Of_Storr_Skye_Island_Scotland_July30_2019.jpg","c":"Terence wiki","l":"CC BY-SA 4.0"},
+{"d":56,"n":"Cartagena, Colombia","f":"056-cartagena-colombia.jpg","p":"https://commons.wikimedia.org/wiki/File:Sunset-cartagena-tower-dewired.jpg","c":"Igvir Ramirez","l":"CC BY-SA 2.0"},
+{"d":57,"n":"Salar de Uyuni, Bolivia","f":"057-salar-de-uyuni-bolivia.jpg","p":"https://commons.wikimedia.org/wiki/File:Piles_of_Salt_Salar_de_Uyuni_Bolivia_Luca_Galuzzi_2006_a.jpg","c":"Luca Galuzzi (Lucag), edit by Trialsanderrors","l":"CC BY-SA 2.5"},
+{"d":58,"n":"Swiss Alps, Switzerland","f":"058-swiss-alps-switzerland.jpg","p":"https://commons.wikimedia.org/wiki/File:Riffelsee.JPG","c":"H. Zell","l":"CC BY 3.0"},
+{"d":59,"n":"Costa Rica","f":"059-costa-rica.jpg","p":"https://commons.wikimedia.org/wiki/File:Arenal_volcano_(70785p)_(cropped).jpg","c":"Rhododendrites","l":"CC BY-SA 4.0"},
+{"d":60,"n":"Chicago, Illinois","f":"060-chicago-illinois.jpg","p":"https://commons.wikimedia.org/wiki/File:Chicago_skyline_from_shore_of_Lake_Michigan_at_Adler_Planetarium.jpeg","c":"Dough4872","l":"CC BY-SA 4.0"},
+{"d":61,"n":"Dubrovnik, Croatia","f":"061-dubrovnik-croatia.jpg","p":"https://commons.wikimedia.org/wiki/File:Dubrovnik_as_seen_from_Sr%C4%91_-_September_2017.jpg","c":"Martin Falbisoner","l":"CC BY-SA 4.0"},
+{"d":62,"n":"Patagonia, Chile","f":"062-patagonia-chile.jpg","p":"https://commons.wikimedia.org/wiki/File:Cuernos_del_Paine_in_Torres_del_Paine_National_Park.jpg","c":"Pedro Szekely from Los Angeles, USA","l":"CC BY-SA 2.0"},
+{"d":63,"n":"Big Sur, California","f":"063-big-sur-california.jpg","p":"https://commons.wikimedia.org/wiki/File:Pacific_Coast_at_Bixby_Creek_Bridge_2013.jpg","c":"Tuxyso","l":"CC BY-SA 3.0"},
+{"d":64,"n":"Iguazú Falls, Argentina","f":"064-iguazu-falls-argentina.jpg","p":"https://commons.wikimedia.org/wiki/File:Cataratas_do_Igua%C3%A7u_-_Vista_de_cima_alt.jpg","c":"Mayra Villas Boas Francisco Zamulko Alt version WB, shadowns","l":"CC BY-SA 4.0"},
+{"d":65,"n":"Washington, D.C.","f":"065-washington-d-c.jpg","p":"https://commons.wikimedia.org/wiki/File:US_Capitol_dome_Jan_2006.jpg","c":"Diliff","l":"CC BY 2.5"},
+{"d":66,"n":"Madeira, Portugal","f":"066-madeira-portugal.jpg","p":"https://commons.wikimedia.org/wiki/File:Cliffs_of_S%C3%A3o_Louren%C3%A7o._View_from_Porto_da_Cruz._Madeira,_Portugal.jpg","c":"Ввласенко","l":"CC BY-SA 3.0"},
+{"d":67,"n":"Zion, Utah","f":"067-zion-utah.jpg","p":"https://commons.wikimedia.org/wiki/File:Evening_Relaxation_-_Flickr_-_Moo.The.Cow.jpg","c":"Michael Kwok","l":"CC BY 4.0"},
+{"d":68,"n":"Seoul, South Korea","f":"068-seoul-south-korea.jpg","p":"https://commons.wikimedia.org/wiki/File:Gyeonghoeru_(Royal_Banquet_Hall)_at_Gyeongbokgung_Palace,_Seoul.jpg","c":"Frank Schulenburg","l":"CC BY-SA 4.0"},
+{"d":69,"n":"Great Ocean Road, Australia","f":"069-great-ocean-road-australia.jpg","p":"https://commons.wikimedia.org/wiki/File:Princetown_(AU),_Port_Campbell_National_Park,_Twelve_Apostles_--_2019_--_0969.jpg","c":"Dietmar Rabich","l":"CC BY-SA 4.0"},
+{"d":70,"n":"Easter Island, Chile","f":"070-easter-island-chile.jpg","p":"https://commons.wikimedia.org/wiki/File:Moai_Rano_raraku.jpg","c":"Aurbina","l":"Public domain"},
+{"d":71,"n":"San Francisco, California","f":"071-san-francisco-california.jpg","p":"https://commons.wikimedia.org/wiki/File:Golden_Gate_Bridge_as_seen_from_Marshall%E2%80%99s_Beach,_March_2018.jpg","c":"Frank Schulenburg","l":"CC BY-SA 4.0"},
+{"d":72,"n":"Phuket, Thailand","f":"072-phuket-thailand.jpg","p":"https://commons.wikimedia.org/wiki/File:Isla_Tapu,_Phuket,_Tailandia,_2013-08-20,_DD_36.JPG","c":"Diego Delso","l":"CC BY-SA 3.0"},
+{"d":73,"n":"Seville, Spain","f":"073-seville-spain.jpg","p":"https://commons.wikimedia.org/wiki/File:Seville,_Plaza_de_Espa%C3%B1a_(38625005691)_(edited).jpg","c":"Dmitry Dzhus from London","l":"CC BY 2.0"},
+{"d":74,"n":"Vienna, Austria","f":"074-vienna-austria.jpg","p":"https://commons.wikimedia.org/wiki/File:Fa%C3%A7ade_nord_ch%C3%A2teau_Sch%C3%B6nbrunn_Vienna.jpg","c":"Jebulon","l":"CC0"},
+{"d":75,"n":"Rio de Janeiro, Brazil","f":"075-rio-de-janeiro-brazil.jpg","p":"https://commons.wikimedia.org/wiki/File:Unique_Moment_with_the_Moon_and_Christ_the_Redeemer_3.jpg","c":"Donatas Dabravolskas","l":"CC BY-SA 4.0"},
+{"d":76,"n":"Zanzibar, Tanzania","f":"076-zanzibar-tanzania.jpg","p":"https://commons.wikimedia.org/wiki/File:Dhow_Sunset,_Zanzibar_(10164046475).jpg","c":"Rod Waddington from Kergunyah, Australia","l":"CC BY-SA 2.0"},
+{"d":77,"n":"Lake Bled, Slovenia","f":"077-lake-bled-slovenia.jpg","p":"https://commons.wikimedia.org/wiki/File:SloveeniaBled.jpg","c":"Abrget47j","l":"CC BY-SA 3.0"},
+{"d":78,"n":"Cliffs of Moher, Ireland","f":"078-cliffs-of-moher-ireland.jpg","p":"https://commons.wikimedia.org/wiki/File:Ireland_Cliffs_of_Moher_BW_2025-09-11_14-27-51.jpg","c":"Berthold Werner","l":"CC BY-SA 4.0"},
+{"d":79,"n":"Crete, Greece","f":"079-crete-greece.jpg","p":"https://commons.wikimedia.org/wiki/File:Aerial_view_of_Balos_Beach_and_Lagoon_on_Crete,_Greece.jpg","c":"dronepicr","l":"CC BY 2.0"},
+{"d":80,"n":"Jackson Hole, Wyoming","f":"080-jackson-hole-wyoming.jpg","p":"https://commons.wikimedia.org/wiki/File:Grand_Teton_from_the_Snake_River_Overlook.jpg","c":"Frank Kovalchek","l":"CC BY 2.0"},
+{"d":81,"n":"Mount Fuji, Japan","f":"081-mount-fuji-japan.jpg","p":"https://commons.wikimedia.org/wiki/File:Chureito_Pagoda_and_Mount_Fuji_2023-03-07.jpg","c":"Stjepko Krehula","l":"CC BY 4.0"},
+{"d":82,"n":"Fiji","f":"082-fiji.jpg","p":"https://commons.wikimedia.org/wiki/File:Fiji_Public_Beach.jpg","c":"Keith Yahl","l":"CC BY 2.0"},
+{"d":83,"n":"Norwegian Fjords, Norway","f":"083-norwegian-fjords-norway.jpg","p":"https://commons.wikimedia.org/wiki/File:Geirangerfjord_from_%C3%98rnesvingen,_2013_June.jpg","c":"Ximonic (Simo Räsänen)","l":"CC BY-SA 3.0"},
+{"d":84,"n":"Boston, Massachusetts","f":"084-boston-massachusetts.jpg","p":"https://commons.wikimedia.org/wiki/File:Skyline_of_Downtown_Boston_20240702.jpg","c":"Nkon21","l":"CC BY 4.0"},
+{"d":85,"n":"Singapore","f":"085-singapore.jpg","p":"https://commons.wikimedia.org/wiki/File:Merli%C3%B3n,_Marina_Bay,_Singapur,_2023-08-18,_DD_45-47_HDR.jpg","c":"Diego Delso","l":"CC BY-SA 4.0"},
+{"d":86,"n":"Crater Lake, Oregon","f":"086-crater-lake-oregon.jpg","p":"https://commons.wikimedia.org/wiki/File:Crater_Lake_October_2019_015.jpg","c":"King of Hearts","l":"CC BY-SA 4.0"},
+{"d":87,"n":"Budapest, Hungary","f":"087-budapest-hungary.jpg","p":"https://commons.wikimedia.org/wiki/File:HUN-2015-Budapest-Hungarian_Parliament_(Budapest)_2015-02.jpg","c":"Godot13","l":"CC BY-SA 4.0"},
+{"d":88,"n":"Bora Bora, French Polynesia","f":"088-bora-bora-french-polynesia.jpg","p":"https://commons.wikimedia.org/wiki/File:Mount_Otemanu_Bora_Bora.jpg","c":"Athos33320","l":"CC BY-SA 4.0"},
+{"d":89,"n":"Copenhagen, Denmark","f":"089-copenhagen-denmark.jpg","p":"https://commons.wikimedia.org/wiki/File:Nyhavn_41-45,_K%C3%B8benhavn_2014.jpg","c":"Jorge Láscar from Melbourne, Australia","l":"CC BY 2.0"},
+{"d":90,"n":"Cape Town, South Africa","f":"090-cape-town-south-africa.jpg","p":"https://commons.wikimedia.org/wiki/File:Cape_Town_(ZA),_Table_Mountain_--_2024_--_3437.jpg","c":"Dietmar Rabich","l":"CC BY-SA 4.0"},
+{"d":91,"n":"Hong Kong","f":"091-hong-kong.jpg","p":"https://commons.wikimedia.org/wiki/File:Hong_Kong_Harbour_Night_2019-06-11.jpg","c":"Benh LIEU SONG (Flickr)","l":"CC BY-SA 4.0"},
+{"d":92,"n":"Banff, Canada","f":"092-banff-canada.jpg","p":"https://commons.wikimedia.org/wiki/File:1_lake_louise_pano_2019.jpg","c":"Chensiyuan","l":"CC BY-SA 4.0"},
+{"d":93,"n":"San Juan, Puerto Rico","f":"093-san-juan-puerto-rico.jpg","p":"https://commons.wikimedia.org/wiki/File:USA-2016-Puerto_Rico-San_Juan-Castillo_San_Felipe_del_Morro_10.jpg","c":"Godot13","l":"CC BY-SA 4.0"},
+{"d":94,"n":"Ha Long Bay, Vietnam","f":"094-ha-long-bay-vietnam.jpg","p":"https://commons.wikimedia.org/wiki/File:Ha_Long_Bay,_Tower_karsts.jpg","c":"Vyacheslav Argenberg","l":"CC BY 4.0"},
+{"d":95,"n":"Acadia, Maine","f":"095-acadia-maine.jpg","p":"https://commons.wikimedia.org/wiki/File:Otter_Cliffs,_Acadia_National_Park,_ME_-_panoramio.jpg","c":"Aaron Zhu","l":"CC BY-SA 3.0"},
+{"d":96,"n":"Serengeti, Tanzania","f":"096-serengeti-tanzania.jpg","p":"https://commons.wikimedia.org/wiki/File:Acacia_tree_on_a_sunrise_safari_at_the_Serengeti_National_Park,_Tanzania.jpg","c":"Daniel Zaas","l":"Public domain"},
+{"d":97,"n":"Aspen, Colorado","f":"097-aspen-colorado.jpg","p":"https://commons.wikimedia.org/wiki/File:Maroon_Bells_(11553)a.jpg","c":"Rhododendrites","l":"CC BY-SA 4.0"},
+{"d":98,"n":"Istanbul, Türkiye","f":"098-istanbul-turkiye.jpg","p":"https://commons.wikimedia.org/wiki/File:Hagia_Sophia_Mars_2013.jpg","c":"Arild Vågen","l":"CC BY-SA 3.0"},
+{"d":99,"n":"Juneau, Alaska","f":"099-juneau-alaska.jpg","p":"https://commons.wikimedia.org/wiki/File:Mendenhall_Glacier_(Winter).jpg","c":"","l":"CC BY-SA 3.0"},
+{"d":100,"n":"Queenstown, New Zealand","f":"100-queenstown-new-zealand.jpg","p":"https://commons.wikimedia.org/wiki/File:Lake_Wakatipu_and_Remarkable_Mountains.jpg","c":"Coekon","l":"CC BY-SA 4.0"}
+];
+function destinationIndexFor(date, epoch){
+  const d = date instanceof Date ? date : new Date(date);
+  const [ey, em, ed] = String(epoch || DEST_EPOCH).split('-').map(Number);
+  const days = Math.round((Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - Date.UTC(ey, em - 1, ed)) / 86400000);
+  const n = DESTINATIONS.length;
+  return ((days % n) + n) % n;
+}
+function destinationFor(date, epoch){ return DESTINATIONS[destinationIndexFor(date, epoch)]; }
+function renderDestinationPill(){
+  try{
+    const pill=document.getElementById('destPill'), img=document.getElementById('destPillImg'), nm=document.getElementById('destPillName');
+    if(!pill||!img||!nm) return;
+    const on = !(adminSettings && adminSettings.destinationOfDay===false);
+    if(!_adminSettingsReady || !on || !DESTINATIONS.length){ pill.hidden=true; return; }
+    const dest = destinationFor(new Date());
+    if(!dest || !dest.f){ pill.hidden=true; return; }
+    const cut = String(dest.n).lastIndexOf(', ');
+    nm.textContent = cut > 0 ? dest.n.slice(0, cut) : dest.n;
+    const sub = document.getElementById('destPillSub'); if(sub) sub.textContent = cut > 0 ? dest.n.slice(cut + 2) : '';
+    pill.href = dest.p;
+    pill.title = 'Photo: ' + (dest.c || 'Wikimedia Commons') + ' · ' + (dest.l || '') + ' · Wikimedia Commons';
+    const src = 'img/destinations/' + dest.f;
+    if(img.getAttribute('src')!==src){
+      pill.hidden=true;                              // never show a broken image: paint only once it has loaded
+      img.onerror=()=>{ pill.hidden=true; };
+      // [review] re-check the switch when the load lands — an OFF that arrived mid-load must win
+      img.onload=()=>{ pill.hidden = !!(adminSettings && adminSettings.destinationOfDay===false); };
+      img.src=src;
+    } else if(img.complete && img.naturalWidth>0){ pill.hidden=false; }
+  }catch(e){ try{ const p=document.getElementById('destPill'); if(p) p.hidden=true; }catch(_){} }
+}
+window.renderDestinationPill=renderDestinationPill;
+renderDestinationPill();
+// [review] a sign-in tab left open past local midnight turns over to the next place by itself
+(function _destMidnightTick(){
+  try{
+    const now=new Date(), next=new Date(now.getFullYear(), now.getMonth(), now.getDate()+1, 0, 0, 2);
+    setTimeout(()=>{ renderDestinationPill(); _destMidnightTick(); }, Math.max(1000, next-now));
+  }catch(_){}
+})();
 refreshLoginUsers();
 document.getElementById("accountSelectModal").classList.add("show");
 
