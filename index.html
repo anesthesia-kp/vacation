@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 176;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 177;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -527,6 +527,11 @@ body{zoom:1.15}
   <!-- [WHITELIST TRACKER 2026-07-26] One-time prompt asking the signed-in user to add the auction
        sender to their contacts and confirm. Filled by renderWhitelistBanner(); hidden once confirmed.
        Reads/writes only the whitelistConfirm doc — nothing here touches bidding. -->
+  <!-- [177 · §201] Test-mode banner — shown while the admin's Rehearsal Mode switch is on, so a
+       user who signs in during a simulation is told the auction is not live. Filled by
+       renderSimModeBanner(); empty and zero-height otherwise. In NORMAL FLOW, never fixed, so it
+       stacks above the whitelist banner and the stack closes up when that banner is absent. -->
+  <div id="simModeBanner"></div>
   <div id="whitelistBanner"></div>
   <header style="position:relative">
     <h1 class="header-top" id="headerTitle">Fall Vacation Auction</h1> <!-- [build 139 · TITLE] phase-derived: Fall (1-3) / Rolling (4) — set by renderPhaseLabel -->
@@ -1713,7 +1718,7 @@ function _rbGateCheck(){
 // during the anonymous bootstrap it was rejected permission-denied (a dead, error-logging
 // listener that never recovers). The signed-in path (_subscribeSensitiveOnce + a getDoc)
 // covers it after login; _emailsReady already initializes true so sign-in never waits on it.
-onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _acCheckRemote(adminSettings); _rbGateCheck(); _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); if(typeof renderDestinationPill==='function') renderDestinationPill(); }); // [build 136 · B5] config check first · [build 139 · GATE] · [174 · §196] the destination pill follows this doc
+onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _acCheckRemote(adminSettings); _rbGateCheck(); _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); if(typeof renderDestinationPill==='function') renderDestinationPill(); if(typeof renderSimModeBanner==='function') renderSimModeBanner(); }); // [177 · §201] the test-mode banner follows this doc too // [build 136 · B5] config check first · [build 139 · GATE] · [174 · §196] the destination pill follows this doc
 
 // ── Maximum bids per phase (admin-set; 'none' = no limit) ──
 // NP bids allowed this phase? Admin toggles per phase (Controls → NP Bids by
@@ -3150,6 +3155,7 @@ _pcStart();
 function render(){
   const user=getCurrentUser(); if(!user) return;
   popcornRefresh();
+  renderSimModeBanner();
   renderWhitelistBanner();
   document.getElementById("globalLockBanner").style.display=locksData.globalLock?"block":"none";
   const nsb=document.getElementById("notStartedBanner"); if(nsb) nsb.style.display=biddingOpen()?"none":"block";
@@ -3159,6 +3165,34 @@ function render(){
   renderSelections(user,ap);
   renderCalendar(user,ap);
 }
+
+// [177 · §201] TEST MODE BANNER — the staff-side face of the admin's Rehearsal Mode switch.
+// adminSettings.simulatorEnabled is the SAME stored field that gates the simulator and the skip
+// buttons on the admin page. This page has always listened to adminSettings, so nothing new is
+// read, no listener is added and no rule changed — the value was already arriving and was simply
+// ignored. Absent or false = hidden, which is also where an unanswered Firestore leaves us: when
+// we cannot know, we do not cry wolf.
+// IN NORMAL FLOW, never position:fixed. It stacks directly above the whitelist banner and the
+// stack closes up when that banner is absent. The fixed .flash box is the one that sat on top of
+// the board's text at a timer expiry — this is deliberately not that.
+// Idempotent like renderWhitelistBanner: what it currently shows is remembered, so snapshot churn
+// cannot rebuild the DOM on every refresh.
+let _simModeBannerState=null;
+function simModeOn(){ return !!(_adminSettingsReady && adminSettings && adminSettings.simulatorEnabled===true); }
+window.simModeOn=simModeOn;
+function renderSimModeBanner(){
+  try{
+    const el=document.getElementById("simModeBanner"); if(!el) return;
+    const desired=simModeOn()?'on':'off';
+    if(_simModeBannerState===desired) return; // nothing changed — leave the DOM alone
+    _simModeBannerState=desired;
+    if(desired==='off'){ el.innerHTML=""; return; }
+    el.innerHTML=`<div style="background:rgba(234,88,12,.10);border:1px solid rgba(234,88,12,.40);border-radius:12px;padding:14px 16px;margin-bottom:14px">
+    <div style="font-weight:800;color:#7c2d12;font-size:.95rem;line-height:1.5">🎭 The site is currently in testing mode and the auction is not live right now. Any bids placed during testing are part of the test and will not be counted.</div>
+  </div>`;
+  }catch(e){ console.warn('[simMode] banner render failed:', e); }
+}
+window.renderSimModeBanner=renderSimModeBanner;
 
 // [WHITELIST TRACKER 2026-07-26] One-time prompt: ask the signed-in user to add the auction sender
 // to their Google contacts / mark Not-Spam, and self-confirm so the admin can track completion.
@@ -4160,6 +4194,7 @@ function completeSignIn(){
   // screen (historically: the first-roster-option user) is corrected here in the same task,
   // so the browser can never paint a stale banner — this is the only place the board is shown.
   if(typeof renderWhitelistBanner==='function') renderWhitelistBanner();
+  if(typeof renderSimModeBanner==='function') renderSimModeBanner(); // [177 · §201] same reason: before the board is visible
   document.getElementById("accountSelectModal").classList.remove("show");
   mainContainer.style.display="block";
   startListening();
