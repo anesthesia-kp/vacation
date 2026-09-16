@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 336;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 337;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -177,6 +177,10 @@ tbody tr:hover td{background:rgba(255,255,255,.02)}
 /* Inline select/input */
 .sel,.inp{background:var(--s2);border:1px solid var(--b2);color:var(--t1);padding:4px 8px;font-family:'Geist Mono',monospace;font-size:12px}
 .sel{cursor:pointer}
+/* [337 · §203] Reports page: each summary renders in a SEALED frame. REPORT_CSS styles bare
+   table/th/td/h1/body, so inlining it here would restyle every other admin table. */
+.rp-frame{display:block;width:100%;height:640px;border:1px solid var(--b1);border-radius:8px;background:#fff}
+@media(max-width:700px){.rp-frame{height:520px}}
 .sel:hover{border-color:var(--b3)}
 .sel option{background:#ffffff;color:#0e3a5c}
 .sel:focus,.inp:focus{outline:none;border-color:var(--b3)}
@@ -438,6 +442,7 @@ thead th{color:var(--t2)}
       <a onclick="nav('edits',this)">✏️ Edit Selections</a>
       <a onclick="nav('bestbids',this)">🔐 Priority Locks</a>
       <a onclick="nav('changelog',this)">📋 Change Log</a>
+      <a onclick="nav('reports',this)">📑 Reports</a>
       <a onclick="nav('capacity',this)">📅 Capacity</a>
       <div class="nav-section">People</div>
       <a onclick="nav('users',this)">👤 Users</a>
@@ -893,6 +898,31 @@ thead th{color:var(--t2)}
          Same rows and same rule as the report (_capacityWeekRows / _capacityWeekOpen), same
          colours; weeks always chronological; a filter (all / available / not available), never a
          sort. Read-only: nothing here writes. -->
+    <!-- REPORTS [337 · §203] — his ask: the Weekly and User summaries shown in the site as an
+         alternative to the pop-ups, "Different admins may like different views". No new data: the
+         two export functions are asked for their report PARTS and the same document they would
+         have written into a tab is rendered into a sealed frame instead. The Dashboard's
+         "Summaries and Reports" card is deliberately unchanged. -->
+    <div class="panel" id="panel-reports">
+      <div class="page-head"><div class="page-title">📑 Reports</div><div class="page-sub">The Weekly and User summaries, in the site instead of a pop-up — the same reports, honoring the phase below.</div></div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+        <label style="font-size:11px;color:var(--t2)">Phase:</label>
+        <select id="rpPhaseFilter" class="sel" onchange="renderReportsPage()"></select>
+        <span style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-left:auto">
+          <span style="font-size:11px;color:var(--t3);font-weight:700">Weekly</span>
+          <button class="btn" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportPhaseResults('pdf',document.getElementById('rpPhaseFilter').value)">📄 PDF</button>
+          <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportPhaseResults('xlsx',document.getElementById('rpPhaseFilter').value)">📊 Excel</button>
+          <span style="font-size:11px;color:var(--t3);font-weight:700;margin-left:10px">User</span>
+          <button class="btn" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportUserSummary('pdf',document.getElementById('rpPhaseFilter').value)">📄 PDF</button>
+          <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportUserSummary('xlsx',document.getElementById('rpPhaseFilter').value)">📊 Excel</button>
+        </span>
+      </div>
+      <div style="font-size:13px;font-weight:700;color:var(--t1);margin-bottom:6px">Weekly Summary</div>
+      <iframe id="rpWeeklyFrame" class="rp-frame" sandbox title="Weekly Summary report"></iframe>
+      <div style="font-size:13px;font-weight:700;color:var(--t1);margin:20px 0 6px">User Summary</div>
+      <iframe id="rpUserFrame" class="rp-frame" sandbox title="User Summary report"></iframe>
+    </div>
+
     <div class="panel" id="panel-capacity">
       <div class="page-head"><div class="page-title">📅 Capacity</div><div class="page-sub">Available capacity by week, live. <strong>Available</strong> = capacity minus approved winners; pending bids not counted — exact between phases; mid-phase, pending bids may still take more. Week, Date and Available are <strong style="color:#047857">green</strong> when Available is at or above the week's Smart Lock Control (stays open) and <strong style="color:#b91c1c">red</strong> when below it (Smart Lock locks it) — the same rule and colours as the Capacity report.</div></div>
       <div id="capSummary" style="margin-bottom:12px"></div>
@@ -2171,6 +2201,7 @@ window.nav = function(id, el) {
   if(id==='userbids'&&typeof renderUserBids==='function') renderUserBids(); // [325 · §178]
   if(id==='activity'&&typeof renderUserActivity==='function') renderUserActivity(); // [330 · §189]
   if(id==='capacity'&&typeof renderCapacityPage==='function') renderCapacityPage(); // [335 · §194]
+  if(id==='reports'&&typeof renderReportsPage==='function') renderReportsPage(); // [337 · §203]
 };
 
 // ── Helpers ──
@@ -3369,6 +3400,7 @@ function refreshAll(){
     if(isOn('slots') && typeof renderSlotsPanel==='function') renderSlotsPanel();
     if(isOn('userbids') && typeof renderUserBids==='function') renderUserBids(); // [325 · §178]
     if(isOn('capacity') && typeof renderCapacityPage==='function') renderCapacityPage(); // [335 · §194]
+    if(isOn('reports') && typeof renderReportsPage==='function') renderReportsPage(); // [337 · §203]
     updateStats();
     syncControls();
   });
@@ -7727,18 +7759,25 @@ function _bannerHeights(aoa, mergedRowSet, cols, rowHts){
   const perLine=Math.max(12, totalW*0.85);
   mergedRowSet.forEach(r=>{ const txt=String((aoa[r]&&aoa[r][0])||''); const lines=Math.max(1,Math.ceil(txt.length/perLine)); rowHts[r]=Math.max(rowHts[r]||0, lines*16+8); });
 }
-function openReportTab(title,phaseLabel,subtitle,bodyHtml,autoPrint){
-  const w=window.open('','_blank');
-  if(!w){ toast('Pop-up blocked — allow pop-ups for this site','warn'); return false; }
-  w.opener=null; // [331 · RA-11 F1] a report window is a document, never a door back into the admin page
-  // The phase is rendered as a large badge right in the heading — it is the
-  // single most important piece of context on every report.
-  w.document.write(`<!doctype html><html><head><title>${title} — ${phaseLabel}</title><style>${REPORT_CSS}</style></head><body>
+// [337 · §203] The report DOCUMENT, factored out of openReportTab so the embedded Reports page
+// can render the BYTE-IDENTICAL document into a sealed frame instead of a new tab. These are the
+// only two callers and there is only one definition, so the tab and the page cannot drift apart.
+// The phase is rendered as a large badge right in the heading — it is the single most important
+// piece of context on every report.
+function reportDocHtml(title,phaseLabel,subtitle,bodyHtml,autoPrint){
+  return `<!doctype html><html><head><title>${title} — ${phaseLabel}</title><style>${REPORT_CSS}</style></head><body>
     <h1>${title}<span class="phase-badge">${phaseLabel}</span></h1>
     <div class="stamp">${subtitle}</div>
     ${bodyHtml}
     ${autoPrint?'<script>setTimeout(()=>window.print(),300);<\/script>':''}
-    </body></html>`);
+    </body></html>`;
+}
+window.reportDocHtml=reportDocHtml;
+function openReportTab(title,phaseLabel,subtitle,bodyHtml,autoPrint){
+  const w=window.open('','_blank');
+  if(!w){ toast('Pop-up blocked — allow pop-ups for this site','warn'); return false; }
+  w.opener=null; // [331 · RA-11 F1] a report window is a document, never a door back into the admin page
+  w.document.write(reportDocHtml(title,phaseLabel,subtitle,bodyHtml,autoPrint));
   w.document.close();
   return true;
 }
@@ -7779,7 +7818,7 @@ window.exportPhaseResults=function(format,scopeOverride){
       let maxBanner=0; const colHeadRows=[]; // longest week-banner text; rows holding column headers
       const push=(cells,cellStyles,ht)=>{aoa.push(cells);styles.push(cellStyles||[]);rowHts.push(ht||null);};
       const S_PHASE={fill:{fgColor:{rgb:'1D4ED8'}},font:{bold:true,sz:13,color:{rgb:'FFFFFF'}},alignment:{horizontal:'center',vertical:'center'}};
-      push([`Vacation Auction — Bids by Week`],[S_TITLE],22);
+      push([`Vacation Auction — Weekly Summary`],[S_TITLE],22);
       merges.push({s:{r:0,c:0},e:{r:0,c:nCols-1}});
       // Dedicated, highly visible phase row — the report's most important context.
       push([exportLabel.toUpperCase()],[S_PHASE],20);
@@ -7841,7 +7880,7 @@ window.exportPhaseResults=function(format,scopeOverride){
         if(nExtra>0){ const rg=XLSX.utils.decode_range(ws['!ref']); rg.e.c=nCols+nExtra-1; ws['!ref']=XLSX.utils.encode_range(rg); } }
       ws['!rows']=rowHts.map(h=>h?{hpt:h}:{});
       const wb=XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb,ws,'Bids by Week');
+      XLSX.utils.book_append_sheet(wb,ws,'Weekly Summary');
       XLSX.writeFile(wb,fname+'.xlsx');
       toast('📊 Excel exported','ok');
       return;
@@ -7862,7 +7901,7 @@ window.exportPhaseResults=function(format,scopeOverride){
       });
     });
     const csvEsc=v=>{ const s=String(v); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
-    const csv=`# Vacation Auction — Bids by Week — ${exportLabel} — exported ${stamp}\n`+[header,...dataRows].map(r=>r.map(csvEsc).join(',')).join('\n');
+    const csv=`# Vacation Auction — Weekly Summary — ${exportLabel} — exported ${stamp}\n`+[header,...dataRows].map(r=>r.map(csvEsc).join(',')).join('\n');
     const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
     const url=URL.createObjectURL(blob);
     const a=document.createElement('a');
@@ -7883,9 +7922,14 @@ window.exportPhaseResults=function(format,scopeOverride){
     return `<div class="wk">${wkHeadHtml(g)}
       <table><thead><tr><th>User</th><th>Bid</th>${showPhaseCol?'<th>Phase</th>':''}<th>Projected</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }).join('');
-  const ok=openReportTab('Vacation Auction — Bids by Week', exportLabel,
-    `Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} across ${groups.length} week${groups.length!==1?'s':''} · Projected = outcome before admin approval/denial · Result — = awaiting admin decision`,
-    sections||'<p>No bids for this selection.</p>', !isView);
+  // [337 · §203] The report's parts, so the embedded Reports page renders the same document
+  // without re-deriving anything. format 'parts' RETURNS them and opens nothing.
+  // [337 · §203] Title now matches the button that opens it ("Weekly summary"), his ruling.
+  const _parts={ title:'Vacation Auction — Weekly Summary', phaseLabel:exportLabel,
+    subtitle:`Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} across ${groups.length} week${groups.length!==1?'s':''} · Projected = outcome before admin approval/denial · Result — = awaiting admin decision`,
+    body:sections||'<p>No bids for this selection.</p>' };
+  if(format==='parts') return _parts;
+  const ok=openReportTab(_parts.title,_parts.phaseLabel,_parts.subtitle,_parts.body, !isView);
   if(ok) toast(isView?'👁 Report opened in a new tab':'📄 Preview opened — use browser "Print → Save as PDF"','ok');
 };
 
@@ -7984,9 +8028,12 @@ window.exportUserSummary=function(format,scopeOverride){
       : `<div style="border:1px solid #e2e8f0;border-top:none;padding:8px 10px;font-size:12px;color:#94a3b8">No bids for this selection.</div>`;
     return `<div class="wk"><div class="wk-head">${u}<span class="fte">FTE ${getUserFTE(u)} · ${rows.length} bid${rows.length!==1?'s':''} · ${won} approved</span></div>${inner}</div>`;
   }).join('')||'<p>No bids for this selection.</p>';
-  const ok=openReportTab('Vacation Auction — User Summary', exportLabel,
-    `Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} · Projected = outcome before admin approval/denial · Result — = awaiting admin decision`,
-    sections, !isView);
+  // [337 · §203] Same parts mode as the weekly report — one definition, two surfaces.
+  const _parts={ title:'Vacation Auction — User Summary', phaseLabel:exportLabel,
+    subtitle:`Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} · Projected = outcome before admin approval/denial · Result — = awaiting admin decision`,
+    body:sections };
+  if(format==='parts') return _parts;
+  const ok=openReportTab(_parts.title,_parts.phaseLabel,_parts.subtitle,_parts.body, !isView);
   if(ok) toast(isView?'👁 User Summary opened in a new tab':'📄 Preview opened — use browser "Print → Save as PDF"','ok');
 };
 
@@ -8135,6 +8182,33 @@ function _capacityFilterRows(rows,f){
   if(f==='closed') return rows.filter(function(r){ return !_capacityWeekOpen(r); });
   return rows.slice();
 }
+// [337 · §203] THE REPORTS PAGE. It authors NO markup of its own: it asks each export function
+// for its report parts (format 'parts', which returns and opens nothing) and hands them to
+// reportDocHtml — the very document openReportTab writes into a pop-up. That is why the two
+// surfaces cannot drift: there is one builder and one document function.
+// Each report goes in a SEALED frame. REPORT_CSS targets bare table/th/td/h1/body, so injected
+// inline it would restyle the lock grid, the Users page and the capacity table.
+// Rendered ONLY while this page is open — see the nav() hook and the snapshot hook, both copied
+// from the capacity page (335). A panel that is not showing costs nothing.
+function renderReportsPage(){
+  const sel=document.getElementById('rpPhaseFilter');
+  if(!sel) return;
+  populatePhaseFilter(sel);
+  const scope=sel.value||'current';
+  const paint=function(frameId,parts){
+    const f=document.getElementById(frameId);
+    if(!f) return;
+    if(!parts){ f.removeAttribute('srcdoc'); return; }
+    f.srcdoc=reportDocHtml(parts.title,parts.phaseLabel,parts.subtitle,parts.body,false);
+  };
+  let wk=null, us=null;
+  try{ wk=exportPhaseResults('parts',scope); }catch(e){ console.warn('[reports] weekly summary failed:',e); }
+  try{ us=exportUserSummary('parts',scope); }catch(e){ console.warn('[reports] user summary failed:',e); }
+  paint('rpWeeklyFrame',wk);
+  paint('rpUserFrame',us);
+}
+window.renderReportsPage=renderReportsPage;
+
 function renderCapacityPage(){
   const body=document.getElementById('capBody'), sum=document.getElementById('capSummary');
   if(!body) return;
