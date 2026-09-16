@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 337;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 338;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -905,22 +905,35 @@ thead th{color:var(--t2)}
          "Summaries and Reports" card is deliberately unchanged. -->
     <div class="panel" id="panel-reports">
       <div class="page-head"><div class="page-title">📑 Reports</div><div class="page-sub">The Weekly and User summaries, in the site instead of a pop-up — the same reports, honoring the phase below.</div></div>
+      <!-- [338 · §204] ONE report at a time, chosen here. User first; the choice is remembered in this browser. -->
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px">
+        <button id="rpViewBtnUser" class="btn btn-primary" onclick="setReportsView('user')">👤 User Summary</button>
+        <button id="rpViewBtnWeekly" class="btn btn-ghost" onclick="setReportsView('weekly')">📅 Weekly Summary</button>
+      </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px">
         <label style="font-size:11px;color:var(--t2)">Phase:</label>
         <select id="rpPhaseFilter" class="sel" onchange="renderReportsPage()"></select>
         <span style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-left:auto">
+          <span id="rpExportWeekly" style="display:none;gap:6px;flex-wrap:wrap;align-items:center">
           <span style="font-size:11px;color:var(--t3);font-weight:700">Weekly</span>
           <button class="btn" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportPhaseResults('pdf',document.getElementById('rpPhaseFilter').value)">📄 PDF</button>
           <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportPhaseResults('xlsx',document.getElementById('rpPhaseFilter').value)">📊 Excel</button>
-          <span style="font-size:11px;color:var(--t3);font-weight:700;margin-left:10px">User</span>
+          </span>
+          <span id="rpExportUser" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <span style="font-size:11px;color:var(--t3);font-weight:700">User</span>
           <button class="btn" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportUserSummary('pdf',document.getElementById('rpPhaseFilter').value)">📄 PDF</button>
           <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportUserSummary('xlsx',document.getElementById('rpPhaseFilter').value)">📊 Excel</button>
+          </span>
         </span>
       </div>
-      <div style="font-size:13px;font-weight:700;color:var(--t1);margin-bottom:6px">Weekly Summary</div>
-      <iframe id="rpWeeklyFrame" class="rp-frame" sandbox title="Weekly Summary report"></iframe>
-      <div style="font-size:13px;font-weight:700;color:var(--t1);margin:20px 0 6px">User Summary</div>
-      <iframe id="rpUserFrame" class="rp-frame" sandbox title="User Summary report"></iframe>
+      <div id="rpUserWrap">
+        <div style="font-size:13px;font-weight:700;color:var(--t1);margin-bottom:6px">User Summary</div>
+        <iframe id="rpUserFrame" class="rp-frame" sandbox title="User Summary report"></iframe>
+      </div>
+      <div id="rpWeeklyWrap" style="display:none">
+        <div style="font-size:13px;font-weight:700;color:var(--t1);margin-bottom:6px">Weekly Summary</div>
+        <iframe id="rpWeeklyFrame" class="rp-frame" sandbox title="Weekly Summary report"></iframe>
+      </div>
     </div>
 
     <div class="panel" id="panel-capacity">
@@ -8190,22 +8203,62 @@ function _capacityFilterRows(rows,f){
 // inline it would restyle the lock grid, the Users page and the capacity table.
 // Rendered ONLY while this page is open — see the nav() hook and the snapshot hook, both copied
 // from the capacity page (335). A panel that is not showing costs nothing.
+// [338 · §204 §205] ONE report at a time (User first, remembered), and the owner-found BLANK FRAME fixed.
+// The blank, measured 15 Sep: desktop Chrome runs a sandboxed frame in its own process, and a frame
+// handed a new document in the same moment its panel is un-hidden is never painted — it HOLDS the
+// report and shows white, until a reload. The capacity hook this was copied from writes a div, where
+// that timing is harmless. So paint() (1) assigns nothing when the frame already holds that exact
+// document, and (2) otherwise assigns ONE animation frame later, after the panel is laid out —
+// coalescing a burst into a single load of the newest document.
+let _rpView='user';
+try{ if(localStorage.getItem('reportsView')==='weekly') _rpView='weekly'; }catch(_){}
+function _applyReportsView(){
+  const isW=_rpView==='weekly';
+  const show=function(id,on,disp){ const e=document.getElementById(id); if(e) e.style.display=on?disp:'none'; };
+  show('rpWeeklyWrap',isW,'block'); show('rpUserWrap',!isW,'block');
+  show('rpExportWeekly',isW,'flex'); show('rpExportUser',!isW,'flex');
+  const bw=document.getElementById('rpViewBtnWeekly'), bu=document.getElementById('rpViewBtnUser');
+  if(bw) bw.className='btn'+(isW?' btn-primary':' btn-ghost');
+  if(bu) bu.className='btn'+(isW?' btn-ghost':' btn-primary');
+}
+window.setReportsView=function(v){
+  _rpView=(v==='weekly')?'weekly':'user';
+  try{ localStorage.setItem('reportsView',_rpView); }catch(_){}
+  renderReportsPage();
+};
+// A report that fails to build SAYS so (§205) — a blank frame hid the error and looked exactly like
+// the paint defect above. No error text is shown; the detail stays in the console.
+function _reportFailedDoc(name){
+  return '<!doctype html><html><head><meta charset="utf-8"></head><body style="font-family:-apple-system,system-ui,sans-serif;margin:0;padding:28px;color:#991b1b;background:#fff">'
+    +'<div style="font-size:15px;font-weight:700;margin-bottom:6px">This report couldn\'t be built.</div>'
+    +'<div style="font-size:13px;color:#475569">The '+name+' could not be produced for this phase. Try reloading the page; if it keeps happening, report it.</div></body></html>';
+}
+function _paintReportFrame(f,html){
+  const held=(f._rpNext!==undefined)?f._rpNext:f.getAttribute('srcdoc');
+  if(held===html) return;                    // (1) already holds this document: no reload, no flicker
+  const queued=f._rpNext!==undefined;
+  f._rpNext=html;                            // the newest document always wins
+  if(queued) return;
+  requestAnimationFrame(function(){          // (2) one frame later: after the panel is shown and laid out
+    const h=f._rpNext; f._rpNext=undefined;
+    if(f.getAttribute('srcdoc')!==h) f.srcdoc=h;
+  });
+}
 function renderReportsPage(){
   const sel=document.getElementById('rpPhaseFilter');
   if(!sel) return;
   populatePhaseFilter(sel);
+  _applyReportsView();
   const scope=sel.value||'current';
-  const paint=function(frameId,parts){
-    const f=document.getElementById(frameId);
-    if(!f) return;
-    if(!parts){ f.removeAttribute('srcdoc'); return; }
-    f.srcdoc=reportDocHtml(parts.title,parts.phaseLabel,parts.subtitle,parts.body,false);
-  };
-  let wk=null, us=null;
-  try{ wk=exportPhaseResults('parts',scope); }catch(e){ console.warn('[reports] weekly summary failed:',e); }
-  try{ us=exportUserSummary('parts',scope); }catch(e){ console.warn('[reports] user summary failed:',e); }
-  paint('rpWeeklyFrame',wk);
-  paint('rpUserFrame',us);
+  const isW=_rpView==='weekly';
+  const f=document.getElementById(isW?'rpWeeklyFrame':'rpUserFrame');
+  if(!f) return;
+  let parts=null;
+  try{ parts=isW?exportPhaseResults('parts',scope):exportUserSummary('parts',scope); }
+  catch(e){ console.warn('[reports] '+(isW?'weekly':'user')+' summary failed:',e); }
+  _paintReportFrame(f, parts
+    ? reportDocHtml(parts.title,parts.phaseLabel,parts.subtitle,parts.body,false)
+    : _reportFailedDoc(isW?'Weekly Summary':'User Summary'));
 }
 window.renderReportsPage=renderReportsPage;
 
