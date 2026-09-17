@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 341;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 342;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -11097,24 +11097,37 @@ window.adminExpireTimer=function(){
   if(timerData.enabled!==true){ toast('The timer is off — there is no countdown to expire. Use ⏱ Close bidding to end bidding.','warn'); return; }
   if(_windowCompletedNow()){ toast('⛔ '+_phaseWindowLabel()+' is complete — there is no open countdown to expire.','err'); return; }
   const _unit=Number(phasesData.currentPhase||1)===4?'round':'phase';
+  // [341 · §210] ASK TWICE. Nothing is written until the second OK, and the state is re-checked then. The shared dialog
+  // re-opens with OK in the same place, so its OK ignores clicks for its first second — one fast double-click cannot
+  // pass both boxes. Local on purpose (extracted-code suites resolve names only while the first dialog is built).
+  const confirmAgain=o=>{ openConfirm(o); try{ const b=document.getElementById('cmOk'); if(b){ b.disabled=true; setTimeout(()=>{ b.disabled=false; },1000); } }catch(_){} };
   openConfirm({
     title:'⏱ Expire Timer Now',
     body:`<div>Make the countdown <strong>run out right now</strong> — exactly as if it had reached zero on its own. Bidding closes and users see the closed notice.</div>
           <div class="cmodal-warn" style="margin-top:8px">🔒 All ${mondays.length} weeks will also be locked, as an open admin page does at a real expiry.</div>
           <div class="cmodal-info" style="margin-top:8px">Like a real expiry — and unlike ⏱ Close bidding — this does not set the server's "bidding closed" flag. Afterwards, do not switch the timer off (that would let bids through again); use ↩ Reopen bidding, or decide the bids and complete the ${_unit}.</div>`,
     okText:'Expire Timer & Lock All Weeks', danger:true,
-    onConfirm:async()=>{
-      if(timerData.enabled!==true||_windowCompletedNow()){ toast('Nothing was expired — the timer or the '+_unit+' changed while this was open.','warn'); return; }
-      await setDoc(timerRef,{lastChange:Date.now()-getDurationMs()-1000},{merge:true});
-      await _lockEveryWeek();
-      try{ await adminLog('ALL','ALL','admin-timer-expire'); }catch(_){}
-      toast('⏱ Timer expired — bidding closed, all weeks locked','warn');
-    }
+    onConfirm:()=>{ confirmAgain({
+      title:'⏱ Expire Timer Now — confirm again',
+      body:`<div>Are you sure? Bidding closes for everyone <strong>right now</strong> and all ${mondays.length} weeks lock.</div>`,
+      okText:'Yes, expire the timer', danger:true,
+      onConfirm:async()=>{
+        if(timerData.enabled!==true||_windowCompletedNow()){ toast('Nothing was expired — the timer or the '+_unit+' changed while this was open.','warn'); return; }
+        await setDoc(timerRef,{lastChange:Date.now()-getDurationMs()-1000},{merge:true});
+        await _lockEveryWeek();
+        try{ await adminLog('ALL','ALL','admin-timer-expire'); }catch(_){}
+        toast('⏱ Timer expired — bidding closed, all weeks locked','warn');
+      }
+    }); }
   });
 };
 
 window.toggleTimerEnabled=function(){
   const nv=!(timerData.enabled===true);
+  // [341 · §210] ASK TWICE. Nothing is written until the second OK, and the state is re-checked then. The shared dialog
+  // re-opens with OK in the same place, so its OK ignores clicks for its first second — one fast double-click cannot
+  // pass both boxes. Local on purpose (extracted-code suites resolve names only while the first dialog is built).
+  const confirmAgain=o=>{ openConfirm(o); try{ const b=document.getElementById('cmOk'); if(b){ b.disabled=true; setTimeout(()=>{ b.disabled=false; },1000); } }catch(_){} };
   openConfirm({
     title:nv?'⏱️ Enable Timer':'🔕 Disable Timer',
     body:nv
@@ -11126,24 +11139,31 @@ window.toggleTimerEnabled=function(){
       : `<div>Turn the countdown timer <strong>off</strong>? Users will no longer see a countdown.</div>
          <div class="cmodal-warn" style="margin-top:10px">This also removes the deadline that ends the phase. Nothing will expire on its own — bidding stays open until you press <strong>Close Bidding</strong>.</div>`,
     okText:nv?'Enable Timer':'Disable Timer', danger:!nv,
-    onConfirm:async()=>{
-      // Re-enabling mid-phase with the opening window ON and time still inside the
-      // window: arm the continuous countdown retroactively from the phase start, so
-      // the window isn't silently skipped. Never arm an already-elapsed window (that
-      // would create an instantly-expired timer and close the auction).
-      let payload={enabled:nv,lastChange:nv?timerData.lastChange:null};
-      if(nv&&!timerData.lastChange){
-        const owr=getTimerRules().openingWindow;
-        const began=_windowStartMs(); // [322 · P-2] retro-arm from the open ROUND's start in Phase 4 (L8 appendix)
-        if(owr&&began
-           &&(owr.days*86400000-(Date.now()-began))>stage0Hours()*3600000){
-          payload={enabled:true,lastChange:began,durationHours:owr.days*24};
+    onConfirm:()=>{ confirmAgain({
+      title:nv?'⏱️ Enable Timer — confirm again':'🔕 Disable Timer — confirm again',
+      body:nv?'<div>Are you sure you want to turn the countdown timer <strong>on</strong>?</div>'
+             :'<div>Are you sure? With the timer <strong>off</strong>, nothing ends bidding on its own — only ⏱ Close bidding does.</div>',
+      okText:nv?'Yes, turn the timer on':'Yes, turn the timer off', danger:!nv,
+      onConfirm:async()=>{
+        if((timerData.enabled===true)===nv){ toast('Nothing changed — the timer is already '+(nv?'on':'off')+'.','warn'); return; }
+        // Re-enabling mid-phase with the opening window ON and time still inside the
+        // window: arm the continuous countdown retroactively from the phase start, so
+        // the window isn't silently skipped. Never arm an already-elapsed window (that
+        // would create an instantly-expired timer and close the auction).
+        let payload={enabled:nv,lastChange:nv?timerData.lastChange:null};
+        if(nv&&!timerData.lastChange){
+          const owr=getTimerRules().openingWindow;
+          const began=_windowStartMs(); // [322 · P-2] retro-arm from the open ROUND's start in Phase 4 (L8 appendix)
+          if(owr&&began
+             &&(owr.days*86400000-(Date.now()-began))>stage0Hours()*3600000){
+            payload={enabled:true,lastChange:began,durationHours:owr.days*24};
+          }
         }
+        await setDoc(timerRef,payload,{merge:true});
+        try{ await adminLog('ALL','ALL',nv?'admin-timer-on':'admin-timer-off'); }catch(_){} // [341 · §209] timer actions leave a trail
+        toast(nv?"⏱️ Timer enabled":"🔕 Timer disabled",nv?"ok":"warn");
       }
-      await setDoc(timerRef,payload,{merge:true});
-      try{ await adminLog('ALL','ALL',nv?'admin-timer-on':'admin-timer-off'); }catch(_){} // [341 · §209] timer actions leave a trail
-      toast(nv?"⏱️ Timer enabled":"🔕 Timer disabled",nv?"ok":"warn");
-    }
+    }); }
   });
 };
 // [FIX 25 Jul 2026 · delta-audit #3/#4/#8] The server-side "bidding is closed" flag, and the
@@ -11330,6 +11350,10 @@ window.adminResetTimer=function(){
   const defLabel=(owActive&&owr)?('Timer rules default — the full '+owr.days+'-day opening window'):('Timer rules default — '+fmtDuration(Math.round(defH*10)/10));
   window._resetTimerPreview=function(){ try{ const pk=picked(), n=Date.now(), h=(pk==='rules')?defaultHours(n):pk;
     const el=document.getElementById('rtCloses'); if(el) el.innerHTML='Bidding will close at <strong>'+fmtAt(n+h*3600000)+'</strong> unless a later bid lengthens the countdown.'; }catch(_){} };
+  // [341 · §210] ASK TWICE. Nothing is written until the second OK, and the state is re-checked then. The shared dialog
+  // re-opens with OK in the same place, so its OK ignores clicks for its first second — one fast double-click cannot
+  // pass both boxes. Local on purpose (extracted-code suites resolve names only while the first dialog is built).
+  const confirmAgain=o=>{ openConfirm(o); try{ const b=document.getElementById('cmOk'); if(b){ b.disabled=true; setTimeout(()=>{ b.disabled=false; },1000); } }catch(_){} };
   const opt=(val,label,checked)=>`<label style="display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer"><input type="radio" name="rtLen" value="${val}"${checked?' checked':''} onchange="_resetTimerPreview()" style="width:15px;height:15px"> ${label}</label>`;
   openConfirm({
     title:'↺ Reset Timer',
@@ -11342,13 +11366,22 @@ window.adminResetTimer=function(){
     okText:'↺ Reset',
     // [FIX 25 Jul 2026 · delta-audit #3/#4] Reset Timer must also clear biddingClosed — a restarted countdown with the
     // flag still set is a live-looking board where every bid is denied server-side.
-    onConfirm:async()=>{
-      if(timerData.enabled!==true){ toast('The timer was switched off while this was open — nothing was reset.','warn'); return; }
-      if(_windowCompletedNow()){ toast('⛔ '+_phaseWindowLabel()+' is complete — its bidding cannot be reopened by a timer reset.','err'); return; }
-      const _n=Date.now(); const pk=picked(); const h=(pk==='rules')?defaultHours(_n):pk;
-      await setDoc(timerRef,{lastChange:_n,biddingClosed:false,durationHours:h},{merge:true});
-      try{ await adminLog('ALL','ALL','admin-timer-reset',undefined,{hours:Math.round(h*100)/100,choice:(pk==='rules'?'rules':'chosen')}); }catch(_){}
-      toast('↺ Timer reset — bidding closes '+fmtAt(_n+h*3600000),'ok');
+    onConfirm:()=>{
+      const pk=picked(); // read the choice NOW — the second box replaces the dialog body that holds the radios
+      const h1=(pk==='rules')?defaultHours(Date.now()):pk;
+      confirmAgain({
+        title:'↺ Reset Timer — confirm again',
+        body:`<div>Are you sure? The countdown restarts now and bidding will close at <strong>${fmtAt(Date.now()+h1*3600000)}</strong>${pk==='rules'?' (the timer rules default)':' ('+pk+' hour'+(pk!==1?'s':'')+')'}.</div>`,
+        okText:'Yes, reset the timer',
+        onConfirm:async()=>{
+          if(timerData.enabled!==true){ toast('The timer was switched off while this was open — nothing was reset.','warn'); return; }
+          if(_windowCompletedNow()){ toast('⛔ '+_phaseWindowLabel()+' is complete — its bidding cannot be reopened by a timer reset.','err'); return; }
+          const _n=Date.now(); const h=(pk==='rules')?defaultHours(_n):pk;
+          await setDoc(timerRef,{lastChange:_n,biddingClosed:false,durationHours:h},{merge:true});
+          try{ await adminLog('ALL','ALL','admin-timer-reset',undefined,{hours:Math.round(h*100)/100,choice:(pk==='rules'?'rules':'chosen')}); }catch(_){}
+          toast('↺ Timer reset — bidding closes '+fmtAt(_n+h*3600000),'ok');
+        }
+      });
     }
   });
 };
