@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 340;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 341;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -528,14 +528,12 @@ thead th{color:var(--t2)}
           </div>
           <div id="phaseOpenFor" style="font-size:12px;color:var(--t2);font-weight:600;margin-top:10px"></div>
           <div id="timerResetInfo" style="font-size:12px;color:var(--t2);margin-top:3px"></div>
-          <div style="margin-top:12px">
-            <div style="font-size:11px;color:var(--t2);margin-bottom:6px">Auction window — <span id="durationDisplay" style="color:var(--t1);font-weight:700">48h</span> <span style="color:var(--t3)">(0 = timer off)</span></div>
-            <input type="range" id="durSlider" min="0" max="6" step="1" value="6" style="width:100%;accent-color:#3b82f6"
-                   oninput="onDurSliderInput(this.value)" onchange="onDurSliderChange(this.value)">
-            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);font-family:var(--mono);margin-top:2px"><span>0</span><span>1h</span><span>3h</span><span>6h</span><span>12h</span><span>24h</span><span>48h</span></div>
-          </div>
-          <div style="display:flex;gap:8px;margin-top:12px">
+          <!-- [341 · §208/§209] The window slider is gone: it counted from the last bid, not from now, and its
+               readout showed the rules' step rather than the stored window (TIMER-REVIEW T-1…T-4, T-9). A length is
+               now chosen inside Reset Timer; Expire timer now keeps the slider's former "0" exactly. -->
+          <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
             <button class="btn btn-blue" id="resetTimerBtn" onclick="adminResetTimer()" disabled>↺ Reset Timer</button>
+            <button class="btn btn-ghost" id="expireTimerBtn" onclick="adminExpireTimer()" disabled>⏱ Expire timer now</button>
           </div>
           <div class="trow" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
             <div><div class="trow-label">Bidding Timer</div><div class="trow-desc">Live countdown shown to all users; resets on each bid change</div></div>
@@ -5228,7 +5226,7 @@ window._runSimulationNow=async function(){
       // [SIM 25 Jul 2026] `lastChange||0` treated "timer on, never started" as long expired,
       // so a simulated bid silently failed to START the countdown — where a real bid does
       // (the staff site defaults its remaining-time to 1 in exactly this case). Mirror it.
-      { const _rem=timerData.lastChange?(getDurationMs()-(Date.now()-timerData.lastChange)):1; if(timerData.enabled && _rem>0 && !openingWindowActive()){ const _n=Date.now(); await setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{}); } }
+      { const _rem=timerData.lastChange?(getDurationMs()-(Date.now()-timerData.lastChange)):1; if(timerData.enabled && _rem>0 && !openingWindowActive()){ const _n=Date.now(); const _h=timerResetHours(timerPhaseStartMs(),_n); const _curDeadline=timerData.lastChange?(timerData.lastChange+getDurationMs()):0; if(_n+_h*3600000>=_curDeadline) await setDoc(timerRef,{lastChange:_n,durationHours:_h},{merge:true}).catch(()=>{}); } } // [341 · §208 (a)] extend-only, like a real bid
     }
     // Outbid alerts: simulated bids are real bid activity, so affected users get
     // the same projection-change alerts a real bid triggers. One batched diff of
@@ -9390,7 +9388,9 @@ function weeksNeedingLock(unlockedOnly){
   mondays.forEach(d=>{
     const wk=dateKey(d);
     const a=ap[wk]; if(!a) return;
-    const remaining=weekLedger(wk,ap).remainingFte; // [300 · H-1] was cap-a.fteWon; toggleWeekLock already uses the ledger
+    // [341 · §209 R-A] DECIDED room only (earlier phases/rounds + approvals). Counting this window's PROJECTED winners
+    // (remainingFte) locked exactly the weeks bidders were still competing for (owner-found R-1).
+    const remaining=weekLedger(wk,ap).remainingApproved; // [300 · H-1] ledger, not cap-a.fteWon
     const slc=getSlc(wk);
     if(remaining<slc){
       if(unlockedOnly && locksData?.weeks?.[wk]) return; // already locked
@@ -9413,7 +9413,7 @@ function lockedWeeksWithAvailability(){
     const wk=dateKey(d);
     if(!locksData?.weeks?.[wk]) return;         // only per-week locked weeks
     const a=ap[wk]; if(!a) return;
-    const remaining=weekLedger(wk,ap).remainingFte; // [300 · H-1] same source as weeksNeedingLock, its inverse
+    const remaining=weekLedger(wk,ap).remainingApproved; // [341 · §209 R-A] decided room only · [300 · H-1] same source as weeksNeedingLock, its inverse
     const slc=getSlc(wk);
     if(remaining>=slc){ list.push({wk,remaining,slc,label:wLabel(wkDate(wk))}); }
   });
@@ -10042,8 +10042,11 @@ function _adminBidTimerReset(u,wk,prevSched){
     if(!gate) return;
     const _rem=timerData.lastChange?(getDurationMs()-(Date.now()-timerData.lastChange)):1;
     if(timerData.enabled && _rem>0 && !openingWindowActive()){
-      const _n=Date.now();
-      setDoc(timerRef,{lastChange:_n,durationHours:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}).catch(()=>{});
+      const _n=Date.now(); const _h=timerResetHours(timerPhaseStartMs(),_n);
+      // [341 · §208 (a)] EXTEND-ONLY, exactly as the user site (persistScheduleChange) and the rules: an admin-entered
+      // bid restarts the countdown only when that makes it LONGER — it can no longer cut a longer deadline short (T-8).
+      const _curDeadline=timerData.lastChange?(timerData.lastChange+getDurationMs()):0;
+      if(_n+_h*3600000>=_curDeadline) setDoc(timerRef,{lastChange:_n,durationHours:_h},{merge:true}).catch(()=>{});
     }
   }catch(_){}
 }
@@ -10622,6 +10625,10 @@ function systemActionText(e){
   const who=esc(e&&e.user&&e.user!=='ALL'?e.user:'');
   const mode=t.match(/^admin-timer-mode-(\d+)$/);
   if(mode) return `Admin set the bidding timer reset mode to <strong>${esc(mode[1])}</strong>`;
+  if(t==='admin-timer-reset') return 'Admin reset the bidding timer to <strong>'+esc(String(e.hours??''))+' h</strong>'+(e.choice==='rules'?' (the timer rules default)':' (chosen length)'); // [341 · §209]
+  if(t==='admin-timer-expire') return 'Admin <strong>expired</strong> the bidding timer — bidding closed, all weeks locked'; // [341 · §209]
+  if(t==='admin-timer-on') return 'Admin turned the bidding timer <strong>ON</strong>'; // [341 · §209]
+  if(t==='admin-timer-off') return 'Admin turned the bidding timer <strong>OFF</strong>'; // [341 · §209]
   if(t==='admin-delete-all-users') return 'Admin deleted <strong>ALL users</strong>';
   if(t==='admin-remove-user') return who?`Admin removed the user <strong>${who}</strong>`:'Admin removed a user';
   if(t==='admin-restore-full') return 'Admin restored a <strong>full backup</strong>';
@@ -11005,7 +11012,6 @@ window.saveTimerRules=async function(rules){
 };
 // ── Timer ──
 function syncTimer(){
-  syncDurationUI();
   const en=timerData.enabled===true;
   // Timer controls are BLUE in normal operation and turn RED while the global
   // lock is on (bidding frozen), so the state is obvious at a glance.
@@ -11014,6 +11020,7 @@ function syncTimer(){
   const trm=document.getElementById("trMasterTog"); if(trm)trm.className="tog"+(en?" on-blue":"");
   const rb=document.getElementById("resetTimerBtn");
   if(rb){ rb.disabled=!en||_windowCompletedNow(); rb.className="btn "+(gLocked?"btn-redlock":"btn-blue"); } // [319 · P-5] paint follows the gate
+  const xb=document.getElementById("expireTimerBtn"); if(xb) xb.disabled=!en||_windowCompletedNow(); // [341 · §209] same gate as Reset Timer
   const bl=document.getElementById("timerBlock"); const lb=document.getElementById("timerLabel"); const mt=document.getElementById("timerMeta");
   if(!bl||!lb||!mt)return;
   if(!en){bl.className="timer-block";lb.textContent="Timer disabled";mt.textContent="Enable above to start.";document.getElementById("timerDigs").innerHTML="";return;}
@@ -11024,7 +11031,6 @@ function syncTimer(){
   mt.textContent=`Last reset: ${new Date(timerData.lastChange).toLocaleString()}`;
   renderTimerDigs();
 }
-function getResetLabel(){ return `↺ Reset to ${fmtDuration(getDurationHrs())}`; }
 function renderTimerDigs(){
   const el=document.getElementById("timerDigs"); if(!el||!timerData.enabled||!timerData.lastChange)return;
   const rem=getDurationMs()-(Date.now()-timerData.lastChange);
@@ -11075,90 +11081,37 @@ async function _autoCloseOnExpiry(){
 }
 function startTick(){
   if(tickInterval)clearInterval(tickInterval);
-  if(timerData.enabled&&timerData.lastChange){ tickInterval=setInterval(()=>{renderTimerDigs();updateStats();_autoCloseOnExpiry();updatePhaseOpen();syncDurationUI();},1000); }
-  updatePhaseOpen(); syncDurationUI();
+  if(timerData.enabled&&timerData.lastChange){ tickInterval=setInterval(()=>{renderTimerDigs();updateStats();_autoCloseOnExpiry();updatePhaseOpen();},1000); }
+  updatePhaseOpen();
 }
 function getDurationMs(){ return ((timerData.durationHours||48)*3600000); }
 function getDurationHrs(){ return timerData.durationHours||48; }
 function fmtDuration(hrs){ return hrs+"h"; }
 
-// Duration slider: discrete stops only. Position 0 EXPIRES the timer immediately
-// (bidding closes, all weeks lock) — it does NOT disable it. Only the on/off
-// toggle can disable the timer entirely.
-const DUR_STOPS=[0,1,3,6,12,24,48];
-function durIdxFor(hrs){ const i=DUR_STOPS.indexOf(hrs); return i>=0?i:6; }
-window.onDurSliderInput=function(idx){
-  // Live label while dragging — nothing is saved until the change confirm.
-  const h=DUR_STOPS[Number(idx)]??48;
-  const dd=document.getElementById("durationDisplay");
-  if(dd) dd.textContent=h===0?'Expire now':h+'h';
-};
-window.onDurSliderChange=function(idx){
-  const h=DUR_STOPS[Number(idx)]??48;
-  const en=timerData.enabled===true;
-  const curHrs=timerData.durationHours||48;
-  const snapBack=()=>syncDurationUI(); // restore slider to the saved state on cancel
-  if(h===0){
-    if(!en){ syncDurationUI(); return; } // timer is off — nothing to expire
-    openConfirm({
-      title:'⏱ Expire Timer Now',
-      body:`<div>Slide to <strong>0</strong> makes the countdown <strong>expire immediately</strong> — bidding closes and users see the auction-closed notice.</div>
-            <div class="cmodal-warn" style="margin-top:8px">🔒 All ${mondays.length} weeks will also be locked automatically.</div>
-            <div class="cmodal-info" style="margin-top:8px">The timer stays <strong>on</strong> (just expired). To turn the timer off entirely, use the on/off toggle instead.</div>`,
-      okText:'Expire Timer & Lock All Weeks', danger:true,
-      onConfirm:async()=>{
-        await setDoc(timerRef,{lastChange:Date.now()-getDurationMs()-1000},{merge:true});
-        await _lockEveryWeek();
-        toast('⏱ Timer expired — bidding closed, all weeks locked','warn');
-      }
-    });
-    // If they cancel, the next syncTimer snapshot re-syncs; also snap back now.
-    setTimeout(snapBack,50);
-    return;
-  }
-  if(en&&h===curHrs){ syncDurationUI(); return; } // no change
-  // M-6: is the countdown currently EXPIRED (phase closed)? If so, changing the duration
-  // must NOT silently un-expire it — a longer window would otherwise make remaining time
-  // positive again and reopen a closed phase (live countdown mid-decision on both sites).
-  const wasExpired = timerData.enabled===true && !!timerData.lastChange && (getDurationMs()-(Date.now()-timerData.lastChange))<=0;
-  // Would this SHORTER window put the countdown already past zero? If so, confirming it
-  // closes bidding for everyone immediately — warn explicitly and lock the weeks
-  // deterministically (don't rely on an auto-close tab being open).
-  const willExpireNow = en && !wasExpired && !!timerData.lastChange && (h*3600000-(Date.now()-timerData.lastChange))<=0;
+// [341 · §209] ⏱ EXPIRE TIMER NOW — the window slider's former position 0, with IDENTICAL writes: the countdown is
+// made to have run out (lastChange moved back past the window), then every week is locked, exactly what an open
+// admin page does at a real expiry (_autoCloseOnExpiry). It deliberately does NOT set the server's biddingClosed
+// flag — that is ⏱ Close bidding, a different act (owner, 17 Sep: expiry "was a more realistic way to close
+// bidding"; TIMER-REVIEW correction). The window and the state are re-checked when OK is pressed.
+window.adminExpireTimer=function(){
+  if(timerData.enabled!==true){ toast('The timer is off — there is no countdown to expire. Use ⏱ Close bidding to end bidding.','warn'); return; }
+  if(_windowCompletedNow()){ toast('⛔ '+_phaseWindowLabel()+' is complete — there is no open countdown to expire.','err'); return; }
+  const _unit=Number(phasesData.currentPhase||1)===4?'round':'phase';
   openConfirm({
-    title:'⏱️ Set Auction Window',
-    body:`<div>Set the auction window to <strong>${h}h</strong>${en?'' :' and turn the timer <strong>on</strong>'}?</div>${
-      willExpireNow?'<div class="cmodal-danger" style="margin-top:8px">⚠️ This window is <strong>shorter than the time already elapsed</strong> in this phase — confirming will <strong>close bidding immediately</strong> for everyone and lock all '+mondays.length+' weeks. Use <strong>Reset Timer</strong> instead if you meant "'+h+'h from now."</div>'
-      :(wasExpired?'<div class="cmodal-warn" style="margin-top:8px">Bidding is currently <strong>closed</strong> (timer expired). Changing the window keeps it closed — use <strong>Reset Timer</strong> to reopen bidding.</div>'
-      :(en?'<div class="cmodal-info" style="margin-top:8px">The timer is running — this changes the total window. Use Reset Timer afterward to restart the countdown from the new duration.</div>':''))}`,
-    okText:willExpireNow?'Set '+h+'h & close bidding now':`Set ${h}h`, danger:willExpireNow,
+    title:'⏱ Expire Timer Now',
+    body:`<div>Make the countdown <strong>run out right now</strong> — exactly as if it had reached zero on its own. Bidding closes and users see the closed notice.</div>
+          <div class="cmodal-warn" style="margin-top:8px">🔒 All ${mondays.length} weeks will also be locked, as an open admin page does at a real expiry.</div>
+          <div class="cmodal-info" style="margin-top:8px">Like a real expiry — and unlike ⏱ Close bidding — this does not set the server's "bidding closed" flag. Afterwards, do not switch the timer off (that would let bids through again); use ↩ Reopen bidding, or decide the bids and complete the ${_unit}.</div>`,
+    okText:'Expire Timer & Lock All Weeks', danger:true,
     onConfirm:async()=>{
-      const payload={durationHours:h,enabled:true};
-      if(wasExpired) payload.lastChange=Date.now()-h*3600000-1000; // re-anchor expiry to the new duration so it stays closed
-      await setDoc(timerRef,payload,{merge:true});
-      if(willExpireNow) await _lockEveryWeek();
-      toast(willExpireNow?`⏱️ Window ${h}h — bidding closed, all weeks locked`:`⏱️ Auction window set to ${h}h${wasExpired?' — still closed':''}`,willExpireNow?'warn':'ok');
+      if(timerData.enabled!==true||_windowCompletedNow()){ toast('Nothing was expired — the timer or the '+_unit+' changed while this was open.','warn'); return; }
+      await setDoc(timerRef,{lastChange:Date.now()-getDurationMs()-1000},{merge:true});
+      await _lockEveryWeek();
+      try{ await adminLog('ALL','ALL','admin-timer-expire'); }catch(_){}
+      toast('⏱ Timer expired — bidding closed, all weeks locked','warn');
     }
   });
-  setTimeout(snapBack,50);
 };
-// Legacy entry point kept for tests/back-compat — routes through the same confirm.
-window.setDuration=function(hrs){ onDurSliderChange(durIdxFor(hrs)); };
-
-function syncDurationUI(){
-  // The slider AUTO-FOLLOWS the current stage's reset length (48/24/12/6/3) as the phase
-  // ages, so it always shows what each bid currently resets the timer to. It stays
-  // manually usable: while the admin is dragging it we don't overwrite, and dragging to
-  // 0 still expires the timer. (The rules are authoritative — a manual set lasts only
-  // until the next bid, which re-applies the stage.)
-  const en=timerData.enabled===true;
-  const dd=document.getElementById("durationDisplay");
-  const sl=document.getElementById("durSlider");
-  if(!en){ if(dd) dd.textContent="Timer off"; if(sl && document.activeElement!==sl) sl.value=0; return; }
-  const h=(typeof currentStageHours==='function')?currentStageHours():(timerData.durationHours||48);
-  if(dd) dd.textContent=h+"h";
-  if(sl && document.activeElement!==sl) sl.value=durIdxFor(h);
-}
 
 window.toggleTimerEnabled=function(){
   const nv=!(timerData.enabled===true);
@@ -11188,6 +11141,7 @@ window.toggleTimerEnabled=function(){
         }
       }
       await setDoc(timerRef,payload,{merge:true});
+      try{ await adminLog('ALL','ALL',nv?'admin-timer-on':'admin-timer-off'); }catch(_){} // [341 · §209] timer actions leave a trail
       toast(nv?"⏱️ Timer enabled":"🔕 Timer disabled",nv?"ok":"warn");
     }
   });
@@ -11229,7 +11183,7 @@ window._reopenRoundMonths=function(){
   const byMonth={}; let availTotal=0;
   mondays.forEach(d=>{
     const wk=dateKey(d);
-    const remaining=weekLedger(wk,ap).remainingFte; // [300 · H-1] guards NE-2/NE-3, which needs the capacity number
+    const remaining=weekLedger(wk,ap).remainingApproved; // [341 · §209 R-A] decided room: a week this round's bids fill still reopens; weeks filled by DECIDED winners stay shut (NE-2) · [300 · H-1]
     const avail=remaining>=getSlc(wk);
     const mkey=wk.slice(0,7);
     if(!byMonth[mkey]){ const p=mkey.split('-'); byMonth[mkey]={label:(MONTHS[Number(p[1])-1]||mkey)+' '+p[0], avail:0, availWeeks:[]}; }
@@ -11341,27 +11295,64 @@ window.reopenBidding=function(){
     onConfirm:async()=>{ await window._reopenCommit(); }
   });
 };
+// [341 · §208/§209] ↺ RESET TIMER ASKS FOR THE LENGTH. The timer rules' length stays the preselected default (the
+// full opening window while it runs — unchanged from 340); 1–48 h may be chosen instead, counted from the moment
+// of the reset. A later qualifying bid can only LENGTHEN it: the user site and the rules were already extend-only,
+// and admin bid entry / the simulator are made to match below (owner ruling (a)). A chosen length is not
+// quiet-hours adjusted — the dialog states the exact closing time instead. When every week is locked, restarting
+// the countdown reopens nothing a user can bid on (TIMER-REVIEW T-5), so the dialog says so and hands off to
+// ↩ Reopen bidding. Everything is re-evaluated when OK is pressed.
 window.adminResetTimer=function(){
   if(!timerData.enabled)return;
   // [319 · P-5] A completed phase or round is history: re-arming the countdown would tell the server
   // bidding is open over a board every other gate has locked.
   if(_windowCompletedNow()){ toast('⛔ '+_phaseWindowLabel()+' is complete — its bidding cannot be reopened by a timer reset.'+((Number(phasesData.currentPhase||1)===4&&!(phasesData.completedPhases||{})[4])?' Send (or skip) the round results, then ▶ Start Round '+(Number(phasesData.p4Round||1)+1)+'.':''),'err'); return; }
+  // Helpers are LOCAL on purpose: extracted-code suites resolve names only while the dialog is being built,
+  // so anything the OK handler needs must live in this function (the page's existing convention).
+  const CHOICES=[1,3,6,12,24,48];
+  const allLocked=()=>Array.isArray(mondays)&&mondays.length>0&&mondays.every(d=>!!locksData?.weeks?.[dateKey(d)]);
+  const defaultHours=n=>{ const ow=getTimerRules().openingWindow; return (openingWindowActive()&&ow)?ow.days*24:timerResetHours(timerPhaseStartMs(),n); };
+  const fmtAt=ms=>new Date(ms).toLocaleString('en-US',{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+  const picked=()=>{ try{ const el=(typeof document!=='undefined'&&document&&document.querySelector)?document.querySelector('#cmBody input[name=rtLen]:checked'):null;
+                          const v=el?Number(el.value):NaN; return CHOICES.indexOf(v)>=0?v:'rules'; }catch(_){ return 'rules'; } };
+  if(allLocked()){
+    openConfirm({
+      title:'↺ Reset Timer',
+      body:`<div>All ${mondays.length} weeks are locked, so restarting the countdown would not let anyone bid — users would see a running clock over a locked board.</div>
+            <div class="cmodal-info" style="margin-top:8px">To reopen bidding, use <strong>↩ Reopen bidding</strong>: it unlocks the weeks that still have room${Number(phasesData.currentPhase||1)===4?' in the month(s) you pick':''} and restarts the countdown.</div>`,
+      okText:'↩ Reopen bidding instead',
+      onConfirm:()=>{ window.reopenBidding(); }
+    });
+    return;
+  }
   const owr=getTimerRules().openingWindow, owActive=openingWindowActive();
-  const newDurH=(owActive&&owr)?owr.days*24:timerResetHours(timerPhaseStartMs(),Date.now());
+  const _n0=Date.now(), defH=defaultHours(_n0);
+  const defLabel=(owActive&&owr)?('Timer rules default — the full '+owr.days+'-day opening window'):('Timer rules default — '+fmtDuration(Math.round(defH*10)/10));
+  window._resetTimerPreview=function(){ try{ const pk=picked(), n=Date.now(), h=(pk==='rules')?defaultHours(n):pk;
+    const el=document.getElementById('rtCloses'); if(el) el.innerHTML='Bidding will close at <strong>'+fmtAt(n+h*3600000)+'</strong> unless a later bid lengthens the countdown.'; }catch(_){} };
+  const opt=(val,label,checked)=>`<label style="display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer"><input type="radio" name="rtLen" value="${val}"${checked?' checked':''} onchange="_resetTimerPreview()" style="width:15px;height:15px"> ${label}</label>`;
   openConfirm({
     title:'↺ Reset Timer',
-    body:`<div>Reset timer to <strong>${fmtDuration(Math.round(newDurH*10)/10)}</strong> from this moment?</div>`
-      +((owActive&&owr)?`<div class="cmodal-info" style="margin-top:6px">The opening window is active — this restarts the full ${owr.days}-day window.</div>`:''),
-    okText:'Reset',
-    // [FIX 25 Jul 2026 · delta-audit #3/#4] Reset Timer is the UI's advertised way to REOPEN
-    // bidding, so it must also clear biddingClosed. Previously the flag was set by Close Phase
-    // Bidding and cleared only by Begin Phase (which wipes the current phase's decisions) or a
-    // full Reset Auction — so restarting the countdown left a live-looking board where every
-    // bid was still denied server-side with a raw permissions error and no explanation.
-    onConfirm:async()=>{ const _n=Date.now(); await setDoc(timerRef,{lastChange:_n,biddingClosed:false,durationHours:(owActive&&owr)?owr.days*24:timerResetHours(timerPhaseStartMs(),_n)},{merge:true}); toast("↺ Timer reset — bidding is open again","ok"); }
+    body:`<div>Restart the countdown from this moment. How long?</div>
+          <div style="margin:8px 0 6px 2px">${opt('rules',defLabel,true)}${CHOICES.map(h=>opt(h,h+' hour'+(h!==1?'s':''),false)).join('')}</div>
+          <div class="cmodal-info" id="rtCloses" style="margin-top:6px">Bidding will close at <strong>${fmtAt(_n0+defH*3600000)}</strong> unless a later bid lengthens the countdown.</div>
+          <div style="margin-top:6px;font-size:12px;color:var(--t2)">A later bid that restarts the countdown can only make it longer, never shorter.</div>`
+      +((owActive&&owr)?`<div class="cmodal-info" style="margin-top:6px">The opening window is active — the default restarts the full ${owr.days}-day window.</div>`:'')
+      +(timerData?.biddingClosed===true?`<div class="cmodal-warn" style="margin-top:6px">This also lifts the server's "bidding closed" flag set by ⏱ Close bidding.</div>`:''),
+    okText:'↺ Reset',
+    // [FIX 25 Jul 2026 · delta-audit #3/#4] Reset Timer must also clear biddingClosed — a restarted countdown with the
+    // flag still set is a live-looking board where every bid is denied server-side.
+    onConfirm:async()=>{
+      if(timerData.enabled!==true){ toast('The timer was switched off while this was open — nothing was reset.','warn'); return; }
+      if(_windowCompletedNow()){ toast('⛔ '+_phaseWindowLabel()+' is complete — its bidding cannot be reopened by a timer reset.','err'); return; }
+      const _n=Date.now(); const pk=picked(); const h=(pk==='rules')?defaultHours(_n):pk;
+      await setDoc(timerRef,{lastChange:_n,biddingClosed:false,durationHours:h},{merge:true});
+      try{ await adminLog('ALL','ALL','admin-timer-reset',undefined,{hours:Math.round(h*100)/100,choice:(pk==='rules'?'rules':'chosen')}); }catch(_){}
+      toast('↺ Timer reset — bidding closes '+fmtAt(_n+h*3600000),'ok');
+    }
   });
 };
-// (Clear Timer removed — the slider's 0 position and the enable toggle cover it.)
+// (Clear Timer removed — Expire timer now and the enable toggle cover it.)
 
 // ── SHA-256 ──
 async function sha256(str){
