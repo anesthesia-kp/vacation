@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 180;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 181;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -1589,6 +1589,27 @@ function _windowStartMs(){
 function timerPhaseStartMs(){ try{ const b=(typeof phasesData!=='undefined')?_windowStartMs():null; return b||(timerData&&timerData.lastChange)||Date.now(); }catch(e){ return Date.now(); } } // [322 · P-2] asks _windowStartMs (round-aware); until 321/166 it read the phase stamp alone
 // Current BASE reset length (one of 48/24/12/6/3) for right now, from the stages + elapsed.
 function currentStageHours(){ const r=getTimerRules(); const st=r.stages; const elapsedDays=(Date.now()-timerPhaseStartMs())/86400000; let base=st.length?st[0].hours:48; for(const s of st){ if(elapsedDays>=(s.days||0)) base=s.hours; } return base; }
+// [181/344 · §225] ★ BOTH pages (twin). The one line that says what a bid does to the countdown RIGHT NOW.
+// It reads the same numbers the bid save path uses (timerResetHours, then the extend-only comparison), so it
+// cannot disagree with what a bid would really do: a reset never shortens the countdown, so while more time is
+// left than a reset would give, no bid resets anything. When the admin's overnight window pushes a reset to the
+// morning it names that end time, from the admin's own settings. Display only: nothing here writes.
+function _timerResetLine(){
+  const n=Date.now();
+  const r=getTimerRules();
+  const stageH=currentStageHours();
+  const resetH=timerResetHours(timerPhaseStartMs(),n);
+  const deadline=(timerData&&timerData.lastChange)?(timerData.lastChange+((timerData.durationHours||48)*3600000)):0;
+  if(n+resetH*3600000<deadline) return 'No reset until less than '+stageH+'h remain.';
+  const plainEnd=n+stageH*3600000;
+  const pushed=!!r.quietEnabled&&stageH<=(r.quietWhenHoursLE||6)&&_quietAdjustExpiry(plainEnd,r)!==plainEnd;
+  const to=pushed?('to end at '+fmtHour12(r.quietEnd)):('to '+stageH+'h');
+  const raw=(typeof adminSettings!=='undefined'&&adminSettings)?adminSettings.timerResetMode:undefined;
+  const mi=parseInt(raw,10); const mode=(mi===2||mi===3)?mi:1;
+  if(mode===2) return 'Bids, changes and cancels reset the timer '+to+" only if they change another user's outcome.";
+  if(mode===3) return 'New bids reset the timer '+to+"; changes and cancels, only if they change another user's outcome.";
+  return 'Any bid change resets the timer '+to+'.';
+}
 function fmtElapsed(ms){ if(!(ms>0)) ms=0; const tm=Math.floor(ms/60000); const d=Math.floor(tm/1440), h=Math.floor((tm%1440)/60), mi=tm%60; return d+'d '+h+'h '+mi+'m'; }
 function updatePhaseOpen(){ const el=document.getElementById('phaseOpenFor'); if(!el) return; const cur=Number((phasesData&&phasesData.currentPhase)||1); const began=phasesData?_windowStartMs():null; const completed=!!(phasesData&&phasesData.completedPhases&&phasesData.completedPhases[cur])||(cur===4&&!!(phasesData.p4Rounds||{})[Number(phasesData.p4Round||1)]); const expired=(typeof isAuctionClosed==='function')&&isAuctionClosed(); const open=began&&(phasesData&&(phasesData.phase1Started||cur>1))&&!completed&&!expired; el.textContent=open?(_phaseWindowLabel()+' has been open for '+fmtElapsed(Date.now()-began)):''; } // [322 · P-2] the open ROUND's start in Phase 4; a completed round is not open either (was [166] label only)
 try{ setInterval(function(){ try{ updatePhaseOpen(); }catch(e){} }, 20000); }catch(e){}
@@ -1625,10 +1646,11 @@ function renderTimerRulesInfo(){
     return 'Every time anyone places or changes a bid, the countdown resets';
   })();
   const endLine=`<p style="margin:0 0 6px"><strong>Each phase ends when the countdown timer gets to 0.</strong></p>`;
+  const noReset=`<p style="margin:8px 0 0">No reset until less than the admin-selected reset time remains.</p>`; // [181 · §225]
   if(st.length<=1){ el.innerHTML=endLine+owHtml+(_timerResetMode()===1
     ?`<p style="margin:0 0 6px">Every time anyone places or changes a bid, the countdown resets to <strong>${(st[0]||{}).hours||48} hours</strong>.</p>`
-    :`<p style="margin:0 0 6px">${resetSentence}. Each qualifying reset returns the countdown to <strong>${(st[0]||{}).hours||48} hours</strong>.</p>`)+quiet; return; }
-  el.innerHTML=endLine+owHtml+`<p style="margin:0 0 6px">${resetSentence}. How long it resets to gets shorter as the round goes on:</p><ul style="margin:0 0 0 18px;padding:0">${items}</ul>${quiet}`;
+    :`<p style="margin:0 0 6px">${resetSentence}. Each qualifying reset returns the countdown to <strong>${(st[0]||{}).hours||48} hours</strong>.</p>`)+noReset+quiet; return; }
+  el.innerHTML=endLine+owHtml+`<p style="margin:0 0 6px">${resetSentence}. How long it resets to gets shorter as the round goes on:</p><ul style="margin:0 0 0 18px;padding:0">${items}</ul>${noReset}${quiet}`;
 }
 function isAuctionClosed(){
   // [FIX 25 Jul 2026 · delta-audit #8] The admin's explicit "close bidding" flag is
@@ -2204,7 +2226,6 @@ function renderCountdown(){
   const ts=Math.floor(remaining/1000);
   const h=Math.floor(ts/3600), m=Math.floor((ts%3600)/60), s=ts%60;
   const pad=n=>String(n).padStart(2,"0");
-  const lastStr=new Date(timerData.lastChange).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
   const dur=(timerData.durationHours||48)*3600000;
   _setCountdownEnds(`${(typeof phasesData!=='undefined'&&phasesData)?_phaseWindowLabel():'This phase'} will not end before ${_fmtEndsPT(timerData.lastChange+DURATION)}\u00a0PT`); // no-break space: "PT" never wraps onto a line alone
   if(openingWindowActive()){
@@ -2219,13 +2240,9 @@ function renderCountdown(){
     <div class="time-block"><span class="time-value">${pad(m)}</span><span class="time-unit">mins</span></div>`;
     return;
   }
-  if(remaining<2*3600000){
-    // Under 2 hours left: a plain heads-up in the box's normal text colour — no
-    // colour change on the banner (no amber "warning" / red "urgent" escalation).
-    descEl.textContent=`Timer is expiring soon. (Last change: ${lastStr})`;
-  } else {
-    descEl.textContent=`Resets to ${currentStageHours()}h with each bid change. (Last change: ${lastStr})`;
-  }
+  // [181 · §225] One line, at every time left: what a bid does to the countdown right now (owner: no
+  // "expiring soon", no "last change"). The wording lives in _timerResetLine, shared with the admin page.
+  descEl.textContent=_timerResetLine();
   timeEl.innerHTML=`
     <div class="time-block"><span class="time-value">${pad(h)}</span><span class="time-unit">hours</span></div>
     <span class="time-sep">:</span>
@@ -4298,6 +4315,7 @@ function timerRulesEmailText(){
   let owTxt='';
   if(r.openingWindow){ owTxt=`\n\nEach phase opens with a ${r.openingWindow.days}-day window: the timer counts down continuously (bids do NOT reset it) until ${(st[0]||{}).hours||48} hours remain — then the reset rules above take over.`; }
   const endLine='Each phase ends when the countdown timer gets to 0. ';
+  const noReset='\n\nNo reset until less than the admin-selected reset time remains.'; // [181/344 · §225]
   // [157 · RA-M2] The reset sentence follows the admin-selected mode, exactly like the
   // on-site explainer (build 274 V3) whose wording this e-mail promises to match.
   // Mode 1 keeps the classic wording byte-for-byte.
@@ -4308,9 +4326,9 @@ function timerRulesEmailText(){
     ?'Every NEW bid resets the countdown; changes and cancels reset it only when they change the projected outcome for another user'
     :'Every time anyone places or changes a bid, the countdown resets';
   if(st.length<=1){ return endLine+(_m===1
-    ?`Every time anyone places or changes a bid, the countdown resets to ${(st[0]||{}).hours||48} hours.${quiet}${owTxt}`
-    :`${resetSentence}. Each qualifying reset returns the countdown to ${(st[0]||{}).hours||48} hours.${quiet}${owTxt}`); }
-  return endLine+`${resetSentence}. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}${owTxt}`;
+    ?`Every time anyone places or changes a bid, the countdown resets to ${(st[0]||{}).hours||48} hours.${noReset}${quiet}${owTxt}`
+    :`${resetSentence}. Each qualifying reset returns the countdown to ${(st[0]||{}).hours||48} hours.${noReset}${quiet}${owTxt}`); }
+  return endLine+`${resetSentence}. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${noReset}${quiet}${owTxt}`;
 }
 function buildWelcomeEmailBody(user){
   // Plain-text e-mail can't hang-indent a soft-wrapped line, so split the (long) cap

@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 343;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 344;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -536,7 +536,7 @@ thead th{color:var(--t2)}
             <button class="btn btn-ghost" id="expireTimerBtn" onclick="adminExpireTimer()" disabled>⏱ Expire timer now</button>
           </div>
           <div class="trow" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
-            <div><div class="trow-label">Bidding Timer</div><div class="trow-desc">Live countdown shown to all users; resets on each bid change</div></div>
+            <div><div class="trow-label">Bidding Timer</div><div class="trow-desc">Live countdown shown to all users</div></div>
             <div class="tog" id="timerToggle" onclick="toggleTimerEnabled()"></div>
           </div>
           <div class="trow" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
@@ -6514,6 +6514,7 @@ function timerRulesEmailText(){
   let owTxt='';
   if(r.openingWindow){ owTxt=`\n\nEach phase opens with a ${r.openingWindow.days}-day window: the timer counts down continuously (bids do NOT reset it) until ${(st[0]||{}).hours||48} hours remain — then the reset rules above take over.`; }
   const endLine='Each phase ends when the countdown timer gets to 0. ';
+  const noReset='\n\nNo reset until less than the admin-selected reset time remains.'; // [181/344 · §225]
   // [293 · RA-M2 twin] The reset sentence follows the admin-selected mode, matching the
   // staff twin (157) and the on-site explainer (build 274 V3). Mode 1 keeps the classic
   // wording byte-for-byte.
@@ -6525,9 +6526,9 @@ function timerRulesEmailText(){
     ?'Every NEW bid resets the countdown; changes and cancels reset it only when they change the projected outcome for another user'
     :'Every time anyone places or changes a bid, the countdown resets';
   if(st.length<=1){ return endLine+(_m===1
-    ?`Every time anyone places or changes a bid, the countdown resets to ${(st[0]||{}).hours||48} hours.${quiet}${owTxt}`
-    :`${resetSentence}. Each qualifying reset returns the countdown to ${(st[0]||{}).hours||48} hours.${quiet}${owTxt}`); }
-  return endLine+`${resetSentence}. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${quiet}${owTxt}`;
+    ?`Every time anyone places or changes a bid, the countdown resets to ${(st[0]||{}).hours||48} hours.${noReset}${quiet}${owTxt}`
+    :`${resetSentence}. Each qualifying reset returns the countdown to ${(st[0]||{}).hours||48} hours.${noReset}${quiet}${owTxt}`); }
+  return endLine+`${resetSentence}. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${noReset}${quiet}${owTxt}`;
 }
 function _cumCap(phase){
   const m=adminSettings?.maxBidsCumulative;
@@ -10839,6 +10840,27 @@ function timerPhaseStartMs(){ try{ const b=(typeof phasesData!=='undefined')?_wi
 function fmtElapsed(ms){ if(!(ms>0)) ms=0; const tm=Math.floor(ms/60000); const d=Math.floor(tm/1440), h=Math.floor((tm%1440)/60), mi=tm%60; return d+'d '+h+'h '+mi+'m'; }
 // The BASE reset length for right now (one of 48/24/12/6/3) from the stages + elapsed.
 function currentStageHours(){ const r=getTimerRules(); const st=r.stages; const elapsedDays=(Date.now()-timerPhaseStartMs())/86400000; let base=st.length?st[0].hours:48; for(const s of st){ if(elapsedDays>=(s.days||0)) base=s.hours; } return base; }
+// [181/344 · §225] ★ BOTH pages (twin). The one line that says what a bid does to the countdown RIGHT NOW.
+// It reads the same numbers the bid save path uses (timerResetHours, then the extend-only comparison), so it
+// cannot disagree with what a bid would really do: a reset never shortens the countdown, so while more time is
+// left than a reset would give, no bid resets anything. When the admin's overnight window pushes a reset to the
+// morning it names that end time, from the admin's own settings. Display only: nothing here writes.
+function _timerResetLine(){
+  const n=Date.now();
+  const r=getTimerRules();
+  const stageH=currentStageHours();
+  const resetH=timerResetHours(timerPhaseStartMs(),n);
+  const deadline=(timerData&&timerData.lastChange)?(timerData.lastChange+((timerData.durationHours||48)*3600000)):0;
+  if(n+resetH*3600000<deadline) return 'No reset until less than '+stageH+'h remain.';
+  const plainEnd=n+stageH*3600000;
+  const pushed=!!r.quietEnabled&&stageH<=(r.quietWhenHoursLE||6)&&_quietAdjustExpiry(plainEnd,r)!==plainEnd;
+  const to=pushed?('to end at '+fmtHour12(r.quietEnd)):('to '+stageH+'h');
+  const raw=(typeof adminSettings!=='undefined'&&adminSettings)?adminSettings.timerResetMode:undefined;
+  const mi=parseInt(raw,10); const mode=(mi===2||mi===3)?mi:1;
+  if(mode===2) return 'Bids, changes and cancels reset the timer '+to+" only if they change another user's outcome.";
+  if(mode===3) return 'New bids reset the timer '+to+"; changes and cancels, only if they change another user's outcome.";
+  return 'Any bid change resets the timer '+to+'.';
+}
 function updatePhaseOpen(){
   const cur=Number((phasesData&&phasesData.currentPhase)||1);
   const began=phasesData?_windowStartMs():null; // [322 · P-2] the open ROUND's start in Phase 4
@@ -10849,7 +10871,7 @@ function updatePhaseOpen(){
   const el=document.getElementById('phaseOpenFor');
   if(el) el.textContent=open?(_phaseWindowLabel()+' has been open for '+fmtElapsed(Date.now()-began)):''; // [322 · P-2] names the round (staff 166 already did)
   const ri=document.getElementById('timerResetInfo');
-  if(ri) ri.textContent=(open && timerData && timerData.enabled)?(openingWindowActive()?('Opening window — bids do not reset the timer until '+stage0Hours()+' hours remain.'):('Each bid now resets the timer to '+currentStageHours()+' hours.')):'';
+  if(ri) ri.textContent=(open && timerData && timerData.enabled)?(openingWindowActive()?('Opening window — bids do not reset the timer until '+stage0Hours()+' hours remain.'):_timerResetLine()):'';
 }
 try{ setInterval(function(){ try{ updatePhaseOpen(); }catch(e){} }, 20000); }catch(e){}
 // Periodic outbid-alert sweep: without this, freshly-queued alerts (which are
