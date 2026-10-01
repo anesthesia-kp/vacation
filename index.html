@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 181;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 182;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -756,6 +756,7 @@ let changesData={log:[]}, unsubSchedule=null;
 // admin setting loads (prevents the spurious password box when passwords are off).
 let emailsData={}, bestBidsData={}, fteData={}, adminSettings={emailNotifsEnabled:true,passcodesEnabled:false}, bidTimesData={}, approvalsData={}, usernamesData={};
 let bidLoweringsData={}; // [build 139 · BL]
+let _lwLoaded={best:false,low:false,holds:false}; // [182 · §221] set by the three snapshots the lower-and-still-win check reads; cleared at teardown — an unloaded doc looks like an empty one, so the check refuses to run without all three
 let bidHoldsData={}; // [169 · §180] withheld numbers, per user — read only; joins the permanently-used set below
 let loginEmailsData={}; // {INITIALS: google-email} shared doc mapping Google accounts to accounts
 
@@ -3683,11 +3684,116 @@ window.setBoardView=function(v){
 // Google Sheets auto-backup removed (feature retired; the embedded service-account
 // key it required has been deleted from this file).
 
+// ── [182 · §221 · §222 #4] "You could lower your bid and still win" ─────────────────────
+// When someone else CANCELS or LOWERS a bid on a week, a user who is winning that week may
+// now be able to place a WEAKER bid there and still win. These helpers work that out. They
+// only READ: the engine is asked "what if" on a COPY of the schedule, exactly as the
+// projection alerts already do. Nothing here writes, and nothing here is called by the
+// engine, the timer or the bid dialog.
+// The bid ladder, strongest first — the same values the bid box offers.
+const _LW_LADDER=["1,2,3","1,2","1","2","3","4","5","6","7","8","9","10","NP"];
+// The weeks on which `actor` withdrew a bid or made it weaker between the two pictures.
+// A new bid or a stronger bid is NOT listed: those only add competition.
+function _lwActorWeakened(prevSnap,newSnap,actor){
+  const out=[];
+  const pa=(prevSnap&&prevSnap[actor]&&typeof prevSnap[actor]==='object')?prevSnap[actor]:{};
+  const na=(newSnap&&newSnap[actor]&&typeof newSnap[actor]==='object')?newSnap[actor]:{};
+  for(const wk of Object.keys(pa)){
+    const b=pa[wk], a=na[wk];
+    if(b===undefined||b===null) continue;
+    if(a===undefined||a===null){ out.push({wk,how:'withdrawn'}); continue; }
+    if(priorityScore(a)>priorityScore(b)) out.push({wk,how:'lowered'});
+  }
+  return out;
+}
+// The WEAKER bids `user` is allowed to place on `wk` right now with which the engine still
+// projects WIN — strongest first, stopping at the first placeable one that would not win — judged on the schedule picture `snap`. The legality tests are the bid box's
+// own (week floor, NP by phase, numbers used elsewhere / held / spent on an earlier win, the
+// priority lock and the lowering allowance). Returns [] when there is none, and null when
+// it cannot tell — the caller sends nothing on null (fail closed).
+function _lwWeakerWins(snap,user,wk){
+  try{
+    if(!_lwLoaded.best||!_lwLoaded.low||!_lwLoaded.holds) return null;
+    const mine=(snap&&snap[user]&&typeof snap[user]==='object')?snap[user]:null;
+    if(!mine) return [];
+    const cur=mine[wk];
+    if(cur===undefined||cur===null||cur==="NP") return [];
+    if(!weekMeta[wk]) return null;
+    if(!isCurrentPhaseBid(user,wk)) return [];
+    if(getPriorPhaseWinners(wk).has(user)) return [];
+    if(p4AnnouncedDecision(user,wk)) return [];
+    if(locksData.globalLock||locksData.weeks?.[wk]) return [];
+    const used=[...getPriorPhaseUsedPriorities(user)];
+    for(const w of Object.keys(mine)){
+      if(w===wk||mine[w]===undefined||mine[w]===null||!isCurrentPhaseBid(user,w)) continue;
+      const p=mine[w]; if(p==="NP") continue;
+      if(Array.isArray(p)) used.push(...p); else used.push(p);
+    }
+    const lockOn=adminSettings.priorityLockEnabled!==false;
+    const floor=(bestBidsData[user]||{})[wk];
+    const rem=blRemaining(user);
+    const bf=bfFloorFor(wk);
+    const curScore=priorityScore(cur);
+    const out=[];
+    for(const v of _LW_LADDER){
+      const p=_bfParse(v);
+      if(!(priorityScore(p)>curScore)) continue;
+      if(v==="NP"){ if(bf!=='none'||!npAllowedNow()) continue; }
+      else{
+        if(!bfAllows(p,bf)) continue;
+        const nums=Array.isArray(p)?p:[p];
+        if(nums.some(n=>used.includes(n))) continue;
+      }
+      const costs=lockOn&&floor!==undefined&&priorityScore(p)>priorityScore(floor);
+      if(costs&&!(rem>0)) continue;
+      const s=JSON.parse(JSON.stringify(snap));
+      s[user][wk]=p;
+      if(getOutcome(wk,user,computeApprovals(s))!=='win') break; // strongest first: stop at the first placeable bid that would not win, so "X or better" holds for every bid it covers
+      out.push({bid:p,costs});
+    }
+    return out;
+  }catch(_){ return null; }
+}
+// The facts, as one or two short sentences (owner wording, 1 Oct 2026: "any bid x or
+// better" — x is the WEAKEST bid found above). The lowering sentence is stated only when it
+// is true of EVERY bid found and the allowance is a number; otherwise it is left out.
+function _lwFacts(user,cands){
+  const x=cands[cands.length-1].bid;
+  let t='Right now, any bid'+(x==="NP"?', including NP,':(' '+blFmtBid(x)+' or better'))+' would also win.';
+  const rem=blRemaining(user);
+  if(cands.every(c=>c.costs)&&rem!==Infinity&&rem>0) t+=' Lowering uses 1 of your '+rem+' remaining bid lowering'+(rem!==1?'s':'')+'.';
+  return t;
+}
+// For one action by `actor`: a map user → week → (how, facts, cur) for every OTHER user who is
+// projected WIN on a week the actor just withdrew from or lowered on, who can now place a
+// weaker bid there and still win, and who could NOT a moment before (so it is said once,
+// when the chance first opens). Anything unknown → that user/week is simply left out.
+function _lwOpenings(prevSnap,newSnap,actor,newAp){
+  const res={};
+  try{
+    for(const {wk,how} of _lwActorWeakened(prevSnap,newSnap,actor)){
+      for(const user of Object.keys(newSnap)){
+        if(user===actor) continue;
+        const nu=(newSnap[user]&&typeof newSnap[user]==='object')?newSnap[user]:{};
+        if(nu[wk]===undefined||nu[wk]===null) continue;
+        if(getOutcome(wk,user,newAp)!=='win') continue;
+        const now=_lwWeakerWins(newSnap,user,wk);
+        if(!now||!now.length) continue;
+        const before=_lwWeakerWins(prevSnap,user,wk);
+        if(before===null||before.length) continue;
+        (res[user]=res[user]||{})[wk]={how,cur:nu[wk],facts:_lwFacts(user,now)};
+      }
+    }
+  }catch(_){ return {}; }
+  return res;
+}
+
 // ── Email notifications ──
 async function sendEmailNotifications(prevSnap,newSnap,actor){
   try{
     const prevAp=computeApprovals(prevSnap), newAp=computeApprovals(newSnap);
     const notif={};
+    let lw={}; try{ lw=_lwOpenings(prevSnap,newSnap,actor,newAp)||{}; }catch(_){ lw={}; } // [182 · §221 · §222 #4] worked out HERE, before the first await (see the bidPhase note at the call site); whatever goes wrong in it, the ordinary alerts below still go out
     for(const user of new Set([...Object.keys(prevSnap),...Object.keys(newSnap)])){
       if(user===actor) continue;
       const pu=(prevSnap[user]&&typeof prevSnap[user]==='object')?prevSnap[user]:{};
@@ -3698,7 +3804,14 @@ async function sendEmailNotifications(prevSnap,newSnap,actor){
         const po=uiOutcome(getOutcome(wk,user,prevAp)), no=uiOutcome(getOutcome(wk,user,newAp));
         if(po!==no){
           if(!notif[user])notif[user]=[];
-          notif[user].push(`Your projection for ${formatShort(wk)} changed from ${outcomeUpperUI(po)} to ${outcomeUpperUI(no)}`);
+          // [182 · §222 #4] just became WIN and a weaker bid would win too: the facts ride the SAME line
+          const _o=(no==='win'&&lw[user])?lw[user][wk]:null;
+          notif[user].push(`Your projection for ${formatShort(wk)} changed from ${outcomeUpperUI(po)} to ${outcomeUpperUI(no)}`+(_o?('. '+_o.facts):''));
+        } else if(no==='win'&&lw[user]&&lw[user][wk]){
+          // [182 · §221] still WIN, and the competition just dropped: say why the e-mail came, then the facts
+          const _o=lw[user][wk];
+          if(!notif[user])notif[user]=[];
+          notif[user].push(`${formatShort(wk)}: Another bid on this week was ${_o.how}. You are still projected to WIN with your bid of ${blFmtBid(_o.cur)}. ${_o.facts}`);
         }
       }
     }
@@ -3804,9 +3917,9 @@ function _subscribeSensitiveOnce(){
   // [build 151 · FB-5 stage 2] Board data — moved here from module load. Same one-shot
   // latch, same teardown. See the note at the old attach site for why each is safe.
   _sensitiveUnsubs.push(onSnapshot(changesRef,snap=>{ changesData=snap.exists()?snap.data():{log:[]}; if(!changesData.log)changesData.log=[]; scheduleRender(); }));
-  _sensitiveUnsubs.push(onSnapshot(bestBidsRef,snap=>{ bestBidsData=snap.exists()?snap.data():{}; }));
-  _sensitiveUnsubs.push(onSnapshot(bidLoweringsRef,snap=>{ bidLoweringsData=snap.exists()?snap.data():{}; }));
-  _sensitiveUnsubs.push(onSnapshot(bidHoldsRef,snap=>{ bidHoldsData=snap.exists()?snap.data():{}; scheduleRender(); })); // [169 · §180] the pool and the bid dialog read this through getPriorPhaseUsedPriorities
+  _sensitiveUnsubs.push(onSnapshot(bestBidsRef,snap=>{ bestBidsData=snap.exists()?snap.data():{}; _lwLoaded.best=true; })); // [182] flag only
+  _sensitiveUnsubs.push(onSnapshot(bidLoweringsRef,snap=>{ bidLoweringsData=snap.exists()?snap.data():{}; _lwLoaded.low=true; })); // [182] flag only
+  _sensitiveUnsubs.push(onSnapshot(bidHoldsRef,snap=>{ bidHoldsData=snap.exists()?snap.data():{}; _lwLoaded.holds=true; scheduleRender(); })); // [169 · §180] the pool and the bid dialog read this through getPriorPhaseUsedPriorities
   _sensitiveUnsubs.push(onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; if(typeof popcornRefresh==='function') popcornRefresh(); scheduleRender(); }));
   _sensitiveUnsubs.push(onSnapshot(whitelistConfirmRef, _wlOnSnap));
   _sensitiveUnsubs.push(onSnapshot(welcomeLogRef, snap=>{ welcomeLogData=snap.exists()?snap.data():{}; }));
@@ -3831,6 +3944,7 @@ function _unsubscribeSensitive(){
   // the board is hidden while signed out, and a listener rejected under the anonymous
   // session never retries — so nothing may survive on stale data into the next session.
   changesData={log:[]}; bestBidsData={}; bidLoweringsData={}; bidHoldsData={}; bidTimesData={}; // [169 · RA-9 #5] bidHolds joins the teardown
+  _lwLoaded={best:false,low:false,holds:false}; // [182 · §221]
   welcomeLogData={}; whitelistConfirmData={}; _whitelistLoaded=false;
   // [build 152] batch 2's caches — same rule. slots also re-zeroes weekMeta capacity.
   locksData={globalLock:false,weeks:{}}; fteData={}; bidPhaseData={}; slotsData={};
