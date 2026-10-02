@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 346;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 347;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -911,16 +911,18 @@ thead th{color:var(--t2)}
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px">
         <label style="font-size:11px;color:var(--t2)">Phase:</label>
         <select id="rpPhaseFilter" class="sel" onchange="renderReportsPage()"></select>
+        <!-- [347 · §229] Off on every page load (never remembered). One switch for both reports; its label follows the report shown. -->
+        <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--t2);cursor:pointer;margin-left:6px"><input type="checkbox" id="rpActiveOnly" autocomplete="off" onchange="setReportsActiveOnly(this.checked)"><span id="rpActiveOnlyLabel">People with bids only</span></label>
         <span style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-left:auto">
           <span id="rpExportWeekly" style="display:none;gap:6px;flex-wrap:wrap;align-items:center">
           <span style="font-size:11px;color:var(--t3);font-weight:700">Weekly</span>
-          <button class="btn" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportPhaseResults('pdf',document.getElementById('rpPhaseFilter').value)">📄 PDF</button>
-          <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportPhaseResults('xlsx',document.getElementById('rpPhaseFilter').value)">📊 Excel</button>
+          <button class="btn" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportPhaseResults('pdf',document.getElementById('rpPhaseFilter').value,rpActiveOnly())">📄 PDF</button>
+          <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportPhaseResults('xlsx',document.getElementById('rpPhaseFilter').value,rpActiveOnly())">📊 Excel</button>
           </span>
           <span id="rpExportUser" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
           <span style="font-size:11px;color:var(--t3);font-weight:700">User</span>
-          <button class="btn" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportUserSummary('pdf',document.getElementById('rpPhaseFilter').value)">📄 PDF</button>
-          <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportUserSummary('xlsx',document.getElementById('rpPhaseFilter').value)">📊 Excel</button>
+          <button class="btn" style="background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportUserSummary('pdf',document.getElementById('rpPhaseFilter').value,rpActiveOnly())">📄 PDF</button>
+          <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportUserSummary('xlsx',document.getElementById('rpPhaseFilter').value,rpActiveOnly())">📊 Excel</button>
           </span>
         </span>
       </div>
@@ -7786,12 +7788,15 @@ function openReportTab(title,phaseLabel,subtitle,bodyHtml,autoPrint){
   return true;
 }
 
-window.exportPhaseResults=function(format,scopeOverride){
+window.exportPhaseResults=function(format,scopeOverride,activeOnly){
   // scopeOverride lets callers pass their own filter; otherwise use the
   // Approvals/Denials phase dropdown.
   const scope=scopeOverride||document.getElementById('adPhaseFilter')?.value||'current';
   const exportLabel=bwScopeLabel(scope);
-  const groups=bidsByWeekModel(scope, true); // include EVERY week of the year, even empty ones
+  // [347 · §229] activeOnly (the Reports page switch) drops the weeks with no bid in this scope. Filtered HERE,
+  // once, so every format below reads the same list; the report says so in its stamp line.
+  const groups=bidsByWeekModel(scope, true).filter(g=>!activeOnly||g.bids.length>0); // every week of the year, even empty ones — unless activeOnly
+  const onlyNote=activeOnly?' · weeks with bids only':'';
   const showPhaseCol=scope==='all';
   const now=new Date();
   const stamp=now.toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
@@ -7827,7 +7832,7 @@ window.exportPhaseResults=function(format,scopeOverride){
       // Dedicated, highly visible phase row — the report's most important context.
       push([exportLabel.toUpperCase()],[S_PHASE],20);
       merges.push({s:{r:1,c:0},e:{r:1,c:nCols-1}});
-      push([`Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} across ${groups.length} week${groups.length!==1?'s':''}`],[S_STAMP]);
+      push([`Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} across ${groups.length} week${groups.length!==1?'s':''}${onlyNote}`],[S_STAMP]);
       merges.push({s:{r:2,c:0},e:{r:2,c:nCols-1}});
       push([]); // spacer
       groups.forEach(g=>{
@@ -7905,7 +7910,7 @@ window.exportPhaseResults=function(format,scopeOverride){
       });
     });
     const csvEsc=v=>{ const s=String(v); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
-    const csv=`# Vacation Auction — Weekly Summary — ${exportLabel} — exported ${stamp}\n`+[header,...dataRows].map(r=>r.map(csvEsc).join(',')).join('\n');
+    const csv=`# Vacation Auction — Weekly Summary — ${exportLabel} — exported ${stamp}${onlyNote}\n`+[header,...dataRows].map(r=>r.map(csvEsc).join(',')).join('\n');
     const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
     const url=URL.createObjectURL(blob);
     const a=document.createElement('a');
@@ -7930,7 +7935,7 @@ window.exportPhaseResults=function(format,scopeOverride){
   // without re-deriving anything. format 'parts' RETURNS them and opens nothing.
   // [337 · §203] Title now matches the button that opens it ("Weekly summary"), his ruling.
   const _parts={ title:'Vacation Auction — Weekly Summary', phaseLabel:exportLabel,
-    subtitle:`Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} across ${groups.length} week${groups.length!==1?'s':''} · Projected = outcome before admin approval/denial · Result = admin decision ("—" = not yet decided)`,
+    subtitle:`Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} across ${groups.length} week${groups.length!==1?'s':''}${onlyNote} · Projected = outcome before admin approval/denial · Result = admin decision ("—" = not yet decided)`,
     body:sections||'<p>No bids for this selection.</p>' };
   if(format==='parts') return _parts;
   const ok=openReportTab(_parts.title,_parts.phaseLabel,_parts.subtitle,_parts.body, !isView);
@@ -7940,7 +7945,7 @@ window.exportPhaseResults=function(format,scopeOverride){
 // ── User Summary report (per USER) — same three formats as the weekly report,
 // driven by the SAME phase selector (repPhaseFilter). One block per user: every
 // week they bid on, with its bid, projected status, and final result. ──
-window.exportUserSummary=function(format,scopeOverride){
+window.exportUserSummary=function(format,scopeOverride,activeOnly){
   const scope=scopeOverride||document.getElementById('repPhaseFilter')?.value||'current';
   const exportLabel=bwScopeLabel(scope);
   const groups=bidsByWeekModel(scope);
@@ -7954,7 +7959,9 @@ window.exportUserSummary=function(format,scopeOverride){
   // Re-pivot the by-week model into per-user rows.
   const byUser={};
   groups.forEach(g=>g.bids.forEach(b=>{ (byUser[b.user]=byUser[b.user]||[]).push({g,b}); }));
-  const allUsers=[...new Set([...(names||[]),...Object.keys(byUser)])].sort();
+  // [347 · §229] activeOnly drops the people with no bid in this scope — filtered once, for every format below.
+  const allUsers=[...new Set([...(names||[]),...Object.keys(byUser)])].sort().filter(u=>!activeOnly||(byUser[u]||[]).length>0);
+  const onlyNote=activeOnly?' · people with bids only':'';
   const totalBids=groups.reduce((s,g)=>s+g.bids.length,0);
 
   if(format==='csv'||format==='xlsx'){
@@ -7977,7 +7984,7 @@ window.exportUserSummary=function(format,scopeOverride){
       const push=(cells,cellStyles,ht)=>{aoa.push(cells);styles.push(cellStyles||[]);rowHts.push(ht||null);};
       push(['Vacation Auction — User Summary'],[S_TITLE],22); merges.push({s:{r:0,c:0},e:{r:0,c:nCols-1}});
       push([exportLabel.toUpperCase()],[S_PHASE],20); merges.push({s:{r:1,c:0},e:{r:1,c:nCols-1}});
-      push([`Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} across ${allUsers.length} user${allUsers.length!==1?'s':''}`],[S_STAMP]); merges.push({s:{r:2,c:0},e:{r:2,c:nCols-1}});
+      push([`Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} across ${allUsers.length} user${allUsers.length!==1?'s':''}${onlyNote}`],[S_STAMP]); merges.push({s:{r:2,c:0},e:{r:2,c:nCols-1}});
       push([]);
       allUsers.forEach(u=>{
         const rows=(byUser[u]||[]).sort((a,b)=>a.g.wk.localeCompare(b.g.wk));
@@ -8016,7 +8023,7 @@ window.exportUserSummary=function(format,scopeOverride){
     const dataRows=[];
     allUsers.forEach(u=>{ (byUser[u]||[]).sort((a,b)=>a.g.wk.localeCompare(b.g.wk)).forEach(({g,b})=>{ const resTxt=b.decided?bwOutcomeLabel(b.outcome):'—'; dataRows.push(showPhaseCol?[u,getUserFTE(u),g.wn,g.date,g.type||'',String(b.bid),'P'+b.phase,projTxt(b.projected),resTxt]:[u,getUserFTE(u),g.wn,g.date,g.type||'',String(b.bid),projTxt(b.projected),resTxt]); }); });
     const csvEsc=v=>{ const s=String(v); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
-    const csv=`# Vacation Auction — User Summary — ${exportLabel} — exported ${stamp}\n`+[header,...dataRows].map(r=>r.map(csvEsc).join(',')).join('\n');
+    const csv=`# Vacation Auction — User Summary — ${exportLabel} — exported ${stamp}${onlyNote}\n`+[header,...dataRows].map(r=>r.map(csvEsc).join(',')).join('\n');
     const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=fname+'.csv'; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
     toast('📊 Excel library unavailable — exported CSV instead','warn'); return;
   }
@@ -8034,7 +8041,7 @@ window.exportUserSummary=function(format,scopeOverride){
   }).join('')||'<p>No bids for this selection.</p>';
   // [337 · §203] Same parts mode as the weekly report — one definition, two surfaces.
   const _parts={ title:'Vacation Auction — User Summary', phaseLabel:exportLabel,
-    subtitle:`Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''} · Projected = outcome before admin approval/denial · Result = admin decision ("—" = not yet decided)`,
+    subtitle:`Exported ${stamp} · ${totalBids} bid${totalBids!==1?'s':''}${onlyNote} · Projected = outcome before admin approval/denial · Result = admin decision ("—" = not yet decided)`,
     body:sections };
   if(format==='parts') return _parts;
   const ok=openReportTab(_parts.title,_parts.phaseLabel,_parts.subtitle,_parts.body, !isView);
@@ -8202,6 +8209,11 @@ function _capacityFilterRows(rows,f){
 // document, and (2) otherwise assigns ONE animation frame later, after the panel is laid out —
 // coalescing a burst into a single load of the newest document.
 let _rpView='user';
+// [347 · §229] "With bids only": hides weeks (Weekly) or people (User) that have no bid in the selected
+// phase. His ruling: default off, and off again on every reload — so it is NEVER stored.
+let _rpActiveOnly=false;
+window.rpActiveOnly=function(){ return _rpActiveOnly; };
+window.setReportsActiveOnly=function(on){ _rpActiveOnly=!!on; renderReportsPage(); };
 try{ if(localStorage.getItem('reportsView')==='weekly') _rpView='weekly'; }catch(_){}
 function _applyReportsView(){
   const isW=_rpView==='weekly';
@@ -8211,6 +8223,10 @@ function _applyReportsView(){
   const bw=document.getElementById('rpViewBtnWeekly'), bu=document.getElementById('rpViewBtnUser');
   if(bw) bw.className='btn'+(isW?' btn-primary':' btn-ghost');
   if(bu) bu.className='btn'+(isW?' btn-ghost':' btn-primary');
+  // [347 · §229] The box always shows the real state — a browser that restores form fields on reload cannot leave it ticked.
+  const cb=document.getElementById('rpActiveOnly'), lb=document.getElementById('rpActiveOnlyLabel');
+  if(cb) cb.checked=_rpActiveOnly;
+  if(lb) lb.textContent=isW?'Weeks with bids only':'People with bids only';
 }
 window.setReportsView=function(v){
   _rpView=(v==='weekly')?'weekly':'user';
@@ -8245,7 +8261,7 @@ function renderReportsPage(){
   const f=document.getElementById(isW?'rpWeeklyFrame':'rpUserFrame');
   if(!f) return;
   let parts=null;
-  try{ parts=isW?exportPhaseResults('parts',scope):exportUserSummary('parts',scope); }
+  try{ parts=isW?exportPhaseResults('parts',scope,_rpActiveOnly):exportUserSummary('parts',scope,_rpActiveOnly); }
   catch(e){ console.warn('[reports] '+(isW?'weekly':'user')+' summary failed:',e); }
   _paintReportFrame(f, parts
     ? reportDocHtml(parts.title,parts.phaseLabel,parts.subtitle,parts.body,false)
