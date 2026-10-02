@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 182;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 183;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -2069,7 +2069,7 @@ async function relayMailQueue(){
         }catch(_){ _mqRelease(qid); continue; } // [H14] we hold the claim — release it
         if(typeof emailjs==='undefined'){ _mqRelease(qid); continue; } // [H14] belt-and-braces (guarded at entry too)
         if(isWelcome && _welcomed(wkey)){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; } // re-check after the claim settle
-        for(const to of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:to,changes:e.body||''}); }catch(err){ _mailLogNote(e.user,to,isWelcome?'welcome':'outbid alert',false,err); throw err; } trackEmailSent(); _mailLogNote(e.user,to,isWelcome?'welcome':'outbid alert',true); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); } // [170 · §189] the log note rethrows, so the strike-count path below is unchanged
+        for(const to of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:to,changes:e.body||''}); }catch(err){ _mailLogNote(e.user,to,isWelcome?'welcome':'projection alert',false,err); throw err; } trackEmailSent(); _mailLogNote(e.user,to,isWelcome?'welcome':'projection alert',true); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); } // [170 · §189] the log note rethrows, so the strike-count path below is unchanged
         // Mark the welcome log after a confirmed relay send so no other page re-sends it.
         if(isWelcome && wkey){ try{ await setDoc(welcomeLogRef,{sent:{[wkey]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[wkey]=true; }catch(_){} }
         // Terminal delete with one retry — a lost delete after a successful send would
@@ -2275,11 +2275,24 @@ function startListening(){
   });
 }
 
+let _fpLastFacts=null; // [183 · §223] {user,wk,f:{tRem,tDur,tReset,aff}} — set by persistScheduleChange, consumed once by logOwnChange
 async function logOwnChange(user,wk,action,bidValue){
   // id field guarantees uniqueness — arrayUnion deduplicates by value equality,
   // so two entries with identical fields (same ms timestamp) would silently drop one.
   const entry={id:Math.random().toString(36).slice(2),user,weekKey:wk,action,actor:'user',ts:Date.now()};
   if(bidValue!==undefined) entry.bidValue=bidValue;
+  // [183 · §223 · §227] The Fair Play Monitor reads these four RECORDED facts instead of
+  // replaying an imagined clock: tRem = ms left on the countdown just before this change,
+  // tDur = the countdown length it is measured against (ms; capped at the starting reset length), tReset = this change restarted the
+  // clock, aff = it changed another person's displayed projection. Captured at the timer
+  // gate in persistScheduleChange; advisory only — never allowed to block or alter a bid.
+  try{
+    const _f=_fpLastFacts;
+    if(_f&&_f.user===user&&_f.wk===wk){
+      _fpLastFacts=null;
+      for(const k of ['tRem','tDur','tReset','aff']){ const v=_f.f[k]; if((typeof v==='number'&&isFinite(v))||typeof v==='boolean') entry[k]=v; }
+    }
+  }catch(_){}
   // Atomically append — preserves all existing entries even if local state is stale.
   // If the doc doesn't exist yet, create it with this entry as the first.
   try {
@@ -2423,6 +2436,18 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
     }
     const _isNewBid=bid!==null&&bid!==undefined&&_prevVal===undefined;
     const _remBefore=timerData.lastChange?(((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)):1;
+    // [183 · §223 · §227] Record what the clock really read and whether this change touched
+    // anyone else — the same before/after comparison the alert e-mails make. Read-only; a
+    // failure here records nothing and can never block, alter or delay the bid.
+    let _fpF=null;
+    try{
+      _fpF={user,wk,f:{tReset:false}};
+      // tDur is capped at the starting reset length: an opening-window clock is days long, and its last
+      // hours must not read as "under 10% left" (the monitor has always measured against the stage length there).
+      if(timerData.enabled&&timerData.lastChange){ _fpF.f.tRem=Math.round(_remBefore); _fpF.f.tDur=Math.min((timerData.durationHours||48),stage0Hours())*3600000; }
+      if(prevSnapshot&&_afterSnap) _fpF.f.aff=_sameVal?false:!!_changeAffectsOthers(_beforeSnap,_afterSnap,user);
+    }catch(_){ _fpF=null; }
+    _fpLastFacts=_fpF;
     if(timerData.enabled&&_remBefore>0&&!_sameVal&&!openingWindowActive()
        &&_timerModeAllowsReset(_timerResetMode(),_isNewBid,_beforeSnap,_afterSnap,user)){ // [154 · AUD-C2]
       const _n=Date.now(); const _resetH=timerResetHours(timerPhaseStartMs(),_n);
@@ -2431,7 +2456,7 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
       // truncate everyone's window from devtools. Skip the reset when it would not extend —
       // the longer deadline stands, matching the server rule. (Admins can still shorten.)
       const _curDeadline=timerData.lastChange?(timerData.lastChange+((timerData.durationHours||48)*3600000)):0;
-      if(_n+_resetH*3600000>=_curDeadline){ setDoc(timerRef,{lastChange:_n,durationHours:_resetH},{merge:true}).catch(()=>{}); }
+      if(_n+_resetH*3600000>=_curDeadline){ if(_fpF) _fpF.f.tReset=true; setDoc(timerRef,{lastChange:_n,durationHours:_resetH},{merge:true}).catch(()=>{}); }
     }
     if(prevSnapshot&&adminSettings.emailNotifsEnabled!==false){
       // Any change to another user's DISPLAYED outcome — lose/under-review -> win as well
@@ -3267,7 +3292,7 @@ function renderWhitelistBanner(){
   el.innerHTML=`<div style="background:linear-gradient(135deg,rgba(59,130,246,.10),rgba(0,107,166,.08));border:1px solid rgba(0,107,166,.35);border-radius:12px;padding:14px 16px;margin-bottom:14px">
     <div style="font-weight:800;color:#132f49;font-size:.95rem;margin-bottom:6px">📌 One quick step so you don't miss auction e-mails</div>
     <div style="font-size:.85rem;color:#2c4763;line-height:1.6">
-      Bid confirmations, outbid alerts, and results come from <strong>${WHITELIST_SENDER}</strong>. Please add that address to your Google <strong>Contacts</strong> and, if any of our e-mails landed in <strong>Spam/Junk</strong>, open one and click <strong>“Not spam.”</strong> This keeps them reliably in your inbox — even mail that arrives fine today can start going to spam later, and adding us as a contact prevents that.
+      Bid confirmations, projection-change alerts, and results come from <strong>${WHITELIST_SENDER}</strong>. Please add that address to your Google <strong>Contacts</strong> and, if any of our e-mails landed in <strong>Spam/Junk</strong>, open one and click <strong>“Not spam.”</strong> This keeps them reliably in your inbox — even mail that arrives fine today can start going to spam later, and adding us as a contact prevents that.
     </div>
     <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button data-user="${_wlAttr(user)}" onclick="confirmWhitelist(this.dataset.user)" style="font-size:.82rem;font-weight:700;color:#fff;background:linear-gradient(135deg,#3b82f6,#006ba6);border:none;border-radius:9px;padding:8px 16px;cursor:pointer">✓ I've added the contact &amp; checked spam</button>
@@ -3829,7 +3854,7 @@ async function sendEmailNotifications(prevSnap,newSnap,actor){
       try{ await setDoc(mailQueueRef,{[qid]:{user,body:bodyText,ts:Date.now()}},{merge:true}); }catch(_){}
       try{
         if(typeof emailjs!=="undefined"){
-          for(const to of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:to,changes:bodyText}); }catch(err){ _mailLogNote(user,to,'outbid alert',false,err); throw err; } trackEmailSent(); _mailLogNote(user,to,'outbid alert',true); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); } // [170 · §189] log note rethrows — the entry stays queued exactly as before
+          for(const to of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:to,changes:bodyText}); }catch(err){ _mailLogNote(user,to,'projection alert',false,err); throw err; } trackEmailSent(); _mailLogNote(user,to,'projection alert',true); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); } // [170 · §189] log note rethrows — the entry stays queued exactly as before
           updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
         }
       }catch(_){/* leave queued — admin panel will send it */}
@@ -4461,7 +4486,7 @@ Welcome to the ${AC_YEAR} Anesthesia Vacation Auction!
 
 This confirms you are enrolled in e-mail alerts. You will receive an e-mail:
 ${bullets([
-  `When someone places a bid that changes your projected outcome for a week (outbid alerts)`,
+  `When another person's bid activity changes your projected outcome for a week (projection-change alerts)`,
   `When a bidding phase concludes and your results (approved/denied) are sent`,
   `As an occasional reminder if you have not yet placed any bids in an open phase`
 ])}
