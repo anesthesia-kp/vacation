@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 348;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 350;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -10612,7 +10612,7 @@ function normalizeEntry(c){
   // pill can treat it as its own kind, and keep the raw type so the row can be worded.
   const system=isSystemEntry(c);
   if(system) action='system';
-  return { actor, action, system, type:raw, user:c.user||'—', weekKey:c.weekKey, bidValue:c.bidValue, ts:c.ts, reason:c.reason }; // [327 · §180] the hold reason survives normalization (found in the browser walk: it was dropped here)
+  return { actor, action, system, type:raw, user:c.user||'—', weekKey:c.weekKey, bidValue:c.bidValue, ts:c.ts, reason:c.reason, hours:c.hours, choice:c.choice }; // [350 · §232] the timer reset's length and choice survive normalization too — they were dropped here, so the row read "to  h (chosen length)" every time // [327 · §180] the hold reason survives normalization (found in the browser walk: it was dropped here)
 }
 
 function fmtRelative(ts){
@@ -10638,7 +10638,14 @@ function systemActionText(e){
   const who=esc(e&&e.user&&e.user!=='ALL'?e.user:'');
   const mode=t.match(/^admin-timer-mode-(\d+)$/);
   if(mode) return `Admin set the bidding timer reset mode to <strong>${esc(mode[1])}</strong>`;
-  if(t==='admin-timer-reset') return 'Admin reset the bidding timer to <strong>'+esc(String(e.hours??''))+' h</strong>'+(e.choice==='rules'?' (the timer rules default)':' (chosen length)'); // [341 · §209]
+  // [350 · §232] "it should be time, not hrs": the row states WHEN bidding was set to close at that reset — the entry's own
+  // moment plus its stored length — not a number of hours. "to close", because a later bid can still lengthen the countdown.
+  if(t==='admin-timer-reset'){
+    const hrs=Number(e.hours), at=Number(e.ts);
+    if(!(hrs>0)||!(at>0)) return 'Admin reset the bidding timer';
+    const closes=new Date(at+hrs*3600000).toLocaleString('en-US',{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+    return 'Admin reset the bidding timer — bidding to close <strong>'+esc(closes)+'</strong>'+(e.choice==='rules'?' (the timer rules default)':' (chosen length)');
+  }
   if(t==='admin-timer-expire') return 'Admin <strong>expired</strong> the bidding timer — bidding closed, all weeks locked'; // [341 · §209]
   if(t==='admin-timer-on') return 'Admin turned the bidding timer <strong>ON</strong>'; // [341 · §209]
   if(t==='admin-timer-off') return 'Admin turned the bidding timer <strong>OFF</strong>'; // [341 · §209]
@@ -10800,8 +10807,20 @@ function _clEntryView(e){
     html:sentence+' on <strong>'+esc(wkStr)+'</strong>'+(bidTxt?' · '+esc(bidTxt):'') };
 }
 function _clPlain(h){ return String(h).replace(/<[^>]*>/g,'').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&amp;/g,'&'); }
-const CL_ACTION_COLOR={added:'#0d7a43',edited:'#005e93',removed:'#dc2626',approved:'#059669',denied:'#dc2626',revoked:'#946008',system:'#38566e'};
-const CL_ACTOR_COLOR={admin:'#c2410c',user:'#5b4fb5'};
+// [349 · §231] His rulings on this export: solid colour blocks are "not necessary and distracting"; "subtle like the
+// change log itself" is best — and, on a screenshot of the Change Log page, "this". So the export is drawn the way
+// that page is: a plain day heading, and for By and Action the SAME tinted pill (a light tint behind coloured text).
+// These are that page's own colours; a test holds the two copies together.
+const CL_ACTION_PILL={added:{bg:'rgba(34,197,94,.15)',color:'#0d7a43'},edited:{bg:'rgba(96,165,250,.15)',color:'#005e93'},removed:{bg:'rgba(239,68,68,.15)',color:'#dc2626'},approved:{bg:'rgba(34,197,94,.18)',color:'#0d7a43'},denied:{bg:'rgba(239,68,68,.18)',color:'#dc2626'},revoked:{bg:'rgba(251,191,36,.18)',color:'#946008'},system:{bg:'rgba(148,163,184,.18)',color:'#38566e'}};
+const CL_ACTOR_PILL={admin:{bg:'rgba(251,146,60,.18)',color:'#fb923c'},user:{bg:'rgba(168,85,247,.15)',color:'#5b4fb5'}};
+const CL_PILL_DEFAULT={bg:'rgba(148,163,184,.15)',color:'#38566e'};
+// A tint is a see-through colour over white; a spreadsheet cell needs it as one solid colour.
+function _clTintHex(rgba){
+  const m=/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)/.exec(String(rgba));
+  if(!m) return 'FFFFFF';
+  const a=m[4]===undefined?1:Number(m[4]);
+  return [1,2,3].map(i=>Math.round(255-(255-Number(m[i]))*a).toString(16).padStart(2,'0')).join('').toUpperCase();
+}
 window.exportChangelog=function(format){
   const v=_clCurrentView();
   if(!v.filtered.length){ toast(v.src.length?'Nothing to export — no changes match the current filters':'Nothing to export — no changes logged','warn'); return; }
@@ -10834,8 +10853,7 @@ window.exportChangelog=function(format){
       const S_COLHEAD={fill:{fgColor:{rgb:'F1F5F9'}},font:{bold:true,sz:10,color:{rgb:'334155'}},border:BORDER};
       const S_CELL={font:{sz:10,color:{rgb:'0F172A'}},border:BORDER,alignment:{vertical:'top'}};
       const S_WRAP={font:{sz:10,color:{rgb:'0F172A'}},border:BORDER,alignment:{vertical:'top',wrapText:true}};
-      const rgb=c=>String(c||'#64748b').replace('#','').toUpperCase();
-      const fillStyle=c=>({fill:{fgColor:{rgb:rgb(c)}},font:{bold:true,sz:10,color:{rgb:'FFFFFF'}},alignment:{horizontal:'center',vertical:'top'},border:BORDER});
+      const pillStyle=p=>{ const q=p||CL_PILL_DEFAULT; return {fill:{fgColor:{rgb:_clTintHex(q.bg)}},font:{bold:true,sz:10,color:{rgb:q.color.replace('#','').toUpperCase()}},alignment:{horizontal:'center',vertical:'top'},border:BORDER}; };
       const aoa=[['Vacation Auction — Change Log'],[phaseLabel.toUpperCase()],[stampLine],[],header].concat(data);
       const ws=XLSX.utils.aoa_to_sheet(aoa);
       const put=(r,c,s)=>{ const addr=XLSX.utils.encode_cell({r:r,c:c}); if(!ws[addr]) ws[addr]={t:'s',v:''}; ws[addr].s=s; };
@@ -10844,8 +10862,8 @@ window.exportChangelog=function(format){
       rows.forEach((r,i)=>{
         const R=5+i;
         for(let c=0;c<nCols;c++) put(R,c,c===6?S_WRAP:S_CELL);
-        put(R,1,fillStyle(CL_ACTOR_COLOR[r.actor]));
-        put(R,2,fillStyle(CL_ACTION_COLOR[r.action]));
+        put(R,1,pillStyle(CL_ACTOR_PILL[r.actor]));
+        put(R,2,pillStyle(CL_ACTION_PILL[r.action]));
       });
       ws['!merges']=[0,1,2].map(r=>({s:{r:r,c:0},e:{r:r,c:nCols-1}}));
       const widest=c=>Math.max(header[c].length,...data.map(d=>String(d[c]??'').length));
@@ -10868,17 +10886,23 @@ window.exportChangelog=function(format){
     toast('📊 Excel library unavailable — exported CSV instead','warn');
     return;
   }
-  // PDF: the shared report document (so it prints in colour — 346), one block per day as on screen.
-  const chip=(label,color)=>'<span class="chip" style="background:'+(color||'#64748b')+'">'+esc(label)+'</span>';
+  // PDF: the shared report document, drawn like the Change Log page (349): a plain day heading with its count,
+  // then one quiet row per entry — time, the two tinted pills, the sentence. No dark bars, no solid chips.
+  const pill=(label,p)=>{ const q=p||CL_PILL_DEFAULT; return '<span style="display:inline-block;font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:3px;letter-spacing:.05em;white-space:nowrap;background:'+q.bg+';color:'+q.color+'">'+label+'</span>'; };
+  const TD='border:none;border-bottom:1px dashed #e2e8f0;padding:7px 10px 7px 4px;vertical-align:top';
   const days=[]; let lastDay=null;
   v.filtered.forEach((e,i)=>{
     const day=e.ts?new Date(e.ts).toDateString():'unknown';
     if(day!==lastDay){ days.push({label:e.ts?new Date(e.ts).toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'short',day:'numeric'}):'Unknown date',rows:[]}); lastDay=day; }
     days[days.length-1].rows.push(rows[i]);
   });
-  const body=days.map(d=>'<div class="wk" style="break-inside:auto"><div class="wk-head">'+esc(d.label)+'<span class="fte">'+d.rows.length+' change'+(d.rows.length!==1?'s':'')+'</span></div>'
-    +'<table style="width:100%"><thead><tr><th style="width:150px">Time</th><th style="width:64px">By</th><th style="width:92px">Action</th><th>Change</th></tr></thead><tbody>'
-    +d.rows.map(r=>'<tr><td>'+esc(r.when)+'</td><td>'+chip(actorTxt(r),CL_ACTOR_COLOR[r.actor])+'</td><td>'+chip(actionTxt(r),CL_ACTION_COLOR[r.action])+'</td><td style="white-space:normal">'+r.html+'</td></tr>').join('')
+  const body=days.map(d=>'<div class="cl-day-block" style="margin-bottom:16px">'
+    +'<div class="cl-day-head" style="font-size:11px;color:#475569;text-transform:uppercase;letter-spacing:.05em;font-weight:700;padding:8px 4px 6px;border-bottom:1px solid #cbd5e1">'+esc(d.label)+' <span style="color:#94a3b8;font-weight:400;font-size:10px;margin-left:6px">'+d.rows.length+' '+(d.rows.length===1?'change':'changes')+'</span></div>'
+    +'<table style="width:100%"><tbody>'
+    +d.rows.map(r=>'<tr style="background:none"><td style="'+TD+';width:150px;color:#475569">'+esc(r.when)+'</td>'
+      +'<td style="'+TD+';width:78px">'+pill((r.actor==='admin'?'⚙️ ':'👤 ')+esc(actorTxt(r)),CL_ACTOR_PILL[r.actor])+'</td>'
+      +'<td style="'+TD+';width:92px">'+pill(esc(actionTxt(r)),CL_ACTION_PILL[r.action])+'</td>'
+      +'<td style="'+TD+';white-space:normal">'+r.html+'</td></tr>').join('')
     +'</tbody></table></div>').join('');
   const ok=openReportTab('Vacation Auction — Change Log',phaseLabel,esc(stampLine),body,true);
   if(ok) toast('📄 Preview opened — use browser "Print → Save as PDF"','ok');
