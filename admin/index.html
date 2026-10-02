@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 347;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 348;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -885,7 +885,10 @@ thead th{color:var(--t2)}
         </select>
         <label style="font-size:11px;color:var(--t2);margin-left:10px">User:</label>
         <select id="cl_user" class="sel" onchange="setClFilter('user',this.value)"><option value="">All Users</option></select>
-        <button class="btn btn-danger" style="margin-left:auto" onclick="clearChangelog()">Clear Log</button>
+        <!-- [348 · §230] Exports what the page is showing: the selected phase, with the Actor / Action / User filters applied. -->
+        <button class="btn" style="margin-left:auto;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportChangelog('pdf')">📄 Export PDF</button>
+        <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportChangelog('xlsx')">📊 Export Excel</button>
+        <button class="btn btn-danger" onclick="clearChangelog()">Clear Log</button>
       </div>
       <div id="changelogBody" style="max-height:620px;overflow-y:auto"></div>
       <!-- legacy table tbody for back-compat with refs, hidden -->
@@ -10683,22 +10686,13 @@ function renderChangelog(){
       if(want.includes(cur)) phSel.value=cur;
     }
   }
-  const phVal=phSel?.value||'current';
-  // [AUDIT #3] Decisions now live in their own admin-only doc — merge them back in so the
-  // admin Change Log still shows the complete picture. Archived phases already contain
-  // both (completePhase archives the merged list).
-  const srcLog=phVal==='current'?[...changesLog,...changesDecisionsLog]:(changesArchiveData[phVal.slice(2)]||[]);
+  // [348 · §230] What to show comes from _clCurrentView — the SAME list the PDF / Excel export reads.
+  const _cv=_clCurrentView(), srcLog=_cv.src;
   if(!srcLog.length){
     host.innerHTML=`<div style="text-align:center;color:var(--t2);padding:30px;background:var(--card);border:1px solid var(--b1);border-radius:10px">No changes logged.</div>`;
     return;
   }
-  const entries = srcLog.map(normalizeEntry).sort((a,b)=>(b.ts||0)-(a.ts||0));
-  const filtered = entries.filter(e=>{
-    if(_clActor!=='all' && e.actor!==_clActor) return false;
-    if(_clAction!=='all' && e.action!==_clAction) return false;
-    if(_clUser && e.user!==_clUser) return false;
-    return true;
-  });
+  const filtered = _cv.filtered;
   if(!filtered.length){
     host.innerHTML=`<div style="text-align:center;color:var(--t2);padding:30px;background:var(--card);border:1px solid var(--b1);border-radius:10px">No changes match the current filters.</div>`;
     return;
@@ -10769,6 +10763,126 @@ function renderChangelog(){
     </div>`;
   }).join('');
 }
+
+// ── Change Log export (PDF / Excel) ── [348 · §230]
+// ONE definition of "what the Change Log is showing": the selected phase's log, normalized, newest
+// first, then the Actor / Action / User filters. The screen (renderChangelog) and the export both
+// read it, so a PDF can never list an entry the screen hides, or hide one it shows.
+function _clCurrentView(){
+  const phVal=document.getElementById('cl_phase')?.value||'current';
+  // [AUDIT #3] Decisions live in their own admin-only doc — merged back in here so the admin
+  // Change Log shows the complete picture. Archived phases already contain both.
+  const src=phVal==='current'?[...changesLog,...changesDecisionsLog]:(changesArchiveData[phVal.slice(2)]||[]);
+  const filtered=src.map(normalizeEntry).sort((a,b)=>(b.ts||0)-(a.ts||0)).filter(e=>{
+    if(_clActor!=='all' && e.actor!==_clActor) return false;
+    if(_clAction!=='all' && e.action!==_clAction) return false;
+    if(_clUser && e.user!==_clUser) return false;
+    return true;
+  });
+  return { phVal:phVal, src:src, filtered:filtered };
+}
+// One entry, worded as the screen words it, but with the REAL date and time — "2 h ago" means
+// nothing on paper. html is the sentence for the PDF; the other fields are the Excel columns.
+function _clEntryView(e){
+  const when=e.ts?new Date(e.ts).toLocaleString('en-US',{year:'numeric',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'—';
+  const bidTxt=(e.bidValue===undefined||e.bidValue===null)?'':String(Array.isArray(e.bidValue)?e.bidValue.join('/'):e.bidValue);
+  if(e.system){
+    const showBid=!/^admin-(hold|release)$/.test(String(e.type||''));
+    return { when:when, actor:'admin', action:'system', user:(e.user&&e.user!=='ALL'&&e.user!=='—')?e.user:'', week:'', bid:showBid?bidTxt:'',
+      html:systemActionText(e)+(showBid&&bidTxt?' · '+esc(bidTxt):'') };
+  }
+  const wkStr=e.weekKey?(()=>{try{return wLabel(wkDate(e.weekKey));}catch(_){return e.weekKey;}})():'—';
+  const isDecision=e.action==='approved'||e.action==='denied'||e.action==='revoked';
+  const sentence=e.actor==='admin'
+    ? `Admin ${esc(e.action)} ${isDecision?'':'bid for '}<strong>${esc(e.user)}</strong>`
+    : `<strong>${esc(e.user)}</strong> ${esc(e.action)} their bid`;
+  return { when:when, actor:e.actor==='admin'?'admin':'user', action:e.action, user:e.user, week:wkStr, bid:bidTxt,
+    html:sentence+' on <strong>'+esc(wkStr)+'</strong>'+(bidTxt?' · '+esc(bidTxt):'') };
+}
+function _clPlain(h){ return String(h).replace(/<[^>]*>/g,'').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&amp;/g,'&'); }
+const CL_ACTION_COLOR={added:'#0d7a43',edited:'#005e93',removed:'#dc2626',approved:'#059669',denied:'#dc2626',revoked:'#946008',system:'#38566e'};
+const CL_ACTOR_COLOR={admin:'#c2410c',user:'#5b4fb5'};
+window.exportChangelog=function(format){
+  const v=_clCurrentView();
+  if(!v.filtered.length){ toast(v.src.length?'Nothing to export — no changes match the current filters':'Nothing to export — no changes logged','warn'); return; }
+  const now=new Date();
+  const stamp=now.toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
+  const phaseLabel=v.phVal==='current'?'Current phase':'Phase '+v.phVal.slice(2)+' (archived)';
+  // The document SAYS what it is: a filtered export must not pass for the whole log.
+  const filters=[];
+  if(_clActor!=='all') filters.push(_clActor==='admin'?'admin only':'user only');
+  if(_clAction!=='all') filters.push('action: '+_clAction);
+  if(_clUser) filters.push('user: '+_clUser);
+  const n=v.filtered.length, tot=v.src.length;
+  const scopeTxt=filters.length
+    ? 'FILTERED — '+filters.join(', ')+' — '+n+' of '+tot+' change'+(tot!==1?'s':'')
+    : n+' change'+(n!==1?'s':'')+' — the whole log for this phase';
+  const stampLine='Exported '+stamp+' · '+scopeTxt+' · newest first';
+  const rows=v.filtered.map(_clEntryView);
+  const fname='vacation-changelog-'+(v.phVal==='current'?'current':'phase'+v.phVal.slice(2))+'-'+now.toISOString().slice(0,10);
+  const actorTxt=r=>r.actor==='admin'?'ADMIN':'USER';
+  const actionTxt=r=>String(r.action||'').toUpperCase();
+  if(format==='xlsx'){
+    const header=['When','By','Action','User','Week','Bid','Change'];
+    const data=rows.map(r=>[r.when,actorTxt(r),actionTxt(r),r.user,r.week,r.bid,_clPlain(r.html)]);
+    if(typeof XLSX!=='undefined'){
+      const nCols=header.length;
+      const BORDER={top:{style:'thin',color:{rgb:'D7DEE6'}},bottom:{style:'thin',color:{rgb:'D7DEE6'}},left:{style:'thin',color:{rgb:'D7DEE6'}},right:{style:'thin',color:{rgb:'D7DEE6'}}};
+      const S_TITLE={font:{bold:true,sz:15,color:{rgb:'0F172A'}}};
+      const S_PHASE={fill:{fgColor:{rgb:'1D4ED8'}},font:{bold:true,sz:13,color:{rgb:'FFFFFF'}},alignment:{horizontal:'center',vertical:'center'}};
+      const S_STAMP={font:{sz:10,color:{rgb:'587690'}}};
+      const S_COLHEAD={fill:{fgColor:{rgb:'F1F5F9'}},font:{bold:true,sz:10,color:{rgb:'334155'}},border:BORDER};
+      const S_CELL={font:{sz:10,color:{rgb:'0F172A'}},border:BORDER,alignment:{vertical:'top'}};
+      const S_WRAP={font:{sz:10,color:{rgb:'0F172A'}},border:BORDER,alignment:{vertical:'top',wrapText:true}};
+      const rgb=c=>String(c||'#64748b').replace('#','').toUpperCase();
+      const fillStyle=c=>({fill:{fgColor:{rgb:rgb(c)}},font:{bold:true,sz:10,color:{rgb:'FFFFFF'}},alignment:{horizontal:'center',vertical:'top'},border:BORDER});
+      const aoa=[['Vacation Auction — Change Log'],[phaseLabel.toUpperCase()],[stampLine],[],header].concat(data);
+      const ws=XLSX.utils.aoa_to_sheet(aoa);
+      const put=(r,c,s)=>{ const addr=XLSX.utils.encode_cell({r:r,c:c}); if(!ws[addr]) ws[addr]={t:'s',v:''}; ws[addr].s=s; };
+      put(0,0,S_TITLE); for(let c=0;c<nCols;c++) put(1,c,S_PHASE); put(2,0,S_STAMP);
+      for(let c=0;c<nCols;c++) put(4,c,S_COLHEAD);
+      rows.forEach((r,i)=>{
+        const R=5+i;
+        for(let c=0;c<nCols;c++) put(R,c,c===6?S_WRAP:S_CELL);
+        put(R,1,fillStyle(CL_ACTOR_COLOR[r.actor]));
+        put(R,2,fillStyle(CL_ACTION_COLOR[r.action]));
+      });
+      ws['!merges']=[0,1,2].map(r=>({s:{r:r,c:0},e:{r:r,c:nCols-1}}));
+      const widest=c=>Math.max(header[c].length,...data.map(d=>String(d[c]??'').length));
+      ws['!cols']=header.map((_,c)=>({wch:Math.min(c===6?80:40,widest(c)+3)}));
+      ws['!rows']=[{hpt:22},{hpt:20}];
+      const wb=XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb,ws,'Change Log');
+      XLSX.writeFile(wb,fname+'.xlsx');
+      toast('📊 Excel exported','ok');
+      return;
+    }
+    const csvEsc=x=>{ const s=String(x??''); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+    const csv='# Vacation Auction — Change Log — '+phaseLabel+' — '+stampLine+'\n'+[header].concat(data).map(r=>r.map(csvEsc).join(',')).join('\n');
+    const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url; a.download=fname+'.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast('📊 Excel library unavailable — exported CSV instead','warn');
+    return;
+  }
+  // PDF: the shared report document (so it prints in colour — 346), one block per day as on screen.
+  const chip=(label,color)=>'<span class="chip" style="background:'+(color||'#64748b')+'">'+esc(label)+'</span>';
+  const days=[]; let lastDay=null;
+  v.filtered.forEach((e,i)=>{
+    const day=e.ts?new Date(e.ts).toDateString():'unknown';
+    if(day!==lastDay){ days.push({label:e.ts?new Date(e.ts).toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'short',day:'numeric'}):'Unknown date',rows:[]}); lastDay=day; }
+    days[days.length-1].rows.push(rows[i]);
+  });
+  const body=days.map(d=>'<div class="wk" style="break-inside:auto"><div class="wk-head">'+esc(d.label)+'<span class="fte">'+d.rows.length+' change'+(d.rows.length!==1?'s':'')+'</span></div>'
+    +'<table style="width:100%"><thead><tr><th style="width:150px">Time</th><th style="width:64px">By</th><th style="width:92px">Action</th><th>Change</th></tr></thead><tbody>'
+    +d.rows.map(r=>'<tr><td>'+esc(r.when)+'</td><td>'+chip(actorTxt(r),CL_ACTOR_COLOR[r.actor])+'</td><td>'+chip(actionTxt(r),CL_ACTION_COLOR[r.action])+'</td><td style="white-space:normal">'+r.html+'</td></tr>').join('')
+    +'</tbody></table></div>').join('');
+  const ok=openReportTab('Vacation Auction — Change Log',phaseLabel,esc(stampLine),body,true);
+  if(ok) toast('📄 Preview opened — use browser "Print → Save as PDF"','ok');
+};
 
 async function adminLog(u,wk,type,bidValue,extra){ // [327 · §180] extra: fields merged into the entry (the hold reason)
   const action = type.replace(/^admin-/,'')
