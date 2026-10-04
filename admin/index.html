@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 351;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 352;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -449,6 +449,7 @@ thead th{color:var(--t2)}
       <a onclick="nav('lowerings',this)">🔽 Bid Lowerings</a>
       <a onclick="nav('userbids',this)">🎟️ User Bids</a>
       <a onclick="nav('activity',this)">👣 User Activity</a>
+      <a onclick="nav('maillog',this)">✉️ E-mail Log</a>
       <a onclick="nav('whitelist',this)">📌 Whitelist Tracker</a>
       <div class="nav-section">Settings</div>
       <a onclick="nav('slots',this)">📆 FTE Availability</a>
@@ -838,6 +839,16 @@ thead th{color:var(--t2)}
       <div id="uaSummary" style="margin-bottom:12px"></div>
       <div style="overflow-x:auto;max-height:640px;overflow-y:auto;border:1px solid var(--b1)">
         <table><thead><tr><th>Initials</th><th>Full Name</th><th>Last sign-in</th><th style="text-align:center">Bids this phase</th><th>Last e-mail</th></tr></thead><tbody id="uaBody"></tbody></table>
+      </div>
+    </div>
+
+    <!-- E-MAIL LOG [352 · §234] — a READ-ONLY view of every e-mail attempt either page recorded. The only
+         writes are the automatic trim of its own oldest entries and the export, which writes nothing. -->
+    <div class="panel" id="panel-maillog">
+      <div class="page-head"><div class="page-title">✉️ E-mail Log</div><div class="page-sub">Every e-mail the site has tried to send — to whom, to which address, what kind, and whether it went out. A failed attempt shows the reason. <strong>The newest 1,000 are kept</strong>; older entries are removed automatically, so export a phase if you want to keep it. The message text is not stored. E-mails from before this build are not recorded.</div></div>
+      <div id="mlogControls" style="margin-bottom:12px"></div>
+      <div style="overflow-x:auto;max-height:640px;overflow-y:auto;border:1px solid var(--b1)">
+        <table><thead><tr><th>When</th><th>Phase</th><th>To</th><th>Address</th><th>Kind</th><th>Result</th><th>Sent from</th></tr></thead><tbody id="mlogBody"></tbody></table>
       </div>
     </div>
 
@@ -1990,7 +2001,7 @@ onSnapshot(bidHoldsRef, snap=>{ bidHoldsData=snap.exists()?snap.data():{}; const
 // [330 · §189] The two activity logs — admin-read docs, painted only while User Activity is open.
 let loginLogData={}, mailLogData={};
 onSnapshot(loginLogRef, snap=>{ loginLogData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-activity'); if(p&&p.classList.contains('on')&&typeof renderUserActivity==='function') renderUserActivity(); });
-onSnapshot(mailLogRef,  snap=>{ mailLogData=snap.exists()?snap.data():{};  const p=document.getElementById('panel-activity'); if(p&&p.classList.contains('on')&&typeof renderUserActivity==='function') renderUserActivity(); });
+onSnapshot(mailLogRef,  snap=>{ mailLogData=snap.exists()?snap.data():{};  const p=document.getElementById('panel-activity'); if(p&&p.classList.contains('on')&&typeof renderUserActivity==='function') renderUserActivity(); if(typeof _mlogOnSnapshot==='function') _mlogOnSnapshot(); });
 onSnapshot(bidLoweringsArchiveRef, snap=>{ bidLoweringsArchiveData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-lowerings'); if(p&&p.classList.contains('on')&&typeof renderBidLowerings==='function') renderBidLowerings(); }); // [build 268 · BL]
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
   onSnapshot(fteRef, snap=>{ fteData=snap.exists()?snap.data():{}; refreshAll(); });
@@ -2245,6 +2256,7 @@ window.nav = function(id, el) {
   if(id==='lowerings'&&typeof renderBidLowerings==='function') renderBidLowerings(); // [build 268 · BL]
   if(id==='userbids'&&typeof renderUserBids==='function') renderUserBids(); // [325 · §178]
   if(id==='activity'&&typeof renderUserActivity==='function') renderUserActivity(); // [330 · §189]
+  if(id==='maillog'&&typeof renderMailLog==='function') renderMailLog(); // [352 · §234]
   if(id==='capacity'&&typeof renderCapacityPage==='function') renderCapacityPage(); // [335 · §194]
   if(id==='reports'&&typeof renderReportsPage==='function') renderReportsPage(); // [337 · §203]
 };
@@ -6461,6 +6473,26 @@ function _mailLogNote(user,to,kind,ok,err){
     const rec={at:Date.now(),to:String(to||''),kind:String(kind||'mail'),ok:!!ok};
     if(!ok){ const e=err||{}; rec.err=String(e.text||e.message||e.status||e||'failed').slice(0,120); }
     const p=setDoc(mailLogRef,{[user]:rec},{merge:true});
+    if(p&&typeof p.catch==='function') p.catch(function(){});
+    _mailHistNote(user,rec); // [352 · §234] the E-mail Log keeps EVERY attempt, not only the last
+  }catch(_){}
+}
+// ── [352 · §234] The E-mail Log ────────────────────────────────────────────────────────────
+// A second, separate record of the same attempt, under a key of its own in the same document
+// (one key per write, so the rule that confines the last-e-mail record confines this too). It
+// adds who it was for, which page sent it, and the phase open at that moment. Same contract as
+// the note above: never awaited, never throws, cannot delay or fail a delivery. The message
+// text is NOT stored. The admin page trims the log to the newest 1,000. Must match the staff twin
+// except for the page name.
+function _mailHistNote(user,rec){
+  try{
+    const ph=(typeof phasesData!=='undefined'&&phasesData)?phasesData:null;
+    const cur=(ph&&ph.currentPhase!=null)?Number(ph.currentPhase):NaN;
+    const pre=(cur===1&&!(ph&&ph.phase1Started));
+    const rd=(cur===4)?Number((ph&&ph.p4Round)||1):NaN;
+    const h=Object.assign({},rec,{u:String(user),by:'admin',phase:isNaN(cur)?null:(pre?0:cur),round:isNaN(rd)?null:rd});
+    const key='h'+Number(rec.at).toString(36)+Math.random().toString(36).slice(2,8).padEnd(6,'0');
+    const p=setDoc(mailLogRef,{[key]:h},{merge:true});
     if(p&&typeof p.catch==='function') p.catch(function(){});
   }catch(_){}
 }
@@ -12029,7 +12061,7 @@ window.renderUserActivity=renderUserActivity;
 window.clearActivityLogs=function(){
   openConfirm({
     title:'🧹 Clear sign-in and e-mail records',
-    body:'<div>Wipe the recorded <strong>last sign-in</strong> and <strong>last e-mail</strong> for every user? New sign-ins and e-mails start recording again immediately.</div><div class="cmodal-warn" style="margin-top:8px">This clears records only — no bids, approvals, settings or e-mail addresses change. Use it to drop rehearsal history before the real auction.</div>',
+    body:'<div>Wipe the recorded <strong>last sign-in</strong> and <strong>last e-mail</strong> for every user, and the whole <strong>E-mail Log</strong>? New sign-ins and e-mails start recording again immediately.</div><div class="cmodal-warn" style="margin-top:8px">This clears records only — no bids, approvals, settings or e-mail addresses change. Use it to drop rehearsal history before the real auction.</div>',
     okText:'🧹 Clear records', danger:true,
     onConfirm:async()=>{
       try{ await setDoc(loginLogRef,{}); await setDoc(mailLogRef,{}); toast('🧹 Sign-in and e-mail records cleared','ok'); }
@@ -12037,6 +12069,166 @@ window.clearActivityLogs=function(){
       renderUserActivity();
     }
   });
+};
+// ── [352 · §234] E-mail Log — a READ-ONLY view of the history entries in mailLog ─────────────
+// _mailHistNote (both pages) writes one entry per attempt under a key of its own; User Activity's
+// last-e-mail records live in the same document under roster initials and are never touched here.
+// ONE definition of "what the page is showing" (_mlogView) feeds the screen and both exports.
+const MAIL_HIST_KEEP=1000, MAIL_HIST_SLACK=200;
+function _isMailHist(k,v){ return !!v&&typeof v==='object'&&typeof v.u==='string'&&/^h[0-9a-z]{9,}$/.test(String(k)); }
+function _mailHistEntries(){
+  const out=[]; const d=mailLogData||{};
+  for(const k of Object.keys(d)){
+    const v=d[k]; if(!_isMailHist(k,v)) continue;
+    out.push({k:k,at:(typeof v.at==='number'&&v.at>0)?v.at:0,u:String(v.u),to:String(v.to||''),kind:String(v.kind||'mail'),
+      ok:v.ok===true,err:String(v.err||''),by:v.by==='admin'?'admin page':(v.by==='staff'?'staff page':'—'),phase:_activityPhaseLabel(v)});
+  }
+  out.sort((a,b)=>(b.at-a.at)||(a.k<b.k?-1:a.k>b.k?1:0));
+  return out;
+}
+let _mlogPerson='', _mlogKind='', _mlogPhase='', _mlogFailed=false;
+function _mlogView(){
+  const all=_mailHistEntries();
+  const filtered=all.filter(e=>{
+    if(_mlogPerson && e.u!==_mlogPerson) return false;
+    if(_mlogKind && e.kind!==_mlogKind) return false;
+    if(_mlogPhase && e.phase!==_mlogPhase) return false;
+    if(_mlogFailed && e.ok) return false;
+    return true;
+  });
+  return { all:all, filtered:filtered };
+}
+window.setMlogFilter=function(which,val){
+  if(which==='person') _mlogPerson=String(val||'');
+  else if(which==='kind') _mlogKind=String(val||'');
+  else if(which==='phase') _mlogPhase=String(val||'');
+  else if(which==='failed') _mlogFailed=!!val;
+  renderMailLog();
+};
+function _mlogName(u){ return String((usernamesData||{})[u]||''); }
+function _mlogWhenLong(ts){ return (typeof ts==='number'&&ts>0)?new Date(ts).toLocaleString('en-US',{year:'numeric',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'—'; }
+function _mlogScope(v){
+  const f=[];
+  if(_mlogPerson) f.push('to: '+_mlogPerson);
+  if(_mlogKind) f.push('kind: '+_mlogKind);
+  if(_mlogPhase) f.push(_mlogPhase);
+  if(_mlogFailed) f.push('failed only');
+  const n=v.filtered.length, tot=v.all.length;
+  return f.length ? 'FILTERED — '+f.join(', ')+' — '+n+' of '+tot+' recorded e-mail'+(tot!==1?'s':'')
+                  : n+' recorded e-mail'+(n!==1?'s':'')+' — everything in the log';
+}
+function renderMailLog(){
+  const ctl=document.getElementById('mlogControls'), body=document.getElementById('mlogBody');
+  if(!ctl||!body) return;
+  const v=_mlogView();
+  const uniq=f=>Array.from(new Set(v.all.map(f))).sort();
+  const opts=(list,cur,label)=>'<option value="">'+label+'</option>'+list.map(x=>'<option value="'+esc(x)+'"'+(x===cur?' selected':'')+'>'+esc(x)+'</option>').join('');
+  const failed=v.all.filter(e=>!e.ok).length;
+  ctl.innerHTML=
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:12.5px">'
+    +'<label style="font-size:11px;color:var(--t2)">To:</label><select class="sel" onchange="setMlogFilter(\'person\',this.value)">'+opts(uniq(e=>e.u),_mlogPerson,'Everyone')+'</select>'
+    +'<label style="font-size:11px;color:var(--t2)">Kind:</label><select class="sel" style="max-width:230px" onchange="setMlogFilter(\'kind\',this.value)">'+opts(uniq(e=>e.kind),_mlogKind,'All kinds')+'</select>'
+    +'<label style="font-size:11px;color:var(--t2)">Phase:</label><select class="sel" onchange="setMlogFilter(\'phase\',this.value)">'+opts(uniq(e=>e.phase),_mlogPhase,'All phases')+'</select>'
+    +'<label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox"'+(_mlogFailed?' checked':'')+' onchange="setMlogFilter(\'failed\',this.checked)"> Failed only</label>'
+    +'<button class="btn" style="margin-left:auto;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportMailLog(\'pdf\')">📄 Export PDF</button>'
+    +'<button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportMailLog(\'xlsx\')">📊 Export Excel</button>'
+    +'</div>'
+    +'<div style="margin-top:8px;font-size:12.5px"><strong>Showing '+v.filtered.length+' of '+v.all.length+'</strong> recorded e-mail'+(v.all.length!==1?'s':'')
+    +' · '+(failed?'<span class="pill p-red">'+failed+' failed</span>':'<span class="pill p-green">0 failed</span>')
+    +' <span style="color:var(--t3);font-size:11.5px">· newest first · the newest '+MAIL_HIST_KEEP.toLocaleString('en-US')+' are kept</span></div>';
+  body.innerHTML=v.filtered.map(e=>'<tr>'
+    +'<td style="white-space:nowrap" title="'+esc(_mlogWhenLong(e.at))+'">'+esc(_activityWhen(e.at))+'</td>'
+    +'<td style="white-space:nowrap;color:var(--t2)">'+esc(e.phase)+'</td>'
+    +'<td><span class="mono"><strong>'+esc(e.u)+'</strong></span> <span style="color:var(--t2)">'+esc(_mlogName(e.u))+'</span></td>'
+    +'<td class="mono" style="font-size:11.5px">'+esc(e.to)+'</td>'
+    +'<td>'+esc(e.kind)+'</td>'
+    +'<td>'+(e.ok?'<span class="pill p-green">✓ sent</span>':'<span class="pill p-red">✗ failed</span> <span style="font-size:11.5px;color:var(--t2)">'+esc(e.err||'no reason recorded')+'</span>')+'</td>'
+    +'<td style="white-space:nowrap;color:var(--t2)">'+esc(e.by)+'</td></tr>').join('')
+    ||'<tr><td colspan="7" style="color:var(--t3)">'+(v.all.length?'No recorded e-mail matches these filters.':'No e-mail has been recorded yet. Sends are recorded from this build on.')+'</td></tr>';
+}
+window.renderMailLog=renderMailLog;
+// The trim: the document also holds User Activity's records and has a size limit, so the history is
+// cut back to the newest MAIL_HIST_KEEP once it passes KEEP + SLACK. Only history keys are ever named.
+let _mlogTrimBusy=false;
+function _mlogTrim(){
+  try{
+    if(_mlogTrimBusy) return 0;
+    const all=_mailHistEntries();
+    if(all.length<=MAIL_HIST_KEEP+MAIL_HIST_SLACK) return 0;
+    const drop=all.slice(MAIL_HIST_KEEP); const upd={};
+    drop.forEach(e=>{ upd[e.k]=deleteField(); });
+    _mlogTrimBusy=true;
+    Promise.resolve(updateDoc(mailLogRef,upd)).catch(function(){}).then(function(){ _mlogTrimBusy=false; });
+    return drop.length;
+  }catch(_){ _mlogTrimBusy=false; return 0; }
+}
+function _mlogOnSnapshot(){
+  const p=document.getElementById('panel-maillog');
+  if(p&&p.classList.contains('on')) renderMailLog();
+  _mlogTrim();
+}
+window.exportMailLog=function(format){
+  const v=_mlogView();
+  if(!v.filtered.length){ toast(v.all.length?'Nothing to export — no recorded e-mail matches the current filters':'Nothing to export — no e-mail has been recorded yet','warn'); return; }
+  const now=new Date();
+  const stampLine='Exported '+now.toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'})+' · '+_mlogScope(v)+' · newest first';
+  const rows=v.filtered.map(e=>({when:_mlogWhenLong(e.at),phase:e.phase,u:e.u,name:_mlogName(e.u),to:e.to,kind:e.kind,ok:e.ok,result:e.ok?'SENT':'FAILED',err:e.ok?'':(e.err||'no reason recorded'),by:e.by}));
+  const fname='vacation-email-log-'+now.toISOString().slice(0,10);
+  const PILL={SENT:CL_ACTION_PILL.added,FAILED:CL_ACTION_PILL.removed};
+  if(format==='xlsx'){
+    const header=['When','Phase','To','Name','Address','Kind','Result','Reason','Sent from'];
+    const data=rows.map(r=>[r.when,r.phase,r.u,r.name,r.to,r.kind,r.result,r.err,r.by]);
+    if(typeof XLSX!=='undefined'){
+      const nCols=header.length;
+      const BORDER={top:{style:'thin',color:{rgb:'D7DEE6'}},bottom:{style:'thin',color:{rgb:'D7DEE6'}},left:{style:'thin',color:{rgb:'D7DEE6'}},right:{style:'thin',color:{rgb:'D7DEE6'}}};
+      const S_TITLE={font:{bold:true,sz:15,color:{rgb:'0F172A'}}};
+      const S_STAMP={font:{sz:10,color:{rgb:'587690'}}};
+      const S_COLHEAD={fill:{fgColor:{rgb:'F1F5F9'}},font:{bold:true,sz:10,color:{rgb:'334155'}},border:BORDER};
+      const S_CELL={font:{sz:10,color:{rgb:'0F172A'}},border:BORDER,alignment:{vertical:'top'}};
+      const S_WRAP={font:{sz:10,color:{rgb:'0F172A'}},border:BORDER,alignment:{vertical:'top',wrapText:true}};
+      const pillStyle=q=>({fill:{fgColor:{rgb:_clTintHex(q.bg)}},font:{bold:true,sz:10,color:{rgb:q.color.replace('#','').toUpperCase()}},alignment:{horizontal:'center',vertical:'top'},border:BORDER});
+      const aoa=[['Vacation Auction — E-mail Log'],[stampLine],[],header].concat(data);
+      const ws=XLSX.utils.aoa_to_sheet(aoa);
+      const put=(r,c,s)=>{ const addr=XLSX.utils.encode_cell({r:r,c:c}); if(!ws[addr]) ws[addr]={t:'s',v:''}; ws[addr].s=s; };
+      put(0,0,S_TITLE); put(1,0,S_STAMP);
+      for(let c=0;c<nCols;c++) put(3,c,S_COLHEAD);
+      rows.forEach((r,i)=>{ const R=4+i; for(let c=0;c<nCols;c++) put(R,c,c===7?S_WRAP:S_CELL); put(R,6,pillStyle(PILL[r.result])); });
+      ws['!merges']=[0,1].map(r=>({s:{r:r,c:0},e:{r:r,c:nCols-1}}));
+      const widest=c=>Math.max(header[c].length,...data.map(d=>String(d[c]??'').length));
+      ws['!cols']=header.map((_,c)=>({wch:Math.min(c===7?60:40,widest(c)+3)}));
+      ws['!rows']=[{hpt:22}];
+      const wb=XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb,ws,'E-mail Log');
+      XLSX.writeFile(wb,fname+'.xlsx');
+      toast('📊 Excel exported','ok');
+      return;
+    }
+    const csvEsc=x=>{ const s=String(x??''); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+    const csv='# Vacation Auction — E-mail Log — '+stampLine+'\n'+[header].concat(data).map(r=>r.map(csvEsc).join(',')).join('\n');
+    const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url; a.download=fname+'.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast('📊 Excel library unavailable — exported CSV instead','warn');
+    return;
+  }
+  // PDF: the shared report document, drawn like the page — one quiet row per e-mail, a tinted pill for the result.
+  const pill=(label,q)=>'<span style="display:inline-block;font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:3px;letter-spacing:.05em;white-space:nowrap;background:'+q.bg+';color:'+q.color+'">'+label+'</span>';
+  const TH='border:none;border-bottom:1px solid #cbd5e1;padding:6px 10px 6px 4px;text-align:left;font-size:10px;color:#475569;text-transform:uppercase;letter-spacing:.05em;background:none';
+  const TD='border:none;border-bottom:1px dashed #e2e8f0;padding:7px 10px 7px 4px;vertical-align:top';
+  const body='<table style="width:100%"><thead><tr>'+['When','Phase','To','Address','Kind','Result','Sent from'].map(h=>'<th style="'+TH+'">'+h+'</th>').join('')+'</tr></thead><tbody>'
+    +rows.map(r=>'<tr style="background:none"><td style="'+TD+';white-space:nowrap;color:#475569">'+esc(r.when)+'</td>'
+      +'<td style="'+TD+';white-space:nowrap;color:#475569">'+esc(r.phase)+'</td>'
+      +'<td style="'+TD+'"><strong>'+esc(r.u)+'</strong> '+esc(r.name)+'</td>'
+      +'<td style="'+TD+'">'+esc(r.to)+'</td>'
+      +'<td style="'+TD+';white-space:normal">'+esc(r.kind)+'</td>'
+      +'<td style="'+TD+';white-space:normal">'+pill(r.ok?'✓ SENT':'✗ FAILED',PILL[r.result])+(r.ok?'':' '+esc(r.err))+'</td>'
+      +'<td style="'+TD+';white-space:nowrap;color:#475569">'+esc(r.by)+'</td></tr>').join('')
+    +'</tbody></table>';
+  const ok=openReportTab('Vacation Auction — E-mail Log','E-mail Log',esc(stampLine),body,true);
+  if(ok) toast('📄 Preview opened — use browser "Print → Save as PDF"','ok');
 };
 // ── Whitelist Tracker [2026-07-26] ───────────────────────────────────────────
 // Self-contained: reads the roster (names/usernames/loginEmails) + the whitelistConfirm doc,

@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 184;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 185;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -4372,6 +4372,26 @@ function _mailLogNote(user,to,kind,ok,err){
     const rec={at:Date.now(),to:String(to||''),kind:String(kind||'mail'),ok:!!ok};
     if(!ok){ const e=err||{}; rec.err=String(e.text||e.message||e.status||e||'failed').slice(0,120); }
     const p=setDoc(mailLogRef,{[user]:rec},{merge:true});
+    if(p&&typeof p.catch==='function') p.catch(function(){});
+    _mailHistNote(user,rec); // [185 · §234] the E-mail Log keeps EVERY attempt, not only the last
+  }catch(_){}
+}
+// ── [185 · §234] The E-mail Log ────────────────────────────────────────────────────────────
+// A second, separate record of the same attempt, under a key of its own in the same document
+// (one key per write, so the rule that confines the last-e-mail record confines this too). It
+// adds who it was for, which page sent it, and the phase open at that moment. Same contract as
+// the note above: never awaited, never throws, cannot delay or fail a delivery. The message
+// text is NOT stored. The admin page trims the log to the newest 1,000. Must match the admin twin
+// except for the page name.
+function _mailHistNote(user,rec){
+  try{
+    const ph=(typeof phasesData!=='undefined'&&phasesData)?phasesData:null;
+    const cur=(ph&&ph.currentPhase!=null)?Number(ph.currentPhase):NaN;
+    const pre=(cur===1&&!(ph&&ph.phase1Started));
+    const rd=(cur===4)?Number((ph&&ph.p4Round)||1):NaN;
+    const h=Object.assign({},rec,{u:String(user),by:'staff',phase:isNaN(cur)?null:(pre?0:cur),round:isNaN(rd)?null:rd});
+    const key='h'+Number(rec.at).toString(36)+Math.random().toString(36).slice(2,8).padEnd(6,'0');
+    const p=setDoc(mailLogRef,{[key]:h},{merge:true});
     if(p&&typeof p.catch==='function') p.catch(function(){});
   }catch(_){}
 }
