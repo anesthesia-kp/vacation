@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 183;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 184;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -1975,6 +1975,30 @@ const MQ_ID='idx_'+Math.random().toString(36).slice(2);
 // until an admin clears the strikes or deletes the entry (admin ⛔ Parked dialog). Ends
 // the infinite retry loop a corrupted roster address caused. Must match the admin value.
 const MQ_MAX_FAILS=5;
+// [184 · §233] A strike means the failure is one a retry could turn into a wrong or repeated
+// e-mail. When the mail service ANSWERS with a refusal other than 422 (sent too fast, quota,
+// its own fault) nothing was delivered, so the retry is free: no strike, never parked. A 422
+// (it rejected this message) and a failure with NO ANSWER (the message may already have been
+// delivered - owner ruling: no duplicate messages) count exactly as before: five, then parked.
+// Anything unreadable counts. The reason is recorded either way. Must match the admin twin.
+function _mqStrike(err){
+  try{
+    const n=(err&&typeof err==='object'&&err.status!=null&&err.status!=='')?Number(err.status):NaN;
+    return !(isFinite(n)&&n>=400&&n!==422);
+  }catch(_){ return true; }
+}
+function _mqErrNote(err){
+  // Never throws and always returns plain data the database accepts (a finite number or null, and
+  // printable text), so the strike that shares its write can never be lost to an odd error value.
+  let st=null, tx='failed';
+  try{
+    const e=(err&&typeof err==='object')?err:null;
+    const n=(!e||e.status==null||e.status==='')?NaN:Number(e.status);
+    if(isFinite(n)) st=n;
+    tx=String((e&&(e.text||e.message))||(typeof err==='string'?err:'')||'failed');
+  }catch(_){}
+  return {at:Date.now(),status:st,text:tx.replace(/[^\x20-\x7E]/g,'?').slice(0,120),by:MQ_ID};
+}
 function _mqEligible(e,now){
   if(e&&typeof e==='object'&&(e.fails||0)>=MQ_MAX_FAILS) return false; // [build 136 · B2] parked
   return e&&typeof e==='object'&&(now-(e.ts||0))>=30000&&(!e.claimedAt||(now-e.claimedAt)>90000);
@@ -2081,7 +2105,9 @@ async function relayMailQueue(){
         // MQ_MAX_FAILS instead of retrying forever. One dotted key = one top-level entry,
         // which the mailQueue relay rule allows from any registered user. Failure-path
         // code — must never throw.
-        try{ await updateDoc(mailQueueRef,{[qid+'.fails']:increment(1)}); }catch(__){}
+        // [184 · §233] Still ONE write. The reason is always recorded; the strike is left out only
+        // when the mail service answered with a refusal that a retry cannot duplicate (_mqStrike).
+        try{ const _u={[qid+'.lastErr']:_mqErrNote(_)}; if(_mqStrike(_)) _u[qid+'.fails']=increment(1); await updateDoc(mailQueueRef,_u); }catch(__){}
       }
     }
   } finally { _mqBusy=false; scheduleMailQueueRelay(); }
