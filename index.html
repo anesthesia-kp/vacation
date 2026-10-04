@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 185;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 186;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -1999,12 +1999,38 @@ function _mqErrNote(err){
   }catch(_){}
   return {at:Date.now(),status:st,text:tx.replace(/[^\x20-\x7E]/g,'?').slice(0,120),by:MQ_ID};
 }
+// ── [186 · §236] A PAGE THAT GETS NO ANSWER FROM THE MAIL SERVICE STEPS ASIDE ─────────────────────
+// Owner-found 4 Oct 2026: one page that could not reach the mail service kept claiming a good
+// alert and failing - each try hid it from every healthy page for 90 s and added a strike.
+// "No answer" is the mailer's status 0 (the request never completed). Counted beside EVERY send
+// this page makes (in _mailLogNote, which already sits there): the first no-answer pauses this
+// page's relaying for 20 s (his "2nd attempt"); a second in a row steps it aside for 30 minutes,
+// and each further one for 30 more. Any send that succeeds, or the browser coming back online,
+// clears it. Page memory only - nothing is stored. The strike rule is untouched (see _mqStrike);
+// a page still sends its OWN alerts at once, always. Must match the admin twin.
+let _mqNoAns=0, _mqAsideUntil=0;
+const MQ_RETRY_MS=20000, MQ_ASIDE_MS=30*60000;
+function _mqNoAnswer(err){
+  try{ return !!err&&typeof err==='object'&&err.status!=null&&err.status!==''&&Number(err.status)===0; }catch(_){ return false; }
+}
+function _mqSendNote(ok,err){
+  try{
+    if(ok){ _mqNoAns=0; _mqAsideUntil=0; return; }
+    if(!_mqNoAnswer(err)) return;
+    if(_mqAside()) return; // already paused or aside: the SAME outage, not another attempt (one bid that alerts two people fails twice in a second)
+    _mqNoAns++;
+    _mqAsideUntil=Date.now()+(_mqNoAns>=2?MQ_ASIDE_MS:MQ_RETRY_MS);
+  }catch(_){}
+}
+function _mqAside(){ return Date.now()<_mqAsideUntil; }
+try{ window.addEventListener('online',function(){ _mqNoAns=0; _mqAsideUntil=0; try{ scheduleMailQueueRelay(); }catch(_){} }); }catch(_){}
 function _mqEligible(e,now){
   if(e&&typeof e==='object'&&(e.fails||0)>=MQ_MAX_FAILS) return false; // [build 136 · B2] parked
   return e&&typeof e==='object'&&(now-(e.ts||0))>=30000&&(!e.claimedAt||(now-e.claimedAt)>90000);
 }
 function scheduleMailQueueRelay(){
   if(_mqTimer||_mqBusy) return;
+  if(_mqAside()) return; // [186 · §236] this page got no answer from the mail service: it leaves the queue to healthy pages
   const now=Date.now();
   if(!Object.values(mailQueueData||{}).some(e=>_mqEligible(e,now))) return;
   _mqTimer=setTimeout(()=>{ _mqTimer=null; relayMailQueue().catch(()=>{}); },5000+Math.random()*10000);
@@ -2108,6 +2134,7 @@ async function relayMailQueue(){
         // [184 · §233] Still ONE write. The reason is always recorded; the strike is left out only
         // when the mail service answered with a refusal that a retry cannot duplicate (_mqStrike).
         try{ const _u={[qid+'.lastErr']:_mqErrNote(_)}; if(_mqStrike(_)) _u[qid+'.fails']=increment(1); await updateDoc(mailQueueRef,_u); }catch(__){}
+        if(_mqNoAnswer(_)){ await _mqRelease(qid); break; } // [186 · §236] no answer: let go of the claim NOW (not in 90 s) so a healthy page can send it, and stop this run
       }
     }
   } finally { _mqBusy=false; scheduleMailQueueRelay(); }
@@ -4367,10 +4394,11 @@ function _recordLogin(user){
 // awaited, never throws: it can neither delay nor fail a delivery. (The rules let a registered
 // user touch one entry per write, the same containment as the mail queue.)
 function _mailLogNote(user,to,kind,ok,err){
+  try{ _mqSendNote(ok,err); }catch(_){} // [186 · §236] every send's outcome also tells this page whether it can reach the mail service
   try{
     if(!user) return;
     const rec={at:Date.now(),to:String(to||''),kind:String(kind||'mail'),ok:!!ok};
-    if(!ok){ const e=err||{}; rec.err=String(e.text||e.message||e.status||e||'failed').slice(0,120); }
+    if(!ok){ const e=err||{}; rec.err=_mqNoAnswer(err)?'no answer':String(e.text||e.message||e.status||e||'failed').slice(0,120); } // [186 · §236] status 0 used to print "[object Object]"
     const p=setDoc(mailLogRef,{[user]:rec},{merge:true});
     if(p&&typeof p.catch==='function') p.catch(function(){});
     _mailHistNote(user,rec); // [185 · §234] the E-mail Log keeps EVERY attempt, not only the last

@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 352;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 353;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -490,8 +490,15 @@ thead th{color:var(--t2)}
                Quiet but always visible while the mode is ON; Turn off is one click; turning ON
                only happens in the Simulation panel — so during a real auction this pill simply
                does not exist. -->
-          <div style="display:flex;align-items:center;gap:10px">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <div class="card-title" style="margin-bottom:0">Current Phase</div>
+            <!-- [353 · §236 C] A stuck e-mail, where the admin is already looking. Hidden unless a queued
+                 e-mail is older than 2 minutes (waiting) or one is parked. Own elements: the Rehearsal
+                 pill beside them is untouched and both can show; the row wraps on a narrow window. -->
+            <div id="mqDashPills" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
+              <button type="button" id="mqDashWait" onclick="mqDashGoQueue()" title="Go to Queued e-mails" style="display:none;font:inherit;font-size:11.5px;font-weight:800;line-height:1.3;padding:3px 8px;border-radius:8px;cursor:pointer;white-space:nowrap;color:#7a4b00;background:rgba(251,191,36,.16);border:1px solid rgba(217,119,6,.45)"></button>
+              <button type="button" id="mqDashParked" onclick="reviewParkedMail()" title="Review parked e-mails" style="display:none;font:inherit;font-size:11.5px;font-weight:800;line-height:1.3;padding:3px 8px;border-radius:8px;cursor:pointer;white-space:nowrap;color:var(--red);background:rgba(220,38,38,.07);border:1px solid rgba(220,38,38,.35)"></button>
+            </div>
             <div id="rehearsalDashBanner" style="display:none;align-items:center;gap:8px;margin-left:auto;padding:3px 8px;border:1px solid rgba(220,38,38,.35);border-radius:8px;background:rgba(220,38,38,.07)">
               <span style="font-size:11.5px;font-weight:800;color:var(--red);white-space:nowrap">🎭 Rehearsal Mode is ON</span>
               <button class="btn btn-ghost" style="padding:1px 8px;font-size:11px" onclick="dashboardDisarmRehearsal()">Turn off</button>
@@ -2054,6 +2061,31 @@ function _mqErrNote(err){
   }catch(_){}
   return {at:Date.now(),status:st,text:tx.replace(/[^\x20-\x7E]/g,'?').slice(0,120),by:MQ_ID};
 }
+// ── [353 · §236] A PAGE THAT GETS NO ANSWER FROM THE MAIL SERVICE STEPS ASIDE ─────────────────────
+// Owner-found 4 Oct 2026: one page that could not reach the mail service kept claiming a good
+// alert and failing - each try hid it from every healthy page for 90 s and added a strike.
+// "No answer" is the mailer's status 0 (the request never completed). Counted beside EVERY send
+// this page makes (in _mailLogNote, which already sits there): the first no-answer pauses this
+// page's relaying for 20 s (his "2nd attempt"); a second in a row steps it aside for 30 minutes,
+// and each further one for 30 more. Any send that succeeds, or the browser coming back online,
+// clears it. Page memory only - nothing is stored. The strike rule is untouched (see _mqStrike);
+// a page still sends its OWN alerts at once, always. Must match the staff twin.
+let _mqNoAns=0, _mqAsideUntil=0;
+const MQ_RETRY_MS=20000, MQ_ASIDE_MS=30*60000;
+function _mqNoAnswer(err){
+  try{ return !!err&&typeof err==='object'&&err.status!=null&&err.status!==''&&Number(err.status)===0; }catch(_){ return false; }
+}
+function _mqSendNote(ok,err){
+  try{
+    if(ok){ _mqNoAns=0; _mqAsideUntil=0; return; }
+    if(!_mqNoAnswer(err)) return;
+    if(_mqAside()) return; // already paused or aside: the SAME outage, not another attempt (one bid that alerts two people fails twice in a second)
+    _mqNoAns++;
+    _mqAsideUntil=Date.now()+(_mqNoAns>=2?MQ_ASIDE_MS:MQ_RETRY_MS);
+  }catch(_){}
+}
+function _mqAside(){ return Date.now()<_mqAsideUntil; }
+try{ window.addEventListener('online',function(){ _mqNoAns=0; _mqAsideUntil=0; try{ scheduleMailQueueSweep(); }catch(_){} }); }catch(_){}
 function updateMailQueueBadge(){
   // [build 265 · B2] Split the count: PARKED entries (>= MQ_MAX_FAILS strikes) are shown
   // but no longer drive the can't-miss red flash — the whole point of parking is that a
@@ -2077,7 +2109,40 @@ function updateMailQueueBadge(){
   [el,top].forEach(b=>{ if(b) b.classList.toggle('mq-badge-pending',pending); });
   const title=document.getElementById('messagingCardTitle');
   if(title) title.classList.toggle('mq-title-pending',pending);
+  try{ renderMqDashPills(); }catch(_){} // [353 · §236 C]
 }
+// [353 · §236 C] The Current Phase card's e-mail pills. WAITING = queued (not parked) for more than
+// 2 minutes - a healthy send takes under one, and every alert sits in the queue for a few seconds
+// while it sends, so anything younger would flicker on nearly every bid. PARKED = five strikes.
+// Display only: reads mailQueueData, writes nothing. Redrawn on every queue change and every 15 s
+// (so the age stays true while nothing changes).
+const MQ_WAIT_MS=120000;
+function _mqDashState(now){
+  let waiting=0, oldest=0, parked=0;
+  for(const e of Object.values(mailQueueData||{})){
+    if(!e||typeof e!=='object') continue;
+    if((e.fails||0)>=MQ_MAX_FAILS){ parked++; continue; }
+    const ts=Number(e.ts);
+    if(!(ts>0)) continue;
+    const age=now-ts;
+    if(age>MQ_WAIT_MS){ waiting++; if(age>oldest) oldest=age; }
+  }
+  return {waiting:waiting,oldest:oldest,parked:parked};
+}
+function _mqAgeLbl(ms){
+  const m=Math.floor(ms/60000);
+  return m<60?(m+' min'):(Math.floor(m/60)+' h '+(m%60)+' min');
+}
+function renderMqDashPills(){
+  const box=document.getElementById('mqDashPills'); if(!box) return;
+  const s=_mqDashState(Date.now());
+  const w=document.getElementById('mqDashWait'), p=document.getElementById('mqDashParked');
+  if(w){ w.style.display=s.waiting?'':'none'; w.textContent=s.waiting?('\u2709\uFE0F '+s.waiting+' e-mail'+(s.waiting!==1?'s':'')+' waiting \u00B7 '+_mqAgeLbl(s.oldest)):''; }
+  if(p){ p.style.display=s.parked?'':'none'; p.textContent=s.parked?('\u26D4 '+s.parked+' e-mail'+(s.parked!==1?'s':'')+' parked'):''; }
+  box.style.display=(s.waiting||s.parked)?'flex':'none';
+}
+window.mqDashGoQueue=function(){ try{ const r=document.getElementById('mqRowTop'); if(r&&r.scrollIntoView) r.scrollIntoView({behavior:'smooth',block:'center'}); }catch(_){} };
+try{ setInterval(function(){ try{ renderMqDashPills(); }catch(e){} }, 15000); }catch(e){}
 // [build 265 · B2] Admin surface for parked entries. "Retry all" clears every parked
 // entry's strike counter so the normal sweep picks them up again (use after fixing the
 // roster address that caused the failures); the per-entry 🗑 permanently drops one
@@ -2123,6 +2188,7 @@ function _mqEligible(e,now,minAgeMs){
 }
 function scheduleMailQueueSweep(){
   if(_mqTimer||_mqBusy) return;
+  if(_mqAside()) return; // [353 · §236] this page got no answer from the mail service: it leaves the queue to healthy pages (Send Pending still works)
   const now=Date.now();
   if(!Object.values(mailQueueData||{}).some(e=>_mqEligible(e,now,30000))) return;
   _mqTimer=setTimeout(()=>{ _mqTimer=null; processMailQueue(30000).catch(()=>{}); },5000+Math.random()*10000);
@@ -2213,6 +2279,7 @@ async function processMailQueue(minAgeMs){
         // [351 · §233] Still ONE write. The reason is always recorded; the strike is left out only
         // when the mail service answered with a refusal that a retry cannot duplicate (_mqStrike).
         try{ const _u={[qid+'.lastErr']:_mqErrNote(err)}; if(_mqStrike(err)) _u[qid+'.fails']=increment(1); await updateDoc(mailQueueRef,_u); }catch(_){}
+        if(_mqNoAnswer(err)){ await _mqRelease(qid); break; } // [353 · §236] no answer: let go of the claim NOW (not in 90 s) so a healthy page can send it, and stop this run
       }
     }
     if(sent) toast(`📮 Sent ${sent} queued e-mail${sent!==1?'s':''}`,'ok');
@@ -6468,10 +6535,11 @@ const mailStatsRef = doc(db,"vacations","mailStats");
 // page, success or failure, so User Activity shows the latest outcome. Called beside the send,
 // never awaited, never throws: it can neither delay nor fail a delivery.
 function _mailLogNote(user,to,kind,ok,err){
+  try{ _mqSendNote(ok,err); }catch(_){} // [353 · §236] every send's outcome also tells this page whether it can reach the mail service
   try{
     if(!user) return;
     const rec={at:Date.now(),to:String(to||''),kind:String(kind||'mail'),ok:!!ok};
-    if(!ok){ const e=err||{}; rec.err=String(e.text||e.message||e.status||e||'failed').slice(0,120); }
+    if(!ok){ const e=err||{}; rec.err=_mqNoAnswer(err)?'no answer':String(e.text||e.message||e.status||e||'failed').slice(0,120); } // [353 · §236] status 0 used to print "[object Object]"
     const p=setDoc(mailLogRef,{[user]:rec},{merge:true});
     if(p&&typeof p.catch==='function') p.catch(function(){});
     _mailHistNote(user,rec); // [352 · §234] the E-mail Log keeps EVERY attempt, not only the last
