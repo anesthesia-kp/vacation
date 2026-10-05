@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 189;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 190;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -629,6 +629,13 @@ body{zoom:1.15}
        obstruction the reader has to dismiss. -->
   <div id="phaseClosedBanner" style="display:none;background:rgba(239,68,68,.10);border:1px solid rgba(239,68,68,.40);color:#b91c1c;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-weight:600;font-size:.9rem;text-align:center">🔒 <span id="pcbText">Bidding is closed — no more changes can be made.</span></div>
   <div id="errorMessage" class="flash err"></div>
+  <!-- [190 · §241] The board waits for its data. After sign-in the board's documents arrive one
+       at a time; drawn from only some of them the board showed no bids, or every bidder as
+       Losing (capacity not yet arrived = 0), until the rest landed. #boardBody ships HIDDEN and
+       renderBoardLoading() shows it only once every board document has arrived; until then
+       #boardLoading carries one line. In normal flow, like the banners above. -->
+  <div id="boardLoading" role="status" aria-live="polite" style="display:none;background:rgba(15,39,68,.05);border:1px solid #c2cfdb;color:#132f49;padding:14px 16px;border-radius:8px;margin-bottom:16px;font-weight:600;font-size:.95rem;text-align:center"></div>
+  <div id="boardBody" style="display:none">
   <div class="selections-bar" style="margin-bottom:14px">
     <div class="selections-bar-title">My Bid Count<span id="blLeftLine" style="margin-left:auto;font-weight:400;font-size:.72rem;color:#48607a"></span></div> <!-- [156 · W-1] owner spec: plain muted "X of Y bid lowerings left"; hidden when unlimited -->
     <div id="bidPoolBox"></div>
@@ -659,6 +666,7 @@ body{zoom:1.15}
     </select>
   </div>
   <div class="months-grid" id="calendar"></div>
+  </div><!-- /#boardBody [190 · §241] -->
 </div>
 
 <script type="module">
@@ -757,6 +765,98 @@ let changesData={log:[]}, unsubSchedule=null;
 let emailsData={}, bestBidsData={}, fteData={}, adminSettings={emailNotifsEnabled:true,passcodesEnabled:false}, bidTimesData={}, approvalsData={}, usernamesData={};
 let bidLoweringsData={}; // [build 139 · BL]
 let _lwLoaded={best:false,low:false,holds:false}; // [182 · §221] set by the three snapshots the lower-and-still-win check reads; cleared at teardown — an unloaded doc looks like an empty one, so the check refuses to run without all three
+// [190 · §241] THE BOARD WAITS FOR ITS DATA (owner-found, 5 Oct 2026). Every document the board is
+// drawn from, and every one the projection engine reads, has a flag here, set by that document's
+// own snapshot the first time it really arrives. render() draws nothing of the board, and
+// persistScheduleChange saves nothing, until all of them are set: a board drawn from some of
+// them showed no bids, or everyone Losing (capacity not arrived = 0), and a bid saved then would
+// have compared two half-loaded pictures and alerted nobody. An unloaded document looks exactly
+// like an empty one (the 182 lesson, _lwLoaded above), so "has arrived" is recorded, never inferred.
+const _BOARD_DOCS=['schedule','slots','fte','bidPhase','phases','settings','locks','changes','holds','bidTimes'];
+const _BOARD_SESSION_DOCS=['schedule','slots','fte','bidPhase','locks','changes','holds','bidTimes']; // re-armed at every sign-out; phases and settings are public listeners that live for the whole tab
+const BOARD_LOADING_TEXT='Loading your bids…';
+const BOARD_SLOW_TEXT='Still loading — your connection may be slow. If this stays, reload the page.';
+const BOARD_SLOW_MS=15000;
+const BOARD_RECHECK_MAX=8; // while the board is still waiting: one look every 15 s, for two minutes, then the line simply stays
+let _boardLoaded={}, _boardLoadSince=0, _boardLoadTimer=null, _boardRechecks=0;
+// An arrival is a snapshot from the server, or one that carries a document. The one thing that is
+// NOT an arrival is the empty stand-in Firestore raises from its (empty) cache when it cannot
+// reach the server: that is the "no bids" picture itself. "From the server" means the snapshot says
+// so in as many words (fromCache===false); anything missing or unreadable counts as not arrived.
+function _boardMark(key,snap){
+  if(_boardLoaded[key]===true) return;
+  let fromCache=true, exists=false;
+  try{ fromCache=!(snap&&snap.metadata&&snap.metadata.fromCache===false); exists=!!(snap&&typeof snap.exists==='function'&&snap.exists()); }catch(_){ fromCache=true; exists=false; }
+  if(fromCache&&!exists) return;
+  _boardLoaded[key]=true;
+  if(typeof scheduleRender==='function') scheduleRender(); // the arrival that completes the set must repaint, whatever its own callback does
+}
+function _boardReady(){
+  for(const k of _BOARD_DOCS){ if(_boardLoaded[k]!==true) return false; }
+  return true;
+}
+// Called when the board is about to be shown (completeSignIn): starts the slow-connection clock.
+function _boardLoadBegin(){
+  _boardLoadSince=Date.now(); _boardRechecks=0;
+  if(_boardLoadTimer){ try{ clearTimeout(_boardLoadTimer); }catch(_){} }
+  _boardLoadTimer=setTimeout(_boardLoadTick, BOARD_SLOW_MS+100);
+}
+// The 15-second wake-up: repaint (that is what swaps in the slow wording) and, while the board is
+// still waiting, look once for a document that will never announce itself (see _boardRecheck).
+function _boardLoadTick(){
+  _boardLoadTimer=null;
+  if(typeof scheduleRender==='function') scheduleRender();
+  if(_boardLoadSince>0&&!_boardReady()&&_boardRechecks<BOARD_RECHECK_MAX){
+    _boardRechecks++;
+    _boardRecheck().catch(()=>{});
+    _boardLoadTimer=setTimeout(_boardLoadTick, BOARD_SLOW_MS);
+  }
+}
+// THE ONE CASE A LISTENER NEVER REPORTS (found by the independent review of this build): a document
+// that DOES NOT EXIST, on a page that first heard the empty from-cache stand-in. When the server is
+// finally reached there is nothing new to deliver, so Firestore raises no second snapshot and that
+// flag would never be set — the board would wait for ever. So for a flag still unset after 15 s the
+// server is asked directly, and ONLY the answer "from the server: no such document" sets it. A document
+// that exists is never marked here: its own listener delivers it, data and flag together.
+// Costs a read only on a page that has already waited 15 s; an unreachable server answers nothing.
+async function _boardRecheck(){
+  const since=_boardLoadSince;
+  const refs=_boardRefs();
+  // All at once, so one slow answer cannot run this look into the next one.
+  await Promise.all(_BOARD_DOCS.filter(k=>_boardLoaded[k]!==true&&refs[k]).map(async k=>{
+    let s=null;
+    try{ s=await getDoc(refs[k]); }catch(_){ return; }
+    if(_boardLoadSince!==since) return; // signed out, or in again, meanwhile — that session's answer is not this one's
+    let gone=false;
+    try{ gone=!!(s&&s.metadata&&s.metadata.fromCache===false&&typeof s.exists==='function'&&!s.exists()); }catch(_){ gone=false; }
+    if(gone) _boardMark(k,s);
+  }));
+}
+function _boardRefs(){
+  return {schedule:scheduleRef,slots:slotsRef,fte:fteRef,bidPhase:bidPhaseRef,phases:phasesRef,settings:adminRef,locks:locksRef,changes:changesRef,holds:bidHoldsRef,bidTimes:bidTimesRef};
+}
+// Sign-out: the session's documents must arrive afresh for the next sign-in.
+function _boardLoadReset(){
+  for(const k of _BOARD_SESSION_DOCS){ _boardLoaded[k]=false; }
+  _boardLoadSince=0; _boardRechecks=0;
+  if(_boardLoadTimer){ try{ clearTimeout(_boardLoadTimer); }catch(_){} _boardLoadTimer=null; }
+}
+// Shows the loading line and hides the board, or the reverse. Returns true when the board may be
+// drawn. Idempotent: it writes to the page only when what is showing has to change.
+function renderBoardLoading(){
+  const box=document.getElementById('boardLoading'), body=document.getElementById('boardBody');
+  if(_boardReady()){
+    if(_boardLoadTimer){ try{ clearTimeout(_boardLoadTimer); }catch(_){} _boardLoadTimer=null; }
+    if(box&&box.style.display!=='none') box.style.display='none';
+    if(body&&body.style.display==='none') body.style.display='';
+    return true;
+  }
+  const slow=_boardLoadSince>0&&(Date.now()-_boardLoadSince)>=BOARD_SLOW_MS;
+  const txt=slow?BOARD_SLOW_TEXT:BOARD_LOADING_TEXT;
+  if(body&&body.style.display!=='none') body.style.display='none';
+  if(box){ if(box.textContent!==txt) box.textContent=txt; if(box.style.display!=='block') box.style.display='block'; }
+  return false;
+}
 let bidHoldsData={}; // [169 · §180] withheld numbers, per user — read only; joins the permanently-used set below
 let loginEmailsData={}; // {INITIALS: google-email} shared doc mapping Google accounts to accounts
 
@@ -1747,7 +1847,7 @@ function _rbGateCheck(){
 // during the anonymous bootstrap it was rejected permission-denied (a dead, error-logging
 // listener that never recovers). The signed-in path (_subscribeSensitiveOnce + a getDoc)
 // covers it after login; _emailsReady already initializes true so sign-in never waits on it.
-onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _acCheckRemote(adminSettings); _rbGateCheck(); _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); if(typeof renderDestinationPill==='function') renderDestinationPill(); if(typeof renderSimModeBanner==='function') renderSimModeBanner(); }); // [177 · §201] the test-mode banner follows this doc too // [build 136 · B5] config check first · [build 139 · GATE] · [174 · §196] the destination pill follows this doc
+onSnapshot(adminRef,    snap=>{ _boardMark('settings',snap); adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _acCheckRemote(adminSettings); _rbGateCheck(); _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); if(typeof renderDestinationPill==='function') renderDestinationPill(); if(typeof renderSimModeBanner==='function') renderSimModeBanner(); }); // [177 · §201] the test-mode banner follows this doc too // [build 136 · B5] config check first · [build 139 · GATE] · [174 · §196] the destination pill follows this doc
 
 // ── Maximum bids per phase (admin-set; 'none' = no limit) ──
 // NP bids allowed this phase? Admin toggles per phase (Controls → NP Bids by
@@ -1928,7 +2028,7 @@ onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; _use
 // callback still only assigns on snap.exists().
 // (approvals listener removed 15 Jul 2026 — same privacy rule as denials: the
 // user site must not react to live admin decisions during the current phase.)
-onSnapshot(phasesRef,  snap=>{ phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{}}; renderPhaseLabel(); scheduleRender(); if(typeof updateSigninPhase==='function') updateSigninPhase(); startCountdownTick(); }); // [173 · §195 audit] the closed statement is owned by renderCountdown — recompute it on every phase change too, so a Reset Auction clears it whichever of its writes lands first (and even when the timer doc does not change)
+onSnapshot(phasesRef,  snap=>{ _boardMark('phases',snap); phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{}}; renderPhaseLabel(); scheduleRender(); if(typeof updateSigninPhase==='function') updateSigninPhase(); startCountdownTick(); }); // [173 · §195 audit] the closed statement is owned by renderCountdown — recompute it on every phase change too, so a Reset Auction clears it whichever of its writes lands first (and even when the timer doc does not change)
 // [build 152] bidPhase listener moved to _subscribeSensitiveOnce().
 // (denials listener removed 15 Jul 2026 — the user site must not react to live
 // admin decisions; denial outcomes reach users via completed-phase snapshots.)
@@ -2307,7 +2407,9 @@ function renderCountdown(){
 
 function startListening(){
   if(unsubSchedule) unsubSchedule();
+  _boardLoaded.schedule=false; // [190 · §241] a fresh listener: the bids must arrive afresh
   unsubSchedule=onSnapshot(scheduleRef,snap=>{
+    _boardMark('schedule',snap); // [190 · §241]
     const rawData=snap.exists()?snap.data():{};
     // Normalize any legacy off-day weekKeys to their SUNDAY (all week keys are
     // Sundays; old Monday-anchored keys from before the timezone fix get snapped
@@ -2368,6 +2470,10 @@ async function logOwnChange(user,wk,action,bidValue){
 // FALSE on any gate bail, limit block, or write error.
 async function persistScheduleChange(user, wk, bid, prevSnapshot){
   // bid===null or undefined → remove. Otherwise → set.
+  // [190 · §241] Nothing is saved before every board document has arrived: the alerts and the
+  // timer gate below compare the board before and after this bid, and two half-loaded pictures
+  // agree that nobody was affected. typeof = sandbox convention; the page always defines it.
+  if(typeof _boardReady==='function'&&!_boardReady()){ showCenterAlert("The page is still loading — please try again in a moment."); return false; }
   if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); return false; }
   if(isAuctionClosed()){ showError("Bidding is closed — no more changes can be made."); return false; }
   if(locksData.globalLock||locksData.weeks?.[wk]){ showError("This week is locked — no more changes allowed."); return false; }
@@ -3276,6 +3382,7 @@ function render(){
   renderWhitelistBanner();
   document.getElementById("globalLockBanner").style.display=locksData.globalLock?"block":"none";
   const nsb=document.getElementById("notStartedBanner"); if(nsb) nsb.style.display=biddingOpen()?"none":"block";
+  if(!renderBoardLoading()) return; // [190 · §241] nothing of the board is drawn from a half-arrived picture
   const ap=computeApprovals();
   renderNotifications(user,ap);
   renderBidPool(user);
@@ -3998,20 +4105,20 @@ function _subscribeSensitiveOnce(){
   _sensitiveUnsubs.push(onSnapshot(mailQueueRef, snap=>{ mailQueueData=snap.exists()?snap.data():{}; scheduleMailQueueRelay(); }));
   // [build 151 · FB-5 stage 2] Board data — moved here from module load. Same one-shot
   // latch, same teardown. See the note at the old attach site for why each is safe.
-  _sensitiveUnsubs.push(onSnapshot(changesRef,snap=>{ changesData=snap.exists()?snap.data():{log:[]}; if(!changesData.log)changesData.log=[]; scheduleRender(); }));
+  _sensitiveUnsubs.push(onSnapshot(changesRef,snap=>{ _boardMark('changes',snap); changesData=snap.exists()?snap.data():{log:[]}; if(!changesData.log)changesData.log=[]; scheduleRender(); }));
   _sensitiveUnsubs.push(onSnapshot(bestBidsRef,snap=>{ bestBidsData=snap.exists()?snap.data():{}; _lwLoaded.best=true; })); // [182] flag only
   _sensitiveUnsubs.push(onSnapshot(bidLoweringsRef,snap=>{ bidLoweringsData=snap.exists()?snap.data():{}; _lwLoaded.low=true; })); // [182] flag only
-  _sensitiveUnsubs.push(onSnapshot(bidHoldsRef,snap=>{ bidHoldsData=snap.exists()?snap.data():{}; _lwLoaded.holds=true; scheduleRender(); })); // [169 · §180] the pool and the bid dialog read this through getPriorPhaseUsedPriorities
-  _sensitiveUnsubs.push(onSnapshot(bidTimesRef, snap=>{ bidTimesData=snap.exists()?snap.data():{}; if(typeof popcornRefresh==='function') popcornRefresh(); scheduleRender(); }));
+  _sensitiveUnsubs.push(onSnapshot(bidHoldsRef,snap=>{ _boardMark('holds',snap); bidHoldsData=snap.exists()?snap.data():{}; _lwLoaded.holds=true; scheduleRender(); })); // [169 · §180] the pool and the bid dialog read this through getPriorPhaseUsedPriorities
+  _sensitiveUnsubs.push(onSnapshot(bidTimesRef, snap=>{ _boardMark('bidTimes',snap); bidTimesData=snap.exists()?snap.data():{}; if(typeof popcornRefresh==='function') popcornRefresh(); scheduleRender(); }));
   _sensitiveUnsubs.push(onSnapshot(whitelistConfirmRef, _wlOnSnap));
   _sensitiveUnsubs.push(onSnapshot(welcomeLogRef, snap=>{ welcomeLogData=snap.exists()?snap.data():{}; }));
   // [build 152 · FB-5 stage 2 batch 2] locks · fteMap · bidPhase · slots — moved here from
   // module load. Same one-shot latch, same teardown. Callbacks byte-identical to the old
   // attach sites; see the note there for why each is board-only and safe.
-  _sensitiveUnsubs.push(onSnapshot(locksRef,  snap=>{ locksData=snap.exists()?snap.data():{globalLock:false,weeks:{}}; if(!locksData.weeks)locksData.weeks={}; scheduleRender(); }));
-  _sensitiveUnsubs.push(onSnapshot(fteRef,      snap=>{ if(snap.exists()){ fteData=snap.data(); scheduleRender(); } }));
-  _sensitiveUnsubs.push(onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); scheduleRender(); }));
-  _sensitiveUnsubs.push(onSnapshot(slotsRef,   snap=>{ slotsData=snap.exists()?snap.data():{}; applySlotOverrides(); scheduleRender(); }));
+  _sensitiveUnsubs.push(onSnapshot(locksRef,  snap=>{ _boardMark('locks',snap); locksData=snap.exists()?snap.data():{globalLock:false,weeks:{}}; if(!locksData.weeks)locksData.weeks={}; scheduleRender(); }));
+  _sensitiveUnsubs.push(onSnapshot(fteRef,      snap=>{ _boardMark('fte',snap); if(snap.exists()){ fteData=snap.data(); scheduleRender(); } }));
+  _sensitiveUnsubs.push(onSnapshot(bidPhaseRef, snap=>{ _boardMark('bidPhase',snap); bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); scheduleRender(); }));
+  _sensitiveUnsubs.push(onSnapshot(slotsRef,   snap=>{ _boardMark('slots',snap); slotsData=snap.exists()?snap.data():{}; applySlotOverrides(); scheduleRender(); }));
 }
 // [FIX 25 Jul 2026 · delta-audit #10] Tear these down when the Google session ends. The latch
 // above is one-shot and was never reset, while "Sign in as someone else" / "Sign out" drop the
@@ -4031,6 +4138,7 @@ function _unsubscribeSensitive(){
   // [build 152] batch 2's caches — same rule. slots also re-zeroes weekMeta capacity.
   locksData={globalLock:false,weeks:{}}; fteData={}; bidPhaseData={}; slotsData={};
   applySlotOverrides();
+  _boardLoadReset();             // [190 · §241] every cache above is empty again — the board must wait for the next arrivals
   _recipMapsLoaded=false;        // the relay's own gate — re-armed by the next sign-in
   if(_mqTimer){ try{ clearTimeout(_mqTimer); }catch(_){} _mqTimer=null; }
 }
@@ -4447,6 +4555,7 @@ function completeSignIn(){
   // so the browser can never paint a stale banner — this is the only place the board is shown.
   if(typeof renderWhitelistBanner==='function') renderWhitelistBanner();
   if(typeof renderSimModeBanner==='function') renderSimModeBanner(); // [177 · §201] same reason: before the board is visible
+  if(typeof _boardLoadBegin==='function'){ _boardLoadBegin(); renderBoardLoading(); } // [190 · §241] same reason: the board appears already holding its loading line, or already complete (typeof = sandbox convention, as the two lines above)
   document.getElementById("accountSelectModal").classList.remove("show");
   mainContainer.style.display="block";
   startListening();
