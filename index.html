@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 191;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 192;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -3900,7 +3900,12 @@ function _lwActorWeakened(prevSnap,newSnap,actor){
 // own (week floor, NP by phase, numbers used elsewhere / held / spent on an earlier win, the
 // priority lock and the lowering allowance). Returns [] when there is none, and null when
 // it cannot tell — the caller sends nothing on null (fail closed).
-function _lwWeakerWins(snap,user,wk){
+// [192 · §244] `wide` (asked for in two places only: to NAME the bid in the sentence, and for the
+// narrowing that can only WITHHOLD the line): a number live on another of this user's weeks this phase is tested too — on the
+// copy that other bid is taken out first, because the engine refuses one number on two weeks —
+// unless it sits on a week they cannot take a bid off (locked, already won, decided this round).
+// Without `wide` this is exactly what it was in 191.
+function _lwWeakerWins(snap,user,wk,wide){
   try{
     if(!_lwLoaded.best||!_lwLoaded.low||!_lwLoaded.holds) return null;
     const mine=(snap&&snap[user]&&typeof snap[user]==='object')?snap[user]:null;
@@ -3913,9 +3918,11 @@ function _lwWeakerWins(snap,user,wk){
     if(p4AnnouncedDecision(user,wk)) return [];
     if(locksData.globalLock||locksData.weeks?.[wk]) return [];
     const used=[...getPriorPhaseUsedPriorities(user)];
+    const elsewhere=[]; // [192 · §244] only filled when `wide`
     for(const w of Object.keys(mine)){
       if(w===wk||mine[w]===undefined||mine[w]===null||!isCurrentPhaseBid(user,w)) continue;
       const p=mine[w]; if(p==="NP") continue;
+      if(wide&&!_lwStuck(user,w)){ elsewhere.push({w,nums:Array.isArray(p)?p:[p]}); continue; }
       if(Array.isArray(p)) used.push(...p); else used.push(p);
     }
     const lockOn=adminSettings.priorityLockEnabled!==false;
@@ -3936,6 +3943,7 @@ function _lwWeakerWins(snap,user,wk){
       const costs=lockOn&&floor!==undefined&&priorityScore(p)>priorityScore(floor);
       if(costs&&!(rem>0)) continue;
       const s=JSON.parse(JSON.stringify(snap));
+      if(v!=="NP"){ const nums=Array.isArray(p)?p:[p]; for(const o of elsewhere){ if(o.nums.some(n=>nums.includes(n))) delete s[user][o.w]; } } // [192 · §244] on the copy only
       s[user][wk]=p;
       if(getOutcome(wk,user,computeApprovals(s))!=='win') break; // strongest first: stop at the first placeable bid that would not win, so "X or better" holds for every bid it covers
       out.push({bid:p,costs});
@@ -3943,12 +3951,15 @@ function _lwWeakerWins(snap,user,wk){
     return out;
   }catch(_){ return null; }
 }
-// The facts, as one or two short sentences (owner wording, 1 Oct 2026: "any bid x or
-// better" — x is the WEAKEST bid found above). The lowering sentence is stated only when it
-// is true of EVERY bid found and the allowance is a number; otherwise it is left out.
-function _lwFacts(user,cands){
-  const x=cands[cands.length-1].bid;
-  let t='Right now, any bid'+(x==="NP"?', including NP,':(' '+blFmtBid(x)+' or better'))+' would also win.';
+// The facts, as one or two short sentences. [192 · §244, owner wording 5 Oct 2026] one fact: the
+// LOWEST bid of theirs that would also win — x is the weakest bid in `wideCands` (which counts
+// numbers live on their other weeks); with none given it is the weakest in `cands`, as in 191.
+// The lowering sentence is judged on `cands` exactly as before: stated only when it is true of
+// EVERY bid found there and the allowance is a number; otherwise it is left out.
+function _lwFacts(user,cands,wideCands){
+  const from=(Array.isArray(wideCands)&&wideCands.length)?wideCands:cands;
+  const x=from[from.length-1].bid;
+  let t='Right now, the lowest bid of yours that would also win here is '+blFmtBid(x)+'.';
   const rem=blRemaining(user);
   if(cands.every(c=>c.costs)&&rem!==Infinity&&rem>0) t+=' Lowering uses 1 of your '+rem+' remaining bid lowering'+(rem!==1?'s':'')+'.';
   return t;
@@ -3970,7 +3981,121 @@ function _lwOpenings(prevSnap,newSnap,actor,newAp){
         if(!now||!now.length) continue;
         const before=_lwWeakerWins(prevSnap,user,wk);
         if(before===null||before.length) continue;
-        (res[user]=res[user]||{})[wk]={how,cur:nu[wk],facts:_lwFacts(user,now)};
+        // [192 · §244, owner 6 Oct 2026: "that user already decided to overbid"] …and it is NOT sent when a bid they already HOLD —
+        // a number live on another week they can move — would have won here before this change. This can only WITHHOLD the line.
+        const beforeWide=_lwWeakerWins(prevSnap,user,wk,true);
+        if(beforeWide===null||beforeWide.length) continue;
+        (res[user]=res[user]||{})[wk]={how,cur:nu[wk],facts:_lwFacts(user,now,_lwWeakerWins(newSnap,user,wk,true))}; // [192 · §244] the bid NAMED counts numbers on their other weeks
+      }
+    }
+  }catch(_){ return {}; }
+  return res;
+}
+
+// ── [192 · §243] "Your withdrawn bid would win again" ────────────────────────────────────
+// A user who REMOVED their own bid from a week this phase is told when someone else's withdrawal
+// or lowering there means that same bid would now be projected WIN, where just before it would not.
+// WIN only — Under Review does not count. Only the withdrawn bid is tested, never another one.
+// PHASES STAY INDEPENDENT (owner, 5 Oct 2026: "it's critical that this doesn't carry over"): the
+// bid is read from the priority-lock store, which the admin page empties at every phase close and
+// round start, AND the CURRENT change log (emptied at phase close by a separate write) must show that
+// user PLACING this very bid on that week and then REMOVING it, inside the open phase (in Phase 4, the
+// open round). The placing entry matters: a removal confirmed from a box left open across a phase
+// close stamps a fresh floor and a fresh "removed" entry for a bid that belonged to the phase before.
+// Any one missing → nothing is sent.
+// Can this user NOT take their bid off week `w` — it is locked, they already won it, or it was decided
+// in this Phase-4 round? A number sitting on such a week cannot be moved to another week.
+function _lwStuck(user,w){
+  return !!(locksData.weeks?.[w]||getPriorPhaseWinners(w).has(user)||p4AnnouncedDecision(user,w));
+}
+// Would `bid`, put on `wk` for `user`, be projected WIN on the picture `snap`? true / false, or
+// null when it cannot tell (the caller sends nothing on null). Works on a COPY of the picture. A
+// bid of this user's on another week that uses one of the same numbers is taken out of the copy
+// (the engine refuses one number on two weeks). The engine also ignores any bid it reads as
+// belonging to an earlier phase, and a removed bid has no phase tag — so the tag is set to the
+// current phase for the length of this one synchronous question and put back in the finally.
+// Nothing here waits, so no other code can run while the tag is set.
+function _lwBidWins(snap,user,wk,bid){
+  let made=false, tagged=false, hadKey=false, old;
+  try{
+    const s=JSON.parse(JSON.stringify(snap||{}));
+    if(!s[user]||typeof s[user]!=='object') s[user]={};
+    if(bid!=="NP"){
+      const nums=Array.isArray(bid)?bid:[bid];
+      for(const w of Object.keys(s[user])){
+        if(w===wk) continue;
+        const p=s[user][w];
+        if(p===undefined||p===null||p==="NP"||!isCurrentPhaseBid(user,w)) continue;
+        if((Array.isArray(p)?p:[p]).some(n=>nums.includes(n))) delete s[user][w];
+      }
+    }
+    s[user][wk]=bid;
+    if(!bidPhaseData[user]){ bidPhaseData[user]={}; made=true; }
+    hadKey=Object.prototype.hasOwnProperty.call(bidPhaseData[user],wk); old=bidPhaseData[user][wk];
+    bidPhaseData[user][wk]=Number(phasesData.currentPhase||1); tagged=true;
+    return getOutcome(wk,user,computeApprovals(s))==='win';
+  }catch(_){ return null; }
+  finally{
+    try{
+      if(made) delete bidPhaseData[user];
+      else if(tagged){ if(hadKey) bidPhaseData[user][wk]=old; else delete bidPhaseData[user][wk]; }
+    }catch(_){}
+  }
+}
+// For one action by `actor`: a map user → week → (how, bid) for every OTHER user who left a week the
+// actor just withdrew from or lowered on, and whose withdrawn bid would WIN there now and would not a
+// moment before (so it is said once, when it opens). Anything unknown → left out.
+function _lwReturns(prevSnap,newSnap,actor){
+  const res={};
+  try{
+    if(!_lwLoaded.best||!_lwLoaded.holds) return res;
+    if(locksData.globalLock) return res;
+    const log=(changesData&&Array.isArray(changesData.log))?changesData.log:[];
+    // the current change log begins at its last reset; in Phase 4 the open ROUND is the window, so it
+    // begins at that round's own stamp — and with no stamp nothing is sent
+    let since=Number(changesData&&changesData.resetAt)||0;
+    if(Number(phasesData.currentPhase||1)===4){
+      const rb=Number((phasesData.p4RoundBeganAt||{})[Number(phasesData.p4Round||1)]);
+      if(!(rb>0)) return res;
+      since=Math.max(since,rb);
+    }
+    for(const {wk,how} of _lwActorWeakened(prevSnap,newSnap,actor)){
+      if(!weekMeta[wk]||locksData.weeks?.[wk]) continue;
+      for(const user of Object.keys(bestBidsData||{})){
+        if(user===actor) continue;
+        const bid=(bestBidsData[user]&&typeof bestBidsData[user]==='object')?bestBidsData[user][wk]:undefined;
+        if(bid===undefined||bid===null) continue;
+        // they have NO bid on this week now (nor in the picture just before): a week they left
+        const pu=(prevSnap&&prevSnap[user]&&typeof prevSnap[user]==='object')?prevSnap[user]:{};
+        const nu=(newSnap&&newSnap[user]&&typeof newSnap[user]==='object')?newSnap[user]:{};
+        if((pu[wk]!==undefined&&pu[wk]!==null)||(nu[wk]!==undefined&&nu[wk]!==null)) continue;
+        // the second lock: they removed it themselves, in the CURRENT change log — and the bid that entry
+        // records is this same bid, so "your withdrawn bid" is literally the bid they withdrew
+        let last=null;
+        for(const e of log){ if(e&&e.user===user&&e.weekKey===wk&&e.action==='removed'&&e.actor==='user'&&typeof e.ts==='number'&&e.ts>=since&&(!last||e.ts>last.ts)) last=e; }
+        if(!last||JSON.stringify(last.bidValue)!==JSON.stringify(bid)) continue;
+        // …and the last thing they did on this week before that removal, inside the same window, was to
+        // PLACE this very bid (see the note at the top of this block)
+        let placed=null;
+        for(const e of log){ if(e&&e.user===user&&e.weekKey===wk&&e.actor==='user'&&(e.action==='added'||e.action==='edited'||e.action==='lowered')&&typeof e.ts==='number'&&e.ts>=since&&e.ts<=last.ts&&(!placed||e.ts>=placed.ts)) placed=e; }
+        if(!placed||JSON.stringify(placed.bidValue)!==JSON.stringify(bid)) continue;
+        if(getPriorPhaseWinners(wk).has(user)) continue;
+        if(p4AnnouncedDecision(user,wk)) continue;
+        if(bid!=="NP"){
+          const nums=Array.isArray(bid)?bid:[bid];
+          const gone=getPriorPhaseUsedPriorities(user); if(nums.some(n=>gone.includes(n))) continue;
+          // the number is on another week of theirs that they cannot take a bid off: it cannot come back here
+          let stuck=false;
+          for(const w of Object.keys(nu)){
+            const q=nu[w];
+            if(w===wk||q===undefined||q===null||q==="NP"||!isCurrentPhaseBid(user,w)) continue;
+            if((Array.isArray(q)?q:[q]).some(n=>nums.includes(n))&&_lwStuck(user,w)){ stuck=true; break; }
+          }
+          if(stuck) continue;
+        }
+        if(_lwBidWins(newSnap,user,wk,bid)!==true) continue;
+        if(_lwBidWins(prevSnap,user,wk,bid)!==false) continue;
+        (res[user]=res[user]||{})[wk]={how,bid};
       }
     }
   }catch(_){ return {}; }
@@ -3982,6 +4107,7 @@ async function sendEmailNotifications(prevSnap,newSnap,actor){
   try{
     const prevAp=computeApprovals(prevSnap), newAp=computeApprovals(newSnap);
     const notif={};
+    let rt={}; try{ rt=_lwReturns(prevSnap,newSnap,actor)||{}; }catch(_){ rt={}; } // [192 · §243] also worked out before the first await; a failure here costs no other alert
     let lw={}; try{ lw=_lwOpenings(prevSnap,newSnap,actor,newAp)||{}; }catch(_){ lw={}; } // [182 · §221 · §222 #4] worked out HERE, before the first await (see the bidPhase note at the call site); whatever goes wrong in it, the ordinary alerts below still go out
     for(const user of new Set([...Object.keys(prevSnap),...Object.keys(newSnap)])){
       if(user===actor) continue;
@@ -4002,6 +4128,15 @@ async function sendEmailNotifications(prevSnap,newSnap,actor){
           if(!notif[user])notif[user]=[];
           notif[user].push(`${formatShort(wk)}: Another bid on this week was ${_o.how}. You are still projected to WIN with your bid of ${blFmtBid(_o.cur)}. ${_o.facts}`);
         }
+      }
+    }
+    // [192 · §243] a week the user LEFT: their withdrawn bid would win there again. They have no bid on
+    // that week, so no line above can exist for it; it joins the same single e-mail as their other lines.
+    for(const user of Object.keys(rt)){
+      for(const wk of Object.keys(rt[user])){
+        const _r=rt[user][wk];
+        if(!notif[user])notif[user]=[];
+        notif[user].push(`${formatShort(wk)}: Another bid on this week was ${_r.how}. Right now, your withdrawn bid of ${blFmtBid(_r.bid)} would be projected to WIN.`);
       }
     }
     for(const [user,changes] of Object.entries(notif)){
