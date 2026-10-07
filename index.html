@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 194;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 195;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -594,7 +594,7 @@ body{zoom:1.15}
         <li>A combined bid like 1/2/3 uses bids 1, 2, and 3 at once</li>
         <li id="ruleNpPhases">NP bids may only be used during the phases for which admin has turned them on</li>
         <li id="rulePrioLock">Bid priorities can only stay the same or get stronger — bid a 5 on a week, and any re-bid there must be 5 or better.</li>
-        <li id="ruleNoWeaken">On a week where more people have bid this phase than it can hold, you can only weaken your bid if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid.</li><!-- [194 · §248] -->
+        <li id="ruleNoWeaken">On a week where more people have bid this phase than it can hold, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid.</li><!-- [194 · §248] -->
         <li id="ruleBidFloors" style="display:none"></li><!-- [COPY-3] filled from the live floors at boot; hidden until then so no stale or invented floor text can flash, and it stays hidden when no floor is set -->
         <li>Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week</li>
         <li>Enter your bids early, it benefits everyone</li>
@@ -2432,11 +2432,12 @@ function startListening(){
 }
 
 let _fpLastFacts=null; // [183 · §223] {user,wk,f:{tRem,tDur,tReset,aff}} — set by persistScheduleChange, consumed once by logOwnChange
-async function logOwnChange(user,wk,action,bidValue){
+async function logOwnChange(user,wk,action,bidValue,won){
   // id field guarantees uniqueness — arrayUnion deduplicates by value equality,
   // so two entries with identical fields (same ms timestamp) would silently drop one.
   const entry={id:Math.random().toString(36).slice(2),user,weekKey:wk,action,actor:'user',ts:Date.now()};
   if(bidValue!==undefined) entry.bidValue=bidValue;
+  if(won===true) entry.won=true; // [195 · §249] a removed bid that was projected WIN: its owner may put the same bid back (see _weWonBack)
   // [183 · §223 · §227] The Fair Play Monitor reads these four RECORDED facts instead of
   // replaying an imagined clock: tRem = ms left on the countdown just before this change,
   // tDur = the countdown length it is measured against (ms; capped at the starting reset length), tReset = this change restarted the
@@ -2708,7 +2709,7 @@ function flash(el,msg,dur){
 // phase (193 allowed it, and a winner then stepped down in two edits). Weeks with no competition are
 // untouched. Page-enforced (bid box, review step, confirm step) and mirrored in _lwWeakerWins so
 // no alert e-mail names a bid the box refuses. The admin page's own bid entry is not bound by it.
-function _wwMsg(){ return "On a week with a bidding competition, a bid can only be weakened if it would still win and is no lower than the lowest other winning bid."; }
+function _wwMsg(){ return (_wwRefuses.why==='in')?"On a week with a bidding competition, a new bid must be at least as strong as the weakest bid there that is winning or under review.":"On a week with a bidding competition, a bid can only be weakened if it would still win and is no lower than the lowest other winning bid."; } // [195 · §249] coming in, or coming down
 // "A bidding competition has happened on a week when more people have bid on it this phase than it
 // can hold" (his definition): the FTE of everyone who has bid there this phase - still there or
 // gone - plus whoever holds it from an earlier phase, against the week's capacity. Three records,
@@ -2724,7 +2725,7 @@ function _wwContested(wk,snap){
     const who=new Set();
     for(const u of Object.keys(d||{})){ const m=d[u]; if(m&&typeof m==='object'&&m[wk]!==undefined&&m[wk]!==null&&isCurrentPhaseBid(u,wk)) who.add(u); }
     for(const u of Object.keys(bestBidsData||{})){ const m=bestBidsData[u]; if(m&&typeof m==='object'&&m[wk]!==undefined&&m[wk]!==null) who.add(u); }
-    const since=Number(changesData&&changesData.resetAt)||0;
+    const since=(typeof _wwSince==='function')?_wwSince():(Number(changesData&&changesData.resetAt)||0); // [195 · owner 7 Oct 2026] in Phase 4 the record is the open ROUND's; typeof = sandbox convention
     const log=(changesData&&Array.isArray(changesData.log))?changesData.log:[];
     for(const e of log){
       if(!e||e.weekKey!==wk||typeof e.user!=='string'||!e.user) continue;
@@ -2761,8 +2762,90 @@ function _wwBelow(ap,s,user,wk,bid){
 // phase, so the tag is set to the current phase for the length of this one synchronous question and
 // put back in the finally (the same device as _lwBidWins). Nothing here waits, writes or touches
 // the page.
+// ── [195 · §249, owner 7 Oct 2026] COMING IN: THE ENTRY LEVEL ───────────────────────────────────
+// 194 never looked at a first bid, so on a competition week with room left a later arrival could take
+// the room with any number - and the winners could then come down to it. Now a NEW bid there (from
+// anyone with no bid on the week at this moment, a returning bidder included) must be at least as
+// strong as the weakest bid on the week that is projected WIN or Under Review, whether or not it
+// would itself win; with bids there but none of them winning or Under Review, as strong as the
+// strongest of them. The week is judged as it WILL be once this bid lands, so the bid that starts
+// the competition is held to the level too. If nobody else has a bid there ("everyone has left") the
+// whole rule stands aside, for everyone, and the ordinary lowering rule alone applies.
+// Asked on the picture `snap`: true = refused · false = allowed · 'empty' = nobody else is on the
+// week · null = cannot tell. Earlier-phase holders are not bids of this phase. It works on a COPY;
+// the phase tag is set for the one synchronous competition question and put back in the finally
+// (the device of _lwBidWins). Nothing here waits, writes or touches the page.
+// THE RETURNING WINNER (owner, 7 Oct 2026): someone whose bid was projected WIN when they removed it
+// from a competition week may put back that same bid, or a stronger one, below the level - provided it would be projected WIN
+// again. That only restores a level the week already had. The removal's log entry records the win
+// (`won`, written by removeSelection from 195 on); the LAST thing they did on the week, inside the
+// record's window, must be that removal. Anything unknown = no.
+// EACH PHASE-4 ROUND FOLLOWS THE SAME RULES (owner, 7 Oct 2026): the competition record begins at the
+// change log's last reset and, in Phase 4, at the open ROUND's own stamp (Start Round already clears
+// the floors and the lowerings; the log is only reset at a phase's close).
+function _wwSince(){
+  let since=Number(changesData&&changesData.resetAt)||0;
+  try{ if(Number(phasesData.currentPhase||1)===4){ const rb=Number((phasesData.p4RoundBeganAt||{})[Number(phasesData.p4Round||1)]); if(rb>0) since=Math.max(since,rb); } }catch(_){}
+  return since;
+}
+function _weWonBack(snap,user,wk,bid){
+  try{
+    const log=(changesData&&Array.isArray(changesData.log))?changesData.log:[];
+    const since=_wwSince();
+    if(Number(phasesData.currentPhase||1)===4&&!(Number((phasesData.p4RoundBeganAt||{})[Number(phasesData.p4Round||1)])>0)) return false; // a round with no stamp: no way back (as _lwReturns)
+    let last=null;
+    for(const e of log){ if(e&&e.user===user&&e.weekKey===wk&&typeof e.ts==='number'&&e.ts>=since&&(!last||e.ts>=last.ts)) last=e; }
+    if(!last||last.action!=='removed'||last.actor!=='user'||last.won!==true||last.bidValue===undefined||last.bidValue===null) return false;
+    if(priorityScore(bid)>priorityScore(last.bidValue)) return false;
+    return _lwBidWins(snap,user,wk,bid)===true;
+  }catch(_){ return false; }
+}
+function _weBlocks(snap,user,wk,bid){
+  let made=false, tagged=false, hadKey=false, old;
+  try{
+    if(!weekMeta[wk]) return null;
+    const s=JSON.parse(JSON.stringify(snap||{}));
+    if(!s[user]||typeof s[user]!=='object') s[user]={};
+    delete s[user][wk];
+    const a=computeApprovals(s)[wk];
+    if(!a) return null;
+    const prior=getPriorPhaseWinners(wk);
+    let n=0, weakestUp=-1, strongest=-1;
+    for(const u of new Set([...a.winners,...a.draws,...a.reviews,...a.losers])){
+      if(u===user||prior.has(u)) continue;
+      const p=(s[u]&&typeof s[u]==='object')?s[u][wk]:undefined;
+      if(p===undefined||p===null) continue;
+      const sc=priorityScore(p); n++;
+      if(a.winners.has(u)||a.draws.has(u)||a.reviews.has(u)) weakestUp=Math.max(weakestUp,sc);
+      strongest=(strongest<0)?sc:Math.min(strongest,sc);
+    }
+    if(!n) return 'empty';
+    s[user][wk]=bid;
+    if(!bidPhaseData[user]){ bidPhaseData[user]={}; made=true; }
+    hadKey=Object.prototype.hasOwnProperty.call(bidPhaseData[user],wk); old=bidPhaseData[user][wk];
+    bidPhaseData[user][wk]=Number(phasesData.currentPhase||1); tagged=true;
+    if(!_wwContested(wk,s)) return false;
+    if(!(priorityScore(bid)>(weakestUp>=0?weakestUp:strongest))) return false;
+    return !_weWonBack(snap,user,wk,bid); // below the level: refused - unless it is a returning winner's own bid, or stronger, and would win again
+  }catch(_){ return null; }
+  finally{
+    try{
+      if(made) delete bidPhaseData[user];
+      else if(tagged){ if(hadKey) bidPhaseData[user][wk]=old; else delete bidPhaseData[user][wk]; }
+    }catch(_){}
+  }
+}
 function _wwRefuses(user,wk,bid){
   let made=false, tagged=false, hadKey=false, old;
+  _wwRefuses.why='down'; // [195 · §249] which half of the rule refused: 'in' (the entry level) or 'down' (194). _wwMsg reads it.
+  try{ // [195 · §249] COMING IN. If it cannot be told the entry check stands aside: it must never block an ordinary first bid.
+    const _lv=isVisibleBid(user,wk)?data[user][wk]:undefined;
+    if(_lv===undefined||_lv===null){
+      const _in=_weBlocks(data,user,wk,bid);
+      if(_in==='empty') return false; // everyone has left: the competition rule stands aside (owner, 7 Oct 2026)
+      if(_in===true){ _wwRefuses.why='in'; return true; }
+    }
+  }catch(_){}
   try{
     try{ // is it a weakening at all? If even that cannot be told, the rule stands aside: it must never block an ordinary bid
       const live=isVisibleBid(user,wk)?data[user][wk]:undefined;
@@ -2865,8 +2948,13 @@ function openPriorityModal(wk){
   // of them (someone who left a fought-over week, put that number elsewhere and came back), the week panel says why and the way
   // back. Paint only - it changes no option and no bid. A box with anything selectable, or one this rule refuses nothing in, is untouched.
   try{ const _wwAll=[...sel.querySelectorAll("option")].filter(o=>o.value);
-    if(winfo&&_wwAll.length&&_wwAll.every(o=>o.disabled)&&typeof _wwRefuses==='function'&&_wwAll.some(o=>_wwRefuses(user,wk,_bfParse(o.value))!==false))
-      winfo.innerHTML+='<div id="wwNoneNote" style="margin-top:8px;padding:8px 10px;background:rgba(251,191,36,.18);border:1px solid rgba(217,119,6,.6);border-radius:8px;font-size:.8rem;color:#4a3000;line-height:1.45">No bid is available to you on this week right now. On a week with a bidding competition you can bid again only with your previous bid or stronger, or with a weaker bid that would still win and is no lower than the lowest other winning bid. If your previous bid number is on another week, moving it back makes it available here.</div>';
+    if(winfo&&_wwAll.length&&_wwAll.every(o=>o.disabled)&&typeof _wwRefuses==='function'&&_wwAll.some(o=>_wwRefuses(user,wk,_bfParse(o.value))!==false)){
+      // [195 · §249] Which text: if their previous bid here would still be accepted, the way back is the 194 note; if not (a first bid, or a
+      // previous bid below the entry level), the coming-in note.
+      const _wwPrev=(bestBidsData[user]&&typeof bestBidsData[user]==='object')?bestBidsData[user][wk]:undefined;
+      const _wwBack=_wwPrev!==undefined&&_wwPrev!==null&&_wwRefuses(user,wk,_wwPrev)===false;
+      winfo.innerHTML+='<div id="wwNoneNote" style="margin-top:8px;padding:8px 10px;background:rgba(251,191,36,.18);border:1px solid rgba(217,119,6,.6);border-radius:8px;font-size:.8rem;color:#4a3000;line-height:1.45">'+(_wwBack?'No bid is available to you on this week right now. On a week with a bidding competition you can bid again only with your previous bid or stronger, or with a weaker bid that would still win and is no lower than the lowest other winning bid. If your previous bid number is on another week, moving it back makes it available here.':'No bid is available to you on this week right now. On a week with a bidding competition a new bid must be at least as strong as the weakest bid there that is winning or under review.')+'</div>';
+    }
   }catch(_){}
   modal.classList.add("show"); sel.focus();
 }
@@ -3120,6 +3208,10 @@ async function removeSelection(wk){
   const meta=weekMeta[wk];
   const prioLockOn=adminSettings.priorityLockEnabled!==false;
   const bestEver=(bestBidsData[user]||{})[wk];
+  // [195 · §249, owner 7 Oct 2026] Could this bid NOT come back? On a competition week, with others still on it, a bid that is below the entry
+  // level and is not winning now would be refused as a new bid: the box must say so instead of promising a re-bid. Read-only; unknown = no.
+  let _rmShut=false;
+  try{ _rmShut=getOutcome(wk,user,computeApprovals())!=='win'&&typeof _weBlocks==='function'&&_weBlocks(data,user,wk,prio)===true; }catch(_){ _rmShut=false; } // typeof = sandbox convention
   const willHaveCap=prioLockOn&&((bestEver!==undefined&&bestEver!=='NP')||(prio!==undefined&&prio!=='NP'));
   // Build informative confirmation message.
   // [155 · AUD-H3] The old message hard-coded the absolute floor sentence in BOTH branches —
@@ -3134,7 +3226,7 @@ async function removeSelection(wk){
   // [187 · §237] Owner-found: bidders remove a bid and place a new one when Edit would do, and each step
   // sends its own projection alerts. Wording only (his, 4 Oct 2026) - shown above the lock note, in the one
   // boxed note of this dialog. Nothing about the remove itself changes.
-  const _editMsg='<div style="margin-top:12px;padding:11px 13px;background:rgba(251,191,36,.18);border:1.5px solid rgba(217,119,6,.6);border-radius:8px;font-size:.88rem;color:#4a3000;line-height:1.5"><strong>Only changing your bid?</strong> Use ✎ Edit instead. Removing and re-bidding can send colleagues multiple alert e-mails. If the bid you want is in use on another week, removing is fine.</div>';
+  const _editMsg='<div style="margin-top:12px;padding:11px 13px;background:rgba(251,191,36,.18);border:1.5px solid rgba(217,119,6,.6);border-radius:8px;font-size:.88rem;color:#4a3000;line-height:1.5"><strong>Only changing your bid?</strong> Use ✎ Edit instead. Removing and re-bidding can send colleagues multiple alert e-mails.'+(_rmShut?'':' If the bid you want is in use on another week, removing is fine.')+'</div>';
   let lockMsg;
   // [157 · RA-H11] Never promise a lowering the week's rules make impossible: check whether
   // ANY allowed value is actually weaker than the stored lock (bid floor + NP-phase rules,
@@ -3165,6 +3257,7 @@ async function removeSelection(wk){
   } else {
     lockMsg=`<div style="${_boxAmber}"><strong>⚠️ Priority lock note:</strong> A bid may be placed again for this week, but it must be <strong>equal to or better than your previous bid</strong> (${_floorLbl}).</div>`;
   }
+  if(_rmShut) lockMsg=`<div style="${_boxAmber}">⚠️ This week has had a bidding competition. If you remove this bid, a new bid here must be at least as strong as the weakest bid there that is winning or under review — you may not be able to place this same bid again.</div>`; // [195 · §249] owner wording, 7 Oct 2026
   const msg=`<div style="font-size:.95rem;font-weight:600;color:#132f49">You are removing your bid for <span style="color:#006ba6">Week ${meta.weekNum}</span> (${meta.range}).</div>
   <div style="margin-top:8px;font-size:.85rem;color:#2c4257">Current bid: <strong style="color:#005e93">${bidLbl(prio)}</strong></div>${_editMsg}${lockMsg}`;
   if(!await showConfirm(msg,{yesText:'Confirm Remove',noText:'Cancel'})) return;
@@ -3172,6 +3265,7 @@ async function removeSelection(wk){
   // Persist the removal FIRST; only clear the local bid, stamp the floor, drop the
   // bid time, and log it if the delete actually landed — a removal rejected by the
   // timer/lock re-check must leave the bid (and its state) untouched.
+  let _rmWon=false; try{ _rmWon=_lwLoaded.best===true&&typeof _wwContested==='function'&&_wwContested(wk)===true&&getOutcome(wk,user,computeApprovals())==='win'; }catch(_){ _rmWon=false; } // [195 · §249] a WINNING bid leaving a COMPETITION week, as the board stands at the moment of removal (a win on a quiet week is not recorded: it could be banked against a later competition); typeof = sandbox convention
   const okRemove=await persistScheduleChange(user,wk,null,_prev);
   if(okRemove){
     delete data[user][wk];
@@ -3179,7 +3273,7 @@ async function removeSelection(wk){
     // Clear bid timestamp — atomic delete of nested key
     if(bidTimesData[user]) bidTimesData[user][wk]=null;
     await updateDoc(bidTimesRef,{[`${user}.${wk}`]:deleteField()}).catch(()=>setDoc(bidTimesRef,{[user]:{[wk]:null}},{merge:true}));
-    logOwnChange(user,wk,'removed',prio);
+    logOwnChange(user,wk,'removed',prio,_rmWon);
   }
 }
 window.removeSelection=removeSelection;
@@ -4206,6 +4300,7 @@ function _lwReturns(prevSnap,newSnap,actor){
         }
         if(_lwBidWins(newSnap,user,wk,bid)!==true) continue;
         if(_lwBidWins(prevSnap,user,wk,bid)!==false) continue;
+        if(typeof _weBlocks==='function'){ const _e=_weBlocks(newSnap,user,wk,bid); if(_e===true||_e===null) continue; } // [195 · §249] below the entry level of a competition week (or it cannot be told): not a bid they can place; typeof = sandbox convention
         (res[user]=res[user]||{})[wk]={how,bid};
       }
     }
