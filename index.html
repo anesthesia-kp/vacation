@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 192;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 193;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -2695,6 +2695,95 @@ function flash(el,msg,dur){
 }
 
 // ── Priority modal ──
+// ── [193 · §245] A WINNING BID CANNOT BE LOWERED BELOW THE WEAKEST WINNING BID ─────────────────
+// Owner rule, 6 Oct 2026 (live Phase 2): people who lost a bidding war were leaving the week, and
+// the winners then lowered their bids. From now on, on a week where a bidding competition has
+// happened this phase, a bid may not be made WEAKER (an edit, or a weaker re-bid after removing)
+// when the weaker bid would be projected WIN and is weaker than every OTHER winning bid of this
+// phase on that week - or nobody else is winning there. Equal to the weakest other winning bid is
+// allowed. A weaker bid that would NOT win is allowed as before. Weeks with no competition are
+// untouched. Page-enforced (bid box, review step, confirm step) and mirrored in _lwWeakerWins so
+// no alert e-mail names a bid the box refuses. The admin page's own bid entry is not bound by it.
+function _wwMsg(){ return "A winning bid can't be lowered below the lowest winning bid on that week."; }
+// "A bidding competition has happened on a week when more people have bid on it this phase than it
+// can hold" (his definition): the FTE of everyone who has bid there this phase - still there or
+// gone - plus whoever holds it from an earlier phase, against the week's capacity. Three records,
+// so no single admin action erases the history: live bids (read from `snap`, the board when none
+// is given), the priority-lock floors (kept when a user removes a bid) and the phase's change log
+// (kept when the admin removes one). It errs STRICT: two people who never overlapped both count,
+// and when it cannot tell it answers true.
+function _wwContested(wk,snap){
+  try{
+    const meta=weekMeta[wk];
+    if(!meta||!_lwLoaded.best) return true;
+    const d=(snap&&typeof snap==='object')?snap:data;
+    const who=new Set();
+    for(const u of Object.keys(d||{})){ const m=d[u]; if(m&&typeof m==='object'&&m[wk]!==undefined&&m[wk]!==null&&isCurrentPhaseBid(u,wk)) who.add(u); }
+    for(const u of Object.keys(bestBidsData||{})){ const m=bestBidsData[u]; if(m&&typeof m==='object'&&m[wk]!==undefined&&m[wk]!==null) who.add(u); }
+    const since=Number(changesData&&changesData.resetAt)||0;
+    const log=(changesData&&Array.isArray(changesData.log))?changesData.log:[];
+    for(const e of log){
+      if(!e||e.weekKey!==wk||typeof e.user!=='string'||!e.user) continue;
+      if(typeof e.ts==='number'&&e.ts<since) continue;
+      who.add(e.user);
+    }
+    const prior=getPriorPhaseWinners(wk);
+    let fte=getPriorPhaseFteWon(wk);
+    for(const u of who){ if(!prior.has(u)) fte+=getUserFTE(u); }
+    return Math.round((fte-Number(meta.slots))*10)/10>0; // the engine's own FP-safe fit test
+  }catch(_){ return true; }
+}
+// On the approvals `ap` worked out from the picture `s` (which already holds `bid` for `user` on
+// `wk`, projected WIN): is that bid weaker than every other winning bid of this phase there - or is
+// there no other one? Winners locked in from an earlier phase or round are not bids of this phase.
+function _wwBelow(ap,s,user,wk,bid){
+  const win=ap&&ap[wk]&&ap[wk].winners;
+  const prior=getPriorPhaseWinners(wk);
+  let weakest=-1;
+  if(win){ for(const u of win){
+    if(u===user||prior.has(u)) continue;
+    const p=(s&&s[u]&&typeof s[u]==='object')?s[u][wk]:undefined;
+    if(p===undefined||p===null||!isCurrentPhaseBid(u,wk)) continue;
+    weakest=Math.max(weakest,priorityScore(p));
+  } }
+  return weakest<0||priorityScore(bid)>weakest;
+}
+// Does the rule refuse `bid` on `wk` for `user`, as the board stands? false = allowed; true =
+// refused; null = it IS a weaker bid but the rest cannot be told (every caller treats null as
+// refused). "Weaker" is judged against the bid they hold there now or, with none, the floor their
+// last bid there left this phase - so a first bid on a week is never touched, and neither is the
+// same bid or a stronger one. The what-if runs on a COPY of the board. A bid being re-placed after
+// a removal has no phase tag, and the engine ignores a bid it reads as belonging to an earlier
+// phase, so the tag is set to the current phase for the length of this one synchronous question and
+// put back in the finally (the same device as _lwBidWins). Nothing here waits, writes or touches
+// the page.
+function _wwRefuses(user,wk,bid){
+  let made=false, tagged=false, hadKey=false, old;
+  try{
+    try{ // is it a weakening at all? If even that cannot be told, the rule stands aside: it must never block an ordinary bid
+      const live=isVisibleBid(user,wk)?data[user][wk]:undefined;
+      const ref=(live!==undefined&&live!==null)?live:((bestBidsData[user]&&typeof bestBidsData[user]==='object')?bestBidsData[user][wk]:undefined);
+      if(ref===undefined||ref===null) return false;
+      if(!(priorityScore(bid)>priorityScore(ref))) return false;
+    }catch(_){ return false; }
+    if(!_wwContested(wk)) return false;
+    const s=JSON.parse(JSON.stringify(data||{}));
+    if(!s[user]||typeof s[user]!=='object') s[user]={};
+    s[user][wk]=bid;
+    if(!bidPhaseData[user]){ bidPhaseData[user]={}; made=true; }
+    hadKey=Object.prototype.hasOwnProperty.call(bidPhaseData[user],wk); old=bidPhaseData[user][wk];
+    bidPhaseData[user][wk]=Number(phasesData.currentPhase||1); tagged=true;
+    const ap=computeApprovals(s);
+    if(getOutcome(wk,user,ap)!=='win') return false;
+    return _wwBelow(ap,s,user,wk,bid);
+  }catch(_){ return null; }
+  finally{
+    try{
+      if(made) delete bidPhaseData[user];
+      else if(tagged){ if(hadKey) bidPhaseData[user][wk]=old; else delete bidPhaseData[user][wk]; }
+    }catch(_){}
+  }
+}
 function openPriorityModal(wk){
   if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); return; }
   if(isAuctionClosed()){ showError("Bidding is closed — no more changes can be made."); return; }
@@ -2765,6 +2854,9 @@ function openPriorityModal(wk){
       opt.disabled=used.includes(num)||(_blCapBlocks&&priorityScore(num)>capScore);
     }
   });
+  // [193 · §245] On a week where a bidding competition has happened, a weaker bid that would still
+  // win below the weakest other winning bid is greyed out like a number already in use.
+  if(typeof _wwRefuses==='function'){ sel.querySelectorAll("option").forEach(opt=>{ if(opt.value&&!opt.disabled&&_wwRefuses(user,wk,_bfParse(opt.value))!==false) opt.disabled=true; }); } // typeof = sandbox convention
   modal.classList.add("show"); sel.focus();
 }
 window.openPriorityModal=openPriorityModal;
@@ -2826,6 +2918,8 @@ window.reviewBid=function(){
     const isNew=!isVisibleBid(user,pendingWeek);
     if(isNew&&bidLimitStatus(user).atLimit){showBidLimitModal();return;}
   }
+  // [193 · §245] The weakest-winning-bid rule, checked before the confirm step (and again at commit).
+  if(typeof _wwRefuses==='function'&&_wwRefuses(user,pendingWeek,_bfParse(val))!==false){ showError(_wwMsg()); return; } // typeof = sandbox convention
   // [build 139 · BL] Lowering pre-check + honest cost display, BEFORE the confirm step.
   // Refusal here mirrors the L-3 commit re-check exactly; the note states the from→to
   // change and the remaining count so nobody ever spends a lowering unknowingly.
@@ -2887,6 +2981,9 @@ window.confirmPriority=async function(){
   // comes from admin settings; NP is the weakest bid so any numeric floor blocks it here too.
   { const _bfF=bfFloorFor(wk);
     if(!bfAllows(_bfParse(val),_bfF)){ showCenterAlert("This "+(weekMeta[wk]?.highPriorityOnly?"high-demand":"summer")+" week needs a bid of "+_bfF+" or better."); window.closeModal(); return; } }
+  // [193 · §245] The weakest-winning-bid rule, re-checked at commit on the board as it stands NOW
+  // (a stale option list, a second tab, a competitor who left while the box was open). Before any write.
+  if(typeof _wwRefuses==='function'&&_wwRefuses(user,wk,_bfParse(val))!==false){ showCenterAlert(_wwMsg()); window.closeModal(); return; } // typeof = sandbox convention
   // Priority-lock FLOOR re-check now also covers NP: NP (score 99) is weaker than any
   // numbered floor, so submitting NP under a numeric floor is a below-floor bid.
   // [build 139 · BL] A below-floor submission is now a SANCTIONED LOWERING while the user
@@ -3930,6 +4027,7 @@ function _lwWeakerWins(snap,user,wk,wide){
     const rem=blRemaining(user);
     const bf=bfFloorFor(wk);
     const curScore=priorityScore(cur);
+    const _wwOn=(typeof _wwContested==='function')&&_wwContested(wk,snap); // [193 · §245] judged on the same picture as the question; typeof = sandbox convention
     const out=[];
     for(const v of _LW_LADDER){
       const p=_bfParse(v);
@@ -3945,7 +4043,9 @@ function _lwWeakerWins(snap,user,wk,wide){
       const s=JSON.parse(JSON.stringify(snap));
       if(v!=="NP"){ const nums=Array.isArray(p)?p:[p]; for(const o of elsewhere){ if(o.nums.some(n=>nums.includes(n))) delete s[user][o.w]; } } // [192 · §244] on the copy only
       s[user][wk]=p;
-      if(getOutcome(wk,user,computeApprovals(s))!=='win') break; // strongest first: stop at the first placeable bid that would not win, so "X or better" holds for every bid it covers
+      const ap=computeApprovals(s);
+      if(getOutcome(wk,user,ap)!=='win') break; // strongest first: stop at the first placeable bid that would not win, so "X or better" holds for every bid it covers
+      if(_wwOn&&_wwBelow(ap,s,user,wk,p)) continue; // [193 · §245] the bid box refuses this one (below the weakest winning bid on a week that had a competition): not a bid they can place
       out.push({bid:p,costs});
     }
     return out;
