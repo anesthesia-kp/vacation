@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 193;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 194;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -594,6 +594,7 @@ body{zoom:1.15}
         <li>A combined bid like 1/2/3 uses bids 1, 2, and 3 at once</li>
         <li id="ruleNpPhases">NP bids may only be used during the phases for which admin has turned them on</li>
         <li id="rulePrioLock">Bid priorities can only stay the same or get stronger — bid a 5 on a week, and any re-bid there must be 5 or better.</li>
+        <li id="ruleNoWeaken">On a week where more people have bid this phase than it can hold, you can only weaken your bid if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid.</li><!-- [194 · §248] -->
         <li id="ruleBidFloors" style="display:none"></li><!-- [COPY-3] filled from the live floors at boot; hidden until then so no stale or invented floor text can flash, and it stays hidden when no floor is set -->
         <li>Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week</li>
         <li>Enter your bids early, it benefits everyone</li>
@@ -2701,10 +2702,13 @@ function flash(el,msg,dur){
 // happened this phase, a bid may not be made WEAKER (an edit, or a weaker re-bid after removing)
 // when the weaker bid would be projected WIN and is weaker than every OTHER winning bid of this
 // phase on that week - or nobody else is winning there. Equal to the weakest other winning bid is
-// allowed. A weaker bid that would NOT win is allowed as before. Weeks with no competition are
+// allowed. [194 · §248, owner 6 Oct 2026] A weaker bid that would NOT win (lose, or Under Review)
+// is REFUSED too: the only weakening left is one that still wins, no lower than the weakest other
+// winning bid. It binds everyone with a bid, or a floor from an earlier bid, on that week this
+// phase (193 allowed it, and a winner then stepped down in two edits). Weeks with no competition are
 // untouched. Page-enforced (bid box, review step, confirm step) and mirrored in _lwWeakerWins so
 // no alert e-mail names a bid the box refuses. The admin page's own bid entry is not bound by it.
-function _wwMsg(){ return "A winning bid can't be lowered below the lowest winning bid on that week."; }
+function _wwMsg(){ return "On a week with a bidding competition, a bid can only be weakened if it would still win and is no lower than the lowest other winning bid."; }
 // "A bidding competition has happened on a week when more people have bid on it this phase than it
 // can hold" (his definition): the FTE of everyone who has bid there this phase - still there or
 // gone - plus whoever holds it from an earlier phase, against the week's capacity. Three records,
@@ -2774,7 +2778,7 @@ function _wwRefuses(user,wk,bid){
     hadKey=Object.prototype.hasOwnProperty.call(bidPhaseData[user],wk); old=bidPhaseData[user][wk];
     bidPhaseData[user][wk]=Number(phasesData.currentPhase||1); tagged=true;
     const ap=computeApprovals(s);
-    if(getOutcome(wk,user,ap)!=='win') return false;
+    if(getOutcome(wk,user,ap)!=='win') return true; // [194 · §248] would lose or be Under Review: refused too (193 allowed it - the two-edit step-down)
     return _wwBelow(ap,s,user,wk,bid);
   }catch(_){ return null; }
   finally{
@@ -2857,6 +2861,13 @@ function openPriorityModal(wk){
   // [193 · §245] On a week where a bidding competition has happened, a weaker bid that would still
   // win below the weakest other winning bid is greyed out like a number already in use.
   if(typeof _wwRefuses==='function'){ sel.querySelectorAll("option").forEach(opt=>{ if(opt.value&&!opt.disabled&&_wwRefuses(user,wk,_bfParse(opt.value))!==false) opt.disabled=true; }); } // typeof = sandbox convention
+  // [194 · §248, owner 7 Oct 2026] The box must never sit silent: when EVERY number is greyed and this rule refuses at least one
+  // of them (someone who left a fought-over week, put that number elsewhere and came back), the week panel says why and the way
+  // back. Paint only - it changes no option and no bid. A box with anything selectable, or one this rule refuses nothing in, is untouched.
+  try{ const _wwAll=[...sel.querySelectorAll("option")].filter(o=>o.value);
+    if(winfo&&_wwAll.length&&_wwAll.every(o=>o.disabled)&&typeof _wwRefuses==='function'&&_wwAll.some(o=>_wwRefuses(user,wk,_bfParse(o.value))!==false))
+      winfo.innerHTML+='<div id="wwNoneNote" style="margin-top:8px;padding:8px 10px;background:rgba(251,191,36,.18);border:1px solid rgba(217,119,6,.6);border-radius:8px;font-size:.8rem;color:#4a3000;line-height:1.45">No bid is available to you on this week right now. On a week with a bidding competition you can bid again only with your previous bid or stronger, or with a weaker bid that would still win and is no lower than the lowest other winning bid. If your previous bid number is on another week, moving it back makes it available here.</div>';
+  }catch(_){}
   modal.classList.add("show"); sel.focus();
 }
 window.openPriorityModal=openPriorityModal;
