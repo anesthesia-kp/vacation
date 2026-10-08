@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 196;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 197;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -595,7 +595,7 @@ body{zoom:1.15}
         <li id="ruleNpPhases">NP bids may only be used during the phases for which admin has turned them on</li>
         <li id="rulePrioLock">Bid priorities can only stay the same or get stronger — bid a 5 on a week, and any re-bid there must be 5 or better.</li>
         <li id="ruleCompWeek">A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.</li><!-- [196 · §251] his wording -->
-        <li id="ruleNoWeaken">On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If nobody has a bid on the week any more, any bid may be placed.</li><!-- [194 · §248 · 196 · §251] -->
+        <li id="ruleNoWeaken">On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If nobody has a bid on the week any more, any bid may be placed.</li><!-- [194 · §248 · 196 · §251 · 197 · §254] -->
         <li id="ruleBidFloors" style="display:none"></li><!-- [COPY-3] filled from the live floors at boot; hidden until then so no stale or invented floor text can flash, and it stays hidden when no floor is set -->
         <li>Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week</li>
         <li>Enter your bids early, it benefits everyone</li>
@@ -2125,6 +2125,18 @@ function _mqSendNote(ok,err){
   }catch(_){}
 }
 function _mqAside(){ return Date.now()<_mqAsideUntil; }
+// ── [197 · §254] A SEND THAT GOT NO ANSWER MAY STILL HAVE BEEN DELIVERED ──
+// Owner-found 6 Oct 2026: an alert whose send got no answer was logged as failed and left queued, and
+// thirty seconds later another page sent it - a second copy whenever the first had in fact gone out
+// (only the reply was lost). A browser cannot tell the two cases apart, and a missing alert costs more
+// than a repeated one, so the retry stays (his choice, 8 Oct 2026) and says what it is: a projection
+// alert whose send got no answer is marked on its queue entry (maybe:true, in the write that already
+// records the failure), and whoever sends a marked alert puts ONE line above it. Welcome e-mails are
+// not marked and never carry the line. Must match the admin twin.
+const MQ_REPEAT_NOTE="Note: this may be a repeat of an alert you already received — an earlier attempt to send it could not be confirmed.";
+function _mqBody(e,isWelcome){
+  try{ const b=(e&&e.body)||''; return (!isWelcome&&e&&e.maybe===true)?MQ_REPEAT_NOTE+"\n\n"+b:b; }catch(_){ return ''; }
+}
 try{ window.addEventListener('online',function(){ _mqNoAns=0; _mqAsideUntil=0; try{ scheduleMailQueueRelay(); }catch(_){} }); }catch(_){}
 function _mqEligible(e,now){
   if(e&&typeof e==='object'&&(e.fails||0)>=MQ_MAX_FAILS) return false; // [build 136 · B2] parked
@@ -2221,7 +2233,7 @@ async function relayMailQueue(){
         }catch(_){ _mqRelease(qid); continue; } // [H14] we hold the claim — release it
         if(typeof emailjs==='undefined'){ _mqRelease(qid); continue; } // [H14] belt-and-braces (guarded at entry too)
         if(isWelcome && _welcomed(wkey)){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; } // re-check after the claim settle
-        for(const to of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:to,changes:e.body||''}); }catch(err){ _mailLogNote(e.user,to,isWelcome?'welcome':'projection alert',false,err); throw err; } trackEmailSent(); _mailLogNote(e.user,to,isWelcome?'welcome':'projection alert',true); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); } // [170 · §189] the log note rethrows, so the strike-count path below is unchanged
+        for(const to of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:to,changes:_mqBody(e,isWelcome)}); }catch(err){ _mailLogNote(e.user,to,isWelcome?'welcome':'projection alert',false,err); throw err; } trackEmailSent(); _mailLogNote(e.user,to,isWelcome?'welcome':'projection alert',true); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); } // [170 · §189] the log note rethrows, so the strike-count path below is unchanged
         // Mark the welcome log after a confirmed relay send so no other page re-sends it.
         if(isWelcome && wkey){ try{ await setDoc(welcomeLogRef,{sent:{[wkey]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[wkey]=true; }catch(_){} }
         // Terminal delete with one retry — a lost delete after a successful send would
@@ -2235,7 +2247,7 @@ async function relayMailQueue(){
         // code — must never throw.
         // [184 · §233] Still ONE write. The reason is always recorded; the strike is left out only
         // when the mail service answered with a refusal that a retry cannot duplicate (_mqStrike).
-        try{ const _u={[qid+'.lastErr']:_mqErrNote(_)}; if(_mqStrike(_)) _u[qid+'.fails']=increment(1); await updateDoc(mailQueueRef,_u); }catch(__){}
+        try{ const _u={[qid+'.lastErr']:_mqErrNote(_)}; if(_mqStrike(_)) _u[qid+'.fails']=increment(1); if(!isWelcome&&_mqNoAnswer(_)) _u[qid+'.maybe']=true; await updateDoc(mailQueueRef,_u); }catch(__){} // [197 · §254] no answer: the next send of this alert says it may be a repeat
         if(_mqNoAnswer(_)){ await _mqRelease(qid); break; } // [186 · §236] no answer: let go of the claim NOW (not in 90 s) so a healthy page can send it, and stop this run
       }
     }
@@ -2788,6 +2800,41 @@ function _wwLabelOn(wk){
     return any&&_wwContested(wk)===true;
   }catch(_){ return false; }
 }
+// [197 · §254, owner 8 Oct 2026] The bid that tips a week over is bound by the rule from the moment it lands, and until now nothing
+// said so: the label only shows on a week that already is one. True only when this person has no bid on the week, someone
+// else has one, the week is not a competition week now and WOULD be with this person's bid on it. Paint only; unknown = no.
+// It works on a COPY of the board; the phase tag and the bid's own "added" log entry (what the page writes when a bid lands - without
+// it the replay cannot see the newcomer) are set for the one synchronous question and taken back in the finally (the device of _weBlocks).
+function _wwWouldTip(user,wk){
+  let made=false, tagged=false, hadKey=false, old, log=null, ent=null;
+  try{
+    if(!user||!(_boardLoaded&&_boardLoaded.changes===true)||!_lwLoaded.best||!weekMeta[wk]) return false;
+    if(isVisibleBid(user,wk)&&data[user][wk]!==null&&data[user][wk]!==undefined) return false;
+    const prior=getPriorPhaseWinners(wk);
+    if(prior.has(user)) return false;
+    let others=false;
+    for(const u of Object.keys(data||{})){ if(u!==user&&!prior.has(u)&&isVisibleBid(u,wk)&&data[u][wk]!==null){ others=true; break; } }
+    if(!others) return false;
+    if(_wwContested(wk)!==false) return false;
+    const s=JSON.parse(JSON.stringify(data||{}));
+    if(!s[user]||typeof s[user]!=='object') s[user]={};
+    s[user][wk]=1;
+    if(!bidPhaseData[user]){ bidPhaseData[user]={}; made=true; }
+    hadKey=Object.prototype.hasOwnProperty.call(bidPhaseData[user],wk); old=bidPhaseData[user][wk];
+    bidPhaseData[user][wk]=Number(phasesData.currentPhase||1); tagged=true;
+    log=(changesData&&Array.isArray(changesData.log))?changesData.log:null;
+    if(log){ ent={user:user,weekKey:wk,action:'added',ts:Date.now()}; log.push(ent); }
+    return _wwContested(wk,s)===true;
+  }catch(_){ return false; }
+  finally{
+    try{ if(log&&ent){ const i=log.lastIndexOf(ent); if(i>=0) log.splice(i,1); } }catch(_){}
+    try{
+      if(made) delete bidPhaseData[user];
+      else if(tagged){ if(hadKey) bidPhaseData[user][wk]=old; else delete bidPhaseData[user][wk]; }
+    }catch(_){}
+  }
+}
+const COMP_TIP_TEXT='Your bid will make this a competition week. To bid here now, your bid must be at least as strong as the weakest bid there that is winning or under review. After that, you can only weaken your bid if it would still win, and if you remove it, a new bid must meet the level of the bids still there.';
 const COMP_LABEL_TEXT='Competition week';
 const COMP_LABEL_HTML='<span class="comp-tag" style="color:#b45309;font-weight:700;text-transform:none;letter-spacing:0;white-space:nowrap">'+COMP_LABEL_TEXT+'</span>';
 // On the approvals `ap` worked out from the picture `s` (which already holds `bid` for `user` on
@@ -2951,6 +2998,7 @@ function openPriorityModal(wk){
     let html=`<div style="font-weight:700;color:#132f49;font-size:.95rem">${meta.range}</div>`;
     if(meta.special) html+=`<div style="margin-top:4px;color:${meta.special.color};font-size:.72rem;font-weight:600">${meta.special.label}${summerAlso(meta)?' · ☀️ Summer':''}${meta.highPriorityOnly?' · High demand':''}</div>`;
     if(typeof _wwLabelOn==='function'&&_wwLabelOn(wk)) html+='<div style="margin-top:4px;font-size:.72rem">'+COMP_LABEL_HTML+'</div>'; // [196 · §250] the same label as the week card; typeof = sandbox convention
+    if(typeof _wwWouldTip==='function'&&_wwWouldTip(user,wk)) html+='<div id="wwTipNote" style="margin-top:8px;padding:8px 10px;background:rgba(251,191,36,.18);border:1px solid rgba(217,119,6,.6);border-radius:8px;font-size:.8rem;color:#4a3000;line-height:1.45">'+COMP_TIP_TEXT+'</div>'; // [197 · §254] typeof = sandbox convention
     winfo.innerHTML=html;
   }
   document.getElementById("prioStep1").style.display="block";
@@ -4400,13 +4448,23 @@ async function sendEmailNotifications(prevSnap,newSnap,actor){
       // itself), then try to send. On success the entry is removed; if this
       // browser dies mid-send, the admin panel flushes the queue later.
       const qid=`${Date.now()}_${user}_${Math.floor(Math.random()*1e6)}`;
-      try{ await setDoc(mailQueueRef,{[qid]:{user,body:bodyText,ts:Date.now()}},{merge:true}); }catch(_){}
+      // [197 · §254] This page is about to send the alert itself, so it CLAIMS it in the write that creates it (no extra
+      // write): no other page touches it for 90 s, where before one could pick it up at 30 s while this send was still
+      // under way. A page with no mailer does not claim - it cannot send, and the alert must stay free for the others.
+      const _mqCan=typeof emailjs!=="undefined"; let _mqQueued=false;
+      try{ const _t=Date.now(); await setDoc(mailQueueRef,{[qid]:(_mqCan?{user,body:bodyText,ts:_t,claimedAt:_t,claimedBy:MQ_ID}:{user,body:bodyText,ts:_t})},{merge:true}); _mqQueued=true; }catch(_){}
       try{
         if(typeof emailjs!=="undefined"){
           for(const to of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:to,changes:bodyText}); }catch(err){ _mailLogNote(user,to,'projection alert',false,err); throw err; } trackEmailSent(); _mailLogNote(user,to,'projection alert',true); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); } // [170 · §189] log note rethrows — the entry stays queued exactly as before
           updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
         }
-      }catch(_){/* leave queued — admin panel will send it */}
+      }catch(_){/* leave queued — another page (or the admin panel) will send it */
+        // [197 · §254] Let go of the claim NOW so a healthy page can send it, and if the mail service gave no answer mark
+        // the alert: it may have gone out. Read first and write only while the entry is still ours - a dotted write to an
+        // entry another page has since sent and deleted would re-create it as an empty stub. Failure path: never throws.
+        if(_mqQueued&&_mqCan){ try{ const _s=await getDoc(mailQueueRef); const _q=(_s.exists()?_s.data():{})[qid];
+          if(_q&&typeof _q==='object'&&_q.claimedBy===MQ_ID){ const _r={[qid+'.claimedAt']:deleteField(),[qid+'.claimedBy']:deleteField()}; if(_mqNoAnswer(_)) _r[qid+'.maybe']=true; await updateDoc(mailQueueRef,_r); } }catch(__){} }
+      }
     }
   }catch(e){ console.error("Email failed:",e); }
 }
@@ -5078,7 +5136,7 @@ ${bullets([
   npPhasesDescription(),
   ...prioLockBullets(), // [build 139 · BL/COPY] Option A wording, allowance-derived
   `A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.`, // [196 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
-  `On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If nobody has a bid on the week any more, any bid may be placed.`,
+  `On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If nobody has a bid on the week any more, any bid may be placed.`,
   ...bfRulesBullets(),
   `Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
   `Enter your bids early, it benefits everyone`,

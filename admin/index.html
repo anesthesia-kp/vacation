@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 358;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 359;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -906,7 +906,7 @@ thead th{color:var(--t2)}
         <!-- [348 · §230] Exports what the page is showing: the selected phase, with the Actor / Action / User filters applied. -->
         <button class="btn" style="margin-left:auto;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportChangelog('pdf')">📄 Export PDF</button>
         <button class="btn" style="background:rgba(52,211,153,.15);color:var(--green);border:1px solid rgba(52,211,153,.3)" onclick="exportChangelog('xlsx')">📊 Export Excel</button>
-        <button class="btn btn-danger" onclick="clearChangelog()">Clear Log</button>
+        <button class="btn" id="clRetryReset" style="display:none;background:rgba(251,191,36,.15);color:#f59e0b;border:1px solid rgba(251,191,36,.45)" onclick="retryChangeLogReset()">↻ Retry log reset</button>
       </div>
       <div id="changelogBody" style="max-height:620px;overflow-y:auto"></div>
       <!-- legacy table tbody for back-compat with refs, hidden -->
@@ -2085,6 +2085,18 @@ function _mqSendNote(ok,err){
   }catch(_){}
 }
 function _mqAside(){ return Date.now()<_mqAsideUntil; }
+// ── [359 · §254] A SEND THAT GOT NO ANSWER MAY STILL HAVE BEEN DELIVERED ──
+// Owner-found 6 Oct 2026: an alert whose send got no answer was logged as failed and left queued, and
+// thirty seconds later another page sent it - a second copy whenever the first had in fact gone out
+// (only the reply was lost). A browser cannot tell the two cases apart, and a missing alert costs more
+// than a repeated one, so the retry stays (his choice, 8 Oct 2026) and says what it is: a projection
+// alert whose send got no answer is marked on its queue entry (maybe:true, in the write that already
+// records the failure), and whoever sends a marked alert puts ONE line above it. Welcome e-mails are
+// not marked and never carry the line. Must match the staff twin.
+const MQ_REPEAT_NOTE="Note: this may be a repeat of an alert you already received — an earlier attempt to send it could not be confirmed.";
+function _mqBody(e,isWelcome){
+  try{ const b=(e&&e.body)||''; return (!isWelcome&&e&&e.maybe===true)?MQ_REPEAT_NOTE+"\n\n"+b:b; }catch(_){ return ''; }
+}
 try{ window.addEventListener('online',function(){ _mqNoAns=0; _mqAsideUntil=0; try{ scheduleMailQueueSweep(); }catch(_){} }); }catch(_){}
 function updateMailQueueBadge(){
   // [build 265 · B2] Split the count: PARKED entries (>= MQ_MAX_FAILS strikes) are shown
@@ -2264,7 +2276,7 @@ async function processMailQueue(minAgeMs){
           if(_f.ts!==e.ts){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
         }catch(_){ _mqRelease(qid); continue; } // [H14] we hold the claim — release it
         if(isWelcome && _welcomed(wkey)){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; } // re-check after claim
-        for(const email of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:e.body||''}); }catch(err){ _mailLogNote(e.user,email,isWelcome?'welcome':'projection alert',false,err); throw err; } trackEmailSent(); _mailLogNote(e.user,email,isWelcome?'welcome':'projection alert',true); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(email)}).catch(()=>{}); } // [330 · §189] the log note rethrows, so the strike-count path below is unchanged
+        for(const email of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:_mqBody(e,isWelcome)}); }catch(err){ _mailLogNote(e.user,email,isWelcome?'welcome':'projection alert',false,err); throw err; } trackEmailSent(); _mailLogNote(e.user,email,isWelcome?'welcome':'projection alert',true); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(email)}).catch(()=>{}); } // [330 · §189] the log note rethrows, so the strike-count path below is unchanged
         if(isWelcome && wkey){ try{ await setDoc(welcomeLogRef,{sent:{[wkey]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[wkey]=true; }catch(_){} }
         // Terminal delete with one retry: if this write is lost after a successful send,
         // the entry becomes re-eligible after claim expiry and every recipient gets the
@@ -2278,7 +2290,7 @@ async function processMailQueue(minAgeMs){
         // update (rules-compatible from any page); failure-path code, so it must never throw.
         // [351 · §233] Still ONE write. The reason is always recorded; the strike is left out only
         // when the mail service answered with a refusal that a retry cannot duplicate (_mqStrike).
-        try{ const _u={[qid+'.lastErr']:_mqErrNote(err)}; if(_mqStrike(err)) _u[qid+'.fails']=increment(1); await updateDoc(mailQueueRef,_u); }catch(_){}
+        try{ const _u={[qid+'.lastErr']:_mqErrNote(err)}; if(_mqStrike(err)) _u[qid+'.fails']=increment(1); if(!isWelcome&&_mqNoAnswer(err)) _u[qid+'.maybe']=true; await updateDoc(mailQueueRef,_u); }catch(_){} // [359 · §254] no answer: the next send of this alert says it may be a repeat
         if(_mqNoAnswer(err)){ await _mqRelease(qid); break; } // [353 · §236] no answer: let go of the claim NOW (not in 90 s) so a healthy page can send it, and stop this run
       }
     }
@@ -6218,7 +6230,7 @@ window.completePhase=function(){
       } else if(!lockClearOk){
         toast('⚠️ Phase '+cur+' completed, but clearing priority locks FAILED — open "Clear ALL Priority Locks" and run it, or users may be floored on weeks they lost.','warn');
       } else {
-        toast('⚠️ Phase '+cur+' completed, but resetting the activity counters FAILED — refresh; if the change log still shows old entries, clear it by hand.','warn');
+        toast('⚠️ Phase '+cur+' completed, but resetting the activity counters FAILED — refresh, then open Change Log and press "↻ Retry log reset" before beginning the next phase.','warn');
       }
       // Sending results is now its own deliberate step in the "Next Step" guide
       // (with a Skip option for testing), so we no longer auto-open the e-mail dialog.
@@ -6789,7 +6801,7 @@ ${bullets([
   npPhasesDescription(),
   ...prioLockBullets(), // [build 268 · BL/COPY] Option A wording, allowance-derived
   `A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.`, // [358 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
-  `On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If nobody has a bid on the week any more, any bid may be placed.`,
+  `On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If nobody has a bid on the week any more, any bid may be placed.`,
   ...bfRulesBullets(),
   `Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
   `Enter your bids early, it benefits everyone`,
@@ -10874,6 +10886,7 @@ function systemActionText(e){
 window.renderChangelog=renderChangelog; // inline onchange on #cl_phase needs it global
 function renderChangelog(){
   const host=document.getElementById("changelogBody"); if(!host) return;
+  try{ const _rb=document.getElementById('clRetryReset'); if(_rb) _rb.style.display=_clResetPending()?'':'none'; }catch(_){} // [359 · §254] shown only when a phase's closing reset did not happen
   // Populate user filter dropdown if needed
   const uf=document.getElementById("cl_user");
   if(uf){
@@ -11149,12 +11162,62 @@ async function adminLog(u,wk,type,bidValue,extra){ // [327 · §180] extra: fiel
     // Otherwise silently ignore — do NOT overwrite the log on other errors
   }
 }
-window.clearChangelog=function(){
+// [359 · §252 · §253 · §254] The admin's option to empty the change log by hand is GONE (owner, 7 and 8 Oct 2026): the log is the
+// record the staff page's competition rule replays, and emptying it by hand wrote no reset stamp. It is emptied only at a
+// phase's close and by Reset Auction, and both write the stamp. ONE thing is left in its place (owner, 8 Oct 2026, "Retry log
+// reset is good"): if the reset at a phase's close did not happen (a failed read or a failed archive leaves the log untouched
+// on purpose), the admin can run that same step again - archive first, then the stamped reset - and ONLY then.
+// Pending = the open phase has been completed, the next one not begun, and the live log's reset stamp is older than that completion.
+function _clResetPending(){
+  try{
+    const cur=Number(phasesData.currentPhase||1);
+    const done=(phasesData.completedPhases||{})[cur];
+    const at=Number(done&&done.completedAt)||0;
+    return at>0&&(Number(changesResetAt)||0)<at;
+  }catch(_){ return false; }
+}
+window.retryChangeLogReset=function(){
+  if(!_feedsHealthyOrExplain('Retry log reset')) return; // this page's own picture of the phase decides whether the button acts - a stale page must not
+  if(!_clResetPending()){ toast('Nothing to retry — the change log was reset when the phase closed.','ok'); return; }
+  const cur=Number(phasesData.currentPhase||1);
   openConfirm({
-    title:'🗑 Clear Change Log',
-    body:`<div>Permanently clear the entire change log?</div><div class="cmodal-danger">All historical change records will be lost. This cannot be undone.</div>`,
-    okText:'Clear Log', danger:true,
-    onConfirm:async()=>{ await setDoc(changesRef,{log:[]}); await setDoc(changesDecisionsRef,{log:[]}).catch(()=>{}); toast("🗑 Log cleared","ok"); } // [AUDIT #3] clear both halves
+    title:'↻ Retry change log reset',
+    body:`<div>Phase ${cur} is complete, but its change log was not reset when it closed.</div><div style="margin-top:8px">This archives the log under Phase ${cur} (nothing is lost — it stays on this page under that phase) and then empties the live log, exactly as a phase close does. Do this before beginning the next phase.</div>`,
+    okText:'Retry reset',
+    onConfirm:async()=>{
+      if(!_feedsHealthyOrExplain('Retry log reset')) return;
+      if(!_clResetPending()||Number(phasesData.currentPhase||1)!==cur){ toast('Nothing to retry — the change log has been reset, or the phase has moved on.','ok'); return; }
+      // Archive from a SERVER read and NEVER reset an unarchived log (the rule of the phase close, build 269). What is already
+      // archived under this phase is kept: the new archive is the union of it, both live halves and this page's own copies.
+      let merged=null;
+      let _at=0;
+      try{
+        const _c=await getDocFromServer(changesRef), _cd=await getDocFromServer(changesDecisionsRef), _ar=await getDocFromServer(changesArchiveRef), _ph=await getDocFromServer(phasesRef), _sg=await getDocFromServer(phaseStagingRef);
+        // The guard again, ALL of it on the SERVER's word (this page's own copies can be stale - another device may have begun the
+        // next phase, or restored a backup in which this phase is open again): there, the same phase must still be the open one,
+        // it must be COMPLETED (published, or staged and not yet announced), and the log must still carry a stamp older than that
+        // completion. Otherwise nothing is written - a phase that is open for bidding never has its log emptied from here.
+        const _phd=(_ph.exists()?_ph.data():null)||{}, _sgd=(_sg.exists()?_sg.data():null)||{};
+        const _srvPhase=Number(_phd.currentPhase||1), _srvStamp=Number((_c.exists()?(_c.data()||{}).resetAt:0))||0;
+        _at=Number((({...(_phd.completedPhases||{}),...(_sgd.pendingPhaseSnapshots||{})})[cur]||{}).completedAt)||0;
+        if(_srvPhase!==cur||!(_at>0)||!(_srvStamp<_at)){ toast('Nothing to retry — the change log has been reset, or the phase has moved on.','ok'); try{ renderChangelog(); }catch(_){} return; }
+        const _prev=_ar.exists()?(_ar.data()||{})[cur]:null;
+        const _seen=new Set();
+        merged=[...(Array.isArray(_prev)?_prev:[]),...((_c.exists()?(_c.data()||{}).log:null)||[]),...((_cd.exists()?(_cd.data()||{}).log:null)||[]),...changesLog,...changesDecisionsLog]
+          .filter(en=>{ const k=en&&en.id?String(en.id):JSON.stringify(en); if(_seen.has(k)) return false; _seen.add(k); return true; });
+      }catch(e){ console.error('retry log reset: server read failed (log left as it is):',e); toast('⚠️ Not reset — the change log could not be read from the server. Check the connection and try again.','err'); return; }
+      if(merged.length){
+        try{ await setDoc(changesArchiveRef,{[cur]:merged},{merge:true}); }
+        catch(e){ console.error('retry log reset: archive failed (log left as it is):',e); toast('⚠️ Not reset — archiving the log failed, so it was left as it is. Try again.','err'); return; }
+      }
+      let ok=true;
+      // The decisions half FIRST and the log itself LAST, and only if the first went through: "pending" reads the log's own stamp,
+      // so the button stays until BOTH halves are done (a failure in between leaves it showing, and a second press finishes the job).
+      try{ await setDoc(changesDecisionsRef,{log:[],resetAt:Math.max(Date.now(),_at+1)}); }catch(e){ ok=false; console.error('retry log reset: decision-log reset failed:',e); }
+      if(ok){ try{ await setDoc(changesRef,{log:[],resetAt:Math.max(Date.now(),_at+1)}); }catch(e){ ok=false; console.error('retry log reset: reset failed:',e); } }
+      toast(ok?'✓ Change log archived under Phase '+cur+' and reset':'⚠️ The reset did not complete — press Retry log reset again.',ok?'ok':'err');
+      try{ renderChangelog(); }catch(_){}
+    }
   });
 };
 // ── Dynamic bidding-timer rules (admin-configurable via adminSettings.timerRules) ──
