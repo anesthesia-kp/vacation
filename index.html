@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 195;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 196;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -157,7 +157,7 @@ select:focus{outline:none;border-color:#006ba6}
    dropdown. Raise whichever container currently holds an open popover. */
 #pcWidget:has(.notif-popover.open),.selections-bar:has(.notif-popover.open){position:relative;z-index:500}
 /* [180 · §219 · owner-found] On narrow screens the Popcornometer box drops BELOW the timer, which puts the
-   "changes in last 24h" button at the screen's LEFT edge; the list (pinned to the button's right edge,
+   "changes in last 12h" button at the screen's LEFT edge; the list (pinned to the button's right edge,
    opening leftward) then ran 110–165px off-screen. Here the list lines up with the right edge of the
    Popcornometer box instead, at its usual width but never wider than the screen (a list only as wide as the
    box squashed long names onto two lines on tablets). Display only. Wider than 860px: untouched. */
@@ -548,7 +548,7 @@ body{zoom:1.15}
       <a onclick="openPhaseHistory()" style="font-size:.7rem;font-weight:600;color:#006ba6;cursor:pointer;text-decoration:underline;text-underline-offset:3px">📋 View previous phases</a>
     </div>
   </header>
-  <!-- Timer (left 2/3) + Popcornometer with the 24h-changes chip (right 1/3) -->
+  <!-- Timer (left 2/3) + Popcornometer with the 12h-changes chip (right 1/3) -->
   <div id="timerRow" style="display:flex;gap:14px;align-items:stretch;flex-wrap:wrap">
     <div id="countdownBanner" style="flex:1 1 62%;min-width:min(420px,100%)">
       <div class="countdown-left">
@@ -563,7 +563,7 @@ body{zoom:1.15}
     </div>
     <div id="pcWidget" style="flex:1 1 30%;min-width:250px;margin-bottom:16px;display:flex;flex-direction:column;background:rgba(255,255,255,.94);border:1px solid #9fb4c6;border-radius:14px;padding:8px 12px;backdrop-filter:blur(10px)">
       <div style="font-size:.72rem;font-weight:700;color:#132f49;letter-spacing:.03em;margin-bottom:4px">🍿 Popcornometer <span id="pcStatus" style="font-weight:600;color:#48607a"></span></div>
-      <canvas id="pcCanvas" style="width:min(230px,68%);margin-right:auto;flex:1;min-height:40px;max-height:56px;display:block;background:linear-gradient(180deg,#1e4a6d,#153755);border:1px solid #c2cfdb;border-radius:8px" title="Bid activity in the last 24 hours — more popping = more bid changes"></canvas>
+      <canvas id="pcCanvas" style="width:min(230px,68%);margin-right:auto;flex:1;min-height:40px;max-height:56px;display:block;background:linear-gradient(180deg,#1e4a6d,#153755);border:1px solid #c2cfdb;border-radius:8px" title="Bid activity in the last 12 hours — more popping = more bid changes"></canvas>
       <div style="margin-top:6px"><span id="notifAll"></span></div>
     </div>
   </div>
@@ -594,7 +594,8 @@ body{zoom:1.15}
         <li>A combined bid like 1/2/3 uses bids 1, 2, and 3 at once</li>
         <li id="ruleNpPhases">NP bids may only be used during the phases for which admin has turned them on</li>
         <li id="rulePrioLock">Bid priorities can only stay the same or get stronger — bid a 5 on a week, and any re-bid there must be 5 or better.</li>
-        <li id="ruleNoWeaken">On a week where more people have bid this phase than it can hold, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid.</li><!-- [194 · §248] -->
+        <li id="ruleCompWeek">A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.</li><!-- [196 · §251] his wording -->
+        <li id="ruleNoWeaken">On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If nobody has a bid on the week any more, any bid may be placed.</li><!-- [194 · §248 · 196 · §251] -->
         <li id="ruleBidFloors" style="display:none"></li><!-- [COPY-3] filled from the live floors at boot; hidden until then so no stale or invented floor text can flash, and it stays hidden when no floor is set -->
         <li>Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week</li>
         <li>Enter your bids early, it benefits everyone</li>
@@ -615,7 +616,7 @@ body{zoom:1.15}
         <div style="font-size:.78rem;color:#3b566d;line-height:1.4">Your bid is projected not to be approved for this week</div>
       </div>
       <ul class="rules-list" style="margin-top:10px">
-        <li>You will be notified via e-mail when someone places a bid that changes your outcome for a week</li>
+        <li>You will be notified via e-mail when another person's bid activity changes your projected outcome for a week</li>
         <li>If you are Under Review for a week and do not win after it is resolved, you will get the bid back for the next phase</li>
         <li>Under Review includes times when your combined bid with other users exceeds the FTE cap.</li>
         <li style="margin-top:8px"><strong style="color:#2c4257">These are projections, not final results — outcomes can shift as others place bids or as unexpected staffing needs change</strong></li>
@@ -2432,12 +2433,11 @@ function startListening(){
 }
 
 let _fpLastFacts=null; // [183 · §223] {user,wk,f:{tRem,tDur,tReset,aff}} — set by persistScheduleChange, consumed once by logOwnChange
-async function logOwnChange(user,wk,action,bidValue,won){
+async function logOwnChange(user,wk,action,bidValue){
   // id field guarantees uniqueness — arrayUnion deduplicates by value equality,
   // so two entries with identical fields (same ms timestamp) would silently drop one.
   const entry={id:Math.random().toString(36).slice(2),user,weekKey:wk,action,actor:'user',ts:Date.now()};
   if(bidValue!==undefined) entry.bidValue=bidValue;
-  if(won===true) entry.won=true; // [195 · §249] a removed bid that was projected WIN: its owner may put the same bid back (see _weWonBack)
   // [183 · §223 · §227] The Fair Play Monitor reads these four RECORDED facts instead of
   // replaying an imagined clock: tRem = ms left on the countdown just before this change,
   // tDur = the countdown length it is measured against (ms; capped at the starting reset length), tReset = this change restarted the
@@ -2710,34 +2710,86 @@ function flash(el,msg,dur){
 // untouched. Page-enforced (bid box, review step, confirm step) and mirrored in _lwWeakerWins so
 // no alert e-mail names a bid the box refuses. The admin page's own bid entry is not bound by it.
 function _wwMsg(){ return (_wwRefuses.why==='in')?"On a week with a bidding competition, a new bid must be at least as strong as the weakest bid there that is winning or under review.":"On a week with a bidding competition, a bid can only be weakened if it would still win and is no lower than the lowest other winning bid."; } // [195 · §249] coming in, or coming down
-// "A bidding competition has happened on a week when more people have bid on it this phase than it
-// can hold" (his definition): the FTE of everyone who has bid there this phase - still there or
-// gone - plus whoever holds it from an earlier phase, against the week's capacity. Three records,
-// so no single admin action erases the history: live bids (read from `snap`, the board when none
-// is given), the priority-lock floors (kept when a user removes a bid) and the phase's change log
-// (kept when the admin removes one). It errs STRICT: two people who never overlapped both count,
-// and when it cannot tell it answers true.
+// [196 · §251, owner 7 Oct 2026: "I need at the same time and previous phases don't matter"] A bidding
+// competition has happened on a week when, at ONE MOMENT in this phase (in Phase 4, this round), the
+// people with a bid on it together came to more than it has available: their FTE plus the FTE of
+// whoever holds the week from an earlier phase, against the week's capacity. People who came and went
+// without ever being there together do NOT make one (193-195 added up everyone who had ever bid).
+// Answered in two looks. NOW: the picture asked about (`snap`, the board when none is given) - so a
+// bid that WOULD tip the week over is judged with that bid in it. EARLIER: the phase's change log,
+// replayed in time order from _wwSince() - every add, edit and lowering puts its person on the week,
+// every removal takes them off (the bidder's own entries and the admin's alike).
+// Where the record is thin it errs STRICT (a log entry is written AFTER its bid and can be lost - the
+// page ignores a failed log write): someone whose first entry in the window is not an "added" was
+// there before it, so they count from the window's start; so does anyone on the board now with no
+// entry at all, and anyone with a floor on the week (195's own record - kept when a bid is removed,
+// cleared at a phase's close and at Start Round) but no entry; someone on the board now whose last
+// entry is a removal came back unrecorded, so they count from that removal on; so does anyone whose
+// removal, edit or lowering finds them OFF the week by the record (they came back unrecorded after
+// their previous entry, and count from it); anyone with an entry that carries no usable time (or one
+// more than ten minutes ahead of this device's clock) counts throughout; if the log carries no reset
+// stamp (the admin's "clear log" writes none) every floor counts throughout; entries at the same
+// instant are taken adds first. FTE and capacity are today's. When it cannot tell (no week record,
+// the change log or the floors not yet arrived, anything thrown) it answers true. It can never answer
+// true where 195's test answered false (every person it counts, 195 counted). [196 audits, 7 Oct 2026:
+// the floors, the unrecorded returns, the clock and the reset stamp were added after two audits showed
+// a lost log write, a cleared log or a clock running ahead could hide a real competition.]
 function _wwContested(wk,snap){
   try{
     const meta=weekMeta[wk];
-    if(!meta||!_lwLoaded.best) return true;
+    if(!meta||!(_boardLoaded&&_boardLoaded.changes===true)||!_lwLoaded.best) return true;
     const d=(snap&&typeof snap==='object')?snap:data;
-    const who=new Set();
-    for(const u of Object.keys(d||{})){ const m=d[u]; if(m&&typeof m==='object'&&m[wk]!==undefined&&m[wk]!==null&&isCurrentPhaseBid(u,wk)) who.add(u); }
-    for(const u of Object.keys(bestBidsData||{})){ const m=bestBidsData[u]; if(m&&typeof m==='object'&&m[wk]!==undefined&&m[wk]!==null) who.add(u); }
-    const since=(typeof _wwSince==='function')?_wwSince():(Number(changesData&&changesData.resetAt)||0); // [195 · owner 7 Oct 2026] in Phase 4 the record is the open ROUND's; typeof = sandbox convention
+    const prior=getPriorPhaseWinners(wk);
+    const base=getPriorPhaseFteWon(wk), slots=Number(meta.slots);
+    const over=set=>{ let fte=base; for(const u of set){ if(!prior.has(u)) fte+=getUserFTE(u); } return Math.round((fte-slots)*10)/10>0; }; // the engine's own FP-safe fit test
+    const onIt=(src,u)=>{ const m=src?src[u]:null; return !!(m&&typeof m==='object'&&m[wk]!==undefined&&m[wk]!==null&&isCurrentPhaseBid(u,wk)); };
+    const now=new Set();
+    for(const u of Object.keys(d||{})){ if(onIt(d,u)) now.add(u); }
+    if(over(now)) return true;
+    const since=_wwSince();
     const log=(changesData&&Array.isArray(changesData.log))?changesData.log:[];
+    const ev=[], there=new Set(), seen=new Set(), always=new Set(), late=Date.now()+600000;
     for(const e of log){
       if(!e||e.weekKey!==wk||typeof e.user!=='string'||!e.user) continue;
-      if(typeof e.ts==='number'&&e.ts<since) continue;
-      who.add(e.user);
+      if(typeof e.ts==='number'&&e.ts<since) continue; // before this phase's (round's) record - 195's own skip, kept FIRST so nothing it skipped is counted here
+      if(typeof e.ts!=='number'||!isFinite(e.ts)||e.ts>late){ always.add(e.user); there.add(e.user); seen.add(e.user); continue; } // no usable time, or a clock running ahead: counted throughout
+      ev.push(e);
     }
-    const prior=getPriorPhaseWinners(wk);
-    let fte=getPriorPhaseFteWon(wk);
-    for(const u of who){ if(!prior.has(u)) fte+=getUserFTE(u); }
-    return Math.round((fte-Number(meta.slots))*10)/10>0; // the engine's own FP-safe fit test
+    ev.sort((x,y)=>(x.ts-y.ts)||((x.action==='removed'?1:0)-(y.action==='removed'?1:0)));
+    const lastOf=Object.create(null), byU=Object.create(null);
+    for(const e of ev){ if(!seen.has(e.user)){ seen.add(e.user); if(e.action!=='added') there.add(e.user); } lastOf[e.user]=e; (byU[e.user]=byU[e.user]||[]).push(e); }
+    for(const u of now){ if(!seen.has(u)&&onIt(data,u)) there.add(u); }
+    const cleared=!(Number(changesData&&changesData.resetAt)>0); // no reset stamp (the admin's "clear log" writes none): who was there before it is unknown, so every floor counts
+    for(const u of Object.keys(bestBidsData||{})){ const m=bestBidsData[u]; if((cleared||!seen.has(u))&&m&&typeof m==='object'&&m[wk]!==undefined&&m[wk]!==null){ there.add(u); if(cleared) always.add(u); } }
+    if(over(there)) return true;
+    // a removal, an edit or a lowering by someone the record has OFF the week means they came back unrecorded after their
+    // previous entry: they count from straight after that entry (an unrecorded return is put into the replay there)
+    const back=new Map();
+    for(const u of Object.keys(byU)){ let on=byU[u][0].action!=='added', prev=null;
+      for(const e of byU[u]){ if(e.action!=='added'&&!on&&prev){ if(!back.has(prev)) back.set(prev,[]); back.get(prev).push({user:u,action:'added'}); } on=e.action!=='removed'; prev=e; } }
+    const walk=[]; for(const e of ev){ walk.push(e); if(back.has(e)) walk.push(...back.get(e)); }
+    for(const e of walk){
+      if(e.action==='removed'){ if(!always.has(e.user)&&!(lastOf[e.user]===e&&onIt(data,e.user))) there.delete(e.user); continue; }
+      if(!there.has(e.user)){ there.add(e.user); if(over(there)) return true; }
+    }
+    return false;
   }catch(_){ return true; }
 }
+// [196 · §250] The week card's "Competition week" label: only once the change log and the floors have arrived, only
+// on a week that has had a competition, and only while someone still has a bid of this phase on it -
+// with nobody there the rule stands aside for everyone, and a label would promise a limit that is not
+// there. Paint only; anything unknown = no label.
+function _wwLabelOn(wk){
+  try{
+    if(!(_boardLoaded&&_boardLoaded.changes===true)||!_lwLoaded.best||!weekMeta[wk]) return false;
+    const prior=getPriorPhaseWinners(wk);
+    let any=false;
+    for(const u of Object.keys(data||{})){ if(!prior.has(u)&&isVisibleBid(u,wk)&&data[u][wk]!==null){ any=true; break; } }
+    return any&&_wwContested(wk)===true;
+  }catch(_){ return false; }
+}
+const COMP_LABEL_TEXT='Competition week';
+const COMP_LABEL_HTML='<span class="comp-tag" style="color:#b45309;font-weight:700;text-transform:none;letter-spacing:0;white-space:nowrap">'+COMP_LABEL_TEXT+'</span>';
 // On the approvals `ap` worked out from the picture `s` (which already holds `bid` for `user` on
 // `wk`, projected WIN): is that bid weaker than every other winning bid of this phase there - or is
 // there no other one? Winners locked in from an earlier phase or round are not bids of this phase.
@@ -2775,11 +2827,9 @@ function _wwBelow(ap,s,user,wk,bid){
 // week · null = cannot tell. Earlier-phase holders are not bids of this phase. It works on a COPY;
 // the phase tag is set for the one synchronous competition question and put back in the finally
 // (the device of _lwBidWins). Nothing here waits, writes or touches the page.
-// THE RETURNING WINNER (owner, 7 Oct 2026): someone whose bid was projected WIN when they removed it
-// from a competition week may put back that same bid, or a stronger one, below the level - provided it would be projected WIN
-// again. That only restores a level the week already had. The removal's log entry records the win
-// (`won`, written by removeSelection from 195 on); the LAST thing they did on the week, inside the
-// record's window, must be that removal. Anything unknown = no.
+// [196 · §251, owner 7 Oct 2026 evening] NO EXCEPTION FOR A RETURNING WINNER: 195 let someone whose bid was winning when
+// they removed it put the same bid back below the level; he withdrew that the same day ("Dr. A must come back with the
+// same rules as anyone else"). Whoever has no bid on the week now is a newcomer, whatever they held there before.
 // EACH PHASE-4 ROUND FOLLOWS THE SAME RULES (owner, 7 Oct 2026): the competition record begins at the
 // change log's last reset and, in Phase 4, at the open ROUND's own stamp (Start Round already clears
 // the floors and the lowerings; the log is only reset at a phase's close).
@@ -2787,18 +2837,6 @@ function _wwSince(){
   let since=Number(changesData&&changesData.resetAt)||0;
   try{ if(Number(phasesData.currentPhase||1)===4){ const rb=Number((phasesData.p4RoundBeganAt||{})[Number(phasesData.p4Round||1)]); if(rb>0) since=Math.max(since,rb); } }catch(_){}
   return since;
-}
-function _weWonBack(snap,user,wk,bid){
-  try{
-    const log=(changesData&&Array.isArray(changesData.log))?changesData.log:[];
-    const since=_wwSince();
-    if(Number(phasesData.currentPhase||1)===4&&!(Number((phasesData.p4RoundBeganAt||{})[Number(phasesData.p4Round||1)])>0)) return false; // a round with no stamp: no way back (as _lwReturns)
-    let last=null;
-    for(const e of log){ if(e&&e.user===user&&e.weekKey===wk&&typeof e.ts==='number'&&e.ts>=since&&(!last||e.ts>=last.ts)) last=e; }
-    if(!last||last.action!=='removed'||last.actor!=='user'||last.won!==true||last.bidValue===undefined||last.bidValue===null) return false;
-    if(priorityScore(bid)>priorityScore(last.bidValue)) return false;
-    return _lwBidWins(snap,user,wk,bid)===true;
-  }catch(_){ return false; }
 }
 function _weBlocks(snap,user,wk,bid){
   let made=false, tagged=false, hadKey=false, old;
@@ -2826,7 +2864,7 @@ function _weBlocks(snap,user,wk,bid){
     bidPhaseData[user][wk]=Number(phasesData.currentPhase||1); tagged=true;
     if(!_wwContested(wk,s)) return false;
     if(!(priorityScore(bid)>(weakestUp>=0?weakestUp:strongest))) return false;
-    return !_weWonBack(snap,user,wk,bid); // below the level: refused - unless it is a returning winner's own bid, or stronger, and would win again
+    return true; // below the level: refused, for everyone [196 · §251: the returning-winner exception of 195 is withdrawn]
   }catch(_){ return null; }
   finally{
     try{
@@ -2912,6 +2950,7 @@ function openPriorityModal(wk){
   if(winfo){
     let html=`<div style="font-weight:700;color:#132f49;font-size:.95rem">${meta.range}</div>`;
     if(meta.special) html+=`<div style="margin-top:4px;color:${meta.special.color};font-size:.72rem;font-weight:600">${meta.special.label}${summerAlso(meta)?' · ☀️ Summer':''}${meta.highPriorityOnly?' · High demand':''}</div>`;
+    if(typeof _wwLabelOn==='function'&&_wwLabelOn(wk)) html+='<div style="margin-top:4px;font-size:.72rem">'+COMP_LABEL_HTML+'</div>'; // [196 · §250] the same label as the week card; typeof = sandbox convention
     winfo.innerHTML=html;
   }
   document.getElementById("prioStep1").style.display="block";
@@ -3208,10 +3247,11 @@ async function removeSelection(wk){
   const meta=weekMeta[wk];
   const prioLockOn=adminSettings.priorityLockEnabled!==false;
   const bestEver=(bestBidsData[user]||{})[wk];
-  // [195 · §249, owner 7 Oct 2026] Could this bid NOT come back? On a competition week, with others still on it, a bid that is below the entry
-  // level and is not winning now would be refused as a new bid: the box must say so instead of promising a re-bid. Read-only; unknown = no.
+  // [195 · §249 · 196 · §251] Could this bid NOT come back? On a competition week, with others still on it, a bid that would be below the entry
+  // level once it is off the week would be refused as a new bid - winning now or not (196: no exception for a returning winner): the box must
+  // say so instead of promising a re-bid. Read-only; unknown = no.
   let _rmShut=false;
-  try{ _rmShut=getOutcome(wk,user,computeApprovals())!=='win'&&typeof _weBlocks==='function'&&_weBlocks(data,user,wk,prio)===true; }catch(_){ _rmShut=false; } // typeof = sandbox convention
+  try{ _rmShut=typeof _weBlocks==='function'&&_weBlocks(data,user,wk,prio)===true; }catch(_){ _rmShut=false; } // typeof = sandbox convention
   const willHaveCap=prioLockOn&&((bestEver!==undefined&&bestEver!=='NP')||(prio!==undefined&&prio!=='NP'));
   // Build informative confirmation message.
   // [155 · AUD-H3] The old message hard-coded the absolute floor sentence in BOTH branches —
@@ -3265,7 +3305,6 @@ async function removeSelection(wk){
   // Persist the removal FIRST; only clear the local bid, stamp the floor, drop the
   // bid time, and log it if the delete actually landed — a removal rejected by the
   // timer/lock re-check must leave the bid (and its state) untouched.
-  let _rmWon=false; try{ _rmWon=_lwLoaded.best===true&&typeof _wwContested==='function'&&_wwContested(wk)===true&&getOutcome(wk,user,computeApprovals())==='win'; }catch(_){ _rmWon=false; } // [195 · §249] a WINNING bid leaving a COMPETITION week, as the board stands at the moment of removal (a win on a quiet week is not recorded: it could be banked against a later competition); typeof = sandbox convention
   const okRemove=await persistScheduleChange(user,wk,null,_prev);
   if(okRemove){
     delete data[user][wk];
@@ -3273,7 +3312,7 @@ async function removeSelection(wk){
     // Clear bid timestamp — atomic delete of nested key
     if(bidTimesData[user]) bidTimesData[user][wk]=null;
     await updateDoc(bidTimesRef,{[`${user}.${wk}`]:deleteField()}).catch(()=>setDoc(bidTimesRef,{[user]:{[wk]:null}},{merge:true}));
-    logOwnChange(user,wk,'removed',prio,_rmWon);
+    logOwnChange(user,wk,'removed',prio);
   }
 }
 window.removeSelection=removeSelection;
@@ -3494,16 +3533,18 @@ window.openPhaseHistory=function(){
 };
 
 // ── Popcornometer — same meter as the admin dashboard ──
-// Bid activity in the last 24h — matches the "changes in last 24h" chip
+// Bid activity in the last 12 hours — matches the "changes in last 12h" chip
 // (change-log events) plus simulator bids, so the two numbers agree. More
 // activity = more popcorn popping in the little saucepan.
-// SINGLE source of truth for 24-hour bid activity. The Popcornometer AND the
-// "changes in last 24h" chip both count exactly this list, so the two numbers
+// SINGLE source of truth for recent bid activity. The Popcornometer AND the
+// "changes in last 12h" chip both count exactly this list, so the two numbers
 // can never disagree (and match the admin site, which uses the same logic).
+// [196 · §250, owner 7 Oct 2026] The window was 24 hours; it is 12, with the proportions kept:
+// every count throws what double that count threw, and each label starts at half its old count.
 // Events = every change-log entry in the window, plus any bidTimes stamp
 // (e.g. legacy simulator bids) that has no matching log entry.
 // Admin approve/deny/revoke decisions are logged for the ADMIN change-log, but
-// must never surface in the shared 24h activity feed or counters — users would
+// must never surface in the shared recent-activity feed or counters — users would
 // see decisions mid-phase (privacy rule), and both sites must count the same.
 function isDecisionEntry(e){
   const a=String((e&&(e.action||e.type))||'');
@@ -3519,23 +3560,24 @@ function isSystemEntry(e){
   if(e.scope==='system') return true;
   return String(e.weekKey||'')==='ALL';
 }
-function changeEvents24h(){
+const ACTIVITY_WINDOW_MS=12*3600000; // [196 · §250] the Popcornometer's and the "changes" chip's window (was 24 hours)
+function changeEventsRecent(){
   // resetAt fences off everything from before the last phase close — the
   // counters read 0 the moment a phase completes (same rule as the admin site).
-  const cutoff=Math.max(Date.now()-86400000, changesData.resetAt||0);
+  const cutoff=Math.max(Date.now()-ACTIVITY_WINDOW_MS, changesData.resetAt||0);
   const log=(changesData.log||[]).filter(e=>e&&typeof e.ts==='number'&&e.ts>=cutoff&&!isDecisionEntry(e)&&!isSystemEntry(e));
   const logged=new Set(log.map(e=>(e.user||'')+'|'+(e.weekKey||'')));
   const extras=[];
   for(const u in bidTimesData){ const m=bidTimesData[u]||{}; for(const wk in m){ const t=m[wk]; if(typeof t==='number'&&t>=cutoff&&!logged.has(u+'|'+wk)) extras.push({id:'bt_'+u+'_'+wk,user:u,weekKey:wk,action:'added',actor:'sim',ts:t}); } }
   return log.concat(extras).sort((a,b)=>(a.ts||0)-(b.ts||0));
 }
-function popcornCount24h(){ return changeEvents24h().length; }
-function popcornRate(n){ return n<=0?0:Math.min(28.8,Math.max(0.72,n*0.144)); } // pops/sec — same thresholds as admin; tops out at 200 changes · [189 · §240] 20% more kernels at every count · [191 · §242] and 20% more again
-function popcornStatus(n){ return n<=0?'— Quiet, no changes yet':n<10?'— A few kernels popping':n<30?'— Steady popping':n<60?'— Lively popping!':n<90?'— Full popcorn frenzy!':'— Popcorn pandemonium!'; }
+function popcornCountRecent(){ return changeEventsRecent().length; }
+function popcornRate(n){ return n<=0?0:Math.min(28.8,Math.max(0.72,n*2*0.144)); } // pops/sec — same thresholds as admin; tops out at 100 changes · [189 · §240] 20% more kernels at every count · [191 · §242] and 20% more again · [196 · §250] the window halved to 12 hours, so each change counts double
+function popcornStatus(n){ return n<=0?'— Quiet, no changes yet':n<5?'— A few kernels popping':n<15?'— Steady popping':n<30?'— Lively popping!':n<45?'— Full popcorn frenzy!':'— Popcorn pandemonium!'; } // [196 · §250] each label at half its old count (was 10 / 30 / 60 / 90)
 const _pc={rate:0,count:0,kernels:[],last:0,started:false};
 window.__pcInfo=()=>({count:_pc.count,rate:_pc.rate}); // exposed for testing
 function popcornRefresh(){
-  const n=popcornCount24h();
+  const n=popcornCountRecent();
   _pc.count=n; _pc.rate=popcornRate(n);
   const s=document.getElementById('pcStatus'); if(s) s.textContent=popcornStatus(n);
 }
@@ -3716,9 +3758,9 @@ function renderNotifications(user,ap){
     return bt&&e.ts>=bt;
   }).map(e=>({...e,outcome:getOutcome(e.weekKey,user,ap)})).reverse();
 
-  // Chip 2: all changes by everyone (including you) in last 24h — MUST count
-  // the exact same events as the Popcornometer (changeEvents24h), always.
-  const total=changeEvents24h().reverse();
+  // Chip 2: all changes by everyone (including you) in the last 12 hours — MUST count
+  // the exact same events as the Popcornometer (changeEventsRecent), always.
+  const total=changeEventsRecent().reverse();
 
   // Chip 1 sits at the far right of the "My Bids & Projections" title; chip 2
   // sits just left of the board-view dropdown in the bidding-board header.
@@ -3729,7 +3771,7 @@ function renderNotifications(user,ap){
     :'<div class="notif-empty-sm">No recent changes on your weeks</div>';
   const totalHtml=total.length
     ?total.map(e=>{const t=new Date(e.ts);const ts=t.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});return `<div class="notif-row"><span style="color:#48607a;font-size:.68rem">${ts}</span> ${e.user===user?'<b>You</b>':escH(e.user||'?')} ${icon(e)} ${escH(formatShort(e.weekKey))}</div>`;}).join('')
-    :'<div class="notif-empty-sm">No changes in last 24h</div>';
+    :'<div class="notif-empty-sm">No changes in last 12h</div>';
   if(mineSlot) mineSlot.innerHTML=`
     <div class="notif-popover" id="notifPop1" onmouseleave="this.classList.remove('open')">
       <div class="notif-chip ${mine.length?'has-mine':''}" onclick="toggleNotifPop('notifPop1');event.stopPropagation()">${mine.length?'<div class="notif-dot"></div>':''}⚠️ ${mine.length} change${mine.length!==1?'s':''} affecting your weeks <span style="margin-left:4px;color:#5a7186">▾</span></div>
@@ -3743,10 +3785,10 @@ function renderNotifications(user,ap){
     </div>`;
   if(allSlot) allSlot.innerHTML=`
     <div class="notif-popover" id="notifPop2" onmouseleave="this.classList.remove('open')">
-      <div class="notif-chip" onclick="toggleNotifPop('notifPop2');event.stopPropagation()">📋 ${total.length} change${total.length!==1?'s':''} in last 24h <span style="margin-left:4px;color:#5a7186">▾</span></div>
+      <div class="notif-chip" onclick="toggleNotifPop('notifPop2');event.stopPropagation()">📋 ${total.length} change${total.length!==1?'s':''} in last 12h <span style="margin-left:4px;color:#5a7186">▾</span></div>
       <div class="notif-popover-content" onclick="event.stopPropagation()" style="left:auto;right:0">
         <div class="notif-popover-header">
-          <span class="notif-popover-title">All changes (last 24h)</span>
+          <span class="notif-popover-title">All changes (last 12h)</span>
           <button class="notif-popover-close" onclick="toggleNotifPop('notifPop2')">✕</button>
         </div>
         <div class="notif-popover-scroll">${totalHtml}</div>
@@ -3876,6 +3918,8 @@ function renderCalendar(user,ap){
       const wn=document.createElement("div");
       wn.style.cssText="font-size:.62rem;font-weight:700;color:#006ba6;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px";
       wn.textContent="Week "+meta.weekNum; div.appendChild(wn);
+      // [196 · §250] "Competition week", at the top, right of the week number (owner's placement). The row becomes two-ended ONLY on a labelled card.
+      if(typeof _wwLabelOn==='function'&&_wwLabelOn(wk)){ wn.style.display='flex'; wn.style.justifyContent='space-between'; wn.style.alignItems='baseline'; wn.style.gap='6px'; wn.insertAdjacentHTML('beforeend',COMP_LABEL_HTML); } // typeof = sandbox convention
       // Line 1: e.g. "Nov 21 – Nov 27" (Sunday-start range)
       const dl=document.createElement("div"); dl.className="week-day-label";
       dl.textContent=meta.range; div.appendChild(dl);
@@ -4447,7 +4491,7 @@ function _subscribeSensitiveOnce(){
   // [build 151 · FB-5 stage 2] Board data — moved here from module load. Same one-shot
   // latch, same teardown. See the note at the old attach site for why each is safe.
   _sensitiveUnsubs.push(onSnapshot(changesRef,snap=>{ _boardMark('changes',snap); changesData=snap.exists()?snap.data():{log:[]}; if(!changesData.log)changesData.log=[]; scheduleRender(); }));
-  _sensitiveUnsubs.push(onSnapshot(bestBidsRef,snap=>{ bestBidsData=snap.exists()?snap.data():{}; _lwLoaded.best=true; })); // [182] flag only
+  _sensitiveUnsubs.push(onSnapshot(bestBidsRef,snap=>{ bestBidsData=snap.exists()?snap.data():{}; const _first=!_lwLoaded.best; _lwLoaded.best=true; if(_first) scheduleRender(); })); // [182] flag only · [196 · §250] …and ONE redraw when they first arrive: the competition label waits for them
   _sensitiveUnsubs.push(onSnapshot(bidLoweringsRef,snap=>{ bidLoweringsData=snap.exists()?snap.data():{}; _lwLoaded.low=true; })); // [182] flag only
   _sensitiveUnsubs.push(onSnapshot(bidHoldsRef,snap=>{ _boardMark('holds',snap); bidHoldsData=snap.exists()?snap.data():{}; _lwLoaded.holds=true; scheduleRender(); })); // [169 · §180] the pool and the bid dialog read this through getPriorPhaseUsedPriorities
   _sensitiveUnsubs.push(onSnapshot(bidTimesRef, snap=>{ _boardMark('bidTimes',snap); bidTimesData=snap.exists()?snap.data():{}; if(typeof popcornRefresh==='function') popcornRefresh(); scheduleRender(); }));
@@ -5033,6 +5077,8 @@ ${bullets([
   `A combined bid like 1/2/3 uses bids 1, 2, and 3 at once`,
   npPhasesDescription(),
   ...prioLockBullets(), // [build 139 · BL/COPY] Option A wording, allowance-derived
+  `A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.`, // [196 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
+  `On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If nobody has a bid on the week any more, any bid may be placed.`,
   ...bfRulesBullets(),
   `Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
   `Enter your bids early, it benefits everyone`,

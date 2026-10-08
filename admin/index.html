@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 357;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 358;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -3741,15 +3741,17 @@ function renderLockSummary(){
 window.renderLockSummary=renderLockSummary;
 
 // ── Auction Insights — participation, bids, and the Popcornometer ──
-// Bid activity in the last 24h — matches the user-facing "changes in last 24h"
+// Bid activity in the last 12 hours — matches the user-facing "changes in last 12h"
 // chip (change-log events) plus simulator bids, so the two numbers agree.
-// SINGLE source of truth for 24-hour bid activity — IDENTICAL logic to the
-// user site's changeEvents24h(), so the Popcornometer and the "changes in
-// last 24h" counters on BOTH sites always show the same number.
+// SINGLE source of truth for recent bid activity — IDENTICAL logic to the
+// user site's changeEventsRecent(), so the Popcornometer and the "changes in
+// last 12h" counters on BOTH sites always show the same number.
+// [358 · §250, owner 7 Oct 2026] The window was 24 hours; it is 12, with the proportions kept:
+// every count throws what double that count threw, and each label starts at half its old count.
 // Events = every change-log entry in the window, plus any bidTimes stamp
 // (e.g. legacy simulator bids) that has no matching log entry.
 // Admin approve/deny/revoke decisions are logged for the ADMIN change-log, but
-// must never surface in the shared 24h activity feed or counters — users would
+// must never surface in the shared recent-activity feed or counters — users would
 // see decisions mid-phase (privacy rule), and both sites must count the same.
 function isDecisionEntry(e){
   const a=String((e&&(e.action||e.type))||'');
@@ -3765,20 +3767,21 @@ function isSystemEntry(e){
   if(e.scope==='system') return true;
   return String(e.weekKey||'')==='ALL';
 }
-function changeEvents24h(){
+const ACTIVITY_WINDOW_MS=12*3600000; // [358 · §250] the Popcornometer's window (was 24 hours) — the same constant as the staff page
+function changeEventsRecent(){
   // resetAt fences off everything from before the last phase close — the
   // counters read 0 the moment a phase completes.
-  const cutoff=Math.max(Date.now()-86400000, changesResetAt||0);
+  const cutoff=Math.max(Date.now()-ACTIVITY_WINDOW_MS, changesResetAt||0);
   const log=(changesLog||[]).filter(e=>e&&typeof e.ts==='number'&&e.ts>=cutoff&&!isDecisionEntry(e)&&!isSystemEntry(e));
   const logged=new Set(log.map(e=>(e.user||'')+'|'+(e.weekKey||'')));
   const extras=[];
   for(const u in bidTimesData){ const m=bidTimesData[u]||{}; for(const wk in m){ const t=m[wk]; if(typeof t==='number'&&t>=cutoff&&!logged.has(u+'|'+wk)) extras.push({id:'bt_'+u+'_'+wk,user:u,weekKey:wk,action:'added',actor:'sim',ts:t}); } }
   return log.concat(extras).sort((a,b)=>(a.ts||0)-(b.ts||0));
 }
-function popcornCount24h(){ return changeEvents24h().length; }
-// Thresholds: 0 quiet · 1-9 a few kernels · 10-29 steady · 30-59 lively · 60-89 frenzy · 90+ pandemonium.
-function popcornStatus(n){ return n<=0?'Quiet — no changes yet':n<10?'A few kernels popping':n<30?'Steady popping':n<60?'Lively popping!':n<90?'Full popcorn frenzy!':'Popcorn pandemonium!'; }
-function popcornRate(n){ return n<=0?0:Math.min(28.8,Math.max(0.72,n*0.144)); } // pops per second; tops out at 200 changes · [356 · §240] 20% more kernels at every count · [357 · §242] and 20% more again
+function popcornCountRecent(){ return changeEventsRecent().length; }
+// Thresholds: 0 quiet · 1-4 a few kernels · 5-14 steady · 15-29 lively · 30-44 frenzy · 45+ pandemonium. [358 · §250] each at half its old count (was 10 / 30 / 60 / 90)
+function popcornStatus(n){ return n<=0?'Quiet — no changes yet':n<5?'A few kernels popping':n<15?'Steady popping':n<30?'Lively popping!':n<45?'Full popcorn frenzy!':'Popcorn pandemonium!'; }
+function popcornRate(n){ return n<=0?0:Math.min(28.8,Math.max(0.72,n*2*0.144)); } // pops per second; tops out at 100 changes · [356 · §240] 20% more kernels at every count · [357 · §242] and 20% more again · [358 · §250] the window halved to 12 hours, so each change counts double
 
 // Popcorn animation engine — a saucepan with kernels popping out and falling back.
 const _pc={rate:0,count:0,kernels:[],last:0,started:false};
@@ -3835,10 +3838,10 @@ function renderInsights(){
     }
     if(has) bidders++;
   }
-  const changes24=popcornCount24h();
+  const changes24=popcornCountRecent(); // [358 · §250] the last 12 hours (the name is the old one's)
   popcornSet(changes24);
   // Build the skeleton ONCE so the canvas animation survives re-renders.
-  // Bid activity (graph) and the Popcornometer show the SAME 24h bid-activity
+  // Bid activity (graph) and the Popcornometer show the SAME bid-activity
   // data in two forms, so they share one toggle instead of both taking up
   // room at once — admin's last choice is remembered (localStorage) so the
   // site opens back to it next time.
@@ -3859,7 +3862,7 @@ function renderInsights(){
         </div>
         <div id="insPopcornView" style="display:none">
           <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">🍿 <strong style="color:var(--t1)">Popcornometer</strong>
-            <span style="color:var(--t2)">— <span id="pcCountAdm">0</span> bid change<span id="pcPlAdm">s</span> in last 24h</span></div>
+            <span style="color:var(--t2)">— <span id="pcCountAdm">0</span> bid change<span id="pcPlAdm">s</span> in last 12h</span></div>
           <div id="pcStatusAdm" style="font-size:11px;color:var(--t2);margin-bottom:6px"></div>
           <canvas id="pcCanvasAdm" style="width:100%;height:104px;display:block;background:linear-gradient(180deg,#1e4a6d,#153755);border:1px solid var(--b1);border-radius:8px"></canvas>
         </div>
@@ -3876,7 +3879,7 @@ function renderInsights(){
   renderStruggling();
   renderBadBehavior();
 }
-// Switch between the two 24h-bid-activity views (same data, two forms) and
+// Switch between the two bid-activity views (same data, two forms) and
 // remember the choice so the admin's site opens back to it next time.
 window.setInsightsView=function(view){
   const isGraph=view!=='popcorn';
@@ -5477,7 +5480,7 @@ window.clearEverything=function(){
               // [AUDIT #2] Plain setDoc (no merge) — this also drops any biddingClosed flag.
               setDoc(timerRef,{enabled:false,lastChange:null,durationHours:48,biddingClosed:false}),
               // Change log + resetAt fence → Popcornometer and the "changes in
-              // last 24h" counters read 0 on BOTH sites after a full reset.
+              // last 12h" counters read 0 on BOTH sites after a full reset.
               setDoc(changesRef,{log:[],resetAt:Date.now()}),
               // [AUDIT #3] The admin-only decision log resets with everything else.
               setDoc(changesDecisionsRef,{log:[],resetAt:Date.now()}),
@@ -6165,8 +6168,8 @@ window.completePhase=function(){
       let lockClearOk=true;
       try{ await setDoc(worstBidsRef,{}); }
       catch(e){ lockClearOk=false; console.error('completePhase priority-lock clear failed:',e); }
-      // Archive this phase's change log and reset ALL 24h activity counters —
-      // the Popcornometer and "changes in last 24h" must read 0 on both sites
+      // Archive this phase's change log and reset ALL recent-activity counters —
+      // the Popcornometer and "changes in last 12h" must read 0 on both sites
       // after a phase closes. resetAt also fences off bidTimes stamps from the
       // closed phase, which would otherwise keep feeding the counters.
       let resetOk=true;
@@ -6785,6 +6788,8 @@ ${bullets([
   `A combined bid like 1/2/3 uses bids 1, 2, and 3 at once`,
   npPhasesDescription(),
   ...prioLockBullets(), // [build 268 · BL/COPY] Option A wording, allowance-derived
+  `A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.`, // [358 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
+  `On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If nobody has a bid on the week any more, any bid may be placed.`,
   ...bfRulesBullets(),
   `Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
   `Enter your bids early, it benefits everyone`,
