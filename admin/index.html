@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 359;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 360;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -6218,10 +6218,17 @@ window.completePhase=function(){
         catch(e){ _archOk=false; resetOk=false; console.error('completePhase change-archive failed (logs left unreset):',e); }
       }
       if(_archOk){
-        try{ await setDoc(changesRef,{log:[],resetAt:Date.now()}); }
-        catch(e){ resetOk=false; console.error('completePhase change-reset failed:',e); }
-        try{ await setDoc(changesDecisionsRef,{log:[],resetAt:Date.now()}); }
-        catch(e){ resetOk=false; console.error('completePhase decision-log reset failed:',e); }
+        // [360 · §254, owner 8 Oct 2026 "2-agree"] The retry's order: the decisions half FIRST and the log itself LAST, and only if the first
+        // went through. "A reset is owed" reads the LOG's own stamp, so after any failure here the Retry button is showing and Begin Phase
+        // refuses (it used to reset the log first: when only the second write failed the button was hidden). The stamp is never older than the completion.
+        const _rsAt=()=>Math.max(Date.now(),(Number(_snapPayload.completedAt)||0)+1);
+        let _decOk=true;
+        try{ await setDoc(changesDecisionsRef,{log:[],resetAt:_rsAt()}); }
+        catch(e){ _decOk=false; resetOk=false; console.error('completePhase decision-log reset failed (change log left unreset):',e); }
+        if(_decOk){
+          try{ await setDoc(changesRef,{log:[],resetAt:_rsAt()}); }
+          catch(e){ resetOk=false; console.error('completePhase change-reset failed:',e); }
+        }
       }
       if(lockOk && lockClearOk && resetOk){
         toast('✓ Phase '+cur+' completed — all weeks locked, priority locks released','ok');
@@ -6310,6 +6317,22 @@ async function _commitBeginPhase(next){
     }
     const _srvLedger=(_srvStg?_srvStg.resultsSentTo:_sentLedger)||{};
     const _srvStaged=(_srvStg?_srvStg.pendingPhaseSnapshots:_stagedCompletedPhases)||{};
+    // [360 · §254] The reset owed? Asked of the SERVER (this page's own copies can be stale - the lesson of the retry, 359): the live
+    // log's stamp against the completion of the phase being left, published or staged. Owed, or unverifiable -> the phase does NOT begin.
+    let _usedAnyway=false;
+    if(typeof getDocFromServer==='function'){ // typeof = sandbox convention
+      let _owed=false;
+      try{
+        const _lc=await getDocFromServer(changesRef), _lp=await getDocFromServer(phasesRef);
+        const _lst=Number((_lc.exists()?(_lc.data()||{}).resetAt:0))||0;
+        const _lcp=Object.assign({},(_lp.exists()?(_lp.data()||{}).completedPhases:null)||{},_srvStaged||{});
+        const _lat=Number((_lcp[next-1]||{}).completedAt)||0;
+        _owed=_lat>0&&_lst<_lat;
+      }catch(e){ toast('🚫 Could not check the change log on the server (connection problem) — Phase '+next+' did NOT begin. Week locks may already have changed; check the Lock Weeks panel, then try again.','err'); return false; }
+      if(_owed&&_clAnywayOk(next-1)){ _owed=false; _usedAnyway=true; } // [360 · §256] the emergency way out; it is used up, and said, only once the phase HAS begun (below)
+      else if(!_owed) _clBeginAnyway=null; // nothing is owed after all: a confirmation still armed is dropped
+      if(_owed){ toast('🚫 Phase '+(next-1)+'\'s change log has not been reset — Phase '+next+' did NOT begin. Open Change Log and press "↻ Retry log reset", then begin the phase. Week locks may already have changed; check the Lock Weeks panel.','err'); return false; }
+    }
     // [311 · F-5b] The archive of the phase being LEFT must exist before anything is retired.
     // The scrub further down is destructive and decides who "won" by reading the archives: with
     // none it would conclude that even this phase's WINNERS had not won and delete their bids in
@@ -6389,6 +6412,7 @@ async function _commitBeginPhase(next){
     try{ await batch.commit(); }
     // [BATCH D · L2 · build 234] Same honest wording as the Phase-1 path.
     catch(e){ toast('Could not begin Phase '+next+' — the phase did NOT start ('+(e?.message||e)+'). Week locks may already have changed; check the Lock Weeks panel, then try again.','err'); return false; }
+    if(_usedAnyway){ _clBeginAnyway=null; _clRetryFailed=false; toast('⚠️ Phase '+next+' has begun WITHOUT resetting Phase '+(next-1)+'\'s change log, as you confirmed.','warn'); } // [360 · §256] used ONCE, and only now that the batch has gone through
   }
   // Beginning any phase resets the countdown to a fresh 48-hour window so
   // every phase opens with the full default bidding time. [begin-phase timer fix]
@@ -6576,6 +6600,20 @@ function _beginPhaseLockDecisionInner(next){
 }
 window.beginNextPhase=function(){
   if(!_feedsHealthyOrExplain('Begin Phase')) return; // [build 227]
+  // [360 · §254, owner 8 Oct 2026 "1-yes, do this"] A phase's closing reset of the change log that did not happen must be run BEFORE the
+  // next phase begins: once it has begun the retry (rightly) refuses, and the old log and its stamp would stand for that whole phase -
+  // the staff page would count last phase's competitions. Refused here, before the backup and every dialog, so nothing is touched;
+  // refused again on the SERVER's word in _commitBeginPhase.
+  if(_clResetPending()&&!_clAnywayOk(Number(phasesData.currentPhase||1))){
+    const _pc=Number(phasesData.currentPhase||1);
+    openConfirm({
+      title:'↻ Reset the change log first',
+      body:'<div>Phase '+_pc+' is complete, but its change log was not reset when it closed.</div><div class="cmodal-danger" style="margin-top:10px">Open Change Log and press <strong>↻ Retry log reset</strong>, then begin Phase '+(_pc+1)+'. Nothing has been changed.</div>'
+        +(_clRetryFailed===_pc?'<div id="clAnywayRow" style="margin-top:12px;font-size:12px;color:var(--t2)">The retry has failed on this page. Only if it keeps failing: <button type="button" class="btn btn-danger" style="margin-left:6px;padding:4px 10px;font-size:12px" onclick="_beginPhaseAnywayAsk()">Begin Phase '+(_pc+1)+' anyway…</button></div>':''), // [360 · §256] the emergency way out, offered only after a retry for THIS phase has really failed here
+      okText:'📋 Open Change Log', onConfirm:()=>{ try{ nav('changelog',document.querySelector('[onclick*="\'changelog\'"]')); }catch(_){} }
+    });
+    return;
+  }
   if(!_bkBypass){ _backupThen('beginning Phase '+(Number(phasesData.currentPhase||1)+1),function(){ _bkBypass=true; try{ window.beginNextPhase(); } finally { _bkBypass=false; } }); return; }
   const cur=Number(phasesData.currentPhase||1);
   const next=cur+1;
@@ -6801,7 +6839,7 @@ ${bullets([
   npPhasesDescription(),
   ...prioLockBullets(), // [build 268 · BL/COPY] Option A wording, allowance-derived
   `A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.`, // [358 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
-  `On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If nobody has a bid on the week any more, any bid may be placed.`,
+  `On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.`,
   ...bfRulesBullets(),
   `Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
   `Enter your bids early, it benefits everyone`,
@@ -11176,6 +11214,33 @@ function _clResetPending(){
     return at>0&&(Number(changesResetAt)||0)<at;
   }catch(_){ return false; }
 }
+// ── [360 · §256, owner 8 Oct 2026: "if the emergency override is easy, safe, and effective, we should do it" · "2-begin"] THE EMERGENCY WAY OUT ──
+// Begin Phase refuses while a reset is owed, and the retry is the way to clear it. If the retry itself keeps FAILING (the one realistic cause:
+// the archive document cannot take the phase's log), the auction must still be able to move on. So: once a retry has failed ON THIS PAGE
+// (archive or reset write - not a mere failed read), the refusal dialog offers "Begin Phase N anyway", behind a second, red confirmation that
+// says what it costs. Confirmed, it lets ONE Begin Phase through for that phase within fifteen minutes; the old log is left exactly as it is
+// (his choice: begin, not reset-without-archive). Never offered before a failed retry, never remembered across a reload.
+// _clRetryFailed = the PHASE whose retry failed here (false = none): a failure in one phase unlocks nothing at a later boundary (audit, 8 Oct 2026).
+let _clRetryFailed=false, _clBeginAnyway=null;
+function _clAnywayOk(cur){ try{ return !!(_clBeginAnyway&&_clBeginAnyway.phase===cur&&Date.now()<_clBeginAnyway.until); }catch(_){ return false; } }
+window._beginPhaseAnywayAsk=function(){
+  if(!_feedsHealthyOrExplain('Begin Phase')) return;
+  const cur=Number(phasesData.currentPhase||1);
+  closeConfirm();
+  if(!_clResetPending()||_clRetryFailed!==cur){ toast('Press "↻ Retry log reset" on the Change Log page first.','warn'); return; }
+  openConfirm({
+    title:'⚠️ Begin Phase '+(cur+1)+' WITHOUT resetting the change log?',
+    body:'<div>Phase '+cur+'\'s change log could not be reset — the retry failed.</div>'
+      +'<div class="cmodal-danger" style="margin-top:10px">If you begin Phase '+(cur+1)+' now: the bidding site will go on counting Phase '+cur+'\'s competition weeks during Phase '+(cur+1)+', so some weeks will be held to last phase\'s bids; the "changes" counts will not start at zero; and Phase '+cur+'\'s log will be archived together with Phase '+(cur+1)+'\'s. This cannot be put right once the phase has begun.</div>'
+      +'<div style="margin-top:10px">Only do this if "↻ Retry log reset" keeps failing.</div>',
+    okText:'Begin Phase '+(cur+1)+' anyway', danger:true,
+    onConfirm:()=>{
+      if(!_clResetPending()||_clRetryFailed!==cur||Number(phasesData.currentPhase||1)!==cur){ toast('Nothing to override — the change log has been reset, or the phase has moved on.','ok'); return; }
+      _clBeginAnyway={phase:cur,until:Date.now()+900000};
+      window.beginNextPhase();
+    }
+  });
+};
 window.retryChangeLogReset=function(){
   if(!_feedsHealthyOrExplain('Retry log reset')) return; // this page's own picture of the phase decides whether the button acts - a stale page must not
   if(!_clResetPending()){ toast('Nothing to retry — the change log was reset when the phase closed.','ok'); return; }
@@ -11208,13 +11273,14 @@ window.retryChangeLogReset=function(){
       }catch(e){ console.error('retry log reset: server read failed (log left as it is):',e); toast('⚠️ Not reset — the change log could not be read from the server. Check the connection and try again.','err'); return; }
       if(merged.length){
         try{ await setDoc(changesArchiveRef,{[cur]:merged},{merge:true}); }
-        catch(e){ console.error('retry log reset: archive failed (log left as it is):',e); toast('⚠️ Not reset — archiving the log failed, so it was left as it is. Try again.','err'); return; }
+        catch(e){ _clRetryFailed=cur; /* [360 · §256] */ console.error('retry log reset: archive failed (log left as it is):',e); toast('⚠️ Not reset — archiving the log failed, so it was left as it is. Try again.','err'); return; }
       }
       let ok=true;
       // The decisions half FIRST and the log itself LAST, and only if the first went through: "pending" reads the log's own stamp,
       // so the button stays until BOTH halves are done (a failure in between leaves it showing, and a second press finishes the job).
       try{ await setDoc(changesDecisionsRef,{log:[],resetAt:Math.max(Date.now(),_at+1)}); }catch(e){ ok=false; console.error('retry log reset: decision-log reset failed:',e); }
       if(ok){ try{ await setDoc(changesRef,{log:[],resetAt:Math.max(Date.now(),_at+1)}); }catch(e){ ok=false; console.error('retry log reset: reset failed:',e); } }
+      if(ok){ _clRetryFailed=false; _clBeginAnyway=null; } else _clRetryFailed=cur; // [360 · §256] a retry that failed here is what unlocks the emergency way out; one that worked takes it away, armed or not
       toast(ok?'✓ Change log archived under Phase '+cur+' and reset':'⚠️ The reset did not complete — press Retry log reset again.',ok?'ok':'err');
       try{ renderChangelog(); }catch(_){}
     }

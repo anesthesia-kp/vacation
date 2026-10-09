@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 197;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 198;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -595,7 +595,7 @@ body{zoom:1.15}
         <li id="ruleNpPhases">NP bids may only be used during the phases for which admin has turned them on</li>
         <li id="rulePrioLock">Bid priorities can only stay the same or get stronger — bid a 5 on a week, and any re-bid there must be 5 or better.</li>
         <li id="ruleCompWeek">A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.</li><!-- [196 · §251] his wording -->
-        <li id="ruleNoWeaken">On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If nobody has a bid on the week any more, any bid may be placed.</li><!-- [194 · §248 · 196 · §251 · 197 · §254] -->
+        <li id="ruleNoWeaken">On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.</li><!-- [194 · §248 · 196 · §251 · 197 · §254 · 198 · §255] -->
         <li id="ruleBidFloors" style="display:none"></li><!-- [COPY-3] filled from the live floors at boot; hidden until then so no stale or invented floor text can flash, and it stays hidden when no floor is set -->
         <li>Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week</li>
         <li>Enter your bids early, it benefits everyone</li>
@@ -2721,7 +2721,7 @@ function flash(el,msg,dur){
 // phase (193 allowed it, and a winner then stepped down in two edits). Weeks with no competition are
 // untouched. Page-enforced (bid box, review step, confirm step) and mirrored in _lwWeakerWins so
 // no alert e-mail names a bid the box refuses. The admin page's own bid entry is not bound by it.
-function _wwMsg(){ return (_wwRefuses.why==='in')?"On a week with a bidding competition, a new bid must be at least as strong as the weakest bid there that is winning or under review.":"On a week with a bidding competition, a bid can only be weakened if it would still win and is no lower than the lowest other winning bid."; } // [195 · §249] coming in, or coming down
+function _wwMsg(){ return (_wwRefuses.why==='left')?"This week has had a bidding competition. A new bid must be at least as strong as the last bid that was on it.":(_wwRefuses.why==='in')?"On a week with a bidding competition, a new bid must be at least as strong as the weakest bid there that is winning or under review.":"On a week with a bidding competition, a bid can only be weakened if it would still win and is no lower than the lowest other winning bid."; } // [195 · §249] coming in, or coming down
 // [196 · §251, owner 7 Oct 2026: "I need at the same time and previous phases don't matter"] A bidding
 // competition has happened on a week when, at ONE MOMENT in this phase (in Phase 4, this round), the
 // people with a bid on it together came to more than it has available: their FTE plus the FTE of
@@ -2753,7 +2753,9 @@ function _wwContested(wk,snap){
     const d=(snap&&typeof snap==='object')?snap:data;
     const prior=getPriorPhaseWinners(wk);
     const base=getPriorPhaseFteWon(wk), slots=Number(meta.slots);
-    const over=set=>{ let fte=base; for(const u of set){ if(!prior.has(u)) fte+=getUserFTE(u); } return Math.round((fte-slots)*10)/10>0; }; // the engine's own FP-safe fit test
+    // [198 · §256, owner 8 Oct 2026: "at least two… are actually needed to make it a competition week"] TWO people at the least: one person
+    // bigger than the room left (a week mostly held from an earlier phase) is not a competition, whatever the arithmetic says.
+    const over=set=>{ let fte=base, k=0; for(const u of set){ if(!prior.has(u)){ fte+=getUserFTE(u); k++; } } return k>=2&&Math.round((fte-slots)*10)/10>0; }; // the engine's own FP-safe fit test
     const onIt=(src,u)=>{ const m=src?src[u]:null; return !!(m&&typeof m==='object'&&m[wk]!==undefined&&m[wk]!==null&&isCurrentPhaseBid(u,wk)); };
     const now=new Set();
     for(const u of Object.keys(d||{})){ if(onIt(d,u)) now.add(u); }
@@ -2778,7 +2780,9 @@ function _wwContested(wk,snap){
     // previous entry: they count from straight after that entry (an unrecorded return is put into the replay there)
     const back=new Map();
     for(const u of Object.keys(byU)){ let on=byU[u][0].action!=='added', prev=null;
-      for(const e of byU[u]){ if(e.action!=='added'&&!on&&prev){ if(!back.has(prev)) back.set(prev,[]); back.get(prev).push({user:u,action:'added'}); } on=e.action!=='removed'; prev=e; } }
+      // [198 · §256] …except a "lowered": the page logs a WEAKER RE-BID by someone who had left as "lowered" (it spends a lowering), so that
+      // entry is their arrival at its own moment - read as "never left" it made a competition of people who were never there together (audits, 8 Oct 2026).
+      for(const e of byU[u]){ if(e.action!=='added'&&e.action!=='lowered'&&!on&&prev){ if(!back.has(prev)) back.set(prev,[]); back.get(prev).push({user:u,action:'added'}); } on=e.action!=='removed'; prev=e; } }
     const walk=[]; for(const e of ev){ walk.push(e); if(back.has(e)) walk.push(...back.get(e)); }
     for(const e of walk){
       if(e.action==='removed'){ if(!always.has(e.user)&&!(lastOf[e.user]===e&&onIt(data,e.user))) there.delete(e.user); continue; }
@@ -2794,10 +2798,7 @@ function _wwContested(wk,snap){
 function _wwLabelOn(wk){
   try{
     if(!(_boardLoaded&&_boardLoaded.changes===true)||!_lwLoaded.best||!weekMeta[wk]) return false;
-    const prior=getPriorPhaseWinners(wk);
-    let any=false;
-    for(const u of Object.keys(data||{})){ if(!prior.has(u)&&isVisibleBid(u,wk)&&data[u][wk]!==null){ any=true; break; } }
-    return any&&_wwContested(wk)===true;
+    return _wwContested(wk)===true; // [198 · §254] with nobody on it too: the week stays a competition week, and a new bid there is held to the remembered level
   }catch(_){ return false; }
 }
 // [197 · §254, owner 8 Oct 2026] The bid that tips a week over is bound by the rule from the moment it lands, and until now nothing
@@ -2885,8 +2886,75 @@ function _wwSince(){
   try{ if(Number(phasesData.currentPhase||1)===4){ const rb=Number((phasesData.p4RoundBeganAt||{})[Number(phasesData.p4Round||1)]); if(rb>0) since=Math.max(since,rb); } }catch(_){}
   return since;
 }
-function _weBlocks(snap,user,wk,bid){
+// ── [198 · §254 · §255, owner 8 Oct 2026] THE REMEMBERED LEVEL OF AN EMPTIED COMPETITION WEEK ──────────────
+// "once a week is a competition week, it remains that way forever" · "A remembered level for the week (stronger)". Until 198
+// the whole rule stood aside when nobody had a bid on the week, so everyone could leave together and come back lower. Now a new
+// bid there - from anyone, the people who left included - must be at least as strong as the weakest winning or Under Review bid
+// the week had when the last person left. With ONE person on a week that person's bid IS that level (winning or Under Review: the
+// weakest such; losing: "the strongest bid there", 195), so the level is simply the bid the last person had when they removed it.
+// Read from the change log since _wwSince(): the last "removed" entry on the week (the bidder's own or the admin's) and the bid
+// it records (an entry without one: that person's floor). Floors carry no time, so only the log can say who left LAST.
+// WHICH removal is the last is read two ways - the log's own order (entries are only ever appended, so that is the order the
+// server took them in) and the entries' own clocks (each written by its bidder's device). On an honest record they agree; where
+// a device's clock is off they can differ, and then BOTH bids are candidates.
+// Where the record is thin it errs STRICT, as _wwContested does - each of these is a candidate too, and the STRONGEST candidate
+// is the level: a removal by
+// someone the record already has OFF the week (a Remove box left open on a second device and confirmed late - or an unrecorded
+// return; either way not believed to be the last leaving); the floor of anyone the record still has ON the week (nobody is, so
+// they left and the log does not show it - a log entry is written after its bid and can be lost); and a floor whose owner has no
+// removal entry, or whose last entry records a different bid. `just` = the bid of someone whose removal is being asked about
+// before its log entry exists (the Remove box, the alert mirror): it IS the last removal.
+// Returns the bid, or null when nothing is known (the change log or the floors not yet arrived, no record, anything thrown).
+// It is only asked when nobody else has a bid on the week. Read-only. [The second reading of the order, the "already off" and
+// "still on" candidates were added after the audits of 8 Oct 2026 showed a late stale removal, a lost last entry and a skewed
+// clock could each make the level WEAKER than the truth.]
+function _weLeftLevel(wk,just){
+  try{
+    if(!(_boardLoaded&&_boardLoaded.changes===true)||!_lwLoaded.best) return null;
+    const since=_wwSince(), late=Date.now()+600000;
+    const log=(changesData&&Array.isArray(changesData.log))?changesData.log:[];
+    const floorOf=u=>{ const m=bestBidsData?bestBidsData[u]:null; const v=(m&&typeof m==='object')?m[wk]:undefined; return (v===undefined||v===null)?undefined:v; };
+    const cand=[], st=Object.create(null);
+    let lastArr=null, lastTs=null;
+    for(const e of log){
+      if(!e||e.weekKey!==wk||typeof e.user!=='string'||!e.user) continue;
+      if(typeof e.ts==='number'&&e.ts<since) continue;
+      const p=st[e.user]||(st[e.user]={on:false,seen:false,v:undefined});
+      if(e.action!=='removed'){ p.on=true; p.seen=true; if(e.bidValue!==undefined&&e.bidValue!==null) p.v=e.bidValue; continue; }
+      const v=(e.bidValue!==undefined&&e.bidValue!==null)?e.bidValue:floorOf(e.user);
+      const again=p.seen&&!p.on;
+      p.on=false; p.seen=true; p.v=v;
+      if(v===undefined) continue;
+      if(again){ cand.push(v); continue; }
+      lastArr=v;
+      if(typeof e.ts==='number'&&isFinite(e.ts)&&e.ts<=late){ if(lastTs===null||e.ts>=lastTs.ts) lastTs={ts:e.ts,v:v}; } // a clock that cannot be used (none, or more than ten minutes ahead of this device's) is left out of the clocks' reading; the log's own order still places the entry
+    }
+    if(just!==undefined&&just!==null) cand.push(just);
+    else{ if(lastArr!==null) cand.push(lastArr); if(lastTs!==null) cand.push(lastTs.v); }
+    for(const u of Object.keys(st)){ if(st[u].on){ const f=floorOf(u), v=(f!==undefined)?f:st[u].v; if(v!==undefined&&v!==null) cand.push(v); } }
+    for(const u of Object.keys(bestBidsData||{})){
+      const f=floorOf(u); if(f===undefined) continue;
+      const p=st[u];
+      if(!p||p.v===undefined||p.v===null||priorityScore(p.v)!==priorityScore(f)) cand.push(f);
+    }
+    let lvl=null;
+    for(const v of cand){ const sc=priorityScore(v); if(typeof sc!=='number'||!isFinite(sc)) continue; if(lvl===null||sc<priorityScore(lvl)) lvl=v; }
+    return lvl;
+  }catch(_){ return null; }
+}
+// [198] Is `wk` a competition week with nobody on it but (at most) `user`? Paint only - the Remove box and the bid box's notes;
+// anything unknown = no. "On it" is the label's own test (_wwLabelOn of 196).
+function _weAlone(user,wk){
+  try{
+    if(!(_boardLoaded&&_boardLoaded.changes===true)||!_lwLoaded.best||!weekMeta[wk]) return false;
+    const prior=getPriorPhaseWinners(wk);
+    for(const u of Object.keys(data||{})){ if(u!==user&&!prior.has(u)&&isVisibleBid(u,wk)&&data[u][wk]!==null&&data[u][wk]!==undefined) return false; }
+    return _wwContested(wk)===true;
+  }catch(_){ return false; }
+}
+function _weBlocks(snap,user,wk,bid,just){
   let made=false, tagged=false, hadKey=false, old;
+  _weBlocks.left=false; // [198] set when the answer came from the remembered level of an emptied competition week. _wwRefuses reads it.
   try{
     if(!weekMeta[wk]) return null;
     const s=JSON.parse(JSON.stringify(snap||{}));
@@ -2904,7 +2972,14 @@ function _weBlocks(snap,user,wk,bid){
       if(a.winners.has(u)||a.draws.has(u)||a.reviews.has(u)) weakestUp=Math.max(weakestUp,sc);
       strongest=(strongest<0)?sc:Math.min(strongest,sc);
     }
-    if(!n) return 'empty';
+    if(!n){ // [198 · §254 · §255] nobody else is on the week. Has it HAD a competition? Asked on the picture WITHOUT this bid and before its tag:
+      // a newcomer bigger than the room left must not make a quiet week a competition week by arriving (audits, 8 Oct 2026).
+      if(_wwContested(wk,s)!==true) return 'empty'; // no: nothing to hold a bid to, as before
+      const lv=_weLeftLevel(wk,just); // yes: the remembered level, for everyone (a returning bidder like anyone else)
+      if(lv===undefined||lv===null) return null;
+      _weBlocks.left=true;
+      return priorityScore(bid)>priorityScore(lv);
+    }
     s[user][wk]=bid;
     if(!bidPhaseData[user]){ bidPhaseData[user]={}; made=true; }
     hadKey=Object.prototype.hasOwnProperty.call(bidPhaseData[user],wk); old=bidPhaseData[user][wk];
@@ -2927,7 +3002,9 @@ function _wwRefuses(user,wk,bid){
     const _lv=isVisibleBid(user,wk)?data[user][wk]:undefined;
     if(_lv===undefined||_lv===null){
       const _in=_weBlocks(data,user,wk,bid);
-      if(_in==='empty') return false; // everyone has left: the competition rule stands aside (owner, 7 Oct 2026)
+      if(_in==='empty') return false; // nobody else is there and the week has had no competition: nothing to hold a bid to [198]
+      if(_weBlocks.left===true&&_in===true){ _wwRefuses.why='left'; return true; } // [198 · §254] an emptied competition week: below the remembered level
+      if(_weBlocks.left===true&&_in===false) return false; // [198 · §255, owner "1-agree"] at or above it: allowed - a returning bidder is held to that level like anyone, not to their own earlier bid (a weaker-than-before bid still costs a lowering)
       if(_in===true){ _wwRefuses.why='in'; return true; }
     }
   }catch(_){}
@@ -3040,7 +3117,7 @@ function openPriorityModal(wk){
       // previous bid below the entry level), the coming-in note.
       const _wwPrev=(bestBidsData[user]&&typeof bestBidsData[user]==='object')?bestBidsData[user][wk]:undefined;
       const _wwBack=_wwPrev!==undefined&&_wwPrev!==null&&_wwRefuses(user,wk,_wwPrev)===false;
-      winfo.innerHTML+='<div id="wwNoneNote" style="margin-top:8px;padding:8px 10px;background:rgba(251,191,36,.18);border:1px solid rgba(217,119,6,.6);border-radius:8px;font-size:.8rem;color:#4a3000;line-height:1.45">'+(_wwBack?'No bid is available to you on this week right now. On a week with a bidding competition you can bid again only with your previous bid or stronger, or with a weaker bid that would still win and is no lower than the lowest other winning bid. If your previous bid number is on another week, moving it back makes it available here.':'No bid is available to you on this week right now. On a week with a bidding competition a new bid must be at least as strong as the weakest bid there that is winning or under review.')+'</div>';
+      winfo.innerHTML+='<div id="wwNoneNote" style="margin-top:8px;padding:8px 10px;background:rgba(251,191,36,.18);border:1px solid rgba(217,119,6,.6);border-radius:8px;font-size:.8rem;color:#4a3000;line-height:1.45">'+((typeof _weAlone==='function'&&_weAlone(user,wk))?'No bid is available to you on this week right now. This week has had a bidding competition, and a new bid must be at least as strong as the last bid that was on it.':_wwBack?'No bid is available to you on this week right now. On a week with a bidding competition you can bid again only with your previous bid or stronger, or with a weaker bid that would still win and is no lower than the lowest other winning bid. If your previous bid number is on another week, moving it back makes it available here.':'No bid is available to you on this week right now. On a week with a bidding competition a new bid must be at least as strong as the weakest bid there that is winning or under review.')+'</div>';
     }
   }catch(_){}
   modal.classList.add("show"); sel.focus();
@@ -3299,7 +3376,9 @@ async function removeSelection(wk){
   // level once it is off the week would be refused as a new bid - winning now or not (196: no exception for a returning winner): the box must
   // say so instead of promising a re-bid. Read-only; unknown = no.
   let _rmShut=false;
-  try{ _rmShut=typeof _weBlocks==='function'&&_weBlocks(data,user,wk,prio)===true; }catch(_){ _rmShut=false; } // typeof = sandbox convention
+  try{ _rmShut=typeof _weBlocks==='function'&&_weBlocks(data,user,wk,prio,prio)===true; }catch(_){ _rmShut=false; } // typeof = sandbox convention · [198] `prio` again: if this removal empties the week, this bid IS the level a new bid is held to
+  let _rmLast=false; // [198 · §254] the LAST person on a competition week: after this removal a new bid here, from anyone, is held to this bid
+  try{ _rmLast=typeof _weAlone==='function'&&_weAlone(user,wk)===true; }catch(_){ _rmLast=false; }
   const willHaveCap=prioLockOn&&((bestEver!==undefined&&bestEver!=='NP')||(prio!==undefined&&prio!=='NP'));
   // Build informative confirmation message.
   // [155 · AUD-H3] The old message hard-coded the absolute floor sentence in BOTH branches —
@@ -3314,7 +3393,7 @@ async function removeSelection(wk){
   // [187 · §237] Owner-found: bidders remove a bid and place a new one when Edit would do, and each step
   // sends its own projection alerts. Wording only (his, 4 Oct 2026) - shown above the lock note, in the one
   // boxed note of this dialog. Nothing about the remove itself changes.
-  const _editMsg='<div style="margin-top:12px;padding:11px 13px;background:rgba(251,191,36,.18);border:1.5px solid rgba(217,119,6,.6);border-radius:8px;font-size:.88rem;color:#4a3000;line-height:1.5"><strong>Only changing your bid?</strong> Use ✎ Edit instead. Removing and re-bidding can send colleagues multiple alert e-mails.'+(_rmShut?'':' If the bid you want is in use on another week, removing is fine.')+'</div>';
+  const _editMsg='<div style="margin-top:12px;padding:11px 13px;background:rgba(251,191,36,.18);border:1.5px solid rgba(217,119,6,.6);border-radius:8px;font-size:.88rem;color:#4a3000;line-height:1.5"><strong>Only changing your bid?</strong> Use ✎ Edit instead. Removing and re-bidding can send colleagues multiple alert e-mails.'+((_rmShut||_rmLast)?'':' If the bid you want is in use on another week, removing is fine.')+'</div>';
   let lockMsg;
   // [157 · RA-H11] Never promise a lowering the week's rules make impossible: check whether
   // ANY allowed value is actually weaker than the stored lock (bid floor + NP-phase rules,
@@ -3346,6 +3425,7 @@ async function removeSelection(wk){
     lockMsg=`<div style="${_boxAmber}"><strong>⚠️ Priority lock note:</strong> A bid may be placed again for this week, but it must be <strong>equal to or better than your previous bid</strong> (${_floorLbl}).</div>`;
   }
   if(_rmShut) lockMsg=`<div style="${_boxAmber}">⚠️ This week has had a bidding competition. If you remove this bid, a new bid here must be at least as strong as the weakest bid there that is winning or under review — you may not be able to place this same bid again.</div>`; // [195 · §249] owner wording, 7 Oct 2026
+  if(!_rmShut&&_rmLast) lockMsg=`<div style="${_boxAmber}">⚠️ This week has had a bidding competition. If you remove this bid, a new bid here, from you or anyone else, must be at least as strong as this bid.</div>`; // [198 · §254 · §255] owner wording, 8 Oct 2026
   const msg=`<div style="font-size:.95rem;font-weight:600;color:#132f49">You are removing your bid for <span style="color:#006ba6">Week ${meta.weekNum}</span> (${meta.range}).</div>
   <div style="margin-top:8px;font-size:.85rem;color:#2c4257">Current bid: <strong style="color:#005e93">${bidLbl(prio)}</strong></div>${_editMsg}${lockMsg}`;
   if(!await showConfirm(msg,{yesText:'Confirm Remove',noText:'Cancel'})) return;
@@ -4392,7 +4472,7 @@ function _lwReturns(prevSnap,newSnap,actor){
         }
         if(_lwBidWins(newSnap,user,wk,bid)!==true) continue;
         if(_lwBidWins(prevSnap,user,wk,bid)!==false) continue;
-        if(typeof _weBlocks==='function'){ const _e=_weBlocks(newSnap,user,wk,bid); if(_e===true||_e===null) continue; } // [195 · §249] below the entry level of a competition week (or it cannot be told): not a bid they can place; typeof = sandbox convention
+        if(typeof _weBlocks==='function'){ const _pa=(prevSnap&&prevSnap[actor]&&typeof prevSnap[actor]==='object')?prevSnap[actor][wk]:undefined, _na=(newSnap&&newSnap[actor]&&typeof newSnap[actor]==='object')?newSnap[actor][wk]:undefined; const _e=_weBlocks(newSnap,user,wk,bid,(_pa!==undefined&&_pa!==null&&(_na===undefined||_na===null))?_pa:undefined); if(_e===true||_e===null) continue; } // [198 · §254] the actor's removal has no log entry yet: its bid is passed in // [195 · §249] below the entry level of a competition week (or it cannot be told): not a bid they can place; typeof = sandbox convention
         (res[user]=res[user]||{})[wk]={how,bid};
       }
     }
@@ -5136,7 +5216,7 @@ ${bullets([
   npPhasesDescription(),
   ...prioLockBullets(), // [build 139 · BL/COPY] Option A wording, allowance-derived
   `A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.`, // [196 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
-  `On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If nobody has a bid on the week any more, any bid may be placed.`,
+  `On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.`,
   ...bfRulesBullets(),
   `Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
   `Enter your bids early, it benefits everyone`,
