@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 360;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 361;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -2276,7 +2276,7 @@ async function processMailQueue(minAgeMs){
           if(_f.ts!==e.ts){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; }
         }catch(_){ _mqRelease(qid); continue; } // [H14] we hold the claim — release it
         if(isWelcome && _welcomed(wkey)){ await updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; } // re-check after claim
-        for(const email of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:_mqBody(e,isWelcome)}); }catch(err){ _mailLogNote(e.user,email,isWelcome?'welcome':'projection alert',false,err); throw err; } trackEmailSent(); _mailLogNote(e.user,email,isWelcome?'welcome':'projection alert',true); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(email)}).catch(()=>{}); } // [330 · §189] the log note rethrows, so the strike-count path below is unchanged
+        for(const email of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:email,changes:_mqBody(e,isWelcome)}); }catch(err){ _mailLogNote(e.user,email,isWelcome?'welcome':'projection alert',false,err,(isWelcome?null:(typeof _mailTags==='function'?_mailTags(e.body,e.maybe===true):null))); throw err; } trackEmailSent(); _mailLogNote(e.user,email,isWelcome?'welcome':'projection alert',true,undefined,(isWelcome?null:(typeof _mailTags==='function'?_mailTags(e.body,e.maybe===true):null))); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(email)}).catch(()=>{}); } // [330 · §189] the log note rethrows, so the strike-count path below is unchanged
         if(isWelcome && wkey){ try{ await setDoc(welcomeLogRef,{sent:{[wkey]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[wkey]=true; }catch(_){} }
         // Terminal delete with one retry: if this write is lost after a successful send,
         // the entry becomes re-eligible after claim expiry and every recipient gets the
@@ -6661,7 +6661,30 @@ const mailStatsRef = doc(db,"vacations","mailStats");
 // One entry per RECIPIENT user — {at,to,kind,ok,err} — overwritten by every send from either
 // page, success or failure, so User Activity shows the latest outcome. Called beside the send,
 // never awaited, never throws: it can neither delay nor fail a delivery.
-function _mailLogNote(user,to,kind,ok,err){
+// ── [199 / 361 · §257, owner 8 Oct 2026] WHAT A PROJECTION ALERT CARRIED ─────────────────────────────────
+// "not every projection change is identical": the E-mail Log row of a projection alert also records what that e-mail
+// said, as short tags worked out from the e-mail's OWN lines at the moment it is sent (the text itself is still not
+// stored). One tag per kind of line, in a fixed order; `maybe` = it went out under the "may be a repeat" line.
+// A line no pattern knows adds nothing - the row still reads "projection alert". It can never throw: whatever goes wrong, it
+// answers with no tags. Must match the twin on the other page.
+const MAIL_TAG_ORDER=['to WIN','to UNDER REVIEW','to LOSE','could lower','still WIN, could lower','withdrawn bid would win','bid removed by admin','repeat'];
+function _mailTags(body,maybe){
+  const got=[];
+  try{
+    const add=x=>{ if(!got.includes(x)) got.push(x); };
+    for(const ln of String(body||'').split('\n')){
+      if(got.length>=12) break; // only eight are ever stored: a forged body of thousands of made-up outcomes must not keep this page busy
+      const m=/ changed from [A-Z][A-Z ]*? to ([A-Z][A-Z ]*?)(?=\.|$)/.exec(ln);
+      if(m){ add('to '+m[1]); if(ln.indexOf('the lowest bid of yours that would also win')>=0) add('could lower'); continue; }
+      if(ln.indexOf('You are still projected to WIN')>=0){ add('still WIN, could lower'); continue; }
+      if(ln.indexOf('your withdrawn bid of')>=0){ add('withdrawn bid would win'); continue; }
+      if(ln.indexOf('was removed — you no longer have a bid on this week')>=0){ add('bid removed by admin'); continue; }
+    }
+    if(maybe===true) add('repeat');
+    return got.sort((x,y)=>{ const i=MAIL_TAG_ORDER.indexOf(x), j=MAIL_TAG_ORDER.indexOf(y); return (i<0?99:i)-(j<0?99:j); });
+  }catch(_){ return []; }
+}
+function _mailLogNote(user,to,kind,ok,err,tags){
   try{ _mqSendNote(ok,err); }catch(_){} // [353 · §236] every send's outcome also tells this page whether it can reach the mail service
   try{
     if(!user) return;
@@ -6669,7 +6692,8 @@ function _mailLogNote(user,to,kind,ok,err){
     if(!ok){ const e=err||{}; rec.err=_mqNoAnswer(err)?'no answer':String(e.text||e.message||e.status||e||'failed').slice(0,120); } // [353 · §236] status 0 used to print "[object Object]"
     const p=setDoc(mailLogRef,{[user]:rec},{merge:true});
     if(p&&typeof p.catch==='function') p.catch(function(){});
-    _mailHistNote(user,rec); // [352 · §234] the E-mail Log keeps EVERY attempt, not only the last
+    let _hr=rec; try{ if(Array.isArray(tags)&&tags.length) _hr=Object.assign({},rec,{tags:tags.slice(0,8).map(x=>String(x).slice(0,40))}); }catch(_){ _hr=rec; } // [199 / 361 · §257] what a projection alert carried - on the E-mail Log entry only; the last-e-mail record above is written exactly as before
+    _mailHistNote(user,_hr); // [352 · §234] the E-mail Log keeps EVERY attempt, not only the last
   }catch(_){}
 }
 // ── [352 · §234] The E-mail Log ────────────────────────────────────────────────────────────
@@ -6838,6 +6862,7 @@ ${bullets([
   `A combined bid like 1/2/3 uses bids 1, 2, and 3 at once`,
   npPhasesDescription(),
   ...prioLockBullets(), // [build 268 · BL/COPY] Option A wording, allowance-derived
+  `To exchange the bids on two of your weeks, use ✎ Edit, then ⇄ Swap bids — both change together.`, // [361 · §257] word for word as on the staff page
   `A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.`, // [358 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
   `On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.`,
   ...bfRulesBullets(),
@@ -12358,7 +12383,7 @@ function _mailHistEntries(){
   for(const k of Object.keys(d)){
     const v=d[k]; if(!_isMailHist(k,v)) continue;
     out.push({k:k,at:(typeof v.at==='number'&&v.at>0)?v.at:0,u:String(v.u),to:String(v.to||''),kind:String(v.kind||'mail'),
-      ok:v.ok===true,err:String(v.err||''),by:v.by==='admin'?'admin page':(v.by==='staff'?('staff page'+((typeof v.from==='string'&&/^[A-Za-z0-9._-]{1,8}$/.test(v.from))?' · '+v.from:'')):'—'),phase:_activityPhaseLabel(v)}); // [354 · §238] a staff row also says whose page made the attempt, inside this same column
+      ok:v.ok===true,tags:(Array.isArray(v.tags)?v.tags.filter(x=>typeof x==='string'&&x).slice(0,8).map(x=>x.slice(0,40)):[]),err:String(v.err||''),by:v.by==='admin'?'admin page':(v.by==='staff'?('staff page'+((typeof v.from==='string'&&/^[A-Za-z0-9._-]{1,8}$/.test(v.from))?' · '+v.from:'')):'—'),phase:_activityPhaseLabel(v)}); // [354 · §238] a staff row also says whose page made the attempt, inside this same column
   }
   out.sort((a,b)=>(b.at-a.at)||(a.k<b.k?-1:a.k>b.k?1:0));
   return out;
@@ -12366,9 +12391,10 @@ function _mailHistEntries(){
 let _mlogPerson='', _mlogKind='', _mlogPhase='', _mlogFailed=false;
 function _mlogView(){
   const all=_mailHistEntries();
+  const _isTag=_mlogKind.charAt(0)==='#'&&all.some(e=>e.tags.includes(_mlogKind.slice(1))); // [361 · §257] a choice starting '#' is a TAG only when some row carries that tag - a kind may begin with '#' too
   const filtered=all.filter(e=>{
     if(_mlogPerson && e.u!==_mlogPerson) return false;
-    if(_mlogKind && e.kind!==_mlogKind) return false;
+    if(_mlogKind && (_isTag ? !e.tags.includes(_mlogKind.slice(1)) : e.kind!==_mlogKind)) return false; // [361 · §257] '#…' = a tag of a projection alert
     if(_mlogPhase && e.phase!==_mlogPhase) return false;
     if(_mlogFailed && e.ok) return false;
     return true;
@@ -12387,7 +12413,7 @@ function _mlogWhenLong(ts){ return (typeof ts==='number'&&ts>0)?new Date(ts).toL
 function _mlogScope(v){
   const f=[];
   if(_mlogPerson) f.push('to: '+_mlogPerson);
-  if(_mlogKind) f.push('kind: '+_mlogKind);
+  if(_mlogKind) f.push('kind: '+((_mlogKind.charAt(0)==='#'&&v.all.some(e=>e.tags.includes(_mlogKind.slice(1))))?'projection alert — '+_mlogKind.slice(1):_mlogKind));
   if(_mlogPhase) f.push(_mlogPhase);
   if(_mlogFailed) f.push('failed only');
   const n=v.filtered.length, tot=v.all.length;
@@ -12404,7 +12430,7 @@ function renderMailLog(){
   ctl.innerHTML=
     '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:12.5px">'
     +'<label style="font-size:11px;color:var(--t2)">To:</label><select class="sel" onchange="setMlogFilter(\'person\',this.value)">'+opts(uniq(e=>e.u),_mlogPerson,'Everyone')+'</select>'
-    +'<label style="font-size:11px;color:var(--t2)">Kind:</label><select class="sel" style="max-width:230px" onchange="setMlogFilter(\'kind\',this.value)">'+opts(uniq(e=>e.kind),_mlogKind,'All kinds')+'</select>'
+    +'<label style="font-size:11px;color:var(--t2)">Kind:</label><select class="sel" style="max-width:230px" onchange="setMlogFilter(\'kind\',this.value)">'+opts(uniq(e=>e.kind),_mlogKind,'All kinds')+Array.from(new Set([].concat.apply([],v.all.map(e=>e.tags)))).sort((x,y)=>{ const i=MAIL_TAG_ORDER.indexOf(x), j=MAIL_TAG_ORDER.indexOf(y); return (i<0?99:i)-(j<0?99:j); }).map(t=>'<option value="#'+esc(t)+'"'+(('#'+t)===_mlogKind?' selected':'')+'>\u21b3 '+esc(t)+'</option>').join('')+'</select>'
     +'<label style="font-size:11px;color:var(--t2)">Phase:</label><select class="sel" onchange="setMlogFilter(\'phase\',this.value)">'+opts(uniq(e=>e.phase),_mlogPhase,'All phases')+'</select>'
     +'<label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox"'+(_mlogFailed?' checked':'')+' onchange="setMlogFilter(\'failed\',this.checked)"> Failed only</label>'
     +'<button class="btn" style="margin-left:auto;background:rgba(96,165,250,.15);color:var(--blue);border:1px solid rgba(96,165,250,.3)" onclick="exportMailLog(\'pdf\')">📄 Export PDF</button>'
@@ -12418,7 +12444,7 @@ function renderMailLog(){
     +'<td style="white-space:nowrap;color:var(--t2)">'+esc(e.phase)+'</td>'
     +'<td><span class="mono"><strong>'+esc(e.u)+'</strong></span> <span style="color:var(--t2)">'+esc(_mlogName(e.u))+'</span></td>'
     +'<td class="mono" style="font-size:11.5px">'+esc(e.to)+'</td>'
-    +'<td>'+esc(e.kind)+'</td>'
+    +'<td>'+esc(e.kind)+(e.tags.length?' <span class="mlog-tags" style="color:var(--t2);font-size:11.5px">· '+esc(e.tags.join(' · '))+'</span>':'')+'</td>' // [361 · §257]
     +'<td>'+(e.ok?'<span class="pill p-green">✓ sent</span>':'<span class="pill p-red">✗ failed</span> <span style="font-size:11.5px;color:var(--t2)">'+esc(e.err||'no reason recorded')+'</span>')+'</td>'
     +'<td style="white-space:nowrap;color:var(--t2)">'+esc(e.by)+'</td></tr>').join('')
     ||'<tr><td colspan="7" style="color:var(--t3)">'+(v.all.length?'No recorded e-mail matches these filters.':'No e-mail has been recorded yet. Sends are recorded from this build on.')+'</td></tr>';
@@ -12449,7 +12475,7 @@ window.exportMailLog=function(format){
   if(!v.filtered.length){ toast(v.all.length?'Nothing to export — no recorded e-mail matches the current filters':'Nothing to export — no e-mail has been recorded yet','warn'); return; }
   const now=new Date();
   const stampLine='Exported '+now.toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'})+' · '+_mlogScope(v)+' · newest first';
-  const rows=v.filtered.map(e=>({when:_mlogWhenLong(e.at),phase:e.phase,u:e.u,name:_mlogName(e.u),to:e.to,kind:e.kind,ok:e.ok,result:e.ok?'SENT':'FAILED',err:e.ok?'':(e.err||'no reason recorded'),by:e.by}));
+  const rows=v.filtered.map(e=>({when:_mlogWhenLong(e.at),phase:e.phase,u:e.u,name:_mlogName(e.u),to:e.to,kind:e.kind+(e.tags.length?' — '+e.tags.join(' · '):''),ok:e.ok,result:e.ok?'SENT':'FAILED',err:e.ok?'':(e.err||'no reason recorded'),by:e.by}));
   const fname='vacation-email-log-'+now.toISOString().slice(0,10);
   const PILL={SENT:CL_ACTION_PILL.added,FAILED:CL_ACTION_PILL.removed};
   if(format==='xlsx'){

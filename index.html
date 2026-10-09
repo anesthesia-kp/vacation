@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 198;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 199;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -488,6 +488,11 @@ body{zoom:1.15}
         <option value="10">10</option>
         <option value="NP">NP (No Priority)</option>
       </select>
+      <!-- [199 · §257] Shown by _swapEntrySync only when this is an existing bid and another bid of this phase exists to swap with. -->
+      <div id="swapEntry" style="display:none;margin:0 0 16px;padding:11px 13px;background:rgba(0,107,166,.07);border:1.5px solid rgba(0,107,166,.45);border-radius:8px;text-align:center">
+        <div style="font-size:.84rem;color:#132f49;font-weight:600;margin-bottom:9px">Need a bid number that is on another of your weeks?</div>
+        <button type="button" id="swapOpenBtn" class="btn-secondary" onclick="openSwapStep()" style="width:100%;font-weight:700;font-size:.95rem;border-color:#006ba6;color:#005e93">⇄ Swap bids</button>
+      </div>
       <div class="modal-buttons">
         <button class="btn-secondary" onclick="closeModal()">Cancel</button>
         <button class="btn-primary" onclick="reviewBid()">Continue →</button>
@@ -512,6 +517,35 @@ body{zoom:1.15}
         <button class="btn-secondary" onclick="closeModal()">Cancel</button>
         <button class="btn-secondary" onclick="backToStep1()">← Edit</button>
         <button class="btn-primary" onclick="confirmPriority()">Submit Bid</button>
+      </div>
+    </div>
+    <!-- [199 · §257] Swap bids: pick the other week, then confirm. Their refusal slots are NOT .dlg-err on purpose -
+         the two dialog slots above keep their one-or-two logic untouched. -->
+    <div id="swapStep1" style="display:none">
+      <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:16px">
+        <h2 class="modal-title" style="margin:0;flex:0 0 auto">Swap Bids</h2>
+        <div id="swapErr1" class="swap-err" style="display:none;flex:1 1 auto;background:#fee2e2;border:1px solid #ef4444;color:#b91c1c;border-radius:8px;padding:7px 10px;font-size:.8rem;font-weight:600;line-height:1.35;text-align:center"></div>
+      </div>
+      <div id="swapThisWeek" style="background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.25);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:.85rem"></div>
+      <label class="modal-label">Swap this week's bid with:</label>
+      <select id="swapSelect" class="priority-input"></select>
+      <div class="modal-buttons">
+        <button class="btn-secondary" onclick="closeModal()" style="flex:0 1 auto;white-space:nowrap;padding-left:13px;padding-right:13px">Cancel</button>
+        <button class="btn-secondary" onclick="backFromSwap()" style="flex:0 1 auto;white-space:nowrap;padding-left:13px;padding-right:13px">← Back</button>
+        <button class="btn-primary" onclick="reviewSwap()" style="white-space:nowrap;padding-left:12px;padding-right:12px">Continue →</button>
+      </div>
+    </div>
+    <div id="swapStep2" style="display:none">
+      <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:16px">
+        <h2 class="modal-title" style="margin:0;flex:0 0 auto">Confirm Your Swap</h2>
+        <div id="swapErr2" class="swap-err" style="display:none;flex:1 1 auto;background:#fee2e2;border:1px solid #ef4444;color:#b91c1c;border-radius:8px;padding:7px 10px;font-size:.8rem;font-weight:600;line-height:1.35;text-align:center"></div>
+      </div>
+      <div id="swapSummary" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:14px 16px;margin-bottom:16px"></div>
+      <div id="swapLowering" style="display:none;background:rgba(234,88,12,.08);border:1px solid rgba(234,88,12,.35);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:.82rem;color:#7c2d12;font-weight:600"></div>
+      <div class="modal-buttons">
+        <button class="btn-secondary" onclick="closeModal()" style="flex:0 1 auto;white-space:nowrap;padding-left:13px;padding-right:13px">Cancel</button>
+        <button class="btn-secondary" onclick="backToSwapPick()" style="flex:0 1 auto;white-space:nowrap;padding-left:13px;padding-right:13px">← Back</button>
+        <button class="btn-primary" id="swapConfirmBtn" onclick="confirmSwap()" style="white-space:nowrap;padding-left:12px;padding-right:12px">Swap Bids</button>
       </div>
     </div>
   </div>
@@ -594,6 +628,7 @@ body{zoom:1.15}
         <li>A combined bid like 1/2/3 uses bids 1, 2, and 3 at once</li>
         <li id="ruleNpPhases">NP bids may only be used during the phases for which admin has turned them on</li>
         <li id="rulePrioLock">Bid priorities can only stay the same or get stronger — bid a 5 on a week, and any re-bid there must be 5 or better.</li>
+        <li id="ruleSwap">To exchange the bids on two of your weeks, use ✎ Edit, then ⇄ Swap bids — both change together.</li><!-- [199 · §257] -->
         <li id="ruleCompWeek">A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.</li><!-- [196 · §251] his wording -->
         <li id="ruleNoWeaken">On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.</li><!-- [194 · §248 · 196 · §251 · 197 · §254 · 198 · §255] -->
         <li id="ruleBidFloors" style="display:none"></li><!-- [COPY-3] filled from the live floors at boot; hidden until then so no stale or invented floor text can flash, and it stays hidden when no floor is set -->
@@ -2233,7 +2268,7 @@ async function relayMailQueue(){
         }catch(_){ _mqRelease(qid); continue; } // [H14] we hold the claim — release it
         if(typeof emailjs==='undefined'){ _mqRelease(qid); continue; } // [H14] belt-and-braces (guarded at entry too)
         if(isWelcome && _welcomed(wkey)){ updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{}); continue; } // re-check after the claim settle
-        for(const to of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:to,changes:_mqBody(e,isWelcome)}); }catch(err){ _mailLogNote(e.user,to,isWelcome?'welcome':'projection alert',false,err); throw err; } trackEmailSent(); _mailLogNote(e.user,to,isWelcome?'welcome':'projection alert',true); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); } // [170 · §189] the log note rethrows, so the strike-count path below is unchanged
+        for(const to of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:e.user,to_email:to,changes:_mqBody(e,isWelcome)}); }catch(err){ _mailLogNote(e.user,to,isWelcome?'welcome':'projection alert',false,err,(isWelcome?null:(typeof _mailTags==='function'?_mailTags(e.body,e.maybe===true):null))); throw err; } trackEmailSent(); _mailLogNote(e.user,to,isWelcome?'welcome':'projection alert',true,undefined,(isWelcome?null:(typeof _mailTags==='function'?_mailTags(e.body,e.maybe===true):null))); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); } // [170 · §189] the log note rethrows, so the strike-count path below is unchanged
         // Mark the welcome log after a confirmed relay send so no other page re-sends it.
         if(isWelcome && wkey){ try{ await setDoc(welcomeLogRef,{sent:{[wkey]:true}},{merge:true}); if(welcomeLogData&&welcomeLogData.sent) welcomeLogData.sent[wkey]=true; }catch(_){} }
         // Terminal delete with one retry — a lost delete after a successful send would
@@ -2995,7 +3030,7 @@ function _weBlocks(snap,user,wk,bid,just){
     }catch(_){}
   }
 }
-function _wwRefuses(user,wk,bid){
+function _wwRefuses(user,wk,bid,pic){ // [199 · §257] `pic` (optional): the picture to judge on - the swap passes the board with BOTH bids already exchanged; without it, exactly as 198
   let made=false, tagged=false, hadKey=false, old;
   _wwRefuses.why='down'; // [195 · §249] which half of the rule refused: 'in' (the entry level) or 'down' (194). _wwMsg reads it.
   try{ // [195 · §249] COMING IN. If it cannot be told the entry check stands aside: it must never block an ordinary first bid.
@@ -3016,7 +3051,7 @@ function _wwRefuses(user,wk,bid){
       if(!(priorityScore(bid)>priorityScore(ref))) return false;
     }catch(_){ return false; }
     if(!_wwContested(wk)) return false;
-    const s=JSON.parse(JSON.stringify(data||{}));
+    const s=JSON.parse(JSON.stringify((pic&&typeof pic==='object')?pic:(data||{})));
     if(!s[user]||typeof s[user]!=='object') s[user]={};
     s[user][wk]=bid;
     if(!bidPhaseData[user]){ bidPhaseData[user]={}; made=true; }
@@ -3080,6 +3115,7 @@ function openPriorityModal(wk){
   }
   document.getElementById("prioStep1").style.display="block";
   document.getElementById("prioStep2").style.display="none";
+  if(typeof _swapEntrySync==='function') _swapEntrySync(user,wk,isRebid); // [199 · §257] typeof = sandbox convention
   _clearDlgErrs(); // [160] a refusal from the last attempt never greets the next one
   const sel=document.getElementById("prioritySelect"); sel.value="";
   const isHighPrioOnly=weekMeta[wk]?.highPriorityOnly||false;
@@ -3351,6 +3387,273 @@ window.confirmPriority=async function(){
   window.closeModal();
 };
 
+// ── [199 · §257, owner 8 Oct 2026] SWAP THE BIDS ON TWO OF YOUR OWN WEEKS, IN ONE STEP ─────────────────────
+// Owner-found: a bidder who wants the numbers on two of their weeks the other way round cannot do it by Edit (each box
+// refuses a number that is on another week, and the engine throws out every bid of a person with one number on two
+// weeks), so they removed a bid and placed it again - and colleagues were e-mailed a projection that was out of date a
+// minute later. A swap exchanges the two bids in ONE batch write (both land or neither does, so no number is ever on
+// two weeks) and is judged ONCE: one timer decision, one alert e-mail per affected colleague, carrying the net result.
+// IT IS NEVER LOOSER THAN TWO EDITS. _swapCheck runs, for BOTH weeks and before any write, every gate the Edit path runs
+// (confirmPriority): the page loaded, bidding open, the locks, a bid of this phase on each week, already-won and
+// decided weeks, NP by phase, the week-category floor, held and spent numbers, the competition rule (_wwRefuses, on the
+// picture with both bids exchanged) and the priority lock with its lowering allowance (a swap can cost one lowering,
+// or two). The existing save, Edit and Remove code is not touched by any of this.
+let _swapWith=null, _swapExpect=null, _swapBusy=false;
+function _swapWeekName(wk){ const m=weekMeta[wk]; return m?('Week '+m.weekNum):String(wk); }
+// The other weeks this bidder could swap `wk` with: a bid of this phase, on the board, different from this week's.
+function _swapPartners(user,wk){
+  const out=[];
+  try{
+    if(!user||!data[user]||!isVisibleBid(user,wk)) return out;
+    const mine=data[user][wk]; if(mine===undefined||mine===null) return out;
+    for(const w of myCountedWeeks(user)){
+      if(w===wk||!weekMeta[w]) continue;
+      const p=data[user][w]; if(p===undefined||p===null) continue;
+      if(JSON.stringify(p)===JSON.stringify(mine)) continue; // the same bid on both (two NPs): nothing to exchange
+      out.push({wk:w,bid:p});
+    }
+    out.sort((x,y)=>(x.wk<y.wk?-1:(x.wk>y.wk?1:0)));
+  }catch(_){ return []; }
+  return out;
+}
+// May `user` exchange their bids on wkA and wkB, as the board stands? {ok:true,a,b,inc,low,spends,rem} or {ok:false,msg}.
+// Read-only. `inc` = the bid each week would RECEIVE; `low` = which weeks would spend a lowering.
+function _swapCheck(user,wkA,wkB){
+  const no=m=>({ok:false,msg:m});
+  try{
+    if(typeof _boardReady==='function'&&!_boardReady()) return no("The page is still loading — please try again in a moment.");
+    if(!biddingOpen()) return no("Bidding hasn't started yet — it opens when the admin begins Phase 1.");
+    if(isAuctionClosed()) return no("Bidding is closed — no more changes can be made.");
+    if(!user||!wkA||!wkB||wkA===wkB||!weekMeta[wkA]||!weekMeta[wkB]) return no("That swap is not available.");
+    if(locksData.globalLock) return no("This week is locked — no more changes allowed.");
+    for(const w of [wkA,wkB]){ if(locksData.weeks?.[w]) return no(_swapWeekName(w)+" is locked — no more changes allowed."); }
+    if(!isVisibleBid(user,wkA)||!isVisibleBid(user,wkB)) return no("That swap is not available — both weeks need a bid of yours from this phase.");
+    const a=data[user][wkA], b=data[user][wkB];
+    if(a===undefined||a===null||b===undefined||b===null||JSON.stringify(a)===JSON.stringify(b)) return no("That swap is not available — both weeks need a bid of yours from this phase.");
+    for(const w of [wkA,wkB]){
+      if(getPriorPhaseWinners(w).has(user)) return no("You already won "+_swapWeekName(w)+" in an earlier phase or Phase 4 round — it's locked in for you.");
+      const _ad=p4AnnouncedDecision(user,w);
+      if(_ad) return no("Your bid on "+_swapWeekName(w)+" was decided in Phase 4: Round "+_ad.round+" — it cannot be changed.");
+    }
+    const inc={}; inc[wkA]=b; inc[wkB]=a;
+    const gone=getPriorPhaseUsedPriorities(user);
+    const elsewhere=[];
+    for(const w of myCountedWeeks(user)){ if(w===wkA||w===wkB) continue; const p=data[user][w]; if(p===undefined||p===null||p==="NP") continue; Array.isArray(p)?elsewhere.push(...p):elsewhere.push(p); }
+    for(const w of [wkA,wkB]){
+      const p=inc[w];
+      if(!(p==="NP"||(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10)))) return no("That swap is not available.");
+      if(p==="NP"){ if(!npAllowedNow()) return no("NP bids are not enabled for Phase "+Number(phasesData.currentPhase||1)+" — the admin controls which phases allow them."); }
+      else{
+        const nums=Array.isArray(p)?p:[p];
+        const held=nums.filter(n=>gone.includes(n));
+        if(held.length) return no("Bid"+(held.length>1?"s":"")+" "+held.join(", ")+" cannot be moved — "+(held.length>1?"they are":"it is")+" not available to you.");
+        const conflicts=nums.filter(n=>elsewhere.includes(n));
+        if(conflicts.length) return no("Bid"+(conflicts.length>1?"s":"")+" "+conflicts.join(", ")+" already used on another week.");
+      }
+      const _bfF=bfFloorFor(w);
+      if(!bfAllows(p,_bfF)) return no(_swapWeekName(w)+" is a "+(weekMeta[w]?.highPriorityOnly?"high-demand":"summer")+" week and needs a bid of "+_bfF+" or better.");
+    }
+    // The competition rule, on the picture with BOTH bids exchanged (on the live board the incoming number would read as
+    // being on two weeks). Asked of both weeks; a bid that is not weaker than the one it replaces is never refused.
+    const pic=JSON.parse(JSON.stringify(data||{}));
+    if(!pic[user]||typeof pic[user]!=='object') pic[user]={};
+    pic[user][wkA]=b; pic[user][wkB]=a;
+    if(typeof _wwRefuses==='function'){ // typeof = sandbox convention
+      for(const w of [wkA,wkB]){ if(_wwRefuses(user,w,inc[w],pic)!==false) return no(_swapWeekName(w)+": "+_wwMsg()); }
+    }
+    // The priority lock: a bid weaker than the week's stored floor is a lowering, exactly as in Edit.
+    const lockOn=adminSettings.priorityLockEnabled!==false;
+    const low={}; let spends=0;
+    for(const w of [wkA,wkB]){ const fl=(bestBidsData[user]||{})[w]; low[w]=!!(lockOn&&fl!==undefined&&priorityScore(inc[w])>priorityScore(fl)); if(low[w]) spends++; }
+    const rem=(typeof blRemaining==='function')?blRemaining(user):0; // typeof = sandbox convention (legacy scope ⇒ 0 ⇒ the classic refusal)
+    if(spends>0&&!(rem>=spends)){
+      if(!(rem>0)){ const w=low[wkA]?wkA:wkB; return no(_swapWeekName(w)+": "+(typeof blExhaustedMsg==='function'?blExhaustedMsg((bestBidsData[user]||{})[w]):"Your bid on this week can only stay the same or get stronger — a previous bid set a floor here.")); }
+      return no("This swap lowers both bids and needs 2 bid lowerings — you have "+rem+" left for "+_blWindowLabel()+".");
+    }
+    return {ok:true,a:a,b:b,inc:inc,low:low,spends:spends,rem:rem};
+  }catch(_){ return no("That swap could not be checked — please try again."); }
+}
+function _swapErr(msg){
+  try{ ['swapErr1','swapErr2'].forEach(id=>{ const e=document.getElementById(id); if(!e) return; e.textContent=msg||''; e.style.display=msg?'block':'none'; }); }catch(_){}
+}
+function _swapShow(which){ // 'edit' | 'pick' | 'confirm' - exactly one panel of the dialog is on screen
+  try{
+    const set=(id,on)=>{ const e=document.getElementById(id); if(e) e.style.display=on?'block':'none'; };
+    set('prioStep1',which==='edit'); set('prioStep2',false); set('swapStep1',which==='pick'); set('swapStep2',which==='confirm');
+  }catch(_){}
+}
+// Called by openPriorityModal every time the bid box opens: the swap panels are put away, anything half-chosen is
+// forgotten, and the "Swap bids" button is shown only for an existing bid with something to swap with.
+function _swapEntrySync(user,wk,isRebid){
+  try{
+    _swapWith=null; _swapExpect=null; _swapErr('');
+    const set=(id,on)=>{ const e=document.getElementById(id); if(e) e.style.display=on?'block':'none'; };
+    set('swapStep1',false); set('swapStep2',false);
+    set('swapEntry',!!isRebid&&_swapPartners(user,wk).length>0);
+  }catch(_){}
+}
+window.openSwapStep=function(){
+  const wk=pendingWeek, user=getCurrentUser(); if(!wk||!user||!weekMeta[wk]) return;
+  const list=_swapPartners(user,wk);
+  if(!list.length){ showError("You have no other bid to swap with."); return; }
+  const meta=weekMeta[wk];
+  const here=document.getElementById('swapThisWeek');
+  if(here) here.innerHTML='<div style="font-size:.7rem;color:#48607a;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">This week</div><div style="font-weight:700;color:#132f49">Week '+escH(meta.weekNum)+' ('+escH(meta.range)+') — bid '+escH(bidLbl(data[user][wk]))+'</div>';
+  const sel=document.getElementById('swapSelect'); if(!sel) return;
+  sel.innerHTML='<option value="">-- Select a week --</option>'+list.map(o=>'<option value="'+escH(o.wk)+'">Week '+escH(weekMeta[o.wk].weekNum)+' ('+escH(weekMeta[o.wk].shortDate||weekMeta[o.wk].range)+') — bid '+escH(bidLbl(o.bid))+'</option>').join('');
+  sel.value="";
+  _swapWith=null; _swapExpect=null; _swapErr(''); _clearDlgErrs();
+  _swapShow('pick');
+  try{ sel.focus(); }catch(_){}
+};
+window.backFromSwap=function(){ _swapWith=null; _swapExpect=null; _swapErr(''); _swapShow('edit'); };
+window.backToSwapPick=function(){ _swapWith=null; _swapExpect=null; _swapErr(''); _swapShow('pick'); };
+window.reviewSwap=function(){
+  const wkA=pendingWeek, user=getCurrentUser(); if(!wkA||!user) return;
+  const sel=document.getElementById('swapSelect'), wkB=sel?sel.value:'';
+  if(!wkB){ _swapErr("Please choose a week to swap with."); return; }
+  const c=_swapCheck(user,wkA,wkB);
+  if(!c.ok){ _swapErr(c.msg); return; }
+  _swapErr('');
+  _swapWith=wkB; _swapExpect=JSON.stringify([c.a,c.b]);
+  const row=(w,from,to)=>'<div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;padding:7px 0;border-top:1px solid rgba(34,197,94,.25)"><div><strong style="color:#132f49">Week '+escH(weekMeta[w].weekNum)+'</strong> <span style="color:#48607a;font-size:.8rem">'+escH(weekMeta[w].range)+'</span></div><div style="font-size:1.15rem;font-weight:700;color:#00753a;white-space:nowrap">'+escH(bidLbl(from))+' → '+escH(bidLbl(to))+'</div></div>';
+  const sum=document.getElementById('swapSummary');
+  if(sum) sum.innerHTML='<div style="font-weight:700;color:#132f49;margin-bottom:8px">You are swapping two of your bids.</div>'+row(wkA,c.a,c.b)+row(wkB,c.b,c.a)+'<div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(34,197,94,.25);font-size:.8rem;color:#3b566d;line-height:1.45">Both change together; colleagues get one alert e-mail, and only if their projection changes.</div>';
+  const lows=[wkA,wkB].filter(w=>c.low[w]);
+  let note='';
+  if(lows.length){
+    note=lows.map(w=>'⚠️ This LOWERS your bid on '+_swapWeekName(w)+' from '+blFmtBid((bestBidsData[user]||{})[w])+' to '+blFmtBid(c.inc[w])+'.').join(' ');
+    if(blAllowance(Number(phasesData.currentPhase||1))!==Infinity) note+=' It will use '+lows.length+' of your '+c.rem+' remaining bid lowering'+(c.rem!==1?'s':'')+' for '+_blWindowLabel()+'.';
+  }
+  const lw=document.getElementById('swapLowering');
+  if(lw){ lw.textContent=note; lw.style.display=note?'block':'none'; }
+  _swapShow('confirm');
+};
+// The save. ONE batch: both weeks and their phase tags. Then, once, on the same before / after pictures: the Fair Play
+// facts, the timer decision and the alert e-mails - the shape of persistScheduleChange, for two weeks instead of one.
+// Returns false (nothing saved, or it could not be confirmed) or {facts}. Bookkeeping is the caller's, as in Edit.
+async function persistSwap(user,wkA,wkB,a,b,prevSnapshot){
+  if(typeof _boardReady==='function'&&!_boardReady()){ showCenterAlert("The page is still loading — please try again in a moment."); return false; }
+  if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); return false; }
+  if(isAuctionClosed()){ showError("Bidding is closed — no more changes can be made."); return false; }
+  if(locksData.globalLock||locksData.weeks?.[wkA]||locksData.weeks?.[wkB]){ showError("This week is locked — no more changes allowed."); return false; }
+  const _pu=(prevSnapshot&&prevSnapshot[user]&&typeof prevSnapshot[user]==='object')?prevSnapshot[user]:null;
+  if(!_pu||wkA===wkB||JSON.stringify(_pu[wkA])!==JSON.stringify(a)||JSON.stringify(_pu[wkB])!==JSON.stringify(b)||!isCurrentPhaseBid(user,wkA)||!isCurrentPhaseBid(user,wkB)){ showError("That swap is not available."); return false; }
+  if(saveInProgress){ showCenterAlert("Still saving your previous change — please wait a moment and try again."); return false; }
+  saveInProgress=true;
+  const safety=setTimeout(()=>{saveInProgress=false;},15000);
+  try{
+    const _ph=Number(phasesData.currentPhase||1);
+    const _b=writeBatch(db);
+    _b.set(scheduleRef, {[user]: {[wkA]: b, [wkB]: a}}, {merge:true});
+    _b.set(bidPhaseRef, {[user]: {[wkA]: _ph, [wkB]: _ph}}, {merge:true});
+    await _awaitWrite(_b.commit());
+    if(!bidPhaseData[user]) bidPhaseData[user]={};
+    bidPhaseData[user][wkA]=_ph; bidPhaseData[user][wkB]=_ph;
+    const _beforeSnap=prevSnapshot;
+    const _afterSnap=JSON.parse(JSON.stringify(prevSnapshot));
+    _afterSnap[user][wkA]=b; _afterSnap[user][wkB]=a;
+    const _remBefore=timerData.lastChange?(((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)):1;
+    // The recorded facts (183): one set for the log entry of each week. aff is the answer for that WEEK alone; tReset is set on one entry only.
+    let facts=null;
+    try{
+      const pa=computeApprovals(_beforeSnap), na=computeApprovals(_afterSnap);
+      const affOn=w=>{ for(const u of new Set([...Object.keys(_beforeSnap),...Object.keys(_afterSnap)])){ if(u===user) continue;
+          const pu=(_beforeSnap[u]&&typeof _beforeSnap[u]==='object')?_beforeSnap[u]:{}, nu=(_afterSnap[u]&&typeof _afterSnap[u]==='object')?_afterSnap[u]:{};
+          if(pu[w]===undefined&&nu[w]===undefined) continue;
+          if(uiOutcome(getOutcome(w,u,pa))!==uiOutcome(getOutcome(w,u,na))) return true; } return false; };
+      facts={};
+      for(const w of [wkA,wkB]){ const f={tReset:false,aff:affOn(w)};
+        if(timerData.enabled&&timerData.lastChange){ f.tRem=Math.round(_remBefore); f.tDur=Math.min((timerData.durationHours||48),stage0Hours())*3600000; }
+        facts[w]=f; }
+    }catch(_){ facts=null; }
+    if(timerData.enabled&&_remBefore>0&&!openingWindowActive()
+       &&_timerModeAllowsReset(_timerResetMode(),false,_beforeSnap,_afterSnap,user)){
+      const _n=Date.now(); const _resetH=timerResetHours(timerPhaseStartMs(),_n);
+      const _curDeadline=timerData.lastChange?(timerData.lastChange+((timerData.durationHours||48)*3600000)):0;
+      if(_n+_resetH*3600000>=_curDeadline){ if(facts){ const w=(facts[wkA].aff||!facts[wkB].aff)?wkA:wkB; facts[w].tReset=true; } setDoc(timerRef,{lastChange:_n,durationHours:_resetH},{merge:true}).catch(()=>{}); }
+    }
+    if(adminSettings.emailNotifsEnabled!==false){
+      sendEmailNotifications(_beforeSnap,_afterSnap,user).catch(()=>{});
+    }
+    return {facts:facts};
+  }catch(e){
+    if(e&&e.code==="write-deadline"){
+      showError("Couldn't confirm your swap — your connection may have dropped. Check the board before you leave this page.");
+    } else {
+      showError("Save failed: "+e.message);
+    }
+    return false;
+  } finally {
+    clearTimeout(safety);
+    saveInProgress=false;
+  }
+}
+window._persistSwap=persistSwap; // exposed for testing
+window.confirmSwap=async function(){
+  // One swap at a time: unlike re-saving the same bid, a second Confirm is NOT harmless - it would swap the bids back.
+  // A second press of the same button finds the box no longer armed and says nothing; a DIFFERENT swap confirmed while
+  // this one is still being recorded is told to wait (it used to be dropped without a word - audit, 9 Oct 2026).
+  if(_swapBusy){ if(pendingWeek&&_swapWith) showCenterAlert("Still saving your previous change — please wait a moment and try again."); return; }
+  const wkA=pendingWeek, wkB=_swapWith, user=getCurrentUser();
+  if(!wkA||!wkB||!user) return;
+  _swapBusy=true;
+  let _btn=null;
+  try{
+    // ALL gates again, on the board as it stands NOW, before any write (the L-3 pattern of confirmPriority).
+    const c=_swapCheck(user,wkA,wkB);
+    if(!c.ok){ showCenterAlert(c.msg); window.closeModal(); return; }
+    // The confirm panel named two bids. If either has changed since (a second tab or device), nothing is swapped.
+    if(_swapExpect!==JSON.stringify([c.a,c.b])){ showCenterAlert("Your bids changed while this box was open — nothing was swapped. Please check the board and try again."); window.closeModal(); return; }
+    _swapWith=null; _swapExpect=null;
+    try{ _btn=document.getElementById('swapConfirmBtn'); if(_btn){ _btn.disabled=true; _btn.textContent='Saving…'; } }catch(_){ _btn=null; }
+    const _prev=JSON.parse(JSON.stringify(data));
+    const saved=await persistSwap(user,wkA,wkB,c.a,c.b,_prev);
+    if(!saved){ scheduleRender(); window.closeModal(); return; }
+    // The board, only where it still shows the old bid: a newer snapshot may already have brought the new one, or something newer still.
+    if(data[user]&&typeof data[user]==='object'){
+      if(JSON.stringify(data[user][wkA])===JSON.stringify(c.a)) data[user][wkA]=c.b;
+      if(JSON.stringify(data[user][wkB])===JSON.stringify(c.b)) data[user][wkB]=c.a;
+    }
+    // BOTH change-log rows go out now, before any other bookkeeping is waited for: the competition rule replays that log in the
+    // order the server took the rows, and a row that arrived AFTER a later removal of the same bid would read as that person
+    // coming back (audit, 9 Oct 2026). logOwnChange takes its facts before its first await, so each row gets its own.
+    for(const w of [wkA,wkB]){
+      try{ _fpLastFacts=(saved.facts&&saved.facts[w])?{user:user,wk:w,f:saved.facts[w]}:null; }catch(_){}
+      logOwnChange(user,w,c.low[w]?'lowered':'edited',c.inc[w]).catch(()=>{});
+    }
+    scheduleRender();
+    // Then the floors and the lowering count - a week that spends a lowering first. The box stays up, its button reading
+    // "Saving…", until they are in: an Edit of one of these weeks made before then would be judged on the old floor and the
+    // old count (audit, 9 Oct 2026 - the same wait the ordinary bid box makes). Each write is its own attempt, so a failure on
+    // one never costs another.
+    let _bkFail=false, _uncounted=false;
+    for(const w of ((c.low[wkB]&&!c.low[wkA])?[wkB,wkA]:[wkA,wkB])){
+      try{
+        await saveBestBid(user,w,c.inc[w],!!c.low[w]);
+        if(c.low[w]&&typeof _blCommitSpend==='function'){ try{ await _blCommitSpend(user); }catch(_bl){ _uncounted=true; } }
+      }catch(_bk){ _bkFail=true; }
+    }
+    // Now the box closes - but only if it is still THIS swap's box (the bidder may have closed it and opened another week).
+    _clearDlgErrs(); if(pendingWeek===wkA) window.closeModal();
+    // Last, the bid times.
+    for(const w of [wkA,wkB]){
+      try{
+        const ts=Date.now();
+        await _awaitWrite(setDoc(bidTimesRef,{[user]:{[w]:ts}},{merge:true}));
+        if(!bidTimesData[user]) bidTimesData[user]={};
+        bidTimesData[user][w]=ts;
+      }catch(_bk){ _bkFail=true; }
+    }
+    if(_bkFail) showCenterAlert("Your swap IS saved. Some bookkeeping (bid floor or timestamp) didn't record — it will self-correct on your next change; no action needed.");
+    if(_uncounted) showCenterAlert("Your swap IS saved and the lower bid stands. One thing did NOT record: a lowering was not counted against your allowance, and it will not correct itself. Please tell your admin so the count can be put right.");
+    scheduleRender();
+  } finally {
+    _swapBusy=false;
+    try{ if(_btn){ _btn.disabled=false; _btn.textContent='Swap Bids'; } }catch(_){}
+  }
+};
+
 async function removeSelection(wk){
   if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); return; }
   if(isAuctionClosed()){ showError("Bidding is closed — no more changes can be made."); return; }
@@ -3393,7 +3696,7 @@ async function removeSelection(wk){
   // [187 · §237] Owner-found: bidders remove a bid and place a new one when Edit would do, and each step
   // sends its own projection alerts. Wording only (his, 4 Oct 2026) - shown above the lock note, in the one
   // boxed note of this dialog. Nothing about the remove itself changes.
-  const _editMsg='<div style="margin-top:12px;padding:11px 13px;background:rgba(251,191,36,.18);border:1.5px solid rgba(217,119,6,.6);border-radius:8px;font-size:.88rem;color:#4a3000;line-height:1.5"><strong>Only changing your bid?</strong> Use ✎ Edit instead. Removing and re-bidding can send colleagues multiple alert e-mails.'+((_rmShut||_rmLast)?'':' If the bid you want is in use on another week, removing is fine.')+'</div>';
+  const _editMsg='<div style="margin-top:12px;padding:11px 13px;background:rgba(251,191,36,.18);border:1.5px solid rgba(217,119,6,.6);border-radius:8px;font-size:.88rem;color:#4a3000;line-height:1.5"><strong>Only changing your bid?</strong> Use ✎ Edit instead. Removing and re-bidding can send colleagues multiple alert e-mails.'+' If the bid you want is on another of your weeks, use ✎ Edit, then ⇄ Swap bids.'+'</div>';
   let lockMsg;
   // [157 · RA-H11] Never promise a lowering the week's rules make impossible: check whether
   // ANY allowed value is actually weaker than the stored lock (bid floor + NP-phase rules,
@@ -4535,7 +4838,7 @@ async function sendEmailNotifications(prevSnap,newSnap,actor){
       try{ const _t=Date.now(); await setDoc(mailQueueRef,{[qid]:(_mqCan?{user,body:bodyText,ts:_t,claimedAt:_t,claimedBy:MQ_ID}:{user,body:bodyText,ts:_t})},{merge:true}); _mqQueued=true; }catch(_){}
       try{
         if(typeof emailjs!=="undefined"){
-          for(const to of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:to,changes:bodyText}); }catch(err){ _mailLogNote(user,to,'projection alert',false,err); throw err; } trackEmailSent(); _mailLogNote(user,to,'projection alert',true); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); } // [170 · §189] log note rethrows — the entry stays queued exactly as before
+          for(const to of recips){ try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:to,changes:bodyText}); }catch(err){ _mailLogNote(user,to,'projection alert',false,err,(typeof _mailTags==='function'?_mailTags(bodyText):null)); throw err; } trackEmailSent(); _mailLogNote(user,to,'projection alert',true,undefined,(typeof _mailTags==='function'?_mailTags(bodyText):null)); await updateDoc(mailQueueRef,{[qid+'.sentTo']:arrayUnion(to)}).catch(()=>{}); } // [170 · §189] log note rethrows — the entry stays queued exactly as before
           updateDoc(mailQueueRef,{[qid]:deleteField()}).catch(()=>{});
         }
       }catch(_){/* leave queued — another page (or the admin panel) will send it */
@@ -5028,7 +5331,30 @@ function _recordLogin(user){
 // page, success or failure, so the admin sees the latest outcome. Called beside the send, never
 // awaited, never throws: it can neither delay nor fail a delivery. (The rules let a registered
 // user touch one entry per write, the same containment as the mail queue.)
-function _mailLogNote(user,to,kind,ok,err){
+// ── [199 / 361 · §257, owner 8 Oct 2026] WHAT A PROJECTION ALERT CARRIED ─────────────────────────────────
+// "not every projection change is identical": the E-mail Log row of a projection alert also records what that e-mail
+// said, as short tags worked out from the e-mail's OWN lines at the moment it is sent (the text itself is still not
+// stored). One tag per kind of line, in a fixed order; `maybe` = it went out under the "may be a repeat" line.
+// A line no pattern knows adds nothing - the row still reads "projection alert". It can never throw: whatever goes wrong, it
+// answers with no tags. Must match the twin on the other page.
+const MAIL_TAG_ORDER=['to WIN','to UNDER REVIEW','to LOSE','could lower','still WIN, could lower','withdrawn bid would win','bid removed by admin','repeat'];
+function _mailTags(body,maybe){
+  const got=[];
+  try{
+    const add=x=>{ if(!got.includes(x)) got.push(x); };
+    for(const ln of String(body||'').split('\n')){
+      if(got.length>=12) break; // only eight are ever stored: a forged body of thousands of made-up outcomes must not keep this page busy
+      const m=/ changed from [A-Z][A-Z ]*? to ([A-Z][A-Z ]*?)(?=\.|$)/.exec(ln);
+      if(m){ add('to '+m[1]); if(ln.indexOf('the lowest bid of yours that would also win')>=0) add('could lower'); continue; }
+      if(ln.indexOf('You are still projected to WIN')>=0){ add('still WIN, could lower'); continue; }
+      if(ln.indexOf('your withdrawn bid of')>=0){ add('withdrawn bid would win'); continue; }
+      if(ln.indexOf('was removed — you no longer have a bid on this week')>=0){ add('bid removed by admin'); continue; }
+    }
+    if(maybe===true) add('repeat');
+    return got.sort((x,y)=>{ const i=MAIL_TAG_ORDER.indexOf(x), j=MAIL_TAG_ORDER.indexOf(y); return (i<0?99:i)-(j<0?99:j); });
+  }catch(_){ return []; }
+}
+function _mailLogNote(user,to,kind,ok,err,tags){
   try{ _mqSendNote(ok,err); }catch(_){} // [186 · §236] every send's outcome also tells this page whether it can reach the mail service
   try{
     if(!user) return;
@@ -5036,7 +5362,8 @@ function _mailLogNote(user,to,kind,ok,err){
     if(!ok){ const e=err||{}; rec.err=_mqNoAnswer(err)?'no answer':String(e.text||e.message||e.status||e||'failed').slice(0,120); } // [186 · §236] status 0 used to print "[object Object]"
     const p=setDoc(mailLogRef,{[user]:rec},{merge:true});
     if(p&&typeof p.catch==='function') p.catch(function(){});
-    _mailHistNote(user,rec); // [185 · §234] the E-mail Log keeps EVERY attempt, not only the last
+    let _hr=rec; try{ if(Array.isArray(tags)&&tags.length) _hr=Object.assign({},rec,{tags:tags.slice(0,8).map(x=>String(x).slice(0,40))}); }catch(_){ _hr=rec; } // [199 / 361 · §257] what a projection alert carried - on the E-mail Log entry only; the last-e-mail record above is written exactly as before
+    _mailHistNote(user,_hr); // [185 · §234] the E-mail Log keeps EVERY attempt, not only the last
   }catch(_){}
 }
 // ── [185 · §234] The E-mail Log ────────────────────────────────────────────────────────────
@@ -5215,6 +5542,7 @@ ${bullets([
   `A combined bid like 1/2/3 uses bids 1, 2, and 3 at once`,
   npPhasesDescription(),
   ...prioLockBullets(), // [build 139 · BL/COPY] Option A wording, allowance-derived
+  `To exchange the bids on two of your weeks, use ✎ Edit, then ⇄ Swap bids — both change together.`, // [199 · §257] word for word as on the page
   `A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.`, // [196 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
   `On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.`,
   ...bfRulesBullets(),
