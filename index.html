@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 199;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 200;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -3068,6 +3068,35 @@ function _wwRefuses(user,wk,bid,pic){ // [199 · §257] `pic` (optional): the pi
     }catch(_){}
   }
 }
+// ── [200 · §258, owner 10 Oct 2026] THE BID BOX SAYS WHY, AND SHOWS WHICH ────────────────────────────────────────
+// Paint only: nothing here decides, waits, writes or changes which numbers can be chosen.
+const WW_SOME_IN='Some numbers are greyed out: a new bid here must be at least as strong as the weakest bid that is winning or under review.';
+const WW_SOME_LEFT='Some numbers are greyed out: a new bid here must be at least as strong as the last bid that was on this week.';
+const WW_SOME_DOWN='Some numbers are greyed out: on a competition week you can only weaken your bid if it would still win and is no lower than the lowest other winning bid.';
+// Which note, if any. `why` = how many numbers each half of the competition rule greyed that the person could otherwise
+// have chosen; `isRebid` = they hold a bid on the week now; `allGreyed` = no number is left (that case has its own note).
+// Someone with no bid on the week is placing a NEW bid, so the coming-in wording leads; anything unknown = no note.
+function _wwSomeNote(why,isRebid,allGreyed){
+  try{
+    if(allGreyed||!why) return '';
+    const n=k=>{ const v=Number(why[k]); return (isFinite(v)&&v>0)?v:0; };
+    if(!isRebid){ if(n('left')) return WW_SOME_LEFT; if(n('in')) return WW_SOME_IN; }
+    return n('down')?WW_SOME_DOWN:'';
+  }catch(_){ return ''; }
+}
+// The phone draws its own drop-down, so no style reaches a greyed number there: the line is written into the text itself,
+// a combining stroke after each character. The plain label is kept on the option and put back whenever it is available again.
+function _strikeText(t){ return Array.from(String(t)).map(c=>c+'\u0336').join(''); }
+function _strikeOptions(sel){
+  if(!sel||typeof sel.querySelectorAll!=='function') return;
+  sel.querySelectorAll('option').forEach(opt=>{
+    if(!opt.value) return;
+    let base=opt.getAttribute('data-label');
+    if(base===null||base===undefined||base===''){ base=opt.textContent; opt.setAttribute('data-label',base); }
+    if(opt.disabled){ opt.textContent=_strikeText(base); opt.setAttribute('aria-label',base+' (not available)'); }
+    else{ opt.textContent=base; opt.removeAttribute('aria-label'); }
+  });
+}
 function openPriorityModal(wk){
   if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); return; }
   if(isAuctionClosed()){ showError("Bidding is closed — no more changes can be made."); return; }
@@ -3143,7 +3172,10 @@ function openPriorityModal(wk){
   });
   // [193 · §245] On a week where a bidding competition has happened, a weaker bid that would still
   // win below the weakest other winning bid is greyed out like a number already in use.
-  if(typeof _wwRefuses==='function'){ sel.querySelectorAll("option").forEach(opt=>{ if(opt.value&&!opt.disabled&&_wwRefuses(user,wk,_bfParse(opt.value))!==false) opt.disabled=true; }); } // typeof = sandbox convention
+  // [200 · §258] …and counts WHICH half of the rule refused each one ('in' / 'left' / 'down'), for the note below. A refusal that
+  // could not be told (null) greys the number exactly as before and is not counted: the note never speaks on a guess.
+  const _wwWhy=Object.create(null); _wwWhy.in=0; _wwWhy.left=0; _wwWhy.down=0;
+  if(typeof _wwRefuses==='function'){ sel.querySelectorAll("option").forEach(opt=>{ if(opt.value&&!opt.disabled){ const _r=_wwRefuses(user,wk,_bfParse(opt.value)); if(_r!==false){ opt.disabled=true; if(_r===true&&typeof _wwWhy[_wwRefuses.why]==='number') _wwWhy[_wwRefuses.why]++; } } }); } // typeof = sandbox convention
   // [194 · §248, owner 7 Oct 2026] The box must never sit silent: when EVERY number is greyed and this rule refuses at least one
   // of them (someone who left a fought-over week, put that number elsewhere and came back), the week panel says why and the way
   // back. Paint only - it changes no option and no bid. A box with anything selectable, or one this rule refuses nothing in, is untouched.
@@ -3156,6 +3188,15 @@ function openPriorityModal(wk){
       winfo.innerHTML+='<div id="wwNoneNote" style="margin-top:8px;padding:8px 10px;background:rgba(251,191,36,.18);border:1px solid rgba(217,119,6,.6);border-radius:8px;font-size:.8rem;color:#4a3000;line-height:1.45">'+((typeof _weAlone==='function'&&_weAlone(user,wk))?'No bid is available to you on this week right now. This week has had a bidding competition, and a new bid must be at least as strong as the last bid that was on it.':_wwBack?'No bid is available to you on this week right now. On a week with a bidding competition you can bid again only with your previous bid or stronger, or with a weaker bid that would still win and is no lower than the lowest other winning bid. If your previous bid number is on another week, moving it back makes it available here.':'No bid is available to you on this week right now. On a week with a bidding competition a new bid must be at least as strong as the weakest bid there that is winning or under review.')+'</div>';
     }
   }catch(_){}
+  // [200 · §258, owner 10 Oct 2026] When the rule greys only SOME numbers the box used to say nothing. One short note, only then:
+  // never beside the will-make-a-competition note, and never when EVERY number is greyed - _wwSomeNote answers nothing then (each of those has its own note). Paint only.
+  try{ if(winfo&&typeof _wwSomeNote==='function'&&String(winfo.innerHTML).indexOf('wwTipNote')<0){
+    const _wwOpts=[...sel.querySelectorAll("option")].filter(o=>o.value);
+    const _wwT=_wwSomeNote(_wwWhy,isRebid,_wwOpts.length>0&&_wwOpts.every(o=>o.disabled));
+    if(_wwT) winfo.innerHTML+='<div id="wwSomeNote" style="margin-top:8px;padding:8px 10px;background:rgba(251,191,36,.18);border:1px solid rgba(217,119,6,.6);border-radius:8px;font-size:.8rem;color:#4a3000;line-height:1.45">'+_wwT+'</div>';
+  } }catch(_){}
+  // [200 · §258] A line through every unavailable number, whatever made it unavailable. Paint only; runs last, on the final picture.
+  try{ if(typeof _strikeOptions==='function') _strikeOptions(sel); }catch(_){}
   modal.classList.add("show"); sel.focus();
 }
 window.openPriorityModal=openPriorityModal;
