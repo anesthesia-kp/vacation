@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 201;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 202;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -307,6 +307,38 @@ select:focus{outline:none;border-color:#006ba6}
 }
 .priority-input{width:100%;padding:10px 13px;margin-bottom:16px;border:2px solid #9fb4c6;border-radius:10px;background:#eef2f6;color:#0a2540;font-size:.95rem;transition:border-color .2s}
 .priority-input:focus{outline:none;border-color:#006ba6}
+/* [202 · §259] The bid box's choices are buttons on the page, not a drop-down the phone draws. Every size here is a class rule,
+   never an inline style: the phone rule further down forces any INLINE grid in this box to three columns. */
+.bid-tiles{margin-bottom:14px}
+.bid-tiles-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.bid-tile{flex:none;min-height:46px;padding:4px;border:2px solid #006ba6;border-radius:10px;background:#fff;color:#005e93;font-size:1.05rem;font-weight:700;font-variant-numeric:tabular-nums}
+.bid-tile.wide{grid-column:span 2}
+.bid-tile[aria-pressed="true"],.swap-row[aria-pressed="true"]{background:#006ba6;color:#fff}
+.bid-tile,.swap-row{touch-action:manipulation} /* two quick taps choose twice - they never zoom the page */
+.bid-tile:focus-visible,.swap-row:focus-visible{outline:3px solid #3b82f6;outline-offset:2px}
+.bid-tiles:focus,.bid-tiles-na:focus,.swap-rows:focus{outline:none} /* the holder takes the keyboard when the box opens (see _pickFocus); it is not itself a control */
+.bid-tiles-hint{margin-top:10px;min-height:1.4em;font-size:.88rem;color:#132f49}
+.bid-tiles-hint b{color:#005e93}
+.bid-tiles-na{margin:0 0 14px;padding-top:10px;border-top:1px solid #d7e0e8}
+.bid-tiles-na-h{margin-bottom:6px;font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#55667a}
+.bid-tiles-na-list{display:flex;flex-wrap:wrap;gap:5px}
+.bid-tiles-na-chip{padding:3px 9px;border:1px dashed #b8c4cf;border-radius:999px;background:#f1f4f7;color:#55667a;font-size:.82rem;font-variant-numeric:tabular-nums}
+.swap-rows{display:flex;flex-direction:column;gap:8px;margin-bottom:14px}
+.swap-row{flex:none;display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:50px;padding:8px 14px;border:2px solid #006ba6;border-radius:10px;background:#fff;color:#005e93;font-size:.95rem;font-weight:700;text-align:left}
+.swap-row-bid{font-size:1.05rem;white-space:nowrap}
+/* The list the bid is read from stays in the page, out of sight, ONLY while its buttons are drawn (the script sets .tiles-on last).
+   min-width:0 undoes the 180px every drop-down on this page is given on a wide screen. */
+.tiles-on>.priority-input{position:absolute;width:1px;min-width:0;height:1px;margin:-1px;padding:0;border:0;opacity:0;overflow:hidden;clip-path:inset(50%);pointer-events:none}
+/* Cancel / Continue stay on screen in every step of this box: the row sticks to the bottom while the rest scrolls behind it.
+   dvh = the part of a phone's screen its own toolbars leave free; a browser without it keeps the 90vh above. */
+#priorityModal .modal-content{padding-bottom:0;max-height:90dvh;scroll-padding-bottom:84px} /* scroll-padding: a button reached by the Tab key is never left under the row */
+#priorityModal .modal-buttons{position:sticky;bottom:0;z-index:1;background:#fff;padding:12px 0 18px;border-top:1px solid #d7e0e8}
+/* What scrolls behind the row fades out above it - the sign that there is more below. At the end of the box it lies over empty space. */
+#priorityModal .modal-buttons::before{content:"";position:absolute;left:0;right:0;bottom:calc(100% + 1px);height:16px;background:linear-gradient(to top,#fff,rgba(255,255,255,0));pointer-events:none}
+/* A wide screen is drawn at 115% (body zoom, further down), which makes 90dvh taller than the window: 78 × 1.15 = 90. */
+@media(min-width:821px) and (min-height:481px){#priorityModal .modal-content{max-height:78dvh}} /* not on a wide phone held sideways: there every pixel of height shows a choice */
+/* A phone held sideways has too little height for a row that stays put - it would cover the choices. There the row ends the box, as before 202. */
+@media(orientation:landscape) and (max-height:480px){#priorityModal .modal-buttons{position:relative}}
 .modal-buttons{display:flex;gap:10px;flex-wrap:wrap}
 button{flex:1;padding:10px 16px;border:none;border-radius:10px;font-size:.9rem;font-weight:600;cursor:pointer;transition:all .2s}
 .btn-primary{background:linear-gradient(135deg,#006ba6,#3b82f6);color:#fff}
@@ -488,11 +520,15 @@ body{zoom:1.15}
         <option value="10">10</option>
         <option value="NP">NP (No Priority)</option>
       </select>
+      <!-- [202 · §259] Filled by _bidTilesPaint each time the box opens: one button per number that can be chosen. Empty and hidden until then. -->
+      <div id="bidTiles" class="bid-tiles" style="display:none"></div>
       <!-- [199 · §257] Shown by _swapEntrySync only when this is an existing bid and another bid of this phase exists to swap with. -->
-      <div id="swapEntry" style="display:none;margin:0 0 16px;padding:11px 13px;background:rgba(0,107,166,.07);border:1.5px solid rgba(0,107,166,.45);border-radius:8px;text-align:center">
-        <div style="font-size:.84rem;color:#132f49;font-weight:600;margin-bottom:9px">Need a bid number that is on another of your weeks?</div>
-        <button type="button" id="swapOpenBtn" class="btn-secondary" onclick="openSwapStep()" style="width:100%;font-weight:700;font-size:.95rem;border-color:#006ba6;color:#005e93">⇄ Swap bids</button>
+      <div id="swapEntry" style="display:none;margin:0 0 14px;text-align:center">
+        <button type="button" id="swapOpenBtn" class="btn-secondary" onclick="openSwapStep()" style="width:100%;min-height:50px;font-weight:700;font-size:1.2rem;border-color:#006ba6;color:#005e93;background:rgba(0,107,166,.07)">⇄ Swap bids</button>
+        <div style="font-size:.78rem;color:#48607a;margin-top:5px">Need a bid number that is on another of your weeks?</div>
       </div>
+      <!-- [202 · §259] The numbers that cannot be chosen, small and last: visible, out of the way. Filled by _bidTilesPaint. -->
+      <div id="bidTilesNA" class="bid-tiles-na" style="display:none"></div>
       <div class="modal-buttons">
         <button class="btn-secondary" onclick="closeModal()">Cancel</button>
         <button class="btn-primary" onclick="reviewBid()">Continue →</button>
@@ -529,6 +565,8 @@ body{zoom:1.15}
       <div id="swapThisWeek" style="background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.25);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:.85rem"></div>
       <label class="modal-label">Swap this week's bid with:</label>
       <select id="swapSelect" class="priority-input"></select>
+      <!-- [202 · §259] Filled by _swapRowsPaint each time the Swap step opens: one button per week. -->
+      <div id="swapRows" class="swap-rows" style="display:none"></div>
       <div class="modal-buttons">
         <button class="btn-secondary" onclick="closeModal()" style="flex:0 1 auto;white-space:nowrap;padding-left:13px;padding-right:13px">Cancel</button>
         <button class="btn-secondary" onclick="backFromSwap()" style="flex:0 1 auto;white-space:nowrap;padding-left:13px;padding-right:13px">← Back</button>
@@ -3105,6 +3143,139 @@ function _groupOptions(sel){
   Array.from(sel.querySelectorAll('optgroup')).forEach(g=>{ if(g!==grp&&typeof g.remove==='function') g.remove(); }); // last opening's heading, emptied above
   try{ sel.value=keep; }catch(_){}
 }
+// [202 · §259, owner 10 Oct 2026: "usable bids appear too high sometimes and also block the new message we have about comp weeks"]
+// A phone draws a drop-down's list itself - where it opens, what it scrolls to and what it covers are not the page's to decide.
+// So the choices are drawn ON the page: one button per number that can be chosen, and the rest in one small "Not available" row.
+// PAINT ONLY. The <select> stays in the page and stays the one thing the bid is read from; which numbers are unavailable is
+// decided before any of this runs; a button can only set the list to a value the list itself allows. If anything here fails,
+// _bidTilesOff() leaves the drop-down on screen exactly as before - nobody is ever left without a way to bid.
+const BID_TILE_HINT='Tap a number to choose your bid.';
+const BID_TILE_PICKED='Your bid: ';
+function _tileLabel(o){ const t=String((o&&(o.textContent||o.value))||''); const i=t.indexOf(' ('); return i>0?t.slice(0,i):t; } // "NP (No Priority)" → "NP"
+const PICK_GUARD_MS=350;      // a second tap of the double tap that OPENED the box lands where the first button now is: it must not choose
+const _pickClock={at:0};      // when the buttons last went on screen
+function _pickOff(stepId,selId,hostIds){ // back to the drop-down: the buttons emptied and hidden, the list on screen and reachable again
+  // each part on its own: one that fails never keeps the others from happening
+  try{ const st=document.getElementById(stepId); if(st&&st.classList) st.classList.remove('tiles-on'); }catch(_){}
+  try{ const sel=document.getElementById(selId); if(sel&&typeof sel.removeAttribute==='function'){ sel.removeAttribute('tabindex'); sel.removeAttribute('aria-hidden'); } }catch(_){}
+  hostIds.forEach(id=>{ try{ const h=document.getElementById(id); if(h){ h.textContent=''; h.style.display='none'; } }catch(_){} });
+}
+function _pickSet(selId,v){ // true only when the list now holds v: v must be one of its own lines, and not an unavailable one
+  try{
+    const sel=document.getElementById(selId); if(!sel||!v) return false;
+    if(Date.now()-_pickClock.at<PICK_GUARD_MS) return false; // the tail of the tap that opened the box
+    const o=Array.from(sel.querySelectorAll('option')).find(x=>x.value===v);
+    if(!o||o.disabled) return false;
+    sel.value=v; return sel.value===v;
+  }catch(_){ return false; }
+}
+// A refusal is written into the title row at the top of the box. With the button row always on screen it can be pressed from
+// further down, where that row is out of view - so when a refusal is showing above what is visible, the box goes back to the top.
+function _pickReveal(st){
+  try{
+    const c=(st&&typeof st.closest==='function')?st.closest('.modal-content'):null; if(!c) return;
+    const e=Array.from(st.querySelectorAll('.dlg-err,.swap-err')).find(x=>x&&x.style&&x.style.display!=='none'&&x.textContent);
+    if(!e) return; const r=e.getBoundingClientRect();
+    if(r.height>0&&r.top<c.getBoundingClientRect().top) c.scrollTop=0; // height 0 = its step is not the one on screen: nothing to bring into view
+  }catch(_){}
+}
+function _pickOn(st,sel,sync){ // the last step of a successful paint, and only then: the list goes out of sight
+  if(!sel._tilesBound&&typeof sel.addEventListener==='function'){ sel.addEventListener('change',sync); sel._tilesBound=true; } // a value set on the list itself shows on the buttons too
+  // Once, on the box itself: a press in ANY step's button row (Continue, ← Edit, ← Back) changes what is on screen without a new paint.
+  // Its second tap must not choose either - so the guard starts again; and a refusal it produced is brought into view.
+  const box=(typeof st.closest==='function'&&st.closest('.modal-content'))||st;
+  if(!box._tilesBound&&typeof box.addEventListener==='function'){ box._tilesBound=true;
+    box.addEventListener('click',ev=>{ try{ const t=ev&&ev.target; if(!t||typeof t.closest!=='function'||!t.closest('.modal-buttons')) return;
+      _pickClock.at=Date.now();
+      setTimeout(()=>{ ['prioStep1','swapStep1'].forEach(id=>{ const s=document.getElementById(id); if(s) _pickReveal(s); }); },0); }catch(_){} }); }
+  sel.setAttribute('tabindex','-1'); sel.setAttribute('aria-hidden','true');
+  _pickClock.at=Date.now();
+  st.classList.add('tiles-on'); sync();
+}
+// When the box opens: it starts at its top (a box left scrolled by the last opening would hide the week it is about), and the
+// keyboard is put on the HOLDER of the buttons, not on a button - Enter or Space there chooses nothing, and the next Tab is the first button.
+function _pickFocus(hostId,altId){ // altId: the holder to use when the first one is not showing (no number can be chosen: the "Not available" row)
+  try{ let h=document.getElementById(hostId); if(h&&h.style&&h.style.display==='none'&&altId) h=document.getElementById(altId)||h; if(!h) return;
+    try{ const c=typeof h.closest==='function'?h.closest('.modal-content'):null; if(c) c.scrollTop=0; }catch(_){}
+    h.setAttribute('tabindex','-1'); if(typeof h.focus==='function') h.focus({preventScroll:true});
+  }catch(_){}
+}
+function _bidTilesOff(){ _pickOff('prioStep1','prioritySelect',['bidTiles','bidTilesNA']); }
+function _bidTilesSync(){
+  try{
+    const sel=document.getElementById('prioritySelect'), host=document.getElementById('bidTiles'); if(!sel||!host) return;
+    const v=sel.value; let lbl='';
+    const tiles=Array.from(host.querySelectorAll('.bid-tile'));
+    tiles.forEach(b=>{ const on=!!v&&b.getAttribute('data-v')===v; b.setAttribute('aria-pressed',on?'true':'false'); if(on) lbl=b.textContent; });
+    const h=document.getElementById('bidTilesHint'); if(!h) return;
+    if(lbl){ h.textContent=BID_TILE_PICKED; const s=document.createElement('b'); s.textContent=lbl; h.appendChild(s); }
+    else h.textContent=tiles.length?BID_TILE_HINT:'';
+  }catch(_){}
+}
+function _bidTilePick(v){ _pickSet('prioritySelect',v); _bidTilesSync(); }
+function _bidTilesPaint(sel){ // true = the buttons are on screen; false = the drop-down is
+  _bidTilesOff();
+  try{
+    const st=document.getElementById('prioStep1'), host=document.getElementById('bidTiles'), na=document.getElementById('bidTilesNA');
+    if(!sel||!st||!st.classList||!host||!na||typeof sel.querySelectorAll!=='function'||typeof document.createElement!=='function') return false;
+    const opts=Array.from(sel.querySelectorAll('option')).filter(o=>o.value);
+    if(!opts.length) return false;
+    const on=opts.filter(o=>!o.disabled), off=opts.filter(o=>o.disabled);
+    const grid=document.createElement('div'); grid.className='bid-tiles-grid';
+    on.forEach(o=>{
+      const b=document.createElement('button'), v=o.value, full=String(o.textContent||'');
+      b.type='button'; b.className='bid-tile'+(v.indexOf(',')>=0?' wide':''); b.setAttribute('data-v',v); b.setAttribute('aria-pressed','false');
+      b.textContent=_tileLabel(o); if(full&&full!==b.textContent) b.setAttribute('aria-label',full);
+      b.addEventListener('click',()=>_bidTilePick(v));
+      grid.appendChild(b);
+    });
+    const hint=document.createElement('div'); hint.id='bidTilesHint'; hint.className='bid-tiles-hint'; hint.setAttribute('aria-live','polite');
+    host.appendChild(grid); host.appendChild(hint);
+    if(off.length){
+      const hd=document.createElement('div'); hd.className='bid-tiles-na-h'; hd.textContent=NA_GROUP_LABEL;
+      const list=document.createElement('div'); list.className='bid-tiles-na-list';
+      off.forEach(o=>{ const c=document.createElement('span'); c.className='bid-tiles-na-chip'; c.textContent=_tileLabel(o); list.appendChild(c); });
+      na.appendChild(hd); na.appendChild(list);
+    }
+    // Counted back before the list is put out of sight: every number that can be chosen has exactly one button, every other exactly one chip.
+    if(host.querySelectorAll('.bid-tile').length!==on.length||na.querySelectorAll('.bid-tiles-na-chip').length!==off.length){ _bidTilesOff(); return false; }
+    host.setAttribute('role','group'); host.setAttribute('aria-label','Bid Level');
+    host.style.display=on.length?'block':'none'; na.style.display=off.length?'block':'none';
+    _pickOn(st,sel,_bidTilesSync);
+    return true;
+  }catch(_){ _bidTilesOff(); return false; }
+}
+// The Swap step's list of weeks, the same way: one full-width button per week, the bid on the right.
+function _swapRowsOff(){ _pickOff('swapStep1','swapSelect',['swapRows']); }
+function _swapRowsSync(){
+  try{
+    const sel=document.getElementById('swapSelect'), host=document.getElementById('swapRows'); if(!sel||!host) return;
+    const v=sel.value;
+    host.querySelectorAll('.swap-row').forEach(b=>b.setAttribute('aria-pressed',(!!v&&b.getAttribute('data-v')===v)?'true':'false'));
+  }catch(_){}
+}
+function _swapRowPick(v){ _pickSet('swapSelect',v); _swapRowsSync(); }
+function _swapRowsPaint(sel){ // true = the buttons are on screen; false = the drop-down is
+  _swapRowsOff();
+  try{
+    const st=document.getElementById('swapStep1'), host=document.getElementById('swapRows');
+    if(!sel||!st||!st.classList||!host||typeof sel.querySelectorAll!=='function'||typeof document.createElement!=='function') return false;
+    const opts=Array.from(sel.querySelectorAll('option')).filter(o=>o.value&&!o.disabled);
+    if(!opts.length) return false;
+    opts.forEach(o=>{
+      const b=document.createElement('button'), v=o.value, full=String(o.textContent||''), cut=full.lastIndexOf(' — bid ');
+      b.type='button'; b.className='swap-row'; b.setAttribute('data-v',v); b.setAttribute('aria-pressed','false');
+      const left=document.createElement('span'); left.textContent=cut>0?full.slice(0,cut):full; b.appendChild(left);
+      if(cut>0){ const right=document.createElement('span'); right.className='swap-row-bid'; right.textContent=full.slice(cut+3); b.appendChild(right); }
+      b.addEventListener('click',()=>_swapRowPick(v));
+      host.appendChild(b);
+    });
+    if(host.querySelectorAll('.swap-row').length!==opts.length){ _swapRowsOff(); return false; }
+    host.setAttribute('role','group'); host.setAttribute('aria-label','Week to swap with'); host.style.display='flex';
+    _pickOn(st,sel,_swapRowsSync);
+    return true;
+  }catch(_){ _swapRowsOff(); return false; }
+}
 function openPriorityModal(wk){
   if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); return; }
   if(isAuctionClosed()){ showError("Bidding is closed — no more changes can be made."); return; }
@@ -3205,7 +3376,9 @@ function openPriorityModal(wk){
   } }catch(_){}
   // [201 · §258] The numbers that cannot be chosen go under a "Not available" heading, whatever made them unavailable. Paint only; runs last, on the final picture.
   try{ if(typeof _groupOptions==='function') _groupOptions(sel); }catch(_){}
-  modal.classList.add("show"); sel.focus();
+  // [202 · §259] The choices as buttons. Paint only; runs last, on the final picture. When it cannot draw them the drop-down is what shows, focused as before.
+  let _tiles=false; try{ if(typeof _bidTilesPaint==='function') _tiles=_bidTilesPaint(sel)===true; }catch(_){ _tiles=false; }
+  modal.classList.add("show"); if(!_tiles) sel.focus(); else if(typeof _pickFocus==='function') _pickFocus('bidTiles','bidTilesNA');
 }
 window.openPriorityModal=openPriorityModal;
 window.closeModal=function(){ 
@@ -3553,7 +3726,8 @@ window.openSwapStep=function(){
   sel.value="";
   _swapWith=null; _swapExpect=null; _swapErr(''); _clearDlgErrs();
   _swapShow('pick');
-  try{ sel.focus(); }catch(_){}
+  let _rows=false; try{ if(typeof _swapRowsPaint==='function') _rows=_swapRowsPaint(sel)===true; }catch(_){ _rows=false; } // [202 · §259] the weeks as buttons; the drop-down when they cannot be drawn
+  if(!_rows){ try{ sel.focus(); }catch(_){} } else if(typeof _pickFocus==='function') _pickFocus('swapRows');
 };
 window.backFromSwap=function(){ _swapWith=null; _swapExpect=null; _swapErr(''); _swapShow('edit'); };
 window.backToSwapPick=function(){ _swapWith=null; _swapExpect=null; _swapErr(''); _swapShow('pick'); };
