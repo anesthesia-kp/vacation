@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 200;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 201;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -3070,9 +3070,9 @@ function _wwRefuses(user,wk,bid,pic){ // [199 · §257] `pic` (optional): the pi
 }
 // ── [200 · §258, owner 10 Oct 2026] THE BID BOX SAYS WHY, AND SHOWS WHICH ────────────────────────────────────────
 // Paint only: nothing here decides, waits, writes or changes which numbers can be chosen.
-const WW_SOME_IN='Some numbers are greyed out: a new bid here must be at least as strong as the weakest bid that is winning or under review.';
-const WW_SOME_LEFT='Some numbers are greyed out: a new bid here must be at least as strong as the last bid that was on this week.';
-const WW_SOME_DOWN='Some numbers are greyed out: on a competition week you can only weaken your bid if it would still win and is no lower than the lowest other winning bid.';
+const WW_SOME_IN='Some numbers are not available: a new bid here must be at least as strong as the weakest bid that is winning or under review.';
+const WW_SOME_LEFT='Some numbers are not available: a new bid here must be at least as strong as the last bid that was on this week.';
+const WW_SOME_DOWN='Some numbers are not available: on a competition week you can only weaken your bid if it would still win and is no lower than the lowest other winning bid.';
 // Which note, if any. `why` = how many numbers each half of the competition rule greyed that the person could otherwise
 // have chosen; `isRebid` = they hold a bid on the week now; `allGreyed` = no number is left (that case has its own note).
 // Someone with no bid on the week is placing a NEW bid, so the coming-in wording leads; anything unknown = no note.
@@ -3084,18 +3084,26 @@ function _wwSomeNote(why,isRebid,allGreyed){
     return n('down')?WW_SOME_DOWN:'';
   }catch(_){ return ''; }
 }
-// The phone draws its own drop-down, so no style reaches a greyed number there: the line is written into the text itself,
-// a combining stroke after each character. The plain label is kept on the option and put back whenever it is available again.
-function _strikeText(t){ return Array.from(String(t)).map(c=>c+'\u0336').join(''); }
-function _strikeOptions(sel){
-  if(!sel||typeof sel.querySelectorAll!=='function') return;
-  sel.querySelectorAll('option').forEach(opt=>{
-    if(!opt.value) return;
-    let base=opt.getAttribute('data-label');
-    if(base===null||base===undefined||base===''){ base=opt.textContent; opt.setAttribute('data-label',base); }
-    if(opt.disabled){ opt.textContent=_strikeText(base); opt.setAttribute('aria-label',base+' (not available)'); }
-    else{ opt.textContent=base; opt.removeAttribute('aria-label'); }
-  });
+// [201 · §258, owner-found 10 Oct 2026: the line through a greyed number was "too faint and just makes the numbers look strange"]
+// The phone draws its own drop-down and no style reaches a greyed number there - but it DOES draw a group heading. So the
+// numbers that can be chosen stay at the top in their usual order, and the ones that cannot go under one heading at the foot of
+// the list. Nothing is hidden, no label is altered, and which numbers are greyed is decided before this runs. Each option's
+// place in the markup is remembered the first time, so every opening starts from the same order.
+const NA_GROUP_LABEL='Not available';
+function _groupOptions(sel){
+  if(!sel||typeof sel.querySelectorAll!=='function'||typeof sel.appendChild!=='function') return;
+  if(typeof document==='undefined'||!document||typeof document.createElement!=='function') return;
+  const opts=Array.from(sel.querySelectorAll('option'));
+  if(!opts.length||opts.some(o=>!o||typeof o.getAttribute!=='function'||typeof o.setAttribute!=='function')) return;
+  opts.forEach((o,i)=>{ const v=o.getAttribute('data-ord'); if(v===null||v===undefined||v==='') o.setAttribute('data-ord',String(i)); });
+  opts.sort((a,b)=>Number(a.getAttribute('data-ord'))-Number(b.getAttribute('data-ord')));
+  const keep=sel.value;
+  const off=opts.filter(o=>o.value&&o.disabled);
+  opts.forEach(o=>{ if(off.indexOf(o)<0) sel.appendChild(o); }); // appendChild MOVES: the choosable ones (and the first line) end up in markup order
+  let grp=null;
+  if(off.length){ grp=document.createElement('optgroup'); grp.label=NA_GROUP_LABEL; sel.appendChild(grp); off.forEach(o=>grp.appendChild(o)); } // attached BEFORE it is filled: no option is ever outside the list
+  Array.from(sel.querySelectorAll('optgroup')).forEach(g=>{ if(g!==grp&&typeof g.remove==='function') g.remove(); }); // last opening's heading, emptied above
+  try{ sel.value=keep; }catch(_){}
 }
 function openPriorityModal(wk){
   if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); return; }
@@ -3195,8 +3203,8 @@ function openPriorityModal(wk){
     const _wwT=_wwSomeNote(_wwWhy,isRebid,_wwOpts.length>0&&_wwOpts.every(o=>o.disabled));
     if(_wwT) winfo.innerHTML+='<div id="wwSomeNote" style="margin-top:8px;padding:8px 10px;background:rgba(251,191,36,.18);border:1px solid rgba(217,119,6,.6);border-radius:8px;font-size:.8rem;color:#4a3000;line-height:1.45">'+_wwT+'</div>';
   } }catch(_){}
-  // [200 · §258] A line through every unavailable number, whatever made it unavailable. Paint only; runs last, on the final picture.
-  try{ if(typeof _strikeOptions==='function') _strikeOptions(sel); }catch(_){}
+  // [201 · §258] The numbers that cannot be chosen go under a "Not available" heading, whatever made them unavailable. Paint only; runs last, on the final picture.
+  try{ if(typeof _groupOptions==='function') _groupOptions(sel); }catch(_){}
   modal.classList.add("show"); sel.focus();
 }
 window.openPriorityModal=openPriorityModal;
