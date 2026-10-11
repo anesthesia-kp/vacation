@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 365;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 366;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -3920,11 +3920,13 @@ window.setInsightsView=function(view){
 };
 // ── Bad Behavior screen ──
 // ── Fair Play Monitor ──
-// Signals: (1) canceling or lowering a bid that was in a WINNING position — only when the
-// move changed another bidder's projection; (2) placing / changing / canceling a bid with
+// Signals: (1) BAIL [366 · §263] — a winning bid taken off a competition week when its bid
+// number was not needed elsewhere (see the BAIL block below; it needs no recorded fact, so
+// it covers every entry of every phase); (2) placing / changing / canceling a bid with
 // less than 10% of the countdown left — only when it changed another bidder's projection;
 // (3) timer stalling — a place-then-cancel round trip that really restarted the countdown.
-// [345 · §223 · §227] (1)–(3) read the facts the staff page RECORDS on each change-log
+// "Winning-bid cancel" and "Winning-bid lowering" are RETIRED (owner, 11 Oct 2026).
+// [345 · §223 · §227] (2)–(3) read the facts the staff page RECORDS on each change-log
 // entry from staff 183 on (tRem / tDur / tReset / aff). Entries without them — every bid
 // before 183, admin and simulator entries — carry NO such flag: no flag beats a guessed
 // one. "Slow start" is retired. Covers every phase since the last auction reset:
@@ -3933,28 +3935,246 @@ function _fpEventFilter(list,fence){ return (list||[]).filter(e=>e&&typeof e.ts=
 function _fpPhases(){
   const out=[]; const cur=Number(phasesData.currentPhase||1);
   const keys=Object.keys(changesArchiveData||{}).map(Number).filter(n=>!isNaN(n)).sort((a,b)=>a-b);
-  for(const p of keys) out.push({phase:p,closed:true,events:_fpEventFilter(changesArchiveData[p])});
+  // [366 · §263] `all` = the same log with the ADMIN's own bid changes kept (add / edit / remove on someone's behalf): the
+  // bail screen replays the board, and a board is wrong without them. Nothing in `all` is ever flagged for an admin's act.
+  for(const p of keys) out.push({phase:p,closed:true,events:_fpEventFilter(changesArchiveData[p]),all:_fpBidEvents(changesArchiveData[p])});
   const liveEvents=_fpEventFilter(changesLog,changesResetAt);
-  if(liveEvents.length||!keys.includes(cur)) out.push({phase:cur,closed:false,events:liveEvents});
+  if(liveEvents.length||!keys.includes(cur)) out.push({phase:cur,closed:false,events:liveEvents,all:_fpBidEvents(changesLog,changesResetAt)});
   return out;
 }
-// Was `val` a winning bid for `u` on `wk`, given the other live bids reconstructed at
-// that moment? Winning = the FTE of everyone bidding STRICTLY stronger, plus this user,
-// still fits in the week's slots (ties/draws don't count as winning). Uses current
-// slots/FTE values — a heuristic, like everything on this screen.
-function _fpWasWinning(wkMap,u,wk,val){
-  const my=pScore(val); if(my>=99) return false; // NP is never a winning position
-  let used=0;
-  // [286 · AUD-H] <= counts TIES too: two tied FTE-1 bids on a 1-slot week are a DRAW on
-  // every screen (getOutcome), so a lowering/cancel from that position must not flag as a
-  // "winning-bid" incident — the spec comment above always said ties don't count as winning.
-  // A multi-slot tie where everyone fits still reads as winning, exactly as before.
-  for(const uu in wkMap){ if(uu===u) continue; const o=wkMap[uu]; if(!o||o.val===undefined||o.val==='NP') continue; if(pScore(o.val)<=my) used+=getUserFTE(uu); }
-  return used+getUserFTE(u)<=getSlots(wk)+0.001;
+// ── [366 · §263, owner 11 Oct 2026] BAIL ─────────────────────────────────────────────────────────────────
+// "it's currently fair game to bail on a week when that bid is needed elsewhere. It's when the bid is not needed that creates
+// trouble." · "it's the behavior that's important, not the timing" · "I would have the data to prove that it was considered
+// fair and why." EVERY removal, by a user, of a WINNING bid from a COMPETITION week is listed with one of three verdicts:
+//   FAIR - NEEDED     the bid number's NEXT placement (on another week) is on a week where this person had been knocked out
+//                     of a winning position by someone else's change BEFORE they left, and had not been winning there since
+//                     (still holding a bid there, or having left that week). Any time earlier in the phase - no clock.
+//   BAIL AND RETURN   (his name) the same person is back on the week before any colleague changed a bid there. Coming back
+//                     weaker is a lowering, which the competition rule already limits.
+//   BAIL              everything else. The only verdict that counts toward a user's incidents.
+// The knock-out must come BEFORE the leave: a need that arises afterwards cannot excuse it (seen in this auction: a winning week
+// left for a new one, a knock-out THERE hours later, and only then the number used there).
+// How it is judged: the phase's log is replayed in time order (the admin's own bid changes included, so the board is right;
+// in Phase 4 each ROUND is its own phase - a fresh board from the round's stamp, earlier rounds' winners holding their room).
+// WINNING = the engine's own steps (computeApprovals: groups by score, the FP-safe fit, the review threshold) with earlier-
+// phase winners holding their room; a tie that does not fit and an Under Review are NOT winning. COMPETITION WEEK = the staff
+// page's own test (_wwContested): at one moment, two or more people with a bid of this phase on the week who, with the
+// earlier-phase winners, come to more than it has available. Capacity = a finished phase's own record (completedPhases[p]
+// .fteHeadPhase), today's for the open phase. FTE = today's. Floors and NP-by-phase are not re-applied (the staff page refuses
+// those bids at the box); an NP has no number to need and is never listed. Advisory, like everything on this screen.
+function _fpDur(ms){ const m=Number(ms)/60000; if(!(m>=1)) return 'under a minute'; if(m<90) return Math.round(m)+' min'; const h=m/60; if(h<48) return (Math.round(h*10)/10)+' h'; return (Math.round(h/24*10)/10)+' days'; }
+function _fpWk(wk){ try{ if(typeof _wkNumByISO==='object'&&_wkNumByISO&&_wkNumByISO[wk]) return 'W'+_wkNumByISO[wk]; }catch(_){} return String(wk); }
+function _fpNums(p){ if(p===undefined||p===null||p==='NP') return []; return Array.isArray(p)?(p.length<=3?p.slice():[]):[p]; }   // a combined bid is two or three numbers; a longer list is not a bid (and must not be walked)
+function _fpPosLbl(o){ return o==='win'?'winning':((o==='draw'||o==='review')?'Under Review':'losing'); }
+function _fpRank(o){ return o==='win'?0:((o==='draw'||o==='review')?1:2); }
+// Bid changes only (the bidder's own and the admin's), in time order; at the same instant adds before removals, as the staff page reads them.
+// Three kinds of admin SYSTEM entry are kept too, because each changes the board without a bid entry of its own (review, 11 Oct 2026: a
+// deleted user's bids stayed on the replayed board and made a week look contested): deleting everyone ('all') and deleting one person
+// ('user') take bids off; restoring one person ('back') puts back bids the log cannot name. A FULL restore is NOT one of them: it puts the
+// change log back together with the bids, so the log before it already is the restored board.
+function _fpResetKind(e){ const t=String((e&&e.type)||''); return t==='admin-delete-all-users'?'all':(t==='admin-remove-user'?'user':(t==='admin-restore-user'?'back':'')); }
+function _fpBidEvents(list,fence){
+  return (list||[]).filter(e=>e&&typeof e.ts==='number'&&isFinite(e.ts)&&e.ts>=(fence||0)&&(_fpResetKind(e)||(typeof e.user==='string'&&e.user&&e.user!=='ALL'
+      &&typeof e.weekKey==='string'&&e.weekKey&&e.weekKey!=='ALL'
+      &&(e.action==='added'||e.action==='edited'||e.action==='lowered'||e.action==='removed'))))   // the four bid actions: a decision, a hold or any other system entry is none of them
+    .sort((a,b)=>(a.ts-b.ts)||((a.action==='removed'?1:0)-(b.action==='removed'?1:0)));
 }
-function _fpAnalyzePhase(phase,events,isCurrent){
+// The engine's projection for ONE replayed week. wkMap: user -> bid. priorSet: the people who hold the week from earlier
+// (an entry of theirs on that week is not a bid of this phase: they get no projection here and are never one of the "two").
+// PORTED LOGIC from computeApprovals (kept in lockstep by tests/test-366-bail.mjs, which runs both on the same boards).
+function _fpOutcomes(wkMap,cap,priorSet){
+  const out={}, reqs=[];
+  let won=0; for(const u of priorSet) won+=getUserFTE(u);
+  for(const u in wkMap){
+    if(priorSet.has(u)) continue;
+    const p=wkMap[u]; if(p===undefined||p===null) continue;
+    out[u]='lose';
+    if(!(p==="NP"||(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10)))) continue;
+    reqs.push({user:u,score:pScore(p),fte:getUserFTE(u)});
+  }
+  reqs.sort((a,b)=>a.score-b.score);
+  const T=getReviewThreshold();
+  let i=0, settled=false;
+  while(i<reqs.length&&!settled){
+    const s=reqs[i].score, g=[];
+    while(i<reqs.length&&reqs[i].score===s){ g.push(reqs[i]); i++; }
+    const gf=g.reduce((a,r)=>a+r.fte,0);
+    if(Math.round((won+gf-cap)*10)/10<=0){ for(const r of g) out[r.user]='win'; won+=gf; }
+    else{
+      settled=true;
+      if(g.length>1){ if(g.some(r=>Math.round(((won+r.fte)-cap)*10)/10<=T)){ for(const r of g) out[r.user]='draw'; } }
+      else{ const ov=Math.round(((won+g[0].fte)-cap)*10)/10; if(ov>0&&ov<=T) out[g[0].user]='review'; }
+    }
+  }
+  return out;
+}
+// The staff page's competition test on one replayed week: two people at the least, and together with the earlier winners more than fits.
+function _fpOver(wkMap,cap,priorSet){
+  let fte=0, k=0; for(const u of priorSet) fte+=getUserFTE(u);
+  for(const u in wkMap){ if(priorSet.has(u)||wkMap[u]===undefined||wkMap[u]===null) continue; fte+=getUserFTE(u); k++; }
+  return k>=2&&Math.round((fte-cap)*10)/10>0;
+}
+// What a phase is measured against, and its pieces: [{round, multi, ev, capOf(wk), priorOf(wk)}]. One piece per phase; in Phase 4 one per
+// round. A round counts only up to the round the auction is in (a stamp left by a rehearsal for a later round is ignored - review, 11 Oct
+// 2026: it replayed the earlier rounds a second time), and only while the stamps rise. A FINISHED round is measured against its own
+// recorded capacity (p4Rounds[r].fteHeadPhase), like a finished phase.
+function _fpPieces(phase,ev,isCurrent){
+  const cp=phasesData.completedPhases||{};
+  const snap=cp[phase]||null;
+  const head=(!isCurrent&&snap)?(snap.fteHeadPhase||snap.fteHead||null):null;
+  const capFrom=(h,fall)=>wk=>{ const c=h&&h[wk]?Number(h[wk].cap):NaN; return isFinite(c)?c:fall(wk); };
+  const capOf=capFrom(head,getSlots);
+  const base=Object.create(null);
+  const add=(map,ap)=>{ for(const wk of Object.keys(ap||{})){ if(Array.isArray(ap[wk])) for(const u of ap[wk]){ (map[wk]=map[wk]||new Set()).add(u); } } };
+  for(const q of Object.keys(cp)){ if(Number(q)<Number(phase)) add(base,cp[q]&&cp[q].approvals); }
+  const none=new Set();
+  const began=(Number(phase)===4&&phasesData.p4RoundBeganAt&&typeof phasesData.p4RoundBeganAt==='object')?phasesData.p4RoundBeganAt:null;
+  const upTo=Number(phasesData.p4Round||1);
+  const rs=[]; let lastT=-Infinity;
+  if(began){ for(const r of Object.keys(began).map(Number).filter(r=>!isNaN(r)&&r>=1&&r<=upTo).sort((a,b)=>a-b)){ const t=Number(began[r]); if(t>0&&t>lastT){ rs.push(r); lastT=t; } } }
+  if(!rs.length) return [{round:null,multi:false,ev,capOf,priorOf:wk=>base[wk]||none}];
+  const rounds=(phasesData.p4Rounds&&typeof phasesData.p4Rounds==='object')?phasesData.p4Rounds:{};
+  return rs.map((r,ix)=>{
+    const from=ix===0?-Infinity:Number(began[r]), to=ix+1<rs.length?Number(began[rs[ix+1]]):Infinity;
+    const pr=Object.create(null); for(const wk of Object.keys(base)) pr[wk]=new Set(base[wk]);
+    for(const q of rs){ if(q<r) add(pr,rounds[q]&&rounds[q].approvals); }
+    const done=rounds[r]&&typeof rounds[r]==='object'?(rounds[r].fteHeadPhase||rounds[r].fteHead||null):null;
+    return {round:r,multi:rs.length>1,ev:rs.length>1?ev.filter(e=>e.ts>=from&&e.ts<to):ev,capOf:capFrom(done,capOf),priorOf:wk=>pr[wk]||none};
+  });
+}
+// A log the auction could not have produced is not screened: the replay does work per person on a week, so thousands of invented
+// names would freeze the Dashboard (review, 11 Oct 2026). A real phase is some hundreds of entries by a few dozen people.
+const FP_MAX_EVENTS=6000, FP_MAX_PEOPLE=400, FP_MAX_WEEKS=120;
+function _fpBailPass(phase,all,isCurrent,bump,fair,notes){
+  const ev=_fpBidEvents(all,0);   // the caller has already fenced the log (an archive holds one phase; the live log is cut at its reset stamp)
+  if(ev.length>FP_MAX_EVENTS) throw new Error('the log is too long to screen ('+ev.length+' entries)');
+  const people=new Set(), weeks=new Set();
+  for(const e of ev){ if(_fpResetKind(e)) continue; people.add(e.user); weeks.add(e.weekKey);
+    if(people.size>FP_MAX_PEOPLE) throw new Error('the log names too many people to screen (more than '+FP_MAX_PEOPLE+')');
+    if(weeks.size>FP_MAX_WEEKS) throw new Error('the log names too many weeks to screen (more than '+FP_MAX_WEEKS+')'); }
+  // A single person restored from a backup comes back with bids the log cannot name: what is listed after that moment may be wrong
+  // either way, and the report says so rather than pretending to know.
+  const back=ev.filter(e=>_fpResetKind(e)==='back');
+  const backN=new Set(back.map(e=>String(e.user))).size;
+  if(back.length&&notes) notes.push('the admin restored '+backN+' user'+(backN!==1?'s':'')+' from a backup during this phase (first: '+String(back[0].user)+') — the bids that came back are not in the change log, so entries after that moment may be wrong');
+  for(const piece of _fpPieces(phase,ev,isCurrent)) _fpBailPiece(piece,isCurrent,bump,fair);
+}
+function _fpBailPiece(piece,isCurrent,bump,fair){
+  const ev=piece.ev, capOf=piece.capOf, priorOf=piece.priorOf;
+  let board=Object.create(null);   // wk -> {user: bid}        the bids of this phase (round) on the week, right now in the replay
+  let comp=Object.create(null);    // wk -> true                once the week has been a competition week
+  let arr=Object.create(null);     // "user|wk" -> {ts,i,vals}  since this person's arrival on the week
+  let knocked=Object.create(null); // user -> {wk: {ts,by}}     knocked out of winning there by someone else, and not winning there since
+  let last=Object.create(null);    // wk -> the projection after the last entry on the week (the board does not change in between)
+  const pre=new Array(ev.length);  // i -> this person's own projection on that week just BEFORE entry i
+  const cands=[];
+  // A bid came off a week without a removal entry of its own (a deleted user, a ghost): the week's projection is worked out afresh, and
+  // whoever is winning there again is no longer "knocked out" there.
+  // A knock-out ends when the person is winning there again. The record is marked with the entry at which it ended, so that a leave
+  // which copied it can tell later whether it was still standing when the number arrived (second review: winning the week back after
+  // leaving and being knocked out again by someone new is a need that arose AFTER the leave).
+  let at=0;
+  const endKnock=(x,w2)=>{ if(knocked[x]&&knocked[x][w2]){ knocked[x][w2].endI=at; delete knocked[x][w2]; } };
+  const offBoard=(w2,who)=>{ delete board[w2][who]; delete arr[who+'|'+w2]; const n2=_fpOutcomes(board[w2],capOf(w2),priorOf(w2)); last[w2]=n2; for(const x in n2){ if(n2[x]==='win') endKnock(x,w2); } };
+  for(let i=0;i<ev.length;i++){
+    at=i;
+    const e=ev[i], u=e.user, wk=e.weekKey;
+    const rk=_fpResetKind(e);
+    if(rk){
+      if(rk==='all'){ board=Object.create(null); comp=Object.create(null); arr=Object.create(null); knocked=Object.create(null); last=Object.create(null); }
+      else if(rk==='user'){ for(const w2 in board){ if(Object.prototype.hasOwnProperty.call(board[w2],u)) offBoard(w2,u); } delete knocked[u]; }
+      continue;   // 'back': nothing on the board can be changed with knowledge - _fpBailPass has put the caution on the report
+    }
+    const pr=priorOf(wk), cap=capOf(wk), bw=(board[wk]=board[wk]||{});
+    let before=last[wk]||_fpOutcomes(bw,cap,pr), now;
+    pre[i]=before[u];
+    if(e.action==='removed'){
+      const had=Object.prototype.hasOwnProperty.call(bw,u);
+      const val=had?bw[u]:e.bidValue;                          // a removal with no arrival on record (a log entry can be lost): its own bid value speaks
+      let isComp=comp[wk]===true;
+      if(!had&&val!==undefined&&val!==null){ const t=Object.assign({},bw); t[u]=val; before=_fpOutcomes(t,cap,pr); if(!isComp&&_fpOver(t,cap,pr)) isComp=true; }
+      delete bw[u];
+      now=_fpOutcomes(bw,cap,pr);
+      // The ADMIN taking a winning bid off is a knock-out by someone else (the person did nothing): remembered until they win there again.
+      if(e.actor==='admin'&&before[u]==='win') (knocked[u]=knocked[u]||Object.create(null))[wk]={ts:e.ts,by:'the admin'};
+      if(e.actor!=='admin'&&val!==undefined&&val!==null&&val!=='NP'&&before[u]==='win'&&isComp){
+        const gained=[]; for(const x in now){ if(_fpRank(now[x])<_fpRank(before[x])) gained.push(x+' ('+_fpPosLbl(before[x])+' → '+_fpPosLbl(now[x])+')'); }
+        const a=arr[u+'|'+wk]||null, others=new Set();
+        if(a){ for(let j=a.i+1;j<i;j++){ const x=ev[j]; if(x.weekKey===wk&&x.user!==u&&(x.action==='added'||x.action==='edited')) others.add(x.user); } }
+        const mine=Object.create(null);                         // this person's other weeks at this moment: wk -> projection
+        for(const w2 in board){ if(w2!==wk&&Object.prototype.hasOwnProperty.call(board[w2],u)) mine[w2]=(last[w2]||_fpOutcomes(board[w2],capOf(w2),priorOf(w2)))[u]; }
+        cands.push({i,e,u,wk,val,thin:!had,gained,a,others:others.size,mine,knocked:Object.assign(Object.create(null),knocked[u]||{})});
+      }
+      delete arr[u+'|'+wk];
+    } else {
+      if(e.bidValue===undefined||e.bidValue===null) continue;
+      // A bid number sits on ONE week at a time (both bid boxes refuse anything else). This person placing a number that the board
+      // still shows on another of their weeks means that bid is gone and its removal never reached the log (review, 11 Oct 2026: such
+      // a ghost made an honest leave look like a bail) - it comes off the board. EXCEPT a Swap: its two entries are written together,
+      // so the other week's own entry follows within moments and that week is left exactly as it stands until then (second review:
+      // taking the swapper off in between invented knock-outs).
+      for(const n of _fpNums(e.bidValue)){ for(const w2 in board){ if(w2===wk) continue; const o=board[w2][u];
+        if(o===undefined||_fpNums(o).indexOf(n)<0) continue;
+        let swap=false; for(let j=i+1;j<ev.length&&ev[j].ts-e.ts<=2000;j++){ if(ev[j].user===u&&ev[j].weekKey===w2&&ev[j].action!=='removed'&&!_fpResetKind(ev[j])){ swap=true; break; } }
+        if(!swap) offBoard(w2,u); } }
+      bw[u]=e.bidValue;
+      const k=u+'|'+wk; if(!arr[k]) arr[k]={ts:e.ts,i,vals:[]}; arr[k].vals.push(e.bidValue);
+      if(!comp[wk]&&_fpOver(bw,cap,pr)) comp[wk]=true;
+      now=_fpOutcomes(bw,cap,pr);
+    }
+    last[wk]=now;
+    // Knocked out = was winning, is not any more, and not by one's own act (the admin changing someone's bid is not that person's act).
+    const own=e.actor!=='admin';
+    for(const x in now){
+      if((x!==u||!own)&&before[x]==='win'&&now[x]!=='win') (knocked[x]=knocked[x]||Object.create(null))[wk]={ts:e.ts,by:own?u:'the admin'};
+      if(now[x]==='win') endKnock(x,wk);
+    }
+  }
+  const rp=piece.multi?('Round '+piece.round+': '):'';      // Phase 4 with more than one round: say which
+  for(const c of cands){
+    const u=c.u, wk=c.wk, t0=c.e.ts, lbl=bidLblAdmin(c.val);
+    let back=null, disturbed=false;
+    for(let j=c.i+1;j<ev.length;j++){ const x=ev[j]; if(x.weekKey!==wk) continue; if(x.user!==u){ disturbed=true; continue; } if(x.action!=='removed') back=x; break; }
+    // Where each of the bid's numbers went next (a combined bid has two or three, and they may part).
+    let use=null, need=null;
+    for(const n of _fpNums(c.val)){
+      for(let j=c.i+1;j<ev.length;j++){ const x=ev[j]; if(x.user!==u||x.action==='removed'||x.weekKey===wk||_fpResetKind(x)) continue; if(_fpNums(x.bidValue).indexOf(n)<0) continue;
+        if(!use||x.ts<use.ts) use=x;
+        // NEEDED: knocked out there before leaving, and that same knock-out still standing when the number arrives (endI: the entry
+        // at which the person was winning there again - the arrival itself ends it, anything earlier means it was over).
+        const kr=c.knocked[x.weekKey];
+        if(!need&&kr&&pre[j]!=='win'&&(kr.endI===undefined||kr.endI>=j)) need=x;
+        break; }
+    }
+    const backTxt=back?('back on this week '+_fpDur(back.ts-t0)+' later with '+(pScore(back.bidValue)===pScore(c.val)?'the same bid':bidLblAdmin(back.bidValue))):'';
+    if(need){
+      const kn=c.knocked[need.weekKey];
+      fair.push({user:u,type:'fairNeeded',wk,ts:t0,detail:rp+'took a winning bid ('+lbl+') off a competition week — FAIR, the number was needed: placed on '+_fpWk(need.weekKey)+' '+_fpDur(need.ts-t0)+' later, where they had been knocked out of winning '+_fpDur(t0-kn.ts)+' earlier by '+kn.by+'\'s change'+(c.mine[need.weekKey]===undefined?' (and had left that week)':'')+(back?'; '+backTxt+(disturbed?', after others had changed bids there':''):'')});
+      continue;
+    }
+    if(back&&!disturbed){
+      const pair=[c.e,back], rec=pair.some(x=>typeof x.tReset==='boolean'), rs=pair.filter(x=>x.tReset===true);
+      const hrs=v=>Math.round(v/360000)/10;
+      const timer=!rec?'no timer record':(rs.length?('restarted the countdown'+(typeof rs[0].tRem==='number'&&typeof rs[0].tDur==='number'&&rs[0].tDur>0?' ('+hrs(rs[0].tRem)+' of '+hrs(rs[0].tDur)+' h were on it)':'')):'did not restart the countdown');
+      const aff=pair.some(x=>x.aff===true)?'it changed another bidder\'s projection on the way':(pair.every(x=>x.aff===false)?'it changed nobody\'s projection':'');
+      fair.push({user:u,type:'bailReturn',wk,ts:t0,detail:rp+'took a winning bid ('+lbl+') off a competition week and was '+backTxt+', before any colleague changed a bid there — BAIL AND RETURN, not counted'+(aff?'; '+aff:'')+'; '+timer+(use?'; bid number went to '+_fpWk(use.weekKey)+' '+_fpDur(use.ts-t0)+' later':'')});
+      continue;
+    }
+    const parts=[];
+    if(c.a){ parts.push('on the week '+_fpDur(t0-c.a.ts)); parts.push(c.a.vals.length>1?('own bids '+c.a.vals.map(bidLblAdmin).join(' → ')):'own bid never changed'); }
+    else parts.push('record thin: no entry places this bid in this phase');
+    parts.push(c.others?(c.others+' colleague'+(c.others!==1?'s':'')+' placed or raised bids there meanwhile'):'no colleague placed or raised a bid there meanwhile');
+    parts.push(c.gained.length?('gained when it left: '+c.gained.join(', ')):'nobody gained when it left');
+    const kw=Object.keys(c.knocked).filter(w=>!use||w!==use.weekKey); if(kw.length) parts.push('had been knocked out of winning on '+kw.map(_fpWk).join(', ')+' — the number did not go there');
+    if(use){ const m=c.mine[use.weekKey]; parts.push('bid number went to '+_fpWk(use.weekKey)+' '+_fpDur(use.ts-t0)+' later — '+(m===undefined?'a week they had no bid on when they left':(m==='win'?'a week where they were already winning':(c.knocked[use.weekKey]?'the week they had been knocked out of, but they had been winning there again before the number arrived':'a week where their bid was not winning and had not been knocked out of winning')))); }
+    else parts.push(isCurrent?'bid number not used on another week yet':'bid number not used on another week for the rest of the phase');
+    if(back) parts.push(backTxt+', after others had changed bids there');
+    bump(u,'bail',wk,t0,rp+'left a competition week from a WINNING position (bid '+lbl+'); the number was not needed elsewhere — '+parts.join('; '));
+  }
+}
+function _fpAnalyzePhase(phase,events,isCurrent,allEvents){
   const flags={};
-  const bump=(u,k,wk,ts,detail)=>{ const f=(flags[u]=flags[u]||{winCancel:0,lateTimer:0,timerStall:0,overLower:0,winLower:0,incidents:[]}); f[k]++; f.incidents.push({type:k,wk:wk||null,ts:ts||null,detail:detail||''}); };
+  const bump=(u,k,wk,ts,detail)=>{ const f=(flags[u]=flags[u]||{bail:0,lateTimer:0,timerStall:0,overLower:0,incidents:[]}); f[k]++; f.incidents.push({type:k,wk:wk||null,ts:ts||null,detail:detail||''}); };
   const live={};                 // wk -> user -> {val, placedTs, known, resets} — bids live at this point in the replay
   for(const e of events){
     const u=e.user,wk=e.weekKey; if(!u||!wk) continue;
@@ -3983,22 +4203,10 @@ function _fpAnalyzePhase(phase,events,isCurrent){
           bump(u,'timerStall',wk,e.ts,'placed a bid ('+bidLblAdmin(prev.val)+'), then canceled it '+hrs+'h later — a no-net-change round trip that restarted the countdown '+(n===1?'once':(n===2?'twice':n+' times'))+' (possible timer stalling)');
         }
       }
-      const v=e.bidValue!==undefined?e.bidValue:(prev?prev.val:undefined);
-      if(aff&&v!==undefined&&v!=='NP'&&_fpWasWinning(wkMap,u,wk,v)){
-        let raised=0;
-        if(prev&&prev.placedTs){ const seen=new Set(); for(const e2 of events){ if(e2.ts<=prev.placedTs) continue; if(e2.ts>=e.ts) break; if(e2.weekKey===wk&&e2.user!==u&&(e2.action==='added'||e2.action==='edited')) seen.add(e2.user); } raised=seen.size; }
-        bump(u,'winCancel',wk,e.ts,'canceled a bid in a WINNING position ('+bidLblAdmin(v)+') — it changed another bidder\'s projection'+(raised?'; while it was live, '+raised+' other user'+(raised!==1?'s':'')+' raised bids on this week':''));
-      }
+      // [366 · §263] The old "Winning-bid cancel" flag lived here. A winning bid taken off is judged by _fpBailPass below.
       delete wkMap[u];
     } else if(e.bidValue!==undefined){
-      // [build 274 · V5] Lowering FROM A WINNING POSITION (owner, 18 Aug: "that would be
-      // useful"). Same winning-position reconstruction the cancel flag uses, evaluated on
-      // the PRE-lowering bid against the week's live bids at that moment. Works in EVERY
-      // allowance mode including unlimited. [345 · §223] Only when it changed another
-      // bidder's projection.
-      if(aff&&e.action==='lowered'&&prev&&prev.val!==undefined&&prev.val!=='NP'&&_fpWasWinning(wkMap,u,wk,prev.val)){
-        bump(u,'winLower',wk,e.ts,'lowered a bid in a WINNING position ('+bidLblAdmin(prev.val)+' → '+bidLblAdmin(e.bidValue)+') — it changed another bidder\'s projection');
-      }
+      // [366 · §263] "Winning-bid lowering" RETIRED (owner, 11 Oct 2026): since staff 194 the bid box refuses the harmful kind.
       wkMap[u]={val:e.bidValue,placedTs:prev?prev.placedTs:e.ts,known:(prev?prev.known:true)&&rec,resets:(prev?prev.resets:0)+(e.tReset===true?1:0)};
     }
   }
@@ -4024,53 +4232,81 @@ function _fpAnalyzePhase(phase,events,isCurrent){
       for(const u in lowCnt){ if(lowCnt[u]>_a) bump(u,'overLower',null,null,'lowered bids '+lowCnt[u]+'× this window — allowance is '+_a+' (client gate bypassed or counter forged)'); }
     }
   }
+  // [366 · §263] The bail screen. Its fair verdicts ride on the result without being counted or listed as a user's incident, under
+  // two SYMBOL keys (Symbol.for('fp.fair'), Symbol.for('fp.bailError')) - no user id can be one, and the per-user loop never sees them. A throw here must not take the Dashboard
+  // down: it is reported on the result and shown in the report instead of a silent empty list.
+  const fair=[], notes=[]; let bailError='';
+  try{ _fpBailPass(phase,allEvents||events,isCurrent,bump,fair,notes); }catch(err){ bailError=String((err&&err.message)||err||'error'); }
+  flags[Symbol.for('fp.fair')]=fair; flags[Symbol.for('fp.bailError')]=bailError; flags[Symbol.for('fp.bailNotes')]=notes;
   return flags;
 }
 function computeBadBehavior(){
   const sections=[];
   for(const ph of _fpPhases()){
-    const flags=_fpAnalyzePhase(ph.phase,ph.events,!ph.closed);
+    const flags=_fpAnalyzePhase(ph.phase,ph.events,!ph.closed,ph.all);
     // [345 · §223] "Slow start" retired (owner, 30 Sep 2026: "not a useful insight").
-    const rows=Object.entries(flags).map(([user,f])=>({user,...f,total:f.winCancel+f.lateTimer+(f.timerStall||0)+(f.overLower||0)+(f.winLower||0)}))
+    const rows=Object.entries(flags).map(([user,f])=>({user,...f,total:(f.bail||0)+f.lateTimer+(f.timerStall||0)+(f.overLower||0)}))
       .filter(r=>r.total>0).sort((a,b)=>b.total-a.total||a.user.localeCompare(b.user));
-    sections.push({phase:ph.phase,closed:ph.closed,rows});
+    // [366 · §263] fair = the winning bids taken off a competition week that were judged fair, each with its reason; never counted.
+    sections.push({phase:ph.phase,closed:ph.closed,rows,fair:(flags[Symbol.for('fp.fair')]||[]).slice().sort((a,b)=>a.ts-b.ts||String(a.user).localeCompare(String(b.user))),bailError:flags[Symbol.for('fp.bailError')]||'',bailNotes:flags[Symbol.for('fp.bailNotes')]||[]});
   }
   return sections;
 }
 function renderBadBehavior(){
   const el=document.getElementById('badBehaviorBox'); if(!el) return;
-  const head=`<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">⚖️ <strong style="color:var(--t1)">Fair Play Monitor</strong><span style="color:var(--t2)">— winning-bid cancels &amp; lowerings, late-timer moves, timer stalling</span></div>`;
+  const head=`<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">⚖️ <strong style="color:var(--t1)">Fair Play Monitor</strong><span style="color:var(--t2)">— bails, late-timer moves, timer stalling</span></div>`;
   if(!phase1Started()){ el.innerHTML=head+'<div style="font-size:12px;color:var(--t3)">Screening begins when bidding opens.</div>'; return; }
   const sections=computeBadBehavior();
   const allRows=sections.flatMap(s=>s.rows);
-  if(!allRows.length){ el.innerHTML=head+'<div style="font-size:12px;color:var(--green)">✅ No users flagged this auction.</div>'; return; }
+  // [366 · §263] The fair list is the admin's record that a winning bid taken off was looked at and why it was cleared, so the
+  // report must be reachable when nobody is flagged too.
+  const fairN=sections.reduce((s,x)=>s+((x.fair&&x.fair.length)||0),0);
+  const errN=sections.filter(x=>x.bailError||(x.bailNotes&&x.bailNotes.length)).length;
+  const fairTxt=(fairN?` · ${fairN} winning bid${fairN!==1?'s':''} taken off, reviewed as fair`:'')+(errN?` · ⚠ see the report: the bail screen has a caution for ${errN} phase${errN!==1?'s':''}`:'');
+  const viewBtn='<button class="btn btn-ghost" style="padding:3px 10px;font-size:11px" onclick="openBadBehaviorReport()">👁 View Report</button>';
+  if(!allRows.length){ el.innerHTML=head+((fairN||errN)?`<div style="display:flex;align-items:center;gap:12px;font-size:12.5px"><span style="color:var(--green)">✅ No users flagged this auction${fairTxt}</span>${viewBtn}</div>`:'<div style="font-size:12px;color:var(--green)">✅ No users flagged this auction.</div>'); return; }
   const users=new Set(allRows.map(r=>r.user)).size, inc=allRows.reduce((s,r)=>s+r.total,0);
   el.innerHTML=head+`<div style="display:flex;align-items:center;gap:12px;font-size:12.5px">
-    <span style="color:${allRows.some(r=>r.total>=3)?'var(--red)':'var(--yellow)'}">⚠️ <strong>${users}</strong> user${users!==1?'s':''} flagged (${inc} incident${inc!==1?'s':''} this auction)</span>
-    <button class="btn btn-ghost" style="padding:3px 10px;font-size:11px" onclick="openBadBehaviorReport()">👁 View Report</button>
+    <span style="color:${allRows.some(r=>r.total>=3)?'var(--red)':'var(--yellow)'}">⚠️ <strong>${users}</strong> user${users!==1?'s':''} flagged (${inc} incident${inc!==1?'s':''} this auction)${fairTxt}</span>
+    ${viewBtn}
   </div>`;
 }
 // Full report in a new tab — same style as the other summary reports.
 window.openBadBehaviorReport=function(){
   const stamp=new Date().toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
   const sections=computeBadBehavior();
-  const TYPE_LABEL={winCancel:'Winning-bid cancel',lateTimer:'Late-timer move',timerStall:'Timer stalling',overLower:'Over-limit lowering',winLower:'Winning-bid lowering'};
-  const TYPE_COLOR={winCancel:'#dc2626',lateTimer:'#d97706',timerStall:'#0e7490',overLower:'#b91c1c',winLower:'#9d174d'};
+  const TYPE_LABEL={bail:'Bail',lateTimer:'Late-timer move',timerStall:'Timer stalling',overLower:'Over-limit lowering',fairNeeded:'Fair — needed',bailReturn:'Bail and return'};
+  const TYPE_COLOR={bail:'#dc2626',lateTimer:'#d97706',timerStall:'#0e7490',overLower:'#b91c1c',fairNeeded:'#15803d',bailReturn:'#64748b'};
+  const whenTxt=ts=>ts?new Date(ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'—';
+  // [366 · §263] The second table of a phase: every winning bid taken off a competition week that was judged FAIR, and why.
+  const fairBlock=s=>{
+    const err=(s.bailError?`<p style="margin:6px 0 0;color:#b91c1c">⚠ The bail screen could not be completed for this phase (${esc(s.bailError)}) — its bails and fair entries may be missing.</p>`:'')
+      +(s.bailNotes||[]).map(n=>`<p style="margin:6px 0 0;color:#b45309">⚠ Caution: ${esc(n)}.</p>`).join('');
+    if(!(s.fair&&s.fair.length)) return err;
+    const rows=s.fair.map(i=>`<tr>
+      <td>${esc(i.user)}</td>
+      <td><span class="chip" style="background:${TYPE_COLOR[i.type]||'#64748b'}">${TYPE_LABEL[i.type]||esc(i.type)}</span></td>
+      <td>${i.wk?('W'+(_wkNumByISO[i.wk]||'?')+' · '+fmtWk(i.wk)):'—'}</td>
+      <td>${whenTxt(i.ts)}</td>
+      <td style="white-space:normal;min-width:340px;max-width:760px">${esc(i.detail)}</td></tr>`).join('');
+    return err+`<div class="wk"><div class="wk-head">Winning bids taken off a competition week — reviewed, fair<span class="fte">${s.fair.length} · not counted</span></div>
+      <table><thead><tr><th>User</th><th>Verdict</th><th>Week</th><th>When</th><th>Detail</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  };
   const userBlock=r=>{
     const rows=r.incidents.map(i=>`<tr>
       <td><span class="chip" style="background:${TYPE_COLOR[i.type]||'#64748b'}">${TYPE_LABEL[i.type]||i.type}</span></td>
       <td>${i.wk?('W'+(_wkNumByISO[i.wk]||'?')+' · '+fmtWk(i.wk)):'—'}</td>
       <td>${i.ts?new Date(i.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'—'}</td>
-      <td>${esc(i.detail)}</td></tr>`).join('');
+      <td style="white-space:normal;min-width:340px;max-width:760px">${esc(i.detail)}</td></tr>`).join('');
     return `<div class="wk"><div class="wk-head">${esc(r.user)}<span class="fte">${r.total} incident${r.total!==1?'s':''}</span></div>
       <table><thead><tr><th>Type</th><th>Week</th><th>When</th><th>Detail</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   };
   const body=sections.map(s=>{
     const inner=s.rows.length?s.rows.map(userBlock).join(''):'<p style="margin:4px 0 0;color:#4a7a54">✅ No users flagged in this phase.</p>';
-    return `<div style="margin:22px 0 8px;padding:8px 12px;background:#eef2f7;border-left:4px solid #006ba6;font-weight:800;font-size:15px">Phase ${s.phase} ${s.closed?'(completed)':'(current)'}</div>${inner}`;
+    return `<div style="margin:22px 0 8px;padding:8px 12px;background:#eef2f7;border-left:4px solid #006ba6;font-weight:800;font-size:15px">Phase ${s.phase} ${s.closed?'(completed)':'(current)'}</div>${inner}${fairBlock(s)}`;
   }).join('')||'<p>✅ No activity yet this auction.</p>';
   const ok=openReportTab('Vacation Auction — Fair Play Report','All phases since last auction reset',
-    `Snapshot ${stamp} · Heuristic screen reconstructed from the change log — verify in the Change Log before acting. "Winning-bid cancel/lowering" = the bid fit the week's slots against all live bids at the moment it was dropped or lowered, and the move changed another bidder's projection.`,
+    `Snapshot ${stamp} · Heuristic screen reconstructed from the change log — verify in the Change Log before acting. A "Bail" = a winning bid taken off a competition week when its bid number was not needed on a week where the same person had already been knocked out of winning. Winning bids taken off for that reason ("Fair — needed"), or put straight back before any colleague changed a bid there ("Bail and return"), are listed under each phase as reviewed and fair, and are not counted.`,
     body,false);
   if(ok) toast('👁 Fair Play report opened in a new tab','ok');
 };
@@ -6931,7 +7167,7 @@ ${bullets([
   `Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
   `Enter your bids early, it benefits everyone`,
   `Sniping is not possible, do not try it`,
-  `Late cancels of winning bids and repeated last-minute bid activity are tracked by admin — please play fairly`
+  `Bailing — leaving a competition week from a winning position when that bid number is not needed on another week — and repeated last-minute bid activity are tracked by admin. Please play fairly.` // [366 · §263] word for word as on the staff page
 ])}
 
 ${B('TIMER RULES')}
