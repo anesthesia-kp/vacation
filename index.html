@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 203;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 204;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -270,10 +270,20 @@ select:focus{outline:none;border-color:#006ba6}
 .week-competitors{font-size:.72rem;color:#0a2540;margin-top:4px}
 .competitor-label{color:#132f49;display:block;margin-bottom:3px;font-size:.64rem;letter-spacing:.5px;font-weight:600;margin-top:4px}
 .competitor{display:inline-block;background:rgba(248,113,113,.2);color:#b91c1c;padding:2px 5px;border-radius:3px;margin:2px 2px 2px 0;font-size:.67rem;font-weight:500}
+/* [204 · §261] Blinded bidding: the mark that stands where a colleague's initials would be. As wide as two or three letters, so the row keeps its shape. */
+.anon-mark{display:inline-flex;align-items:center;justify-content:center;min-width:1.35em;vertical-align:-.12em}
+.anon-mark svg{width:1.05em;height:1.05em;display:block;fill:#8496a8}
 .edit-btn{background:rgba(96,165,250,.15);color:#005e93;border:1px solid rgba(96,165,250,.3);padding:4px 8px;border-radius:5px;font-size:.65rem;font-weight:600;cursor:pointer;transition:background .15s;flex:1;text-align:center}
 .edit-btn:hover{background:rgba(96,165,250,.25)}
 .cancel-btn{background:rgba(239,68,68,.15);color:#b91c1c;border:1px solid rgba(239,68,68,.35);padding:4px 8px;border-radius:5px;font-size:.65rem;font-weight:600;cursor:pointer;transition:background .15s;flex:1;text-align:center}
 .cancel-btn:hover{background:rgba(239,68,68,.28)}
+/* [204 · owner-found 10 Oct 2026] The signed-in person's own row on a week card keeps ✎ and ✕ on the bid's own line: the initials, the bid
+   and the letter keep their width, and the two buttons share what is left - as wide as before where there is room, down to 20px each
+   where there is not. Only when even 20px each cannot be had (very large text, on the narrowest two-to-a-row phones) does ✕ go to a
+   second line, full size, as it did before: a button too thin to press would be worse than a second line. */
+.own-row>span{flex:none;white-space:nowrap}
+.own-row .edit-btn,.own-row .cancel-btn{min-width:20px;padding-left:2px;padding-right:2px}
+@media(max-width:820px){.own-row{gap:4px!important}.own-row .obadge{margin-right:0}} /* a phone's two-to-a-row cards: the slack between the pieces goes to the buttons */
 
 /* Modals */
 .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);align-items:center;justify-content:center;z-index:1000;overflow-y:auto;padding:40px 0}
@@ -670,6 +680,7 @@ body{zoom:1.15}
         <li id="ruleCompWeek">A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.</li><!-- [196 · §251] his wording -->
         <li id="ruleNoWeaken">On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.</li><!-- [194 · §248 · 196 · §251 · 197 · §254 · 198 · §255] -->
         <li id="ruleBidFloors" style="display:none"></li><!-- [COPY-3] filled from the live floors at boot; hidden until then so no stale or invented floor text can flash, and it stays hidden when no floor is set -->
+        <li id="ruleBlind" style="display:none">Bidder names are hidden for this auction. You see your own bids as usual; every other bid shows without initials.</li><!-- [204 · §261] shown only while the admin's Blinded bidding switch is on (_blindSync) -->
         <li>Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week</li>
         <li>Enter your bids early, it benefits everyone</li>
         <li>Sniping is not possible, do not try it</li>
@@ -1922,7 +1933,7 @@ function _rbGateCheck(){
 // during the anonymous bootstrap it was rejected permission-denied (a dead, error-logging
 // listener that never recovers). The signed-in path (_subscribeSensitiveOnce + a getDoc)
 // covers it after login; _emailsReady already initializes true so sign-in never waits on it.
-onSnapshot(adminRef,    snap=>{ _boardMark('settings',snap); adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _acCheckRemote(adminSettings); _rbGateCheck(); _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); if(typeof renderDestinationPill==='function') renderDestinationPill(); if(typeof renderSimModeBanner==='function') renderSimModeBanner(); }); // [177 · §201] the test-mode banner follows this doc too // [build 136 · B5] config check first · [build 139 · GATE] · [174 · §196] the destination pill follows this doc
+onSnapshot(adminRef,    snap=>{ _boardMark('settings',snap); adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _acCheckRemote(adminSettings); _rbGateCheck(); _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); if(typeof renderDestinationPill==='function') renderDestinationPill(); if(typeof renderSimModeBanner==='function') renderSimModeBanner(); if(typeof _blindSync==='function') _blindSync(); }); // [204 · §261] the blind follows this doc · [177 · §201] the test-mode banner follows this doc too // [build 136 · B5] config check first · [build 139 · GATE] · [174 · §196] the destination pill follows this doc
 
 // ── Maximum bids per phase (admin-set; 'none' = no limit) ──
 // NP bids allowed this phase? Admin toggles per phase (Controls → NP Bids by
@@ -4397,6 +4408,25 @@ document.addEventListener('click',e=>{
   if(!e.target.closest('.notif-popover')) document.querySelectorAll('.notif-popover').forEach(p=>p.classList.remove('open'));
 });
 
+// ── [204 · §261, owner 10 Oct 2026] Blinded bidding ─────────────────────────────────────────────────────
+// One stored value, adminSettings.blindedBidding, set by the admin's Controls switch. ONLY an explicit true blinds: absent,
+// false or anything else shows names exactly as before. While it is on, the four places on this page that print another
+// person's initials (the week card's "Bids:" list, "Other Bids:" on a locked week, the two changes lists) print one generic
+// mark instead; the signed-in person's own row is untouched, and so are every bid number and every W / R / L. PAINT ONLY: the
+// bids still arrive in this browser keyed by initials (the owner's ruling: a page-level blind is good enough), nothing in the
+// bid path reads this value, and no e-mail changes - none of them ever named a colleague. The board already waits for the
+// settings document before it draws (190), so names cannot show first and vanish.
+const BLIND_MARK_HTML='<span class="anon-mark" role="img" aria-label="Another bidder"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="5" r="3.2"/><path d="M1.8 15c0-3.6 2.8-5.6 6.2-5.6s6.2 2 6.2 5.6z"/></svg></span>';
+function blindOn(){ try{ return !!(adminSettings&&adminSettings.blindedBidding===true); }catch(_){ return false; } }
+// u = the person a row is about, me = the signed-in person. Own rows and un-blinded pages get the initials, escaped as before.
+function whoHtml(u,me){ return (blindOn()&&!(typeof me==='string'&&me&&u===me))?BLIND_MARK_HTML:escH(u); }
+// Follows the settings document: shows or hides the one line in Rules & Reminders, and repaints the board when the value flips.
+let _blindShown=null;
+function _blindSync(){
+  const b=blindOn();
+  try{ const li=document.getElementById('ruleBlind'); if(li) li.style.display=b?'':'none'; }catch(_){}
+  if(b!==_blindShown){ _blindShown=b; if(typeof scheduleRender==='function') scheduleRender(); }
+}
 function renderNotifications(user,ap){
   const cut48=Date.now()-48*3600000;
   const log48=(changesData.log||[]).filter(e=>e.ts>=cut48&&!isDecisionEntry(e)&&!isSystemEntry(e));
@@ -4421,10 +4451,10 @@ function renderNotifications(user,ap){
   const mineSlot=document.getElementById("notifMine");
   const allSlot=document.getElementById("notifAll");
   const mineHtml=mine.length
-    ?mine.map(e=>{const t=new Date(e.ts);const ts=t.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});return `<div class="notif-row mine-row"><span style="color:#48607a;font-size:.68rem">${ts}</span> ${escH(e.user)} ${icon(e)} ${escH(formatShort(e.weekKey))} → your bid: <b>${escH(outcomeUpperUI(e.outcome))}</b></div>`;}).join('')
+    ?mine.map(e=>{const t=new Date(e.ts);const ts=t.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});return `<div class="notif-row mine-row"><span style="color:#48607a;font-size:.68rem">${ts}</span> ${(typeof whoHtml==='function')?whoHtml(e.user,user):escH(e.user)} ${icon(e)} ${escH(formatShort(e.weekKey))} → your bid: <b>${escH(outcomeUpperUI(e.outcome))}</b></div>`;}).join('')
     :'<div class="notif-empty-sm">No recent changes on your weeks</div>';
   const totalHtml=total.length
-    ?total.map(e=>{const t=new Date(e.ts);const ts=t.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});return `<div class="notif-row"><span style="color:#48607a;font-size:.68rem">${ts}</span> ${e.user===user?'<b>You</b>':escH(e.user||'?')} ${icon(e)} ${escH(formatShort(e.weekKey))}</div>`;}).join('')
+    ?total.map(e=>{const t=new Date(e.ts);const ts=t.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});return `<div class="notif-row"><span style="color:#48607a;font-size:.68rem">${ts}</span> ${e.user===user?'<b>You</b>':((typeof whoHtml==='function')?whoHtml(e.user||'?',user):escH(e.user||'?'))} ${icon(e)} ${escH(formatShort(e.weekKey))}</div>`;}).join('')
     :'<div class="notif-empty-sm">No changes in last 12h</div>';
   if(mineSlot) mineSlot.innerHTML=`
     <div class="notif-popover" id="notifPop1" onmouseleave="this.classList.remove('open')">
@@ -4660,10 +4690,11 @@ function renderCalendar(user,ap){
             row.style.cssText="display:flex;align-items:center;gap:6px;font-size:.7rem;line-height:1.35;flex-wrap:wrap";
             const nameWeight=b.isMe?'700':'400';
             const nameColor=b.isMe?'#005e93':'#132f49';
-            row.innerHTML=`<span style="font-weight:${nameWeight};color:${nameColor}">${escH(b.user)}</span>
+            row.innerHTML=`<span style="font-weight:${nameWeight};color:${nameColor}">${(typeof whoHtml==='function')?whoHtml(b.user,user):escH(b.user)}</span>
               <span style="color:#48607a">${escH(bidLbl(b.priority))}</span>
               <span style="font-weight:700;color:${outcomeColorUI(o)}">${outcomeShort(o)}</span>`;
             if(b.isMe&&!isF&&!closed&&!priorWon&&!p4AnnouncedDecision(user,wk)){ // [132/133] a won or announced-decided week's bid shows no ✎/✕ — it is a result, not a live bid
+              row.classList.add("own-row"); // [204 · owner-found 10 Oct 2026] ✎ and ✕ stay on the bid's own line, on a phone too (the .own-row rules)
               const eb=document.createElement("button"); eb.className="edit-btn"; eb.textContent="✎";
               eb.title="Edit bid";
               eb.onclick=(e)=>{e.stopPropagation();openPriorityModal(wk);};
@@ -4747,7 +4778,7 @@ function renderCalendar(user,ap){
         const od=document.createElement("div"); od.style.cssText="margin-top:4px";
         function outcomeShortL(o){ return outcomeIcon(o); }
         od.innerHTML=`<span style="font-size:.62rem;font-weight:600;color:#48607a;display:block;margin-bottom:2px">Other Bids:</span>`+
-          othersLocked.map(x=>{ const o=getOutcome(wk,x.user,ap); return `<span class="competitor" style="background:rgba(15,23,42,.08);color:#132f49">${escH(x.user)} <span style="color:#48607a">${escH(bidLbl(x.priority))}</span> <span style="font-weight:700;color:${outcomeColorUI(o)}">${outcomeShortL(o)}</span></span>`; }).join('');
+          othersLocked.map(x=>{ const o=getOutcome(wk,x.user,ap); return `<span class="competitor" style="background:rgba(15,23,42,.08);color:#132f49">${(typeof whoHtml==='function')?whoHtml(x.user,user):escH(x.user)} <span style="color:#48607a">${escH(bidLbl(x.priority))}</span> <span style="font-weight:700;color:${outcomeColorUI(o)}">${outcomeShortL(o)}</span></span>`; }).join('');
         div.appendChild(od);
       }
       // Lock badge
@@ -5831,6 +5862,7 @@ ${bullets([
   `A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.`, // [196 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
   `On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.`,
   ...bfRulesBullets(),
+  ...((typeof blindOn==='function'&&blindOn())?[`Bidder names are hidden for this auction. You see your own bids as usual; every other bid shows without initials.`]:[]), // [204 · §261] only while the Blinded bidding switch is on; word for word as on the page
   `Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
   `Enter your bids early, it benefits everyone`,
   `Sniping is not possible, do not try it`,

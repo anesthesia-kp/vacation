@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 364;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 365;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1161,6 +1161,20 @@ thead th{color:var(--t2)}
             <div class="trow-desc">When ON, the staff sign-in screen shows a small round photo of a vacation destination with its name — a different one each day, the same for everyone, cycling through 100. When OFF, the sign-in screen shows nothing extra. Purely cosmetic: it never touches bids, phases or e-mail.</div>
           </div>
           <div class="tog" id="destinationTog" onclick="toggleDestinationOfDay()"></div>
+        </div>
+      </div>
+      <!-- BLINDED BIDDING [365 · §261] — one stored value, adminSettings.blindedBidding. ON = every staff page prints a
+           generic mark where another person's initials would be (week cards and both changes lists); OFF or absent = names
+           shown. Paint only on the staff page; THIS site always shows names. Not a frozen fairness key, so it saves in any
+           phase - the owner means to set it for a whole auction, between phases. -->
+      <div class="card">
+        <div class="card-title">Blinded bidding</div>
+        <div class="trow">
+          <div>
+            <div class="trow-label">Hide bidder names on the staff site</div>
+            <div class="trow-desc">When ON, each person sees their own bids as usual and every other bid without initials. Bid numbers and W / R / L stay visible. The admin site still shows names.</div>
+          </div>
+          <div class="tog" id="blindTog" onclick="toggleBlindedBidding()"></div>
         </div>
       </div>
       <!-- RESET AUCTION [build 247] — moved from the page header into its own collapsed card at
@@ -4576,6 +4590,8 @@ function syncControls(){
   if(et) et.className="tog"+(adminSettings.emailNotifsEnabled!==false?" on":"");
   const dt=document.getElementById("destinationTog"); // [336 · §196] absent key = on
   if(dt) dt.className="tog"+(adminSettings.destinationOfDay!==false?" on":"");
+  const bt=document.getElementById("blindTog"); // [365 · §261] only an explicit true is on
+  if(bt) bt.className="tog"+(adminSettings.blindedBidding===true?" on":"");
   const ecd=document.getElementById("emailCycleDayInp");
   if(ecd&&document.activeElement!==ecd){ const d=parseInt(adminSettings?.emailCycleResetDay,10); ecd.value=(!isNaN(d)&&d>=1&&d<=28)?d:22; }
   if(typeof renderMailMeter==='function') renderMailMeter(); // keep "resets the Nth" in sync
@@ -4822,6 +4838,51 @@ window.toggleDestinationOfDay=async function(){
   catch(e){ toast('Could not save the Destination of the Day switch ('+(e.code||'error')+') — nothing changed.','err'); return; }
   try{ await adminLog('ALL','ALL',next?'admin-destination-on':'admin-destination-off'); }catch(_){}
   toast(next?'🌍 Destination of the Day ON':'🌍 Destination of the Day OFF', next?'ok':'warn');
+};
+// ── [365 · §261, owner 10 Oct 2026] Blinded bidding ─────────────────────────────────────────────────────
+// The staff page hides every colleague's initials while adminSettings.blindedBidding is exactly true. One confirmation each
+// way ("2-agree"); un-blinding while bidding is OPEN asks a second time, in red, because it shows the names beside bids people
+// placed believing they were hidden. The dialogs are paint - each write re-reads the stored value at the moment of action and
+// does nothing if it is already there. Logged as a system entry (no user, no week), like the Destination switch.
+function _blindBiddingOpenNow(){ try{ if(!_phasesReady) return true; return phase1Started()&&!_windowCompletedNow()&&biddingOpenOnServer(); }catch(_){ return true; } } // unknown (the auction state not yet loaded, or unreadable) = ask twice
+async function _blindWrite(next){
+  if((adminSettings.blindedBidding===true)===next){ toast('Blinded bidding is already '+(next?'ON':'OFF')+' — nothing changed.','warn'); return; }
+  try{ await setDoc(adminRef,{blindedBidding:next},{merge:true}); }
+  catch(e){ toast('Could not save the Blinded bidding switch ('+(e.code||'error')+') — nothing changed.','err'); return; }
+  try{ await adminLog('ALL','ALL',next?'admin-blind-on':'admin-blind-off'); }catch(_){}
+  toast(next?'Blinded bidding ON — bidder names are hidden on the staff site':'Blinded bidding OFF — bidder names are shown on the staff site', next?'ok':'warn');
+}
+window.toggleBlindedBidding=function(){
+  const cur=adminSettings.blindedBidding===true;
+  if(!cur){
+    openConfirm({
+      title:'Turn blinded bidding ON?',
+      body:`<div>Every staff page will <strong>hide other people's initials</strong> within a moment. Each person still sees their own bids as usual, and every other bid with its number and W / R / L.</div>
+            <div class="cmodal-info" style="margin-top:8px">This site keeps showing names. Alert and results e-mails do not change — none of them names a colleague; the welcome e-mail gains the one rule line.</div>
+            <div class="cmodal-warn" style="margin-top:8px">Names that were on screen before now have already been seen. And it hides names on the page only: it stops casual looking, not a determined, technical colleague.</div>`,
+      okText:'Turn blinding ON',
+      onConfirm:()=>_blindWrite(true)
+    });
+    return;
+  }
+  const confirmAgain=o=>{ openConfirm(o); try{ const b=document.getElementById('cmOk'); if(b){ b.disabled=true; setTimeout(()=>{ b.disabled=false; },1000); } }catch(_){} };
+  openConfirm({
+    title:'Turn blinded bidding OFF?',
+    body:`<div>Every staff page will <strong>show everyone's initials</strong> beside their bids again within a moment — including bids placed while names were hidden.</div>
+          <div class="cmodal-warn" style="margin-top:8px">People may have bid believing their names would stay hidden.</div>`,
+    okText:'Turn blinding OFF', danger:true,
+    onConfirm:()=>{
+      if(!_blindBiddingOpenNow()) return _blindWrite(false);
+      confirmAgain({
+        title:'⚠️ Confirm again — show bidder names',
+        body:`<div style="color:var(--red);font-weight:700;font-size:15px">Bidding is open. Are you sure you want to show bidder names now?</div>
+              <ul style="margin:10px 0 10px 18px;color:var(--t2);font-size:13px;line-height:1.7"><li>Every bid on the board gets its owner's initials back, for <strong>everyone</strong></li><li>That includes bids placed while names were hidden</li><li>Turning blinding back on afterwards does not undo what people have seen</li></ul>
+              <div class="cmodal-danger"><strong>This takes effect the moment you confirm.</strong></div>`,
+        okText:'Yes, show bidder names', danger:true,
+        onConfirm:()=>_blindWrite(false)
+      });
+    }
+  });
 };
 window.toggleEmailNotifs=async function(){
   const cur=adminSettings.emailNotifsEnabled!==false;
@@ -6866,6 +6927,7 @@ ${bullets([
   `A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.`, // [358 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
   `On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.`,
   ...bfRulesBullets(),
+  ...((typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.blindedBidding===true)?[`Bidder names are hidden for this auction. You see your own bids as usual; every other bid shows without initials.`]:[]), // [365 · §261] only while the Blinded bidding switch is on; word for word as on the staff page
   `Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
   `Enter your bids early, it benefits everyone`,
   `Sniping is not possible, do not try it`,
@@ -10940,6 +11002,8 @@ function systemActionText(e){
   if(t==='admin-fte-snap') return 'Admin snapped FTE values to the 0.1 grid';
   if(t==='admin-destination-on') return 'Admin turned the sign-in <strong>Destination of the Day</strong> ON'; // [336 · §196]
   if(t==='admin-destination-off') return 'Admin turned the sign-in <strong>Destination of the Day</strong> OFF'; // [336 · §196]
+  if(t==='admin-blind-on') return 'Admin turned <strong>Blinded bidding</strong> ON — bidder names hidden on the staff site'; // [365 · §261]
+  if(t==='admin-blind-off') return 'Admin turned <strong>Blinded bidding</strong> OFF — bidder names shown on the staff site'; // [365 · §261]
   if(t==='admin-fte-bulk') return 'Admin bulk-set an FTE value';
   if(t==='admin-hold') return 'Admin <strong>withheld</strong> bid number <strong>'+esc(String(e.bidValue??''))+'</strong> from <strong>'+who+'</strong>'+(e.reason?' — '+esc(e.reason):''); // [327 · §180]
   if(t==='admin-release') return 'Admin <strong>released</strong> bid number <strong>'+esc(String(e.bidValue??''))+'</strong> to <strong>'+who+'</strong>'+(e.reason?' — '+esc(e.reason):''); // [327 · §180]
