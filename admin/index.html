@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 363;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 364;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -842,10 +842,10 @@ thead th{color:var(--t2)}
          beside every send on both pages). The only writes on this page are the Clear button's two
          admin-only wipes of the logs themselves. No auction state is touched. -->
     <div class="panel" id="panel-activity">
-      <div class="page-head"><div class="page-title">👣 User Activity</div><div class="page-sub">Who has signed in, who is bidding, and whether their e-mail is getting through. <strong>Last sign-in</strong> is recorded by the site each time a user completes sign-in (the phase is the one open at that moment). <strong>Bids this phase</strong> counts the user's live bids in the current phase — Phase 4: the current round — and hover shows the weeks. <strong>Last e-mail</strong> is the most recent message sent to that user from either site and whether it went out. Logins and e-mails from before this build are not recorded.</div></div>
+      <div class="page-head"><div class="page-title">👣 User Activity</div><div class="page-sub">Who has signed in, who is bidding, and whether their e-mail is getting through. <strong>Last active</strong> is the most recent time the user's page was on a screen — a sign-in or a visit (the phase is the one open at that moment). <strong>Visits</strong>: the site notes each time a signed-in user's page comes onto the screen (opened, un-minimized, or switched back to on a phone), at most once every 30 minutes, and whether they tapped, clicked or typed during it — press the visits button on a row for that person's list. “Viewed” means the page was on the screen, not that anyone was looking. The record is kept by each user's own browser and uses that device's clock, so read it as good evidence rather than proof; visits from before build 364 were not recorded. <strong>Bids this phase</strong> counts the user's live bids in the current phase — Phase 4: the current round — and hover shows the weeks. <strong>Last e-mail</strong> is the most recent message sent to that user from either site and whether it went out. Logins and e-mails from before this build are not recorded.</div></div>
       <div id="uaSummary" style="margin-bottom:12px"></div>
       <div style="overflow-x:auto;max-height:640px;overflow-y:auto;border:1px solid var(--b1)">
-        <table><thead><tr><th>Initials</th><th>Full Name</th><th>Last sign-in</th><th style="text-align:center">Bids this phase</th><th>Last e-mail</th></tr></thead><tbody id="uaBody"></tbody></table>
+        <table><thead><tr><th>Initials</th><th>Full Name</th><th>Last active</th><th style="text-align:center">Bids this phase</th><th>Last e-mail</th></tr></thead><tbody id="uaBody"></tbody></table>
       </div>
     </div>
 
@@ -1488,7 +1488,7 @@ window.syncEmailToUser=async function(){
   toast(ok?'🔑 Login map synced ('+Object.keys(_buildEmailToUser()).length+' addresses)':'Sync failed — make sure you are signed in as admin', ok?'ok':'err');
 };
 const welcomeLogRef = doc(db,"vacations","welcomeLog"); // {sent:{<addrKey>:true}} — addresses already welcomed THIS cycle (cleared by Reset Auction)
-const loginLogRef   = doc(db,"vacations","loginLog");   // [330 · §189] {INITIALS:{at,phase,round}} — each user's LAST sign-in, written by the staff site (own key only); admin-read; cleared by Reset Auction and by User Activity's Clear
+const loginLogRef   = doc(db,"vacations","loginLog");   // [330 · §189] {INITIALS:{at,phase,round}} — each user's LAST sign-in, written by the staff site (own key only); admin-read; cleared by Reset Auction and by User Activity's Clear · [364 · §260] plus v:{<key>:<code>} inside each key — the visits; trimmed here (_visitTrim)
 const mailLogRef    = doc(db,"vacations","mailLog");    // [330 · §189] {INITIALS:{at,to,kind,ok,err}} — each user's LAST e-mail and whether it sent, written beside every send on both pages; admin-read; cleared with loginLog
 // [build 268 · BL] Bid Lowerings — sanctioned per-phase bid DECREASES (mistake-fixing).
 // Current-window usage: {USER:{used:n}} — user-writable own-key-only (isBidDoc rules gates:
@@ -2007,7 +2007,7 @@ onSnapshot(bidLoweringsRef, snap=>{ bidLoweringsData=snap.exists()?snap.data():{
 onSnapshot(bidHoldsRef, snap=>{ bidHoldsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-userbids'); if(p&&p.classList.contains('on')&&typeof renderUserBids==='function') renderUserBids(); }); // [327 · §180]
 // [330 · §189] The two activity logs — admin-read docs, painted only while User Activity is open.
 let loginLogData={}, mailLogData={};
-onSnapshot(loginLogRef, snap=>{ loginLogData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-activity'); if(p&&p.classList.contains('on')&&typeof renderUserActivity==='function') renderUserActivity(); });
+onSnapshot(loginLogRef, snap=>{ loginLogData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-activity'); if(p&&p.classList.contains('on')&&typeof renderUserActivity==='function') renderUserActivity(); if(typeof _visitTrim==='function') _visitTrim(); });
 onSnapshot(mailLogRef,  snap=>{ mailLogData=snap.exists()?snap.data():{};  const p=document.getElementById('panel-activity'); if(p&&p.classList.contains('on')&&typeof renderUserActivity==='function') renderUserActivity(); if(typeof _mlogOnSnapshot==='function') _mlogOnSnapshot(); });
 onSnapshot(bidLoweringsArchiveRef, snap=>{ bidLoweringsArchiveData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-lowerings'); if(p&&p.classList.contains('on')&&typeof renderBidLowerings==='function') renderBidLowerings(); }); // [build 268 · BL]
 onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-users'); if(p&&p.classList.contains('on')) renderUsersCombined(); });
@@ -12310,6 +12310,72 @@ function _activityLiveBids(u){
   }
   return out.sort((a,b)=>a.wk<b.wk?-1:a.wk>b.wk?1:0);
 }
+// ── [364 · §260, owner 10 Oct 2026] Visit history ───────────────────────────────────────────────────────
+// The staff page notes a VISIT inside each user's own loginLog key: v:{<key>:<code>} - the key is 'v' + the visit's start time
+// (the user's device clock, ms, base 36); the code one short string: the phase open then, '.round' in Phase 4, a final 'u' when
+// the person touched the page ('3', '3u', '4.2u'; '' = phase not known). Everything here reads it defensively - the user's own
+// page writes it, so a user can put anything there: an entry is believed only when its key and its code have that exact shape.
+// VISIT_KEEP: every stored value costs the document two index entries and a document may hold 40,000; the whole roster shares
+// this one (37 people x 280 x 2 = 20,720). Do not raise it without redoing that sum.
+const VISIT_KEEP=250, VISIT_SLACK=30, VISIT_DROP_MAX=400, VISIT_HOLD_MS=300000;
+function _visitShape(k,e){ // null unless k / e are shaped like an entry; else its time, phase, round and mark
+  if(typeof k!=='string'||!/^v[0-9a-z]{6,11}$/.test(k)||typeof e!=='string'||e.length>8) return null;
+  const m=/^(\d{1,2})?(?:\.(\d{1,3}))?(u)?$/.exec(e); if(!m) return null;
+  return {k:k,at:parseInt(k.slice(1),36),phase:m[1]!=null?Number(m[1]):null,round:m[2]!=null?Number(m[2]):null,used:m[3]==='u'};
+}
+function _visitEntries(u){ // what is SHOWN: shaped like an entry AND at a believable time (not before 2017, not more than a day ahead of this computer)
+  const out=[]; const d=loginLogData||{}; const rec=Object.prototype.hasOwnProperty.call(d,u)?d[u]:null; const v=(rec&&typeof rec==='object')?rec.v:null;
+  if(!v||typeof v!=='object'||Array.isArray(v)) return out;
+  const lim=Date.now()+86400000;
+  for(const k of Object.keys(v)){
+    const s=_visitShape(k,v[k]); if(!s||!(s.at>1500000000000)||s.at>lim) continue;
+    out.push(s);
+  }
+  out.sort((a,b)=>(b.at-a.at)||(a.k<b.k?-1:a.k>b.k?1:0));
+  return out;
+}
+// The trim: each person's list is cut back to the newest VISIT_KEEP once it passes KEEP + SLACK, and anything under `v` that is not
+// shaped like an entry is dropped. It judges by SHAPE and by RANK only, never by whether a time looks right from here (this
+// computer's clock may be the wrong one), and it counts EVERY shaped key - shown or not - so nothing can pile up unseen.
+// Only keys under `v` are ever named: the sign-in record beside them is never touched. One merge write, at most VISIT_DROP_MAX keys
+// a pass; after a refused write it stands down for VISIT_HOLD_MS, so a refusal can never become a stream of retries.
+let _visitTrimBusy=false, _visitTrimHold=0;
+function _visitTrim(){
+  try{
+    if(_visitTrimBusy||Date.now()<_visitTrimHold) return 0;
+    const d=loginLogData||{}; const upd={}; let n=0;
+    for(const u of Object.keys(d)){
+      if(u===''||/^__.*__$/.test(u)) continue;
+      const rec=d[u]; const v=(rec&&typeof rec==='object')?rec.v:null;
+      if(!v||typeof v!=='object'||Array.isArray(v)) continue;
+      const all=[]; const drop=[];
+      for(const k of Object.keys(v)){
+        if(k===''||/^__.*__$/.test(k)) continue; // a name no write may carry: naming it would fail the whole pass
+        const s=_visitShape(k,v[k]); if(s) all.push(s); else drop.push(k);
+      }
+      if(all.length>VISIT_KEEP+VISIT_SLACK){ all.sort((a,b)=>(b.at-a.at)||(a.k<b.k?-1:a.k>b.k?1:0)); all.slice(VISIT_KEEP).forEach(e=>drop.push(e.k)); }
+      for(const k of drop){ if(n>=VISIT_DROP_MAX) break; if(!Object.prototype.hasOwnProperty.call(upd,u)) upd[u]={v:{}}; upd[u].v[k]=deleteField(); n++; }
+      if(n>=VISIT_DROP_MAX) break;
+    }
+    if(!n) return 0;
+    _visitTrimBusy=true;
+    Promise.resolve(setDoc(loginLogRef,upd,{merge:true})).catch(function(){ _visitTrimHold=Date.now()+VISIT_HOLD_MS; }).then(function(){ _visitTrimBusy=false; });
+    return n;
+  }catch(_){ _visitTrimBusy=false; _visitTrimHold=Date.now()+VISIT_HOLD_MS; return 0; }
+}
+let _uaOpen=''; // the one person whose visits are shown
+window.toggleUaVisits=function(u){ u=String(u||''); _uaOpen=(_uaOpen===u)?'':u; renderUserActivity(); };
+function _visitListHtml(r){
+  const used=r.visits.filter(e=>e.used).length; const shown=r.visits.slice(0,VISIT_KEEP);
+  return '<div class="ua-visits" style="padding:8px 10px;background:var(--bg2,rgba(0,0,0,.03));border-left:3px solid var(--b1)">'
+    +'<div style="font-size:11.5px;color:var(--t2);margin-bottom:6px"><strong>'+r.visits.length+' visit'+(r.visits.length!==1?'s':'')+' recorded</strong> for '+esc(r.u)
+    +' · '+used+' with the page used · newest first · the newest '+VISIT_KEEP+' are kept · one entry per 30 minutes at most</div>'
+    +'<div class="ua-visits-scroll" style="max-height:240px;overflow-y:auto"><table style="width:auto"><tbody>'
+    +shown.map(e=>'<tr><td style="white-space:nowrap;padding:2px 14px 2px 0">'+esc(_activityWhen(e.at))+'</td>'
+      +'<td style="white-space:nowrap;color:var(--t2);padding:2px 14px 2px 0">'+esc(_activityPhaseLabel(e))+'</td>'
+      +'<td style="padding:2px 0">'+(e.used?'<span class="pill p-green">viewed and used</span>':'<span class="pill">viewed</span>')+'</td></tr>').join('')
+    +'</tbody></table></div></div>';
+}
 function _activityRows(){
   const cur=Number(phasesData.currentPhase||1); const round=cur===4?Number(phasesData.p4Round||1):null;
   const roster=[...(names||[])].sort();
@@ -12318,8 +12384,11 @@ function _activityRows(){
     const login=(lg&&typeof lg.at==='number'&&lg.at>0)?lg:null;
     const mail=(ml&&typeof ml.at==='number'&&ml.at>0)?ml:null;
     const bids=_activityLiveBids(u);
-    const inThisPhase=!!(login&&Number(login.phase)===cur&&(cur!==4||Number(login.round||1)===round));
-    return {u,name:(usernamesData||{})[u]||'',login,inThisPhase,bids,noBids:bids.length===0,mail};
+    const visits=_visitEntries(u); // [364 · §260]
+    const vHere=visits.filter(e=>e.phase===cur&&(cur!==4||Number(e.round||1)===round)).length;
+    const last=(visits.length&&visits[0].at>=(login?login.at:0))?{at:visits[0].at,phase:visits[0].phase,round:visits[0].round}:login; // the later of the last sign-in and the newest visit
+    const inThisPhase=!!(login&&Number(login.phase)===cur&&(cur!==4||Number(login.round||1)===round))||vHere>0;
+    return {u,name:(usernamesData||{})[u]||'',login,inThisPhase,bids,noBids:bids.length===0,mail,visits,vHere,last};
   });
 }
 let _activitySort='name';
@@ -12330,19 +12399,19 @@ function renderUserActivity(){
   const rows=_activityRows();
   const cur=Number(phasesData.currentPhase||1);
   const here=cur===4?'Phase 4 · Round '+Number(phasesData.p4Round||1):'Phase '+cur;
-  if(_activitySort==='login') rows.sort((a,b)=>((b.login?b.login.at:0)-(a.login?a.login.at:0))||(a.u<b.u?-1:1));
+  if(_activitySort==='login') rows.sort((a,b)=>((b.last?b.last.at:0)-(a.last?a.last.at:0))||(a.u<b.u?-1:1));
   else if(_activitySort==='mail') rows.sort((a,b)=>((b.mail?b.mail.at:0)-(a.mail?a.mail.at:0))||(a.u<b.u?-1:1));
   const none=t=>'<span style="color:var(--t3);font-size:11.5px">'+t+'</span>';
-  const loggedIn=rows.filter(r=>r.inThisPhase).length, everIn=rows.filter(r=>r.login).length;
+  const loggedIn=rows.filter(r=>r.inThisPhase).length, everIn=rows.filter(r=>r.last).length;
   const noBids=rows.filter(r=>r.noBids).map(r=>r.u);
   const failed=rows.filter(r=>r.mail&&!r.mail.ok).map(r=>r.u);
   const sortBtn=(k,label)=>'<button class="btn'+(_activitySort===k?' btn-primary':'')+'" style="padding:3px 9px;font-size:11px" onclick="setActivitySort(\''+k+'\')">'+label+'</button>';
   if(sum) sum.innerHTML=
     '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-size:12.5px">'
-    +'<div><strong>Signed in during '+esc(here)+':</strong> '+loggedIn+' of '+rows.length+(everIn!==loggedIn?' <span style="color:var(--t3)">('+everIn+' ever recorded)</span>':'')+'</div>'
+    +'<div><strong>On the site during '+esc(here)+':</strong> '+loggedIn+' of '+rows.length+(everIn!==loggedIn?' <span style="color:var(--t3)">('+everIn+' ever recorded)</span>':'')+'</div>'
     +'<div><strong>No bids this phase:</strong> '+(noBids.length?'<span class="pill p-red">'+noBids.length+'</span> <span style="font-family:var(--mono)">'+noBids.map(esc).join(', ')+'</span>':'<span class="pill p-green">0</span>')+'</div>'
     +(failed.length?'<div><strong>Last e-mail failed:</strong> <span class="pill p-red">'+failed.length+'</span> <span style="font-family:var(--mono)">'+failed.map(esc).join(', ')+'</span></div>':'')
-    +'<div style="margin-left:auto;display:flex;gap:6px;align-items:center"><span style="color:var(--t3);font-size:11px">Sort:</span>'+sortBtn('name','A–Z')+sortBtn('login','Last sign-in')+sortBtn('mail','Last e-mail')
+    +'<div style="margin-left:auto;display:flex;gap:6px;align-items:center"><span style="color:var(--t3);font-size:11px">Sort:</span>'+sortBtn('name','A–Z')+sortBtn('login','Last active')+sortBtn('mail','Last e-mail')
     +'<button class="btn btn-danger" style="padding:3px 9px;font-size:11px;margin-left:10px" onclick="clearActivityLogs()" title="Wipe the sign-in and e-mail records (for example, rehearsal history before go-live). Bids are not touched.">🧹 Clear records…</button></div>'
     +'</div>';
   const bidCell=r=>{
@@ -12350,20 +12419,24 @@ function renderUserActivity(){
     const t=r.bids.map(b=>fmtWk(b.wk)+' · '+(b.p==='NP'?'NP':(Array.isArray(b.p)?b.p.join('/'):b.p))+(b.denied?' (denied)':'')).join('\n');
     return '<span class="pill p-green" title="'+esc(t)+'">'+r.bids.length+'</span>';
   };
-  const loginCell=r=>r.login?'<span style="white-space:nowrap">'+esc(_activityWhen(r.login.at))+'</span> <span style="color:var(--t2)">· '+esc(_activityPhaseLabel(r.login))+'</span>':none('never recorded');
+  const loginCell=r=>{ if(!r.last) return none('never recorded');
+    return '<span style="white-space:nowrap">'+esc(_activityWhen(r.last.at))+'</span> <span style="color:var(--t2)">· '+esc(_activityPhaseLabel(r.last))+'</span>'
+      +(r.visits.length?' <button class="btn ua-visits-btn" style="padding:1px 8px;font-size:11px;margin-left:6px;white-space:nowrap" data-u="'+esc(r.u)+'" aria-expanded="'+(_uaOpen===r.u?'true':'false')+'" onclick="toggleUaVisits(this.dataset.u)" title="Show every recorded visit for '+esc(r.u)+'">'+r.vHere+' visit'+(r.vHere!==1?'s':'')+' this phase '+(_uaOpen===r.u?'▴':'▾')+'</button>':''); }; // [364 · §260]
   const mailCell=r=>{ if(!r.mail) return none('none recorded');
     const k=esc(String(r.mail.kind||'mail')); const to=esc(String(r.mail.to||''));
     return '<span style="white-space:nowrap">'+esc(_activityWhen(r.mail.at))+'</span> <span style="color:var(--t2)">· '+k+'</span> '
       +(r.mail.ok?'<span class="pill p-green" title="Sent to '+to+'">✓ sent</span>':'<span class="pill p-red" title="'+esc(String(r.mail.err||'failed'))+'">✗ failed</span>')
       +' <span class="mono" style="font-size:11px;color:var(--t3)">'+to+'</span>'; };
-  body.innerHTML=rows.map(r=>'<tr><td class="mono"><strong>'+esc(r.u)+'</strong></td><td>'+esc(r.name)+'</td><td>'+loginCell(r)+'</td><td style="text-align:center">'+bidCell(r)+'</td><td>'+mailCell(r)+'</td></tr>').join('')
+  let _sc=0; try{ const b0=body.querySelector?body.querySelector('.ua-visits-scroll'):null; if(b0) _sc=b0.scrollTop||0; }catch(_){ _sc=0; } // [364 · §260] an open list keeps its place when a colleague's visit repaints the table
+  body.innerHTML=rows.map(r=>'<tr><td class="mono"><strong>'+esc(r.u)+'</strong></td><td>'+esc(r.name)+'</td><td>'+loginCell(r)+'</td><td style="text-align:center">'+bidCell(r)+'</td><td>'+mailCell(r)+'</td></tr>'+((_uaOpen===r.u&&r.visits.length)?'<tr class="ua-visits-row"><td></td><td colspan="4">'+_visitListHtml(r)+'</td></tr>':'')).join('')
     ||'<tr><td colspan="5" style="color:var(--t3)">No users on the roster.</td></tr>';
+  if(_sc){ try{ const b1=body.querySelector?body.querySelector('.ua-visits-scroll'):null; if(b1) b1.scrollTop=_sc; }catch(_){} }
 }
 window.renderUserActivity=renderUserActivity;
 window.clearActivityLogs=function(){
   openConfirm({
     title:'🧹 Clear sign-in and e-mail records',
-    body:'<div>Wipe the recorded <strong>last sign-in</strong> and <strong>last e-mail</strong> for every user, and the whole <strong>E-mail Log</strong>? New sign-ins and e-mails start recording again immediately.</div><div class="cmodal-warn" style="margin-top:8px">This clears records only — no bids, approvals, settings or e-mail addresses change. Use it to drop rehearsal history before the real auction.</div>',
+    body:'<div>Wipe the recorded <strong>last sign-in</strong>, every recorded <strong>visit</strong> and the <strong>last e-mail</strong> for every user, and the whole <strong>E-mail Log</strong>? New sign-ins and e-mails start recording again immediately.</div><div class="cmodal-warn" style="margin-top:8px">This clears records only — no bids, approvals, settings or e-mail addresses change. Use it to drop rehearsal history before the real auction.</div>',
     okText:'🧹 Clear records', danger:true,
     onConfirm:async()=>{
       try{ await setDoc(loginLogRef,{}); await setDoc(mailLogRef,{}); toast('🧹 Sign-in and e-mail records cleared','ok'); }
