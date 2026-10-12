@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 368;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 369;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1872,7 +1872,8 @@ var _loadCover;  // the cover's clock: {since, timer, looks, done}
 var LOAD_TEXT='Loading the auction…';
 var LOAD_SLOW_TEXT='Still loading — your connection may be slow. If this stays, reload the page.';
 var LOAD_SLOW_MS=15000;
-var LOAD_RECHECK_MAX=8; // while still waiting: one look every 15 s, for two minutes, then the slow line simply stays
+var LOAD_RECHECK_MAX=8; // while still waiting: one look every 15 s, for two minutes, then one a minute (LOAD_LATE_LOOK_MS)
+var LOAD_LATE_LOOK_MS=60000; // [369 · §265, owner 12 Oct 2026: "page should probably keep asking, why not."] after the 8 quick looks, one a minute for as long as the cover is up
 function _feedReg(ref){ if(!_feedList) _feedList=[]; const f={ref:ref,arrived:false,gone:false}; _feedList.push(f); return f; }
 // "From the server" means the snapshot says so in as many words (fromCache===false); anything missing or unreadable is not an arrival.
 function _feedMark(f,snap){
@@ -1923,7 +1924,7 @@ function _loadCoverTick(){
   const c=_loadCover; if(!c) return;
   c.timer=null;
   _loadCoverSync();
-  if(!c.done&&c.looks<LOAD_RECHECK_MAX){ c.looks++; _loadCoverLook().catch(()=>{}); c.timer=setTimeout(_loadCoverTick, LOAD_SLOW_MS); }
+  if(!c.done){ c.looks++; _loadCoverLook().catch(()=>{}); c.timer=setTimeout(_loadCoverTick, c.looks<LOAD_RECHECK_MAX?LOAD_SLOW_MS:LOAD_LATE_LOOK_MS); } // [369] never gives up while the cover is up
 }
 // THE ONE CASE A LISTENER NEVER REPORTS (staff 190's review, H1): a document that DOES NOT EXIST, on a page that first heard
 // the empty from-cache stand-in. When the server is reached there is nothing new to deliver, so no second snapshot comes.
@@ -1940,6 +1941,9 @@ async function _loadCoverLook(){
     if(missing&&!f.arrived){ f.arrived=true; _loadCoverSoon(); }
   }));
 }
+// [369 · §265] The connection coming back is the likeliest moment for a missing document to become answerable: look at once,
+// only while the cover is up. A look reads only the feeds still waiting; nothing is read on a page that has loaded.
+try{ window.addEventListener('online', function(){ if(_loadCover&&_loadCover.since&&!_loadCover.done) _loadCoverLook().catch(()=>{}); }); }catch(_){}
 function onSnapshot(ref, next, error) {
   let unsub = null, cancelled = false, attempt = 0;
   const path = (ref && ref.path) || '?';
