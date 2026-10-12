@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 369;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 370;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1179,6 +1179,20 @@ thead th{color:var(--t2)}
             <div class="trow-desc">When ON, each person sees their own bids as usual and every other bid without initials. Bid numbers and W / R / L stay visible. The admin site still shows names.</div>
           </div>
           <div class="tog" id="blindTog" onclick="toggleBlindedBidding()"></div>
+        </div>
+      </div>
+      <!-- LOCKED WEEKS ON THE STAFF BOARD [370 · §266] — one stored map, adminSettings.lockedInPlace {1..4: true|false}. true = on
+           the staff bidding board a locked week stays in its month, grey; false = locked weeks gather in the grey Locked Weeks
+           section at the bottom. Absent = the owner's defaults (Phase 1 false; Phases 2, 3, 4 true); ONE value for every Phase 4
+           round. Whenever every week is locked the staff page keeps them in place whatever this says. Display only: not a frozen
+           fairness key, so it saves in any phase. -->
+      <div class="card">
+        <div class="card-title">Locked weeks on the staff board</div>
+        <div class="trow" style="align-items:flex-start;flex-direction:column;gap:8px">
+          <div>
+            <div class="trow-desc">ON: a locked week stays in its month on the staff bidding board, drawn grey. OFF: locked weeks are gathered in the Locked Weeks section at the bottom of the board. Whenever every week is locked they stay in their month, whatever this says. A week a person won is drawn green either way. Display only — no bid, lock or rule changes.</div>
+          </div>
+          <div id="lipPhaseToggles" style="display:flex;gap:22px;flex-wrap:wrap"></div>
         </div>
       </div>
       <!-- RESET AUCTION [build 247] — moved from the page header into its own collapsed card at
@@ -4940,6 +4954,7 @@ function syncControls(){
   // Cumulative bid caps (Phase 1 · through P2 · through P3 · through P4). Null/blank = no limit.
   if(typeof _populateCapsFromSaved==='function') _populateCapsFromSaved();
   renderNpToggles();
+  renderLipToggles(); // [370 · §266]
   renderBidFloorsCard(); // [build 266 · BF]
   { const p=document.getElementById('panel-lowerings'); if(p&&p.classList.contains('on')&&typeof renderBidLowerings==='function') renderBidLowerings(); } // [build 268 · BL]
   const gl=document.getElementById("globalLockToggle");
@@ -6078,6 +6093,26 @@ function renderNpToggles(){
     <span style="font-size:12px;color:var(--t1);font-weight:700">Phase ${p}</span>
     <div class="tog${npAllowedForPhase(p)?' on':''}" id="npTog${p}" onclick="toggleNpPhase(${p})"></div></div>`).join('');
 }
+// ── [370 · §266, owner 12 Oct 2026] Locked weeks on the staff board ──────────────────────────────────────────────
+// adminSettings.lockedInPlace = {1..4: true|false}; absent = the owner's defaults (Phase 1 at the bottom, 2, 3, 4 in place) - the
+// staff page reads the same defaults (LIP_DEFAULT there). One tap writes the whole map by merge, nothing else; a display setting,
+// not a frozen fairness key, so it saves in any phase and asks no confirmation (it changes no bid, lock or rule).
+const LIP_DEFAULT={1:false,2:true,3:true,4:true};
+function lockedInPlaceFor(ph){ const v=adminSettings?.lockedInPlace?.[ph]; return (v===true||v===false)?v:LIP_DEFAULT[ph]; }
+function renderLipToggles(){
+  const el=document.getElementById('lipPhaseToggles'); if(!el) return;
+  el.innerHTML=[1,2,3,4].map(p=>`<div style="display:flex;align-items:center;gap:8px">
+    <span style="font-size:12px;color:var(--t1);font-weight:700">${p===4?'Phase 4 (all rounds)':'Phase '+p}</span>
+    <div class="tog${lockedInPlaceFor(p)?' on':''}" id="lipTog${p}" onclick="toggleLockedInPlace(${p})"></div></div>`).join('');
+}
+window.toggleLockedInPlace=async function(p){
+  p=Number(p); if(![1,2,3,4].includes(p)) return;
+  const cur={}; [1,2,3,4].forEach(x=>cur[x]=lockedInPlaceFor(x));
+  cur[p]=!cur[p];
+  try{ await setDoc(adminRef,{lockedInPlace:cur},{merge:true}); }
+  catch(e){ toast('Could not save the locked-weeks switch ('+((e&&e.code)||'error')+') — nothing changed.','err'); syncControls(); return; }
+  toast('Locked weeks for '+(p===4?'Phase 4 (all rounds)':'Phase '+p)+': '+(cur[p]?'in their month, grey':'at the bottom of the board'),'ok');
+};
 // ── Bid Floors card [build 266 · BF] ──
 function renderBidFloorsCard(){
   const hd=document.getElementById('bfHd'), su=document.getElementById('bfSummer'); if(!hd||!su) return;
