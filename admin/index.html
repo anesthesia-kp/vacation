@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 367;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 368;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -264,6 +264,10 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
 .spin{width:28px;height:28px;border:2px solid var(--b2);border-top-color:var(--blue);border-radius:50%;animation:spin .6s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 #load.hidden{display:none}
+/* [368 · §265] The sign-in cover: the same spinner, with one line under it until every feed has arrived. */
+#load{flex-direction:column;gap:16px}
+#loadText{font-size:15px;font-weight:600;color:var(--t2);text-align:center;max-width:340px;padding:0 20px;line-height:1.45}
+#loadText:empty{display:none}
 /* Outbid-alert attention flash: pulses red while alerts are queued so admin can't miss them. */
 @keyframes mqFlash{0%,100%{background:rgba(220,38,38,.06)}50%{background:rgba(220,38,38,.22)}}
 .mq-pending{animation:mqFlash 1.1s ease-in-out infinite;border-radius:8px}
@@ -426,7 +430,7 @@ thead th{color:var(--t2)}
 <div id="feedStaleBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:3000;align-items:center;gap:10px;justify-content:center;padding:8px 14px;background:#b91c1c;color:#fff;font-weight:800;font-size:13px;box-shadow:0 2px 12px rgba(0,0,0,.35)">
   ⚠️ LIVE CONNECTION LOST — this page may show STALE data (<span id="feedStaleCount">1</span> feed(s) down). Reconnecting automatically… if this stays up, reload the page. Do not make phase decisions until it clears.
 </div>
-<div id="load"><div class="spin"></div></div>
+<div id="load"><div class="spin"></div><div id="loadText" role="status" aria-live="polite"></div></div>
 
 <div class="shell">
   <button id="navToggle" onclick="toggleNav()" aria-label="Menu">☰</button>
@@ -1707,6 +1711,7 @@ function _enterAdmin(u){
   const badge=document.getElementById('adminWhoami');
   if(badge) badge.textContent=u.email;
   _refreshSchedAdminLink(); // show the Scheduling Admin link only for schedule admins
+  _loadCoverBegin(); // [368 · §265] the "Loading the auction…" cover, until every feed has arrived (first entry only)
   _authResolve(u); // listeners attach; the panel comes alive
 }
 window.adminContinue=function(){ if(_pendingAdminUser) _enterAdmin(_pendingAdminUser); };
@@ -1851,13 +1856,94 @@ function _syncFeedBanner(){
 // Phase-freezing actions must never run on possibly-stale data: Complete Phase freezes winners
 // FROM THIS PAGE'S LOCAL STATE, so a dead schedule feed would freeze an old board permanently.
 function _feedsHealthyOrExplain(label){
-  if(_deadFeeds.size===0) return true;
+  if(_deadFeeds.size===0) return _feedsArrivedOrExplain(label); // [368 · §265] healthy is not enough: every feed must also have ARRIVED
   toast('🚫 '+label+' is blocked — the live connection is broken ('+_deadFeeds.size+' data feed(s) down) and this page may be showing STALE data. Wait for the red banner to clear, or reload the page.','err');
   return false;
+}
+// [368 · §265] THE ADMIN PAGE WAITS FOR ITS DATA (owner, 11 Oct 2026: "only partially loading and was missing data" — the
+// Dashboard drawn as its blank template after sign-in). Every listener registers here when it is DECLARED and is marked
+// the first time it really ARRIVES: a snapshot from the server, or one that carries a document. The one thing that is NOT an
+// arrival is the empty stand-in Firestore raises from its (empty) cache when it cannot reach the server — that is the blank
+// template itself (staff 190's rule, _boardMark). Until every feed has arrived: the sign-in cover stays up, the dangerous
+// actions refuse (_feedsHealthyOrExplain) and the automatic close waits. `var`, not let/const: the admin-access listeners are
+// declared ABOVE this line and register before a let here would exist.
+var _feedList;   // one entry per listener: {ref, arrived, gone}
+var _loadCover;  // the cover's clock: {since, timer, looks, done}
+var LOAD_TEXT='Loading the auction…';
+var LOAD_SLOW_TEXT='Still loading — your connection may be slow. If this stays, reload the page.';
+var LOAD_SLOW_MS=15000;
+var LOAD_RECHECK_MAX=8; // while still waiting: one look every 15 s, for two minutes, then the slow line simply stays
+function _feedReg(ref){ if(!_feedList) _feedList=[]; const f={ref:ref,arrived:false,gone:false}; _feedList.push(f); return f; }
+// "From the server" means the snapshot says so in as many words (fromCache===false); anything missing or unreadable is not an arrival.
+function _feedMark(f,snap){
+  if(!f||f.arrived) return false;
+  let fromCache=true, exists=false;
+  try{ fromCache=!(snap&&snap.metadata&&snap.metadata.fromCache===false); exists=!!(snap&&typeof snap.exists==='function'&&snap.exists()); }catch(_){ fromCache=true; exists=false; }
+  if(fromCache&&!exists) return false;
+  f.arrived=true; return true;
+}
+function _feedsAllArrived(){
+  if(!_feedList||!_feedList.length) return false;
+  for(const f of _feedList){ if(!f.gone&&!f.arrived) return false; }
+  return true;
+}
+function _feedsArrivedOrExplain(label){
+  if(_feedsAllArrived()) return true;
+  toast('🚫 '+label+' is blocked — this page has not finished loading the auction\'s data. Wait a moment and try again; if it stays, reload the page.','err');
+  return false;
+}
+// Sign-in (_enterAdmin) shows the cover and starts the 15-second clock — on the FIRST entry only. After a sign-out the feeds
+// fail (no access) and recover through the red banner, which already blocks the dangerous actions.
+function _loadCoverBegin(){
+  if(!_loadCover) _loadCover={since:0,timer:null,looks:0,done:false};
+  if(_loadCover.done||_loadCover.since) return;
+  _loadCover.since=Date.now();
+  _loadCover.timer=setTimeout(_loadCoverTick, LOAD_SLOW_MS+100);
+  _loadCoverSync();
+}
+// An arrival repaints the cover on the next frame — after the Dashboard's own repaint (refreshAll), which it queued first.
+function _loadCoverSoon(){ if(_loadCover&&_loadCover.since&&!_loadCover.done){ try{ requestAnimationFrame(_loadCoverSync); }catch(_){ _loadCoverSync(); } } }
+// Shows the cover with its line, or lifts it for good. Writes to the page only when what is showing has to change.
+function _loadCoverSync(){
+  const c=_loadCover; if(!c||!c.since||c.done) return;
+  const el=document.getElementById('load'), tx=document.getElementById('loadText');
+  if(_feedsAllArrived()){
+    c.done=true;
+    if(c.timer){ try{ clearTimeout(c.timer); }catch(_){} c.timer=null; }
+    if(el&&!el.classList.contains('hidden')) el.classList.add('hidden');
+    if(tx&&tx.textContent!=='') tx.textContent='';
+    return;
+  }
+  const t=(Date.now()-c.since)>=LOAD_SLOW_MS?LOAD_SLOW_TEXT:LOAD_TEXT;
+  if(tx&&tx.textContent!==t) tx.textContent=t;
+  if(el&&el.classList.contains('hidden')) el.classList.remove('hidden');
+}
+// The 15-second wake-up: repaint (that is what swaps in the slow line) and, while still waiting, look once.
+function _loadCoverTick(){
+  const c=_loadCover; if(!c) return;
+  c.timer=null;
+  _loadCoverSync();
+  if(!c.done&&c.looks<LOAD_RECHECK_MAX){ c.looks++; _loadCoverLook().catch(()=>{}); c.timer=setTimeout(_loadCoverTick, LOAD_SLOW_MS); }
+}
+// THE ONE CASE A LISTENER NEVER REPORTS (staff 190's review, H1): a document that DOES NOT EXIST, on a page that first heard
+// the empty from-cache stand-in. When the server is reached there is nothing new to deliver, so no second snapshot comes.
+// So a feed still waiting is asked of the server directly, and ONLY the answer "from the server: no such document" marks it.
+// A document that exists is never marked here: its own listener delivers it. All at once, so one slow answer cannot run
+// into the next look; an unreachable server answers nothing.
+async function _loadCoverLook(){
+  const waiting=(_feedList||[]).filter(f=>!f.gone&&!f.arrived);
+  await Promise.all(waiting.map(async f=>{
+    let s=null;
+    try{ s=await getDocFromServer(f.ref); }catch(_){ return; }
+    let missing=false;
+    try{ missing=!!(s&&s.metadata&&s.metadata.fromCache===false&&typeof s.exists==='function'&&!s.exists()); }catch(_){ missing=false; }
+    if(missing&&!f.arrived){ f.arrived=true; _loadCoverSoon(); }
+  }));
 }
 function onSnapshot(ref, next, error) {
   let unsub = null, cancelled = false, attempt = 0;
   const path = (ref && ref.path) || '?';
+  const _fid = _feedReg(ref); // [368 · §265] registered when declared; marked the first time it really arrives
   function attach(){
     if (cancelled) return;
     unsub = _onSnapshot(ref, snap => {
@@ -1877,7 +1963,8 @@ function onSnapshot(ref, next, error) {
       } else {
         attempt = 0;
       }
-      next(snap);
+      const _first = _feedMark(_fid, snap); // [368 · §265] a first real arrival — the cover is repainted after the page's own repaint
+      try { next(snap); } finally { if (_first) _loadCoverSoon(); }
     }, e => {
       console.error('[Firestore listener]', path, e && e.code, e && e.message);
       _deadFeeds.add(path); _syncFeedBanner();
@@ -1887,7 +1974,7 @@ function onSnapshot(ref, next, error) {
     });
   }
   authReady.then(() => { if (!cancelled) attach(); }).catch(() => {});
-  return () => { cancelled = true; if (unsub) unsub(); };
+  return () => { cancelled = true; _fid.gone = true; if (unsub) unsub(); }; // [368 · §265] a feed switched off is no longer waited for
 }
 
 document.getElementById("load").classList.add("hidden");
@@ -11919,6 +12006,7 @@ function renderTimerDigs(){
 // at/after expiry; if none is open, the manual Close bidding step still works as before.
 let _autoCloseFired=false;
 async function _autoCloseOnExpiry(){
+  if(!_feedsAllArrived()) return;                       // [368 · §265] not on a half-loaded page — it tries again the next second
   if(!phase1Started()) return;                          // bidding never opened
   const cur=Number(phasesData.currentPhase||1);
   if(phasesData.completedPhases?.[cur]) return;         // this phase already completed
