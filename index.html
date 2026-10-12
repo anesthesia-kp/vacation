@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 206;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 207;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -272,6 +272,12 @@ select:focus{outline:none;border-color:#006ba6}
 .week.lk-grey .week-day-label{color:#3f4b57}
 .week.lk-grey .obadge{background:rgba(72,96,122,.10);color:#7d8a97}
 .lk-out{color:#5b6875;font-weight:600}
+/* [207 · §266 (12)] the person's own bid on a locked week, before results are sent: the projection's colour, as during bidding */
+.week.lk-proj{cursor:not-allowed}
+.week.lk-proj:hover{transform:none}
+.week.outcome-win.lk-proj .lk-out{color:#00753a}
+.week.outcome-review.lk-proj .lk-out{color:#4f42a3}
+.week.outcome-lose.lk-proj .lk-out{color:#dc2626}
 .lk-tag{margin-top:6px;display:inline-block;background:rgba(72,96,122,.13);color:#4b5763;padding:2px 8px;border-radius:4px;font-size:.65rem;font-weight:700}
 .month-section.lk-sec{border-color:#c3ccd5;background:#f3f5f7}
 .month-section.lk-sec .month-title{color:#3f4b57}
@@ -4595,10 +4601,15 @@ function _boardWonIn(user,wk){
 function _lockedCard(user,wk,ap){
   const meta=weekMeta[wk]||{};
   const wonIn=_boardWonIn(user,wk);
-  const div=document.createElement("div"); div.className="week "+(wonIn?"outcome-win lk-won":"lk-grey");
+  // [207 · §266 (12), owner 12 Oct 2026 3:40 PM] Until this phase's results are sent, the person's OWN bid on a locked week keeps its
+  // projection's colour, as during bidding (green Winning, purple Under Review, red Losing). Once they are sent: won = the green
+  // card above, not won = grey. Weeks without their bid stay grey. Only their own projection is read (getOutcome for `user`).
+  // A Phase 4 round's ANNOUNCED decision on this week (a denial, between Send Round Results and Start Round) ends the projection too.
+  const proj=(!wonIn&&isVisibleBid(user,wk)&&!currentPhaseAnnounced()&&!p4AnnouncedDecision(user,wk))?uiOutcome(getOutcome(wk,user,ap)):null;
+  const div=document.createElement("div"); div.className="week "+(wonIn?"outcome-win lk-won":(proj?"outcome-"+proj+" lk-proj":"lk-grey"));
   div.dataset.wk=wk; // anchor for scroll-to-week from My Bids & Projections
   const wn=document.createElement("div");
-  wn.style.cssText="font-size:.62rem;font-weight:700;color:"+(wonIn?"#006ba6":"#5b6875")+";text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px";
+  wn.style.cssText="font-size:.62rem;font-weight:700;color:"+((wonIn||proj)?"#006ba6":"#5b6875")+";text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px";
   wn.textContent="Week "+meta.weekNum; div.appendChild(wn);
   const dl=document.createElement("div"); dl.className="week-day-label";
   dl.textContent=meta.range; div.appendChild(dl);
