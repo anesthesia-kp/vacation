@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 366;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 367;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -3964,6 +3964,18 @@ function _fpPhases(){
 // those bids at the box); an NP has no number to need and is never listed. Advisory, like everything on this screen.
 function _fpDur(ms){ const m=Number(ms)/60000; if(!(m>=1)) return 'under a minute'; if(m<90) return Math.round(m)+' min'; const h=m/60; if(h<48) return (Math.round(h*10)/10)+' h'; return (Math.round(h/24*10)/10)+' days'; }
 function _fpWk(wk){ try{ if(typeof _wkNumByISO==='object'&&_wkNumByISO&&_wkNumByISO[wk]) return 'W'+_wkNumByISO[wk]; }catch(_){} return String(wk); }
+// [367 · §263, owner-found 11 Oct 2026: "These are hard to read"] An entry's VIEW: one opening line and a short labelled list. The week
+// in full and the duration in words, for the view only - `detail` keeps _fpWk and _fpDur and is not changed by this build.
+function _fpWkL(wk){ try{ if(typeof _wkNumByISO==='object'&&_wkNumByISO&&_wkNumByISO[wk]) return 'Week '+_wkNumByISO[wk]; }catch(_){} return String(wk); }
+function _fpDurL(ms){ const m=Number(ms)/60000; if(!(m>=1)) return 'under a minute'; if(m<90){ const r=Math.round(m); return r+' minute'+(r!==1?'s':''); } const h=m/60; if(h<48){ const v=Math.round(h*10)/10; return v+' hour'+(v!==1?'s':''); } const d=Math.round(h/24*10)/10; return d+' day'+(d!==1?'s':''); }
+function _fpCap(s){ s=String(s); return s.charAt(0).toUpperCase()+s.slice(1); }
+// Every piece is escaped here, at the one place it is drawn: the opening line, each label and each value (they carry user ids).
+// An entry with no view (the three older flags, or a view that is not the expected shape) is drawn as its plain detail, as in 366.
+function _fpDetailHtml(i){
+  const v=i&&i.view;
+  if(!v||typeof v.head!=='string'||!v.head||!Array.isArray(v.rows)) return esc(i&&i.detail);
+  return '<div style="font-weight:700">'+esc(v.head)+'</div>'+v.rows.filter(r=>Array.isArray(r)&&r.length===2).map(r=>'<div style="margin-top:3px"><span style="color:#475569;font-weight:600">'+esc(r[0])+':</span> '+esc(r[1])+'</div>').join('');
+}
 function _fpNums(p){ if(p===undefined||p===null||p==='NP') return []; return Array.isArray(p)?(p.length<=3?p.slice():[]):[p]; }   // a combined bid is two or three numbers; a longer list is not a bid (and must not be walked)
 function _fpPosLbl(o){ return o==='win'?'winning':((o==='draw'||o==='review')?'Under Review':'losing'); }
 function _fpRank(o){ return o==='win'?0:((o==='draw'||o==='review')?1:2); }
@@ -4147,9 +4159,14 @@ function _fpBailPiece(piece,isCurrent,bump,fair){
         break; }
     }
     const backTxt=back?('back on this week '+_fpDur(back.ts-t0)+' later with '+(pScore(back.bidValue)===pScore(c.val)?'the same bid':bidLblAdmin(back.bidValue))):'';
+    const WK=_fpWkL(wk), backL=back?(_fpDurL(back.ts-t0)+' later with '+(pScore(back.bidValue)===pScore(c.val)?'the same bid':('bid '+bidLblAdmin(back.bidValue)))):'';   // [367] for the views
     if(need){
       const kn=c.knocked[need.weekKey];
-      fair.push({user:u,type:'fairNeeded',wk,ts:t0,detail:rp+'took a winning bid ('+lbl+') off a competition week — FAIR, the number was needed: placed on '+_fpWk(need.weekKey)+' '+_fpDur(need.ts-t0)+' later, where they had been knocked out of winning '+_fpDur(t0-kn.ts)+' earlier by '+kn.by+'\'s change'+(c.mine[need.weekKey]===undefined?' (and had left that week)':'')+(back?'; '+backTxt+(disturbed?', after others had changed bids there':''):'')});
+      const vw={head:rp+'Took winning bid '+lbl+' off '+WK+'. Fair: the number was needed.',rows:[
+        ['Where the '+lbl+' went',_fpWkL(need.weekKey)+', '+_fpDurL(need.ts-t0)+' later.'],
+        ['Why it was needed','They had been knocked out of winning on '+_fpWkL(need.weekKey)+' '+_fpDurL(t0-kn.ts)+' earlier, by '+kn.by+'\'s change.'+(c.mine[need.weekKey]===undefined?' They had since left that week.':'')]]};
+      if(back) vw.rows.push(['Afterwards','Back on '+WK+' '+backL+(disturbed?', after others had changed bids there.':'.')]);
+      fair.push({user:u,type:'fairNeeded',wk,ts:t0,view:vw,detail:rp+'took a winning bid ('+lbl+') off a competition week — FAIR, the number was needed: placed on '+_fpWk(need.weekKey)+' '+_fpDur(need.ts-t0)+' later, where they had been knocked out of winning '+_fpDur(t0-kn.ts)+' earlier by '+kn.by+'\'s change'+(c.mine[need.weekKey]===undefined?' (and had left that week)':'')+(back?'; '+backTxt+(disturbed?', after others had changed bids there':''):'')});
       continue;
     }
     if(back&&!disturbed){
@@ -4157,7 +4174,12 @@ function _fpBailPiece(piece,isCurrent,bump,fair){
       const hrs=v=>Math.round(v/360000)/10;
       const timer=!rec?'no timer record':(rs.length?('restarted the countdown'+(typeof rs[0].tRem==='number'&&typeof rs[0].tDur==='number'&&rs[0].tDur>0?' ('+hrs(rs[0].tRem)+' of '+hrs(rs[0].tDur)+' h were on it)':'')):'did not restart the countdown');
       const aff=pair.some(x=>x.aff===true)?'it changed another bidder\'s projection on the way':(pair.every(x=>x.aff===false)?'it changed nobody\'s projection':'');
-      fair.push({user:u,type:'bailReturn',wk,ts:t0,detail:rp+'took a winning bid ('+lbl+') off a competition week and was '+backTxt+', before any colleague changed a bid there — BAIL AND RETURN, not counted'+(aff?'; '+aff:'')+'; '+timer+(use?'; bid number went to '+_fpWk(use.weekKey)+' '+_fpDur(use.ts-t0)+' later':'')});
+      const vw={head:rp+'Took winning bid '+lbl+' off '+WK+' and came straight back. Not counted.',rows:[
+        ['Back on the week',_fpCap(backL)+', before any colleague changed a bid there.']]};
+      if(aff) vw.rows.push(['Effect on others',pair.some(x=>x.aff===true)?'It changed another bidder\'s projection on the way.':'It changed nobody\'s projection.']);
+      vw.rows.push(['Countdown',!rec?'No timer record.':(rs.length?('Restarted the countdown'+(typeof rs[0].tRem==='number'&&typeof rs[0].tDur==='number'&&rs[0].tDur>0?' ('+hrs(rs[0].tRem)+' of '+hrs(rs[0].tDur)+' hours were on it)':'')+'.'):'Did not restart the countdown.')]);
+      if(use) vw.rows.push(['Where the '+lbl+' went',_fpWkL(use.weekKey)+', '+_fpDurL(use.ts-t0)+' later.']);
+      fair.push({user:u,type:'bailReturn',wk,ts:t0,view:vw,detail:rp+'took a winning bid ('+lbl+') off a competition week and was '+backTxt+', before any colleague changed a bid there — BAIL AND RETURN, not counted'+(aff?'; '+aff:'')+'; '+timer+(use?'; bid number went to '+_fpWk(use.weekKey)+' '+_fpDur(use.ts-t0)+' later':'')});
       continue;
     }
     const parts=[];
@@ -4169,12 +4191,21 @@ function _fpBailPiece(piece,isCurrent,bump,fair){
     if(use){ const m=c.mine[use.weekKey]; parts.push('bid number went to '+_fpWk(use.weekKey)+' '+_fpDur(use.ts-t0)+' later — '+(m===undefined?'a week they had no bid on when they left':(m==='win'?'a week where they were already winning':(c.knocked[use.weekKey]?'the week they had been knocked out of, but they had been winning there again before the number arrived':'a week where their bid was not winning and had not been knocked out of winning')))); }
     else parts.push(isCurrent?'bid number not used on another week yet':'bid number not used on another week for the rest of the phase');
     if(back) parts.push(backTxt+', after others had changed bids there');
-    bump(u,'bail',wk,t0,rp+'left a competition week from a WINNING position (bid '+lbl+'); the number was not needed elsewhere — '+parts.join('; '));
+    const vw={head:rp+'Left '+WK+' from a winning position with bid '+lbl+'. The number was not needed elsewhere.',rows:[]};
+    if(c.a){ vw.rows.push(['Time on the week',_fpCap(_fpDurL(t0-c.a.ts))]); vw.rows.push(['Own bids',c.a.vals.length>1?c.a.vals.map(bidLblAdmin).join(' → '):'Never changed']); }
+    else vw.rows.push(['Record','Thin. No entry in the log places this bid in this phase.']);
+    vw.rows.push(['Colleagues who bid there meanwhile',c.others?String(c.others):'None']);
+    vw.rows.push(['Who gained',c.gained.length?c.gained.join(', '):'Nobody']);
+    if(kw.length) vw.rows.push(['Knocked out elsewhere','Had been knocked out of winning on '+kw.map(_fpWkL).join(', ')+'. The number did not go there.']);
+    if(use){ const m=c.mine[use.weekKey]; vw.rows.push(['Where the '+lbl+' went',_fpWkL(use.weekKey)+', '+_fpDurL(use.ts-t0)+' later. '+(m===undefined?'They had no bid there when they left.':(m==='win'?'They were already winning there.':(c.knocked[use.weekKey]?'They had been knocked out of winning there, but were winning there again before the number arrived.':'Their bid there was not winning, and had not been knocked out of winning.')))]); }
+    else vw.rows.push(['Where the '+lbl+' went',isCurrent?'Not used on another week yet.':'Not used on another week for the rest of the phase.']);
+    if(back) vw.rows.push(['Back on the week',_fpCap(backL)+', after others had changed bids there.']);
+    bump(u,'bail',wk,t0,rp+'left a competition week from a WINNING position (bid '+lbl+'); the number was not needed elsewhere — '+parts.join('; '),vw);
   }
 }
 function _fpAnalyzePhase(phase,events,isCurrent,allEvents){
   const flags={};
-  const bump=(u,k,wk,ts,detail)=>{ const f=(flags[u]=flags[u]||{bail:0,lateTimer:0,timerStall:0,overLower:0,incidents:[]}); f[k]++; f.incidents.push({type:k,wk:wk||null,ts:ts||null,detail:detail||''}); };
+  const bump=(u,k,wk,ts,detail,view)=>{ const f=(flags[u]=flags[u]||{bail:0,lateTimer:0,timerStall:0,overLower:0,incidents:[]}); f[k]++; const inc={type:k,wk:wk||null,ts:ts||null,detail:detail||''}; if(view) inc.view=view; f.incidents.push(inc); };
   const live={};                 // wk -> user -> {val, placedTs, known, resets} — bids live at this point in the replay
   for(const e of events){
     const u=e.user,wk=e.weekKey; if(!u||!wk) continue;
@@ -4288,7 +4319,7 @@ window.openBadBehaviorReport=function(){
       <td><span class="chip" style="background:${TYPE_COLOR[i.type]||'#64748b'}">${TYPE_LABEL[i.type]||esc(i.type)}</span></td>
       <td>${i.wk?('W'+(_wkNumByISO[i.wk]||'?')+' · '+fmtWk(i.wk)):'—'}</td>
       <td>${whenTxt(i.ts)}</td>
-      <td style="white-space:normal;min-width:340px;max-width:760px">${esc(i.detail)}</td></tr>`).join('');
+      <td style="white-space:normal;min-width:340px;max-width:760px">${_fpDetailHtml(i)}</td></tr>`).join('');
     return err+`<div class="wk"><div class="wk-head">Winning bids taken off a competition week — reviewed, fair<span class="fte">${s.fair.length} · not counted</span></div>
       <table><thead><tr><th>User</th><th>Verdict</th><th>Week</th><th>When</th><th>Detail</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   };
@@ -4297,7 +4328,7 @@ window.openBadBehaviorReport=function(){
       <td><span class="chip" style="background:${TYPE_COLOR[i.type]||'#64748b'}">${TYPE_LABEL[i.type]||i.type}</span></td>
       <td>${i.wk?('W'+(_wkNumByISO[i.wk]||'?')+' · '+fmtWk(i.wk)):'—'}</td>
       <td>${i.ts?new Date(i.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'—'}</td>
-      <td style="white-space:normal;min-width:340px;max-width:760px">${esc(i.detail)}</td></tr>`).join('');
+      <td style="white-space:normal;min-width:340px;max-width:760px">${_fpDetailHtml(i)}</td></tr>`).join('');
     return `<div class="wk"><div class="wk-head">${esc(r.user)}<span class="fte">${r.total} incident${r.total!==1?'s':''}</span></div>
       <table><thead><tr><th>Type</th><th>Week</th><th>When</th><th>Detail</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   };
