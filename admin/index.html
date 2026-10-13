@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 371;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 372;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1282,7 +1282,7 @@ thead th{color:var(--t2)}
         <p style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:14px">
           Assigns each user random bids at random weeks with random bid levels. High-demand weeks get only high-priority bids.
           <br><br>
-          <strong style="color:var(--t1)">Existing bids count toward the target.</strong> "Bids per user" includes bids users have already placed this phase: a user with 3 real bids and a target of 3 gets nothing from the simulator; a user with 1 gets topped up with 2 more. Existing bids are never changed, their weeks are never re-bid, and their priority numbers stay consumed.
+          <strong style="color:var(--t1)">Existing bids count toward the target.</strong> "Bids per user" includes bids users have already placed this phase: a user with 3 real bids and a target of 3 gets nothing from the simulator; a user with 1 gets topped up with 2 more. Existing bids are never changed, their weeks are never re-bid, and their priority numbers stay consumed. In Phase 4, a week won in an earlier round does not count toward the target; it counts toward the bid cap, like a win from an earlier phase.
           <br><br>
           <strong style="color:var(--t1)">Auto-Approve/Deny Results</strong> works in every phase (1–4) whenever the current phase has undecided bids: winners are approved, losers denied, single over-cap bids approved, and ties decided at random — approving as many tied users as fit within the FTE cap plus the configured FTE overage, denying the rest.
         </p>
@@ -3203,6 +3203,13 @@ function _windowCompletedNow(){
   if((phasesData.completedPhases||{})[cur]) return true;
   return cur===4&&!!(phasesData.p4Rounds||{})[Number(phasesData.p4Round||1)];
 }
+// [372 · §268] A Phase 4 bid that an ANNOUNCED round already decided (above all a round win, which stays in the live schedule all
+// year): a result, not a bid of the open round. Exactly the test _hasOpenRoundBid uses (just below); false outside Phase 4.
+function _p4DecidedRoundBid(u,wk){
+  if(Number(phasesData.currentPhase||1)!==4) return false;
+  const r=_p4ArchivedDecisionRound(u,wk);
+  return r!==null&&!!(phasesData.p4RoundResultsSent||{})[r];
+}
 // [319 · P-1] Has this user placed a bid in the OPEN window? Phases 1–3: any live bid tagged cur (unchanged).
 // Phase 4: the same, minus bids an ANNOUNCED round already decided (a round-1 win stays live all year but is
 // not a round-2 bid). "Announced" is H-9: an unsent denial must still count as placed.
@@ -4504,7 +4511,9 @@ function computeStrugglingUsers(){
   const out=[];
   for(const u of names){
     const bids=[];
-    for(const wk in (scheduleData[u]||{})){ if(scheduleData[u][wk]===undefined) continue; if(isCurrentPhaseBidAdmin(u,wk)) bids.push(wk); }
+    // [372 · §268] In Phase 4 a week an announced round already decided (a round win) is not a bid of the open round - otherwise
+    // a Round 1 winner losing every Round 2 bid counts as winning and is never listed.
+    for(const wk in (scheduleData[u]||{})){ if(scheduleData[u][wk]===undefined) continue; if(isCurrentPhaseBidAdmin(u,wk)&&!_p4DecidedRoundBid(u,wk)) bids.push(wk); }
     if(!bids.length) continue; // dashboard's "users without bids" covers these
     let curWins=0; const losing=[],draws=[],reviews=[];
     for(const wk of bids){
@@ -5599,6 +5608,7 @@ function simHasBids(){
       if(!isValidBid(v)) continue;
       const isDenied=Array.isArray(deniedData?.[wk])&&deniedData[wk].includes(u);
       if(isDenied) continue;
+      if(_p4DecidedRoundBid(u,wk)) continue; // [372 · §268] an earlier round's result is not a bid of the open round
       const bidPh=bidPhaseData[u]?.[wk];
       const effectivePh=bidPh===undefined?cur:Number(bidPh);
       if(effectivePh===cur) return true;
@@ -5731,6 +5741,7 @@ window._runSimulationNow=async function(){
     // weeks can never be re-bid, and their priority numbers stay consumed.
     // Denied bids count too (same convention as the user-facing bid limit).
     const existingWeeks=new Set();
+    const decidedWeeks=new Set(); // [372 · §268 · O-F] weeks an announced Phase 4 round already decided for this user
     const uw=scheduleData[user]||{};
     for(const wk of Object.keys(uw)){
       const v=uw[wk];
@@ -5738,12 +5749,14 @@ window._runSimulationNow=async function(){
       const valid=(v==='NP')||(typeof v==='number')||(Array.isArray(v)&&v.length>0&&v.every(n=>typeof n==='number'));
       if(!valid) continue;
       if(getUserBidPhaseAdmin(user,wk)!==cur) continue;
-      existingWeeks.add(wk);
+      // [372 · §268 · O-F] A round already decided this week (a round win): like a win from an earlier phase it is never re-bid, its
+      // numbers stay used and it counts toward the bid cap - but NOT toward "Bids per user", which is about the open round.
+      if(_p4DecidedRoundBid(user,wk)) decidedWeeks.add(wk); else existingWeeks.add(wk);
       if(v==='NP') usedPrios.add('NP');
       else if(Array.isArray(v)) v.forEach(n=>usedPrios.add(n));
       else usedPrios.add(v);
     }
-    const weeks=fyShuffle([...allWeeks].filter(wk=>!priorWonWeeks.has(wk)&&!existingWeeks.has(wk)));
+    const weeks=fyShuffle([...allWeeks].filter(wk=>!priorWonWeeks.has(wk)&&!existingWeeks.has(wk)&&!decidedWeeks.has(wk)));
     let bidCount=existingWeeks.size; // target INCLUDES bids the user already placed
     // [SIM 25 Jul 2026] Honour the CUMULATIVE cap, not just the slider. A real user is
     // stopped by bidLimitStatus() at priorApprovedCount + live bids >= cap, so a slider
@@ -5751,7 +5764,7 @@ window._runSimulationNow=async function(){
     // reach. priorWonWeeks is exactly this user's prior-phase win count, so the room left
     // is cap - priorWins; the slider can only ever make the target SMALLER, never larger.
     const _simCap=_cumCap(cur);
-    const _capRoom=(_simCap===null)?Infinity:Math.max(0,_simCap-priorWonWeeks.size);
+    const _capRoom=(_simCap===null)?Infinity:Math.max(0,_simCap-priorWonWeeks.size-decidedWeeks.size); // [372] decided round weeks hold cap slots
     const _simTarget=Math.min(SIM_MAX_BIDS,_capRoom);
     const userBids={};
     for(const wk of weeks){
