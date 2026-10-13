@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 372;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 373;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -782,7 +782,7 @@ thead th{color:var(--t2)}
         </div>
       </div>
       <div class="card">
-        <div class="card-title">All Users (<span id="userCount">0</span>)</div>
+        <div class="card-title">All Users (<span id="userCount">0</span>)<span id="fteTotal" style="font-weight:400;color:var(--t2)"></span></div>
         <div class="page-sub" style="margin-bottom:12px">One row per user. "Initials" is the account ID admin sets. The <strong>Login e-mail (Google)</strong> is the account each user signs in with; the <strong>KP e-mail</strong> is their Kaiser address, which receives the same alerts as the login e-mail (users can enter their own at login). Delete removes the user and all their data.</div>
         <div class="trow" style="margin-bottom:10px">
           <div>
@@ -4469,7 +4469,7 @@ window.openBadBehaviorReport=function(){
   const ok=openReportTab('Vacation Auction — Fair Play Report','All phases since last auction reset',
     `Snapshot ${stamp} · Heuristic screen reconstructed from the change log — verify in the Change Log before acting. A "Bail" = a winning bid taken off a competition week when its bid number was not needed on a week where the same person had already been knocked out of winning. Winning bids taken off for that reason ("Fair — needed"), or put straight back before any colleague changed a bid there ("Bail and return"), are listed under each phase as reviewed and fair, and are not counted.`,
     body,false);
-  if(ok) toast('👁 Fair Play report opened in a new tab','ok');
+  if(ok===true) toast('👁 Fair Play report opened in a new tab','ok');
 };
 window.computeBadBehavior=computeBadBehavior;
 // ── Struggling-user flag ──
@@ -4685,7 +4685,7 @@ window.openSummaryTab=function(kind){
   const ok=openReportTab(`Vacation Auction — ${title}`, scopeLabel,
     `Snapshot ${stamp}${isUsers?' · Projected = outcome before admin approval/denial · Result — = awaiting admin decision':' · FTE figures = completed-phase approvals PLUS current-phase projected winners · Solid chip = admin decision, outlined = projected'}`,
     body,false);
-  if(ok) toast('👁 '+title+' opened in a new tab','ok');
+  if(ok===true) toast('👁 '+title+' opened in a new tab','ok');
 };
 // Unlock every week that is locked but still has availability.
 window.unlockAvailabilityWeeks=function(){
@@ -5085,15 +5085,15 @@ window.onReviewThresholdInput=function(v){
   if(sl&&document.activeElement!==sl) sl.value=clamped;
   if(tx&&document.activeElement!==tx) tx.value=clamped.toFixed(1);
 };
-function _syncReviewThresholdFromSaved(){ const v=getReviewThreshold(); const sl=document.getElementById('reviewThresholdSlider'); const tx=document.getElementById('reviewThresholdText'); if(sl&&document.activeElement!==sl)sl.value=v; if(tx&&document.activeElement!==tx)tx.value=v.toFixed(1); }
+function _syncReviewThresholdFromSaved(force){ const v=getReviewThreshold(); const sl=document.getElementById('reviewThresholdSlider'); const tx=document.getElementById('reviewThresholdText'); if(sl&&(force===true||document.activeElement!==sl))sl.value=v; if(tx&&(force===true||document.activeElement!==tx))tx.value=v.toFixed(1); } // [373 · §269 O-A hunt] force = a revert: write even the focused field
 // Confirm-on-change (no Save button): on slider release / textbox commit, confirm the new
 // value, then save. Cancel reverts the controls to the saved value.
 window._confirmSaveReviewThreshold=function(){
-  if(!cfgUnlockedNow()){ toast('🔒 The FTE overage is locked while a phase is running — editable between phases, once results are sent.','err'); _syncReviewThresholdFromSaved(); return; } // [build 268 · FRZ8/GAP]
+  if(!cfgUnlockedNow()){ toast('🔒 The FTE overage is locked while a phase is running — editable between phases, once results are sent.','err'); _syncReviewThresholdFromSaved(true); return; } // [build 268 · FRZ8/GAP]
   // [331 · RA-11 F3] the second gate (anyCurrentPhaseBidsExist) is gone: it was true in every real gap.
   const tx=document.getElementById("reviewThresholdText");
   const raw=Number(tx?.value);
-  if(isNaN(raw)){ toast('Invalid value','warn'); _syncReviewThresholdFromSaved(); return; }
+  if(isNaN(raw)){ toast('Invalid value','warn'); _syncReviewThresholdFromSaved(true); return; }
   const clamped=Math.max(0,Math.min(2,Math.round(raw*10)/10));
   if(clamped===getReviewThreshold()){ return; } // unchanged
   openConfirm({
@@ -5104,7 +5104,7 @@ window._confirmSaveReviewThreshold=function(){
       try{ await setDoc(adminRef,{reviewThreshold:clamped},{merge:true}); toast(`FTE overage set to ${clamped.toFixed(1)}`,'ok'); }
       catch(e){ toast(_cfgDeniedMsg(e,'the FTE overage')||('Save failed: '+e.message),'warn'); } // [build 268 · FRZ8]
     },
-    onCancel:()=>{ _syncReviewThresholdFromSaved(); }
+    onCancel:()=>{ _syncReviewThresholdFromSaved(true); }
   });
 };
 // [SWEEP D5 · 30 Jul 2026] This was a bare toggle div on the Dashboard with no confirmation, one
@@ -5161,13 +5161,13 @@ window._syncCaps=_syncCaps;
 function _savedCaps(){ const m=adminSettings?.maxBidsCumulative||{}; return [1,2,3,4].map(p=>{ const raw=m[p]!==undefined?m[p]:m[String(p)]; return (raw===undefined||raw===null||raw===''||raw==='none')?null:Number(raw); }); }
 // Reflect the saved caps onto both the number inputs and the No-limit checkboxes (used on
 // initial load, on the live snapshot, and to revert a cancelled change). Skips focused fields.
-function _populateCapsFromSaved(){
+function _populateCapsFromSaved(force){ // [373 · §269 O-A hunt] force = a revert: write even the focused field
   const s=_savedCaps();
   for(let p=1;p<=4;p++){
     const inp=document.getElementById('cap'+p), cb=document.getElementById('nolim'+p); if(!inp||!cb) continue;
     const isNL=s[p-1]===null;
-    if(document.activeElement!==cb) cb.checked=isNL;
-    if(document.activeElement!==inp) inp.value=isNL?'':s[p-1];
+    if(force===true||document.activeElement!==cb) cb.checked=isNL;
+    if(force===true||document.activeElement!==inp) inp.value=isNL?'':s[p-1];
     inp.disabled=isNL; inp.style.opacity=isNL?'.45':'';
   }
 }
@@ -5179,7 +5179,7 @@ window._capNoLimitToggle=function(p){
 };
 // On commit (blur/Enter/checkbox): normalize, and if changed from saved, confirm before saving.
 window._capsChanged=function(){
-  if(!cfgUnlockedNow()){ toast('🔒 Bid caps are locked while a phase is running — editable between phases, once results are sent.','err'); _populateCapsFromSaved(); return; } // [build 268 · FRZ8/GAP]
+  if(!cfgUnlockedNow()){ toast('🔒 Bid caps are locked while a phase is running — editable between phases, once results are sent.','err'); _populateCapsFromSaved(true); return; } // [build 268 · FRZ8/GAP]
   const out=_syncCaps();
   // Force display to the normalized values so what's shown matches what will be saved.
   for(let p=1;p<=4;p++){ const el=document.getElementById('cap'+p), cb=document.getElementById('nolim'+p); if(!el) continue; const nl=!!cb?.checked; el.disabled=nl; el.style.opacity=nl?'.45':''; el.value=(nl||out[p-1]===null)?'':out[p-1]; }
@@ -5191,17 +5191,24 @@ window._capsChanged=function(){
     okText:'Save caps',
     onConfirm:async()=>{
       try{ await setDoc(adminRef,{maxBidsCumulative:{1:out[0],2:out[1],3:out[2],4:out[3]}},{merge:true}); }
-      catch(e){ toast(_cfgDeniedMsg(e,'the bid caps')||('⚠️ Bid caps NOT saved — nothing changed ('+(e?.message||e)+'). Try again.'),'err'); _populateCapsFromSaved(); return; } // [build 268 · FRZ8]
+      catch(e){ toast(_cfgDeniedMsg(e,'the bid caps')||('⚠️ Bid caps NOT saved — nothing changed ('+(e?.message||e)+'). Try again.'),'err'); _populateCapsFromSaved(true); return; } // [build 268 · FRZ8]
       const el=document.getElementById('capsMsg'); if(el){ el.style.color='var(--green)'; el.textContent='✓ Saved'; setTimeout(()=>{ if(el&&el.textContent==='✓ Saved') el.textContent=''; },3000); }
       toast('Bid caps saved','ok');
     },
-    onCancel:()=>{ _populateCapsFromSaved(); }
+    onCancel:()=>{ _populateCapsFromSaved(true); }
   });
 };
 
 // [build 274 · V3] Timer Reset Mode — current value, radio sync, and the confirmed +
 // audited change handler. Mode semantics live on the staff page (_timerResetMode /
 // _timerModeAllowsReset); this card only selects and records the mode.
+// [373 · §269 T-6] When a countdown that is not running will start, in the words of the live Reset Mode.
+function _timerStartsAt(){
+  const m=_timerModeCurrent();
+  if(m===2) return "the next bid, change or cancel that changes another user's outcome";
+  if(m===3) return "the next new bid, or the next change or cancel that changes another user's outcome";
+  return 'the next bid change';
+}
 function _timerModeCurrent(){
   const r=parseInt(adminSettings?.timerResetMode,10);
   return (r===2||r===3)?r:1;
@@ -5894,8 +5901,8 @@ window._runSimulationNow=async function(){
       for(const u of Object.keys(newSchedule)) mergedSched[u]=Object.assign({},mergedSched[u]||{},newSchedule[u]);
       simAlerts=await queueProjectionAlerts(prevSchedSnap,null,mergedSched);
     }catch(_){}
-    log.innerHTML='<div style="color:#0d7a43;font-weight:700;margin-bottom:8px">✅ Phase '+cur+' simulation complete — '+Object.keys(newSchedule).length+' users assigned'+(simAlerts?' · '+simAlerts+' projection-change alert'+(simAlerts!==1?'s':'')+' queued':'')+'</div>'+lines.map(l=>'<div>'+l+'</div>').join('');
-    toast('🎲 Phase '+cur+' simulation complete'+(simAlerts?' · '+simAlerts+' alerts queued':''),'ok');
+    log.innerHTML='<div style="color:#0d7a43;font-weight:700;margin-bottom:8px">✅ '+_phaseWindowLabel(cur)+' simulation complete — '+Object.keys(newSchedule).length+' users assigned'+(simAlerts?' · '+simAlerts+' projection-change alert'+(simAlerts!==1?'s':'')+' queued':'')+'</div>'+lines.map(l=>'<div>'+l+'</div>').join('');
+    toast('🎲 '+_phaseWindowLabel(cur)+' simulation complete'+(simAlerts?' · '+simAlerts+' alerts queued':''),'ok');
     renderSimPanel();
     const approveBtn=document.getElementById('runSimApprovalsBtn');
     if(approveBtn) approveBtn.style.display='';
@@ -8552,7 +8559,52 @@ function reportDocHtml(title,phaseLabel,subtitle,bodyHtml,autoPrint){
     </body></html>`;
 }
 window.reportDocHtml=reportDocHtml;
+// [373 · §269 owner-found] On an iPhone the admin page opened from a HOME-SCREEN ICON has no tabs and no address bar:
+// a report opened in a new window replaced the page with no way back. There, the report opens in a full-screen
+// panel INSIDE the page with "← Back to admin". The report sits in a sandboxed frame WITHOUT scripts (331: a report
+// is a document, never a door back into the admin page); its Print button is the panel's own (allow-modals lets
+// the parent print the frame; allow-same-origin without allow-scripts lets the parent reach it, never the reverse).
+// A normal browser keeps the new window exactly as before.
+function _isStandaloneApp(){ try{ return !!((window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches)||window.navigator.standalone===true); }catch(_){ return false; } }
+function closeReportPanel(){
+  const p=document.getElementById('rptPanel'); if(!p||!p.classList.contains('show')) return;
+  p.classList.remove('show'); const b=document.getElementById('rptBody'); if(b) b.innerHTML='';
+  try{ document.documentElement.style.overflow=p._prevOverflow||''; }catch(_){ }
+}
+function openReportPanel(title,phaseLabel,subtitle,bodyHtml,wantPrint){
+  let p=document.getElementById('rptPanel');
+  if(!p){
+    if(!document.getElementById('rptPanelCss')){ const st=document.createElement('style'); st.id='rptPanelCss';
+      st.textContent='#rptPanel{position:fixed;inset:0;z-index:5000;background:#fff;display:none;flex-direction:column}'
+        +'#rptPanel.show{display:flex}'
+        +'#rptPanel .rpt-bar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:10px 12px;padding-top:calc(10px + env(safe-area-inset-top,0px));background:#0f2b46}'
+        +'#rptPanel .rpt-bar button{font:600 15px -apple-system,system-ui,sans-serif;border:0;border-radius:8px;padding:9px 14px;cursor:pointer}'
+        +'#rptBack{background:#fff;color:#0f2b46}#rptPrint{background:#2563eb;color:#fff;margin-left:auto}'
+        +'#rptBody{flex:1 1 auto;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}'
+        +'#rptBody iframe{display:block;border:0;width:100%;height:100%;background:#fff}';
+      document.head.appendChild(st); }
+    p=document.createElement('div'); p.id='rptPanel'; p.setAttribute('role','dialog'); p.setAttribute('aria-modal','true');
+    p.innerHTML='<div class="rpt-bar"><button type="button" id="rptBack" onclick="closeReportPanel()">← Back to admin</button><button type="button" id="rptPrint" onclick="printReportPanel()">🖨 Print / Save PDF</button></div><div id="rptBody"></div>';
+    document.body.appendChild(p);
+  }
+  const body=document.getElementById('rptBody'); body.innerHTML='';
+  const f=document.createElement('iframe'); f.id='rptFrame'; f.title=String(title||'Report');
+  f.setAttribute('sandbox',wantPrint?'allow-same-origin allow-modals':''); // a fresh frame each time: sandbox flags apply when it loads
+  body.appendChild(f);
+  f.srcdoc=reportDocHtml(title,phaseLabel,subtitle,bodyHtml,false); // never the auto-print script: nothing runs in the frame
+  const pr=document.getElementById('rptPrint'); if(pr) pr.style.display=wantPrint?'':'none';
+  if(!p.classList.contains('show')){ try{ p._prevOverflow=document.documentElement.style.overflow; document.documentElement.style.overflow='hidden'; }catch(_){ } }
+  p.classList.add('show');
+  return 'panel';
+}
+function printReportPanel(){
+  try{ const f=document.getElementById('rptFrame'); f.contentWindow.focus(); f.contentWindow.print(); }
+  catch(_){ toast('Printing is not available here — open the report on your computer to print it.','warn'); }
+}
+window.closeReportPanel=closeReportPanel; window.printReportPanel=printReportPanel; window.openReportPanel=openReportPanel; window._isStandaloneApp=_isStandaloneApp;
+try{ document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ const p=document.getElementById('rptPanel'); if(p&&p.classList.contains('show')) closeReportPanel(); } }); }catch(_){ }
 function openReportTab(title,phaseLabel,subtitle,bodyHtml,autoPrint){
+  if(_isStandaloneApp()) return openReportPanel(title,phaseLabel,subtitle,bodyHtml,!!autoPrint); // [373 · §269]
   const w=window.open('','_blank');
   if(!w){ toast('Pop-up blocked — allow pop-ups for this site','warn'); return false; }
   w.opener=null; // [331 · RA-11 F1] a report window is a document, never a door back into the admin page
@@ -8712,7 +8764,7 @@ window.exportPhaseResults=function(format,scopeOverride,activeOnly){
     body:sections||'<p>No bids for this selection.</p>' };
   if(format==='parts') return _parts;
   const ok=openReportTab(_parts.title,_parts.phaseLabel,_parts.subtitle,_parts.body, !isView);
-  if(ok) toast(isView?'👁 Report opened in a new tab':'📄 Preview opened — use browser "Print → Save as PDF"','ok');
+  if(ok===true) toast(isView?'👁 Report opened in a new tab':'📄 Preview opened — use browser "Print → Save as PDF"','ok');
 };
 
 // ── User Summary report (per USER) — same three formats as the weekly report,
@@ -8818,7 +8870,7 @@ window.exportUserSummary=function(format,scopeOverride,activeOnly){
     body:sections };
   if(format==='parts') return _parts;
   const ok=openReportTab(_parts.title,_parts.phaseLabel,_parts.subtitle,_parts.body, !isView);
-  if(ok) toast(isView?'👁 User Summary opened in a new tab':'📄 Preview opened — use browser "Print → Save as PDF"','ok');
+  if(ok===true) toast(isView?'👁 User Summary opened in a new tab':'📄 Preview opened — use browser "Print → Save as PDF"','ok');
 };
 
 // ── [build 271 · B4] Available capacity by week ──────────────────────────────
@@ -8951,7 +9003,7 @@ window.exportCapacityByWeek=function(format){
   const ok=openReportTab('Vacation Auction — Available Capacity by Week', 'Capacity',
     'Exported '+stamp+' · '+rows.length+' weeks · taken '+totTaken+' of '+totCap+' FTE-weeks · '+CAPACITY_DEF_TEXT+' — exact between phases; mid-phase, pending bids may still take more',
     body, !isView);
-  if(ok) toast(isView?'👁 Capacity report opened in a new tab':'📄 Preview opened — use browser "Print → Save as PDF"','ok');
+  if(ok===true) toast(isView?'👁 Capacity report opened in a new tab':'📄 Preview opened — use browser "Print → Save as PDF"','ok');
 };
 
 // ── Capacity page [335 · §194] — the report built into the site. Same rows (_capacityWeekRows),
@@ -10246,7 +10298,7 @@ window.runSimulationApprovals=function(){
   const cur=Number(phasesData.currentPhase||1);
   openConfirm({
     title:'✅ Auto-Approve/Deny Results',
-    body:`<div>Run auto-approve/deny for <strong>Phase ${cur}</strong>?</div>
+    body:`<div>Run auto-approve/deny for <strong>${_phaseWindowLabel(cur)}</strong>?</div>
           <div class="cmodal-info" style="margin-top:8px">Winners are approved, losers denied, single over-cap bids approved, and ties decided at random within the FTE cap plus the allowed overage. This writes real approvals and denials.</div>`,
     okText:'✅ Run Auto-Approve/Deny', danger:true,
     onConfirm:()=>_execSimulationApprovals()
@@ -10720,6 +10772,12 @@ function guardAdminBid(u,wk,val,isNew,proceed,onCancel){
   });
 }
 window.adminBidIssues=adminBidIssues; window.guardAdminBid=guardAdminBid;
+// [373 · §269 O-A] Edit Selections redraws from the saved data on a refusal or a cancel - but renderEditTable
+// skips its redraw while a field inside the table has focus (H-7), and after an onchange the <select> still
+// has it, so the row kept showing the number that was never saved. Blur ONLY a field inside #editBody (other
+// callers of the raw save are untouched), then redraw.
+function _edSnapBack(){ try{ const a=document.activeElement, tb=document.getElementById('editBody'); if(a&&tb&&tb.contains(a)&&typeof a.blur==='function') a.blur(); }catch(_){ } try{ refreshAll(); }catch(_){ } }
+window._edSnapBack=_edSnapBack;
 
 window.adminChangePriority=async function(u,wk,val){
   // [316 · E1] The archived-round guard SIX other write handlers already use, on the one that
@@ -10731,17 +10789,22 @@ window.adminChangePriority=async function(u,wk,val){
   // round-decided. [324] The rule is now round-current, not value-aware; this gate stands as is.
   // Paint is not enforcement (§3 r5): the row lock stops it being OFFERED, this stops it being
   // DONE. refreshAll because the <select> has already moved in the DOM and nothing was written.
-  if(typeof _p4ArchivedDecisionRound==='function'){ const _ar=_p4ArchivedDecisionRound(u,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); try{ refreshAll(); }catch(_){ } return; } }
+  if(typeof _p4ArchivedDecisionRound==='function'){ const _ar=_p4ArchivedDecisionRound(u,wk); if(_ar!==null){ toast('This decision was announced in Phase 4: Round '+_ar+' — archived round results cannot be changed.','err'); _edSnapBack(); return; } }
   const _ds=(typeof _decisionStamp==='function')?_decisionStamp():null; // [292 · RA-M1]
   // [AUDIT #8/#9] Warn before an edit that no bidder could have made. Everything
   // below runs unchanged once the admin has confirmed (or if nothing is wrong).
   const _issues=adminBidIssues(u,wk,val,false);
-  if(_issues.length){
+  // [373 · §269 O-A] a duplicated, withheld or below-floor number goes straight to its own refusal instead of
+  // first through "Change this bid?" (whose Save then refused it).
+  const _fatal=(typeof adminDupFatal==='function'&&adminDupFatal(u,wk,String(val)).length>0)
+    ||(typeof _adminHoldFatal==='function'&&_adminHoldFatal(u,String(val)).length>0)
+    ||(typeof adminFloorFatal==='function'&&!!adminFloorFatal(u,wk,String(val)));
+  if(_issues.length||_fatal){
     // [BATCH D · M4 · build 234] RETURN the write's promise. The M-14 safety net in openConfirm
     // awaits the onConfirm chain and toasts "Action failed" on rejection — but these arrow
     // functions dropped the promise, so a failed bid save showed no error and the table kept the
     // unsaved value. One word reconnects the net.
-    guardAdminBid(u,wk,val,false,()=>window._adminChangePriorityRaw(u,wk,val,_ds));
+    guardAdminBid(u,wk,val,false,()=>window._adminChangePriorityRaw(u,wk,val,_ds),_edSnapBack);
     return;
   }
   // [SWEEP D3 · 30 Jul 2026] A rule-LEGAL change used to write straight through with no dialog at
@@ -10764,7 +10827,7 @@ window.adminChangePriority=async function(u,wk,val){
     // [delta-audit #7, same trap] The <select> has ALREADY moved to the new value in the DOM and
     // no snapshot fires when nothing is written, so a cancel would leave the table showing a value
     // that was never saved. Redraw from live data, exactly as guardAdminBid does.
-    onCancel:()=>{ try{ if(document.activeElement&&typeof document.activeElement.blur==='function') document.activeElement.blur(); }catch(_){ } try{ refreshAll(); }catch(_){ } }
+    onCancel:_edSnapBack // [373 · §269 O-A]
   });
 };
 // [289 · AUD-H, owner ruling 20 Aug] Admin manual bid add/edit/delete is real bid activity:
@@ -10838,16 +10901,16 @@ window._adminChangePriorityRaw=async function(u,wk,val,_atOpen){
   // replace-dead-bid dialog reaches here without guardAdminBid). typeof guard for extracted-
   // code test sandboxes only -- in the real page adminDupFatal always exists.
   const _dupR=(typeof adminDupFatal==='function')?adminDupFatal(u,wk,String(val)):[];
-  if(_dupR.length){ toast('🚫 Not saved — '+u+' already has bid '+[...new Set(_dupR.map(c=>c.n))].join(', ')+' on another week this phase. A duplicated number makes BOTH weeks lose; change the other week first.','err'); try{ refreshAll(); }catch(_){ } return; }
-  { const _hR=(typeof _adminHoldFatal==='function')?_adminHoldFatal(u,String(val)):[]; if(_hR.length){ toast('🚫 Not saved — '+_hR.join(', ')+' is withheld from '+u+' (release it on User Bids first). Nothing changed.','err'); try{ refreshAll(); }catch(_){ } return; } } // [327 · RA-9 #4]
+  if(_dupR.length){ toast('🚫 Not saved — '+u+' already has bid '+[...new Set(_dupR.map(c=>c.n))].join(', ')+' on another week this phase. A duplicated number makes BOTH weeks lose; change the other week first.','err'); _edSnapBack(); return; }
+  { const _hR=(typeof _adminHoldFatal==='function')?_adminHoldFatal(u,String(val)):[]; if(_hR.length){ toast('🚫 Not saved — '+_hR.join(', ')+' is withheld from '+u+' (release it on User Bids first). Nothing changed.','err'); _edSnapBack(); return; } } // [327 · RA-9 #4]
   // [292 · RA-M1] Phase-identity guard for the manual-edit dialogs: a confirm left open
   // across a phase/round boundary must not re-tag an archived bid as a live new-phase bid
   // (line below stamps bidPhase with the phase CURRENT AT CLICK TIME). Callers pass the
   // stamp captured at dialog-open; callers/sandboxes that pass none keep the old behavior.
-  if(_atOpen&&typeof _decisionGuard==='function'&&!_decisionGuard(_atOpen)){ try{ refreshAll(); }catch(_){ } return; }
+  if(_atOpen&&typeof _decisionGuard==='function'&&!_decisionGuard(_atOpen)){ _edSnapBack(); return; }
   // [296 · §72] write-level backstop: below-floor / NP-off values never reach the server.
   { const _flR=(typeof adminFloorFatal==='function')?adminFloorFatal(u,wk,String(val)):null;
-    if(_flR){ toast('🚫 Not saved — '+(_flR.kind==='np'?('NP is switched off for Phase '+Number(phasesData.currentPhase||1)):('this week\'s floor is '+_flR.floor+' or better'))+'. §72: floors are absolute; change the setting itself to make an exception.','err'); try{ refreshAll(); }catch(_){ } return; } }
+    if(_flR){ toast('🚫 Not saved — '+(_flR.kind==='np'?('NP is switched off for Phase '+Number(phasesData.currentPhase||1)):('this week\'s floor is '+_flR.floor+' or better'))+'. §72: floors are absolute; change the setting itself to make an exception.','err'); _edSnapBack(); return; } }
   // Direct dropdown change in Edit Selections — real per-field writes via
   // mergeFields() (updateDoc-based); plain setDoc+merge on a nested object
   // silently wipes the user's OTHER weeks, which is what this used to do.
@@ -10858,7 +10921,7 @@ window._adminChangePriorityRaw=async function(u,wk,val,_atOpen){
   // [BATCH D · M4 · build 234] A failed save must not leave the table showing the unsaved value:
   // revert the local mirror, redraw, and RETHROW so the M-14 net toasts "Action failed".
   try{ await mergeFields(scheduleRef,{[u+'.'+wk]:scheduleData[u][wk]}); }
-  catch(e){ if(_hadOld) scheduleData[u][wk]=_oldVal; else delete scheduleData[u][wk]; try{ refreshAll(); }catch(_){} throw e; }
+  catch(e){ if(_hadOld) scheduleData[u][wk]=_oldVal; else delete scheduleData[u][wk]; _edSnapBack(); throw e; }
   await mergeFields(bidPhaseRef,{[u+'.'+wk]:Number(phasesData.currentPhase||1)}).catch(()=>{});
   // [291 · ES-2, owner ruling 20 Aug 2026] The admin-set bid BECOMES the priority lock
   // (staff-lowering precedent build 139; simulator precedent). NP stamps "NP", exactly like
@@ -11678,7 +11741,7 @@ window.exportChangelog=function(format){
       +'<td style="'+TD+';white-space:normal">'+r.html+'</td></tr>').join('')
     +'</tbody></table></div>').join('');
   const ok=openReportTab('Vacation Auction — Change Log',phaseLabel,esc(stampLine),body,true);
-  if(ok) toast('📄 Preview opened — use browser "Print → Save as PDF"','ok');
+  if(ok===true) toast('📄 Preview opened — use browser "Print → Save as PDF"','ok');
 };
 
 async function adminLog(u,wk,type,bidValue,extra){ // [327 · §180] extra: fields merged into the entry (the hold reason)
@@ -11879,12 +11942,21 @@ try{ setInterval(function(){ try{ updatePhaseOpen(); }catch(e){} }, 20000); }cat
 try{ setInterval(function(){ try{ scheduleMailQueueSweep(); }catch(e){} }, 12000); }catch(e){}
 window.currentStageHours=currentStageHours; window.updatePhaseOpen=updatePhaseOpen; window.timerResetHours=timerResetHours; window.getTimerRules=getTimerRules; window.openingWindowActive=openingWindowActive; window.stage0Hours=stage0Hours;
 function fmtHour12(h){ h=((h%24)+24)%24; const ap=h<12?'AM':'PM'; let hh=h%12; if(hh===0) hh=12; return hh+' '+ap; }
-const TIMER_HOUR_OPTS=[48,24,12,6,3];
+// [373 · §269] Timer Rules hours are typed: whole hours, TR_MIN_H to 72. The floor is 2, not 1: firestore.rules
+// requires a bidder's reset to leave more than an hour on the clock, measured from the bidder's own clock, so a
+// 1-hour step would silently fail to reset from the staff pages (the admin's own ↺ Reset Timer may still pick 1).
+const TR_MIN_H=2, TR_MAX_H=72;
+function _trHourOk(h){ return Number.isInteger(h)&&h>=TR_MIN_H&&h<=TR_MAX_H; }
+// The longest the overnight rule can stretch a reset of h hours: an expiry landing at the very start of the quiet
+// hours is carried to their end (the whole quiet window, Q hours), plus one hour on the night the clocks fall back.
+function _trQuietSpanH(qs,qe){ return ((((qe-qs)%24)+24+23)%24)+1; }
+// The day count the Opening window shows: the SAVED one, kept when the box is unticked (O-C); 3 when none is saved.
+function _owSavedDays(){ try{ const x=(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.timerRules)?adminSettings.timerRules.openingWindow:null; const d=Number(x&&x.days); return (d>0)?Math.min(60,Math.max(1,Math.round(d))):3; }catch(_){ return 3; } }
 function renderTimerRules(){
   if(window._trEditing) return; // M-13 / TR-4: unsaved edits are open — never rebuild (and silently discard) them from a live snapshot
   const el=document.getElementById('timerRulesBody'); if(!el) return;
   const r=getTimerRules();
-  const hoursSel=(id,val)=>`<select id="${id}" class="sel" style="width:78px">${TIMER_HOUR_OPTS.map(h=>`<option value="${h}"${h===val?' selected':''}>${h} h</option>`).join('')}</select>`;
+  const hoursSel=(id,val)=>`<input type="number" id="${id}" class="inp" style="width:64px" min="${TR_MIN_H}" max="${TR_MAX_H}" step="1" inputmode="numeric" value="${esc(String(val))}"> h`; // [373 · §269] any whole number of hours
   const dayInp=(id,val)=>`<input type="number" id="${id}" class="inp" style="width:60px" min="0" max="90" value="${val}">`;
   const hourSel=(id,val)=>`<select id="${id}" class="sel" style="width:88px">${Array.from({length:24},(_,h)=>`<option value="${h}"${h===val?' selected':''}>${fmtHour12(h)}</option>`).join('')}</select>`;
   // Editor rows render from the RAW saved stages (including switched-off ones) so a
@@ -11914,7 +11986,7 @@ function renderTimerRules(){
   const ow=r.openingWindow;
   const owRow=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
     <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t1);font-weight:600;cursor:pointer"><input type="checkbox" id="tr_ow" ${ow?'checked':''}> Opening window (every phase or round)</label>
-    <div style="font-size:12.5px;color:var(--t2);margin-top:8px;line-height:1.7"><span>Start each phase with a timer of</span> ${dayInp('tr_owd',ow?ow.days:7)} <span>days. It counts down in days + hours, continuously — bids do <strong>not</strong> reset it — until <strong>${(st[0]||{}).hours||48} hours</strong> remain. From then on it shows hours only and every bid change resets it per the rules above. Applies whenever a phase is begun.</span></div>
+    <div style="font-size:12.5px;color:var(--t2);margin-top:8px;line-height:1.7"><span>Start each phase with a timer of</span> ${dayInp('tr_owd',_owSavedDays())} <span>days. It counts down in days + hours, continuously — bids do <strong>not</strong> reset it — until <strong>${(st[0]||{}).hours||48} hours</strong> remain. From then on it shows hours only and resets per the rules above and the Timer Reset Mode. Applies whenever a phase is begun.</span></div>
     ${(ow&&ow.days*24<=((st[0]||{}).hours||48))?`<div style="margin-top:6px;font-size:12px;color:var(--red)">⚠️ This window (${ow.days} day${ow.days!==1?'s':''} = ${ow.days*24}h) is not longer than the ${(st[0]||{}).hours||48}h starting reset, so it has no effect — bids reset the timer from the start. Set more days than ${Math.ceil(((st[0]||{}).hours||48)/24)} to use it.</div>`:''}
   </div>`;
   const quiet=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
@@ -11949,6 +12021,20 @@ function _trValidate(rules){
   const out=[];
   const st=(rules&&Array.isArray(rules.stages))?rules.stages:[];
   const start=st[0]||{hours:48};
+  // [373 · §269] every hours box - switched-off lines too, since they are saved and can be switched back on.
+  const hl=i=>i===0?'The starting reset':'Line '+i;
+  st.forEach((s,i)=>{ if(!_trHourOk(s&&s.hours)) out.push(hl(i)+' needs a whole number of hours from '+TR_MIN_H+' to '+TR_MAX_H+'.'); });
+  const le=rules?rules.quietWhenHoursLE:NaN;
+  if(!_trHourOk(le)) out.push('The overnight rule needs a whole number of hours from '+TR_MIN_H+' to '+TR_MAX_H+'.'); // checked when switched off too: it is saved
+  else if(rules&&rules.quietEnabled!==false){
+    {
+      // A bidder's countdown reset is refused by the database beyond 72 hours (the bid saves; the countdown would not
+      // reset). Refuse any switched-on step the overnight hours could stretch past that.
+      const Q=_trQuietSpanH(Number(rules.quietStart),Number(rules.quietEnd)), maxH=TR_MAX_H-Q-1;
+      st.forEach((s,i)=>{ if(s&&(i===0||s.enabled!==false)&&_trHourOk(s.hours)&&s.hours<=le&&s.hours>maxH)
+        out.push(hl(i)+' ('+s.hours+' hours) can be stretched by the overnight hours to '+(s.hours+Q+1)+' hours, past the 72-hour limit a bidder\'s reset can reach. Use '+maxH+' hours or less, or lower the overnight rule\'s hours.'); });
+    }
+  }
   let prevDays=0, prevHours=start.hours, prevLabel='the starting reset';
   for(let i=1;i<st.length;i++){
     const s=st[i];
@@ -12003,17 +12089,17 @@ window.toggleTimerRules=function(){
 // CAPTURE the pending edit before opening the confirm dialog — saveTimerRules then persists
 // that captured value, not whatever the DOM holds after a possible mid-dialog re-render.
 function buildTimerRulesFromDOM(){
-  const getH=id=>{ const v=parseInt(document.getElementById(id)?.value,10); return TIMER_HOUR_OPTS.includes(v)?v:null; };
+  const getH=id=>{ const t=String(document.getElementById(id)?.value??'').trim(); return /^\d+$/.test(t)?Number(t):NaN; }; // [373 · §269] NaN = not a whole number; _trValidate refuses it
   const getD=id=>{ let v=parseInt(document.getElementById(id)?.value,10); if(isNaN(v)||v<0) v=0; return v; };
-  const stages=[{days:0,hours:getH('tr_h0')||48}];
-  for(let i=1;i<=4;i++){ const h=getH('tr_h'+i); if(h!=null) stages.push({days:getD('tr_d'+i),hours:h,enabled:document.getElementById('tr_e'+i)?.checked!==false}); }
+  const stages=[{days:0,hours:getH('tr_h0')}];
+  for(let i=1;i<=4;i++){ stages.push({days:getD('tr_d'+i),hours:getH('tr_h'+i),enabled:document.getElementById('tr_e'+i)?.checked!==false}); }
   // TR-1: no sort here either — the saved order IS the on-screen order. getTimerRules
   // sorts for the engine, so the stored order never affects how the timer behaves.
   let qs=parseInt(document.getElementById('tr_qs')?.value,10); if(isNaN(qs)) qs=21;
   let qe=parseInt(document.getElementById('tr_qe')?.value,10); if(isNaN(qe)) qe=9;
-  let owDays=parseInt(document.getElementById('tr_owd')?.value,10); if(isNaN(owDays)||owDays<1) owDays=7; if(owDays>60) owDays=60;
-  const openingWindow=document.getElementById('tr_ow')?.checked===true?{enabled:true,days:owDays}:null;
-  return { stages, quietEnabled:document.getElementById('tr_quiet')?.checked!==false, quietWhenHoursLE:getH('tr_qle')||6, quietStart:qs, quietEnd:qe, openingWindow };
+  let owDays=parseInt(document.getElementById('tr_owd')?.value,10); if(isNaN(owDays)||owDays<1) owDays=3; if(owDays>60) owDays=60; // [373 · §269 O-C] default 3
+  const openingWindow={enabled:document.getElementById('tr_ow')?.checked===true,days:owDays}; // [373 · O-C] unticked keeps its days; _owNorm reads enabled:false as off
+  return { stages, quietEnabled:document.getElementById('tr_quiet')?.checked!==false, quietWhenHoursLE:getH('tr_qle'), quietStart:qs, quietEnd:qe, openingWindow };
 }
 window.saveTimerRules=async function(rules){
   rules=rules||buildTimerRulesFromDOM();
@@ -12044,7 +12130,7 @@ function syncTimer(){
   const bl=document.getElementById("timerBlock"); const lb=document.getElementById("timerLabel"); const mt=document.getElementById("timerMeta");
   if(!bl||!lb||!mt)return;
   if(!en){bl.className="timer-block";lb.textContent="Timer disabled";mt.textContent="Enable above to start.";document.getElementById("timerDigs").innerHTML="";return;}
-  if(!timerData.lastChange){bl.className="timer-block";lb.textContent="Waiting for first change";mt.textContent="Countdown starts on first bid.";document.getElementById("timerDigs").innerHTML='<span class="pill p-blue">Waiting</span>';return;}
+  if(!timerData.lastChange){bl.className="timer-block";lb.textContent="Waiting for first change";mt.textContent='Countdown starts at '+_timerStartsAt()+'.'; /* [373 · §269 T-6] */document.getElementById("timerDigs").innerHTML='<span class="pill p-blue">Waiting</span>';return;}
   const rem=getDurationMs()-(Date.now()-timerData.lastChange);
   bl.className="timer-block"+(rem<=0?" expired":" running")+(gLocked?" glocked":"");
   lb.textContent=rem<=0?"Timer expired":"Timer running";
@@ -12154,7 +12240,12 @@ window.toggleTimerEnabled=function(){
   openConfirm({
     title:nv?'⏱️ Enable Timer':'🔕 Disable Timer',
     body:nv
-      ? `<div>Turn the countdown timer <strong>on</strong>? A live countdown will show to all users and reset on each bid change.</div>`
+      ? (()=>{ // [373 · §269 T-6] the old sentence promised a countdown that does not start until a qualifying bid
+          let _owGo=false; try{ const owr=getTimerRules().openingWindow, began=_windowStartMs(); _owGo=!timerData.lastChange&&!!owr&&!!began&&(owr.days*86400000-(Date.now()-began))>stage0Hours()*3600000; }catch(_){ }
+          if(timerData.lastChange) return `<div>Turn the countdown timer <strong>on</strong>? The countdown resumes from its last reset.</div>`;
+          if(_owGo) return `<div>Turn the countdown timer <strong>on</strong>? The opening window is still running, so the countdown resumes at once, counted from the start of the round.</div>`;
+          return `<div>Turn the countdown timer <strong>on</strong>? The countdown does <strong>not</strong> start now — users see no countdown until ${esc(_timerStartsAt())}, or until you press ↺ Reset Timer.</div>`;
+        })()
       // [297 · RA-3] The old text described only what disappears from the doctors' screen.
       // Switching the timer off also removes the thing that ENDS the phase: nothing expires,
       // bids stay writable, and the phase runs until Close Bidding is pressed by hand. The
@@ -12352,12 +12443,12 @@ window.adminResetTimer=function(){
   if(_windowCompletedNow()){ toast('⛔ '+_phaseWindowLabel()+' is complete — its bidding cannot be reopened by a timer reset.'+((Number(phasesData.currentPhase||1)===4&&!(phasesData.completedPhases||{})[4])?' Send (or skip) the round results, then ▶ Start Round '+(Number(phasesData.p4Round||1)+1)+'.':''),'err'); return; }
   // Helpers are LOCAL on purpose: extracted-code suites resolve names only while the dialog is being built,
   // so anything the OK handler needs must live in this function (the page's existing convention).
-  const CHOICES=[1,3,6,12,24,48];
   const allLocked=()=>Array.isArray(mondays)&&mondays.length>0&&mondays.every(d=>!!locksData?.weeks?.[dateKey(d)]);
   const defaultHours=n=>{ const ow=getTimerRules().openingWindow; return (openingWindowActive()&&ow)?ow.days*24:timerResetHours(timerPhaseStartMs(),n); };
   const fmtAt=ms=>new Date(ms).toLocaleString('en-US',{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
   const picked=()=>{ try{ const el=(typeof document!=='undefined'&&document&&document.querySelector)?document.querySelector('#cmBody input[name=rtLen]:checked'):null;
-                          const v=el?Number(el.value):NaN; return CHOICES.indexOf(v)>=0?v:'rules'; }catch(_){ return 'rules'; } };
+                          if(!el||el.value!=='custom') return 'rules'; // [373 · §269] the typed length: whole hours 1-72, else null (refused)
+                          const t=String((document.getElementById('rtHrs')||{}).value||'').trim(); const v=/^\d+$/.test(t)?Number(t):NaN; return (v>=1&&v<=72)?v:null; }catch(_){ return 'rules'; } };
   if(allLocked()){
     openConfirm({
       title:'↺ Reset Timer',
@@ -12372,7 +12463,7 @@ window.adminResetTimer=function(){
   const _n0=Date.now(), defH=defaultHours(_n0);
   const defLabel=(owActive&&owr)?('Timer rules default — the full '+owr.days+'-day opening window'):('Timer rules default — '+fmtDuration(Math.round(defH*10)/10));
   window._resetTimerPreview=function(){ try{ const pk=picked(), n=Date.now(), h=(pk==='rules')?defaultHours(n):pk;
-    const el=document.getElementById('rtCloses'); if(el) el.innerHTML='Bidding will close at <strong>'+fmtAt(n+h*3600000)+'</strong> unless a later bid lengthens the countdown.'; }catch(_){} };
+    const el=document.getElementById('rtCloses'); if(el&&pk===null){ el.innerHTML='Enter a whole number of hours from 1 to 72.'; return; } if(el) el.innerHTML='Bidding will close at <strong>'+fmtAt(n+h*3600000)+'</strong> unless a later bid lengthens the countdown.'; }catch(_){} };
   // [341 · §210] ASK TWICE. Nothing is written until the second OK, and the state is re-checked then. The shared dialog
   // re-opens with OK in the same place, so its OK ignores clicks for its first second — one fast double-click cannot
   // pass both boxes. Local on purpose (extracted-code suites resolve names only while the first dialog is built).
@@ -12381,7 +12472,7 @@ window.adminResetTimer=function(){
   openConfirm({
     title:'↺ Reset Timer',
     body:`<div>Restart the countdown from this moment. How long?</div>
-          <div style="margin:8px 0 6px 2px">${opt('rules',defLabel,true)}${CHOICES.map(h=>opt(h,h+' hour'+(h!==1?'s':''),false)).join('')}</div>
+          <div style="margin:8px 0 6px 2px">${opt('rules',defLabel,true)}${opt('custom','<span>Other:</span> <input type="number" id="rtHrs" class="inp" min="1" max="72" step="1" inputmode="numeric" value="12" style="width:64px" oninput="try{document.querySelector(\'#cmBody input[name=rtLen][value=custom]\').checked=true;}catch(_){}_resetTimerPreview()" onfocus="try{document.querySelector(\'#cmBody input[name=rtLen][value=custom]\').checked=true;}catch(_){}_resetTimerPreview()"> hours',false)}</div>
           <div class="cmodal-info" id="rtCloses" style="margin-top:6px">Bidding will close at <strong>${fmtAt(_n0+defH*3600000)}</strong> unless a later bid lengthens the countdown.</div>
           <div style="margin-top:6px;font-size:12px;color:var(--t2)">A later bid that restarts the countdown can only make it longer, never shorter.</div>`
       +((owActive&&owr)?`<div class="cmodal-info" style="margin-top:6px">The opening window is active — the default restarts the full ${owr.days}-day window.</div>`:'')
@@ -12391,6 +12482,7 @@ window.adminResetTimer=function(){
     // flag still set is a live-looking board where every bid is denied server-side.
     onConfirm:()=>{
       const pk=picked(); // read the choice NOW — the second box replaces the dialog body that holds the radios
+      if(pk===null){ toast('Enter a whole number of hours from 1 to 72.','warn'); return; } // [373 · §269]
       const h1=(pk==='rules')?defaultHours(Date.now()):pk;
       confirmAgain({
         title:'⚠️ Confirm again — Reset Timer', // [343 · §211]
@@ -12481,8 +12573,10 @@ onSnapshot(userListRef, snap=>{
 
 function renderUsersCombined(){
   const tb=document.getElementById('usersBody'); if(!tb) return;
-  if(tb.contains(document.activeElement)) return; // H-7: don't wipe an in-progress name/FTE/email edit on a snapshot
+  // [373 · §269] the count and the FTE total sit OUTSIDE the table, so they stay current while a field in it is being edited.
   const count=document.getElementById('userCount'); if(count) count.textContent=names.length;
+  { const ft=document.getElementById('fteTotal'); if(ft){ let t=0; names.forEach(n=>{ const f=Number(getUserFTE(n)); if(isFinite(f)) t+=f; }); ft.textContent=' · Total FTE: '+(Math.round(t*100)/100)+' ('+names.length+' user'+(names.length!==1?'s':'')+')'; } }
+  if(tb.contains(document.activeElement)) return; // H-7: don't wipe an in-progress name/FTE/email edit on a snapshot
   // FTE fields are locked unless the admin has deliberately switched "FTE editing" ON
   // (adminSettings.fteEditEnabled). Editing auto-switches OFF when Phase 1 begins and on
   // auction reset, so mid-auction FTE changes require an explicit, confirmed unlock.
@@ -13093,7 +13187,7 @@ window.exportMailLog=function(format){
       +'<td style="'+TD+';white-space:nowrap;color:#475569">'+esc(r.by)+'</td></tr>').join('')
     +'</tbody></table>';
   const ok=openReportTab('Vacation Auction — E-mail Log','E-mail Log',esc(stampLine),body,true);
-  if(ok) toast('📄 Preview opened — use browser "Print → Save as PDF"','ok');
+  if(ok===true) toast('📄 Preview opened — use browser "Print → Save as PDF"','ok');
 };
 // ── Whitelist Tracker [2026-07-26] ───────────────────────────────────────────
 // Self-contained: reads the roster (names/usernames/loginEmails) + the whitelistConfirm doc,
