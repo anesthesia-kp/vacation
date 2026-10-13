@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 370;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 371;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1184,13 +1184,14 @@ thead th{color:var(--t2)}
       <!-- LOCKED WEEKS ON THE STAFF BOARD [370 · §266] — one stored map, adminSettings.lockedInPlace {1..4: true|false}. true = on
            the staff bidding board a locked week stays in its month, grey; false = locked weeks gather in the grey Locked Weeks
            section at the bottom. Absent = the owner's defaults (Phase 1 false; Phases 2, 3, 4 true); ONE value for every Phase 4
-           round. Whenever every week is locked the staff page keeps them in place whatever this says. Display only: not a frozen
+           round. Whenever every week was locked while bidding was open the staff page keeps them in place whatever this says; when
+           bidding closes (or the Freeze is on) the staff board keeps the layout it had [371 · §267]. Display only: not a frozen
            fairness key, so it saves in any phase. -->
       <div class="card">
         <div class="card-title">Locked weeks on the staff board</div>
         <div class="trow" style="align-items:flex-start;flex-direction:column;gap:8px">
           <div>
-            <div class="trow-desc">ON: a locked week stays in its month on the staff bidding board, drawn grey. OFF: locked weeks are gathered in the Locked Weeks section at the bottom of the board. Whenever every week is locked they stay in their month, whatever this says. A week a person won is drawn green either way. Display only — no bid, lock or rule changes.</div>
+            <div class="trow-desc">ON: a locked week stays in its month on the staff bidding board, drawn grey. OFF: locked weeks are gathered in the Locked Weeks section at the bottom of the board. When bidding closes, the board keeps this layout until the next phase or round begins. A week a person won is drawn green either way. Display only — no bid, lock or rule changes.</div>
           </div>
           <div id="lipPhaseToggles" style="display:flex;gap:22px;flex-wrap:wrap"></div>
         </div>
@@ -1579,6 +1580,23 @@ async function mergeFields(ref, dotted){
     }
     await setDoc(ref, nested, {merge:true});
   }
+}
+// [371 · §267, owner 12 Oct 2026: "when bidding closes nothing moves"] Every write to the week locks passes through here. When the
+// write leaves EVERY week locked and they were not all locked before it, the weeks locked just BEFORE it are saved beside them,
+// in the same write, as locks.closeLayout {phase, round (Phase 4 only, else 0), weeks:[...], at} - so the staff board keeps the
+// layout it had while bidding was open, with or without this page open when the timer reaches zero. Any other write passes unchanged
+// (an earlier list is then simply not used: the staff page reads it only while every week is locked, for the same phase and
+// round). An ARRAY, so the mergeFields fallback (setDoc merge) replaces it whole. Not on a half-loaded page (a wrong list). Display only.
+function _withCloseLayout(dotted){
+  try{
+    if(typeof _feedsAllArrived==='function'&&!_feedsAllArrived()) return dotted;
+    const all=mondays.map(d=>dateKey(d)); if(!all.length) return dotted;
+    const pre=wk=>!!locksData?.weeks?.[wk];
+    const post=wk=>{ const k='weeks.'+wk; return Object.prototype.hasOwnProperty.call(dotted,k)?dotted[k]===true:pre(wk); };
+    if(all.every(pre)||!all.every(post)) return dotted;
+    const cur=Number(phasesData.currentPhase||1);
+    return Object.assign({},dotted,{closeLayout:{phase:cur,round:cur===4?Number(phasesData.p4Round||0):0,weeks:all.filter(pre),at:Date.now()}});
+  }catch(_){ return dotted; }
 }
 
 // [build 274 · C7] No baked-in roster — the database is the only source. The old
@@ -4678,7 +4696,7 @@ window.unlockAvailabilityWeeks=function(){
     okText:'🔓 Unlock These',
     onConfirm:()=>guardP1Unlock(toUnlock.map(w=>w.wk),async()=>{   // [AUDIT #4]
       const dotted={}; toUnlock.forEach(w=>dotted['weeks.'+w.wk]=false);
-      await mergeFields(locksRef,dotted);
+      await mergeFields(locksRef,_withCloseLayout(dotted));
       toast('🔓 Unlocked '+toUnlock.length+' week'+(toUnlock.length!==1?'s':''),'ok');
     })
   });
@@ -4695,7 +4713,7 @@ window.lockNoAvailabilityWeeks=function(){
     okText:'🔒 Lock These', danger:true,
     onConfirm:async()=>{
       const dotted={}; toLock.forEach(w=>dotted['weeks.'+w.wk]=true);
-      await mergeFields(locksRef,dotted);
+      await mergeFields(locksRef,_withCloseLayout(dotted));
       toast('🔒 Locked '+toLock.length+' week'+(toLock.length!==1?'s':''),'warn');
     }
   });
@@ -4739,7 +4757,7 @@ window.smartLockUnlock=function(){
       const dotted={};
       toLock.forEach(w=>dotted['weeks.'+w.wk]=true);
       toUnlock.forEach(w=>dotted['weeks.'+w.wk]=false);
-      await mergeFields(locksRef,dotted);
+      await mergeFields(locksRef,_withCloseLayout(dotted));
       toast('✨ Locked '+toLock.length+', unlocked '+toUnlock.length,'ok');
     }
   });
@@ -5421,7 +5439,7 @@ window.toggleWeekLock=async function(wk){
       body:`<div>Lock <strong>${wLabel(wkDate(wk))}</strong> for bidding?</div>${lockLiveWarnHtml()}`,
       okText:'Lock Anyway', danger:true,
       onConfirm:async()=>{
-        await mergeFields(locksRef,{['weeks.'+wk]:true});
+        await mergeFields(locksRef,_withCloseLayout({['weeks.'+wk]:true}));
         toast("🔒 Locked",'warn');
       }
     });
@@ -5439,7 +5457,7 @@ window.toggleWeekLock=async function(wk){
               <div class="cmodal-warn" style="margin-top:8px">⚠️ This week is <strong>below its Smart Lock Control</strong> (remaining ${remaining}, control ${slc}) — it is effectively full, and users could waste bids on it. Confirm to override.</div>`,
         okText:'Unlock Anyway', danger:true,
         onConfirm:()=>guardP1Unlock([wk],async()=>{                 // [AUDIT #4]
-          await mergeFields(locksRef,{['weeks.'+wk]:false});
+          await mergeFields(locksRef,_withCloseLayout({['weeks.'+wk]:false}));
           toast("🔓 Unlocked",'ok');
         })
       });
@@ -5447,12 +5465,12 @@ window.toggleWeekLock=async function(wk){
     }
     // [AUDIT #4] Plain unlock of a single week still needs the Phase-1 gate.
     guardP1Unlock([wk],async()=>{
-      await mergeFields(locksRef,{['weeks.'+wk]:false});
+      await mergeFields(locksRef,_withCloseLayout({['weeks.'+wk]:false}));
       toast("🔓 Unlocked",'ok');
     });
     return;
   }
-  await mergeFields(locksRef,{['weeks.'+wk]:!cur});
+  await mergeFields(locksRef,_withCloseLayout({['weeks.'+wk]:!cur}));
   toast(cur?"🔓 Unlocked":"🔒 Locked",cur?"ok":"warn");
 };
 window.lockAllWeeks=function(){
@@ -5462,7 +5480,7 @@ window.lockAllWeeks=function(){
     okText:'Lock All', danger:true,
     onConfirm:async()=>{
       const dotted={}; mondays.forEach(d=>{dotted['weeks.'+dateKey(d)]=true;});
-      await mergeFields(locksRef,dotted); toast("🔒 All locked","warn");
+      await mergeFields(locksRef,_withCloseLayout(dotted)); toast("🔒 All locked","warn");
     }
   });
 };
@@ -5535,7 +5553,7 @@ window.lockAllExceptHighDemand=function(){
         if(HIGH_DEMAND_WEEKS.has(wk)){ dotted['weeks.'+wk]=false; }
         else { dotted['weeks.'+wk]=true; lockedCount++; }
       });
-      await mergeFields(locksRef,dotted);
+      await mergeFields(locksRef,_withCloseLayout(dotted));
       toast("🔒 Locked all weeks except high demand ("+lockedCount+" weeks)","warn");
     }
   });
@@ -6996,7 +7014,7 @@ function _beginPhaseLockDecisionInner(next){
       try{
         const dotted={}; let lockedCount=0;
         mondays.forEach(d=>{ const wk=dateKey(d); if(HIGH_DEMAND_WEEKS.has(wk)){ dotted['weeks.'+wk]=false; } else { dotted['weeks.'+wk]=true; lockedCount++; } });
-        await mergeFields(locksRef,dotted);
+        await mergeFields(locksRef,_withCloseLayout(dotted));
         await _commitBeginPhase(1);
         { const _hn=(typeof HIGH_DEMAND_WEEKS!=='undefined'?HIGH_DEMAND_WEEKS.size:6); toast('🔒 Phase 1: '+lockedCount+' standard weeks locked — only the '+_hn+' high-demand week'+(_hn!==1?'s are':' is')+' open','warn'); } // [build 268 · HDCB] derived count (typeof = sandbox convention)
       }catch(e){
@@ -7011,7 +7029,7 @@ function _beginPhaseLockDecisionInner(next){
   // opens the chosen month(s). Mirrors the ▶ Start Round N+1 → reopen path used for Rounds 2+.
   if(next===4){
     return (async()=>{
-      try{ const dotted={}; mondays.forEach(d=>{ dotted['weeks.'+dateKey(d)]=true; }); await mergeFields(locksRef,dotted); }
+      try{ const dotted={}; mondays.forEach(d=>{ dotted['weeks.'+dateKey(d)]=true; }); await mergeFields(locksRef,_withCloseLayout(dotted)); }
       catch(e){ toast('⚠️ Could not prepare Phase 4 week locks — '+(e?.message||e)+'. Phase not started.','err'); return; }
       const ok=await _commitBeginPhase(4);
       if(ok){
@@ -7045,7 +7063,7 @@ function _beginPhaseLockDecisionInner(next){
       const dotted={};
       need.forEach(w=>dotted['weeks.'+w.wk]=true);
       wrongLocked.forEach(w=>dotted['weeks.'+w.wk]=false);
-      try{ await mergeFields(locksRef,dotted); }
+      try{ await mergeFields(locksRef,_withCloseLayout(dotted)); }
       catch(e){ toast('Could not apply the lock fixes — '+(e?.message||e)+'. Nothing was changed.','err'); return; }
       const ok=await _commitBeginPhase(next);
       if(ok) toast('🔧 Fixed '+(need.length+wrongLocked.length)+' week'+((need.length+wrongLocked.length)!==1?'s':''),'ok');
@@ -9744,7 +9762,7 @@ function readinessWarnHtml(sim){
 // dialog the admin is in) and then refresh the warning box in place.
 async function _lockEveryWeek(){
   const dotted={}; mondays.forEach(d=>{dotted['weeks.'+dateKey(d)]=true;});
-  await mergeFields(locksRef,dotted);
+  await mergeFields(locksRef,_withCloseLayout(dotted));
 }
 function _refreshReadinessBox(){
   const box=document.getElementById('readinessWarnBox'); if(!box) return;
@@ -10202,7 +10220,7 @@ window.lockFullWeeks=function(){
     okText:'Lock These Weeks', danger:true,
     onConfirm:async()=>{
       const dotted={}; tolock.forEach(w=>dotted['weeks.'+w.wk]=true);
-      await mergeFields(locksRef,dotted);
+      await mergeFields(locksRef,_withCloseLayout(dotted));
       toast('🔒 Locked '+tolock.length+' week'+( tolock.length!==1?'s':''),'warn');
     }
   });
@@ -12226,7 +12244,7 @@ window._reopenRoundMonths=function(){
       // else globalLock would silently keep every week frozen while the board reads "open".
       const dotted={globalLock:false};
       mondays.forEach(d=>{ const wk=dateKey(d); dotted['weeks.'+wk]=!unlock.has(wk); });
-      try{ await mergeFields(locksRef,dotted); }
+      try{ await mergeFields(locksRef,_withCloseLayout(dotted)); }
       catch(e){ toast('Could not set the week locks — '+(e&&e.message||e)+'. Bidding was NOT reopened.','err'); return; }
       toast('📅 Opened '+unlock.size+' week'+(unlock.size!==1?'s':'')+' in '+picked.length+' month'+(picked.length!==1?'s':'')+'; all others locked.','ok');
       await window._reopenCommit();
@@ -12287,7 +12305,7 @@ window.reopenBidding=function(){
         const dotted={};
         need.forEach(w=>dotted['weeks.'+w.wk]=true);
         wrongLocked.forEach(w=>dotted['weeks.'+w.wk]=false);
-        try{ await mergeFields(locksRef,dotted); }
+        try{ await mergeFields(locksRef,_withCloseLayout(dotted)); }
         catch(e){ toast('Could not apply the lock fixes — '+(e?.message||e)+'. Bidding was NOT reopened.','err'); return; }
         toast('✨ Locked '+need.length+', unlocked '+wrongLocked.length,'ok');
         await window._reopenCommit();

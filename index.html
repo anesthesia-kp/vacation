@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 207;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 208;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -2433,6 +2433,7 @@ function _setPhaseClosedBanner(on){
 // time shown is never later than the real close. Only the admin's Expire / Close can end it sooner.
 function _fmtEndsPT(ms){ return new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date(ms)); }
 function _setCountdownEnds(txt){ const el=document.getElementById('countdownEnds'); if(el) el.textContent=txt||''; }
+var _closedShown=null; // [208 · §267] isAuctionClosed() as the board was last drawn; null until the first draw
 function startCountdownTick(){
   if(countdownInterval) clearInterval(countdownInterval);
   renderCountdown();
@@ -2445,6 +2446,9 @@ function renderCountdown(){
   const banner=document.getElementById("countdownBanner");
   if(!banner) return;
   updatePhaseOpen();
+  // [208 · §267] The board was drawn open and bidding has now closed (or the reverse): redraw it ONCE, so every week shows the
+  // locked card at zero without waiting for an admin page. renderCalendar records what it drew, so this cannot repeat.
+  try{ if(_closedShown!==null&&isAuctionClosed()!==_closedShown){ _closedShown=isAuctionClosed(); scheduleRender(); } }catch(_){}
   const timeEl=document.getElementById("countdownTime");
   const descEl=document.getElementById("countdownDesc");
   // Before Phase 1 has even begun, there's no timer running yet — showing
@@ -4565,20 +4569,49 @@ window.scrollToWeek=function(wk){
 // WHERE: adminSettings.lockedInPlace = {1..4: true|false}, set by the admin's Controls switch - true = a locked week stays in its
 // own month; false = locked weeks gather in the Locked Weeks section at the bottom. Absent or not a boolean = the owner's defaults:
 // Phase 1 at the bottom, Phases 2, 3 and 4 in place (ONE value for every Phase 4 round - each round is its own phase, all alike).
-// Whenever EVERY week is locked (a phase close, the timer's expiry, the Freeze) they stay in place whatever the switch says.
+// Whenever EVERY week was already locked while bidding was open, they stay in place whatever the switch says.
+// [208 · §267, owner 12 Oct 2026] WHEN BIDDING CLOSES NOTHING MOVES: from the moment the timer reaches zero (or the admin closes
+// bidding, or the Freeze is on) every week is drawn with the locked card, and the layout is the one the board had while bidding was
+// open - worked out from the weeks that were locked BEFORE the close: the lock record as it stands until an admin page locks every
+// week, then the list that admin page saved in the same write (locks.closeLayout, admin 371), used only while every week is locked
+// and only when it belongs to THIS phase (and THIS Phase 4 round). With or without an admin page open the board looks the same.
 // HOW: grey, never red, in both places; only the signed-in person's OWN bid is shown (never another person's); a week they won is
 // the green card. DISPLAY ONLY: nothing here is read by the bid path, the projection engine or any e-mail.
 const LIP_DEFAULT={1:false,2:true,3:true,4:true};
 function _lipFor(ph){ const p=Math.min(4,Math.max(1,Math.round(Number(ph))||1)); let v; try{ v=adminSettings&&adminSettings.lockedInPlace?adminSettings.lockedInPlace[p]:undefined; }catch(_){ v=undefined; } return (v===true||v===false)?v:LIP_DEFAULT[p]; }
 // monthEntries = the board's own weeks (groupByMonth); every one of them locked = in place.
-function _lockedInPlace(monthEntries){
+// [208 · §267] The saved layout of THIS close (admin 371 writes it when it locks every week), or null when there is none, it is
+// malformed, or it belongs to another phase / Phase 4 round (an old list is never used).
+function _closeLayoutSet(){
   try{
-    if(locksData.globalLock) return true;
-    const all=[]; (monthEntries||[]).forEach(e=>((e&&e[1])||[]).forEach(d=>all.push(dateKey(d))));
-    if(all.length&&all.every(wk=>!!locksData.weeks?.[wk])) return true;
-    return _lipFor(phasesData.currentPhase||1);
-  }catch(_){ return true; }
+    const cl=locksData&&locksData.closeLayout;
+    if(!cl||typeof cl!=='object'||!Array.isArray(cl.weeks)) return null;
+    const cur=Number(phasesData.currentPhase||1);
+    if(Number(cl.phase)!==cur) return null;
+    if(Number(cl.round||0)!==(cur===4?Number(phasesData.p4Round||0):0)) return null;
+    return new Set(cl.weeks.map(String));
+  }catch(_){ return null; }
 }
+// [208 · §267] How the board draws its weeks. place = the weeks that go where locked weeks go (the bottom section when the switch
+// says so): the weeks locked BEFORE the close - the saved list while every week is locked and it belongs to this phase / round,
+// otherwise the lock record itself (the Freeze does not count: it changes no week lock, so freezing moves nothing). inPlace =
+// that set covers every week on the board, or the switch of the phase. showLocked(wk) = the card is the locked card: the week lock,
+// the Freeze, or bidding closed (the timer at zero by the clock of this device, or the admin Close).
+function _boardLocks(monthEntries){
+  const recLocked=wk=>!!locksData.weeks?.[wk];
+  let closed=false; try{ closed=isAuctionClosed(); }catch(_){ closed=false; }
+  const showLocked=wk=>!!locksData.globalLock||recLocked(wk)||closed;
+  try{
+    const all=[]; (monthEntries||[]).forEach(e=>((e&&e[1])||[]).forEach(d=>all.push(dateKey(d))));
+    const saved=(all.length&&all.every(recLocked))?_closeLayoutSet():null;
+    const place=saved||new Set(all.filter(recLocked));
+    // nothing was locked before the close and every card is now locked (closed, the Freeze, or every week lock): no bottom section - its
+    // "No weeks are currently locked." would sit under a fully locked board (review note, 12 Oct 2026). No week moves.
+    const inPlace=((all.length&&all.every(wk=>place.has(wk)))||(!place.size&&(closed||!!locksData.globalLock||(all.length&&all.every(recLocked)))))?true:_lipFor(phasesData.currentPhase||1);
+    return {inPlace,place,showLocked};
+  }catch(_){ return {inPlace:true,place:new Set(),showLocked}; }
+}
+function _lockedInPlace(monthEntries){ return _boardLocks(monthEntries).inPlace; }
 // Repaints the board when the stored value changes (it is read only while drawing).
 let _lipShown=null;
 function _lipSync(){ let k='null'; try{ k=JSON.stringify((adminSettings&&adminSettings.lockedInPlace)||null); }catch(_){} if(k!==_lipShown){ _lipShown=k; if(typeof scheduleRender==='function') scheduleRender(); } }
@@ -4641,6 +4674,7 @@ function renderCalendar(user,ap){
   calendarEl.innerHTML="";
   const isF=false;
   const closed=isAuctionClosed();
+  _closedShown=closed; // [208 · §267] what this board was drawn with - renderCountdown redraws once when it changes
   const myWks=new Set(myActiveWeeks(user));
   // Apply board view filter
   function weekPassesFilter(d){
@@ -4657,7 +4691,8 @@ function renderCalendar(user,ap){
   // Build unlocked weeks per month, filter by board view, collect locked separately
   const monthMap=groupByMonth();
   const monthEntries=Object.entries(monthMap);
-  const _inPlace=_lockedInPlace(monthEntries); // [206 · §266] true = locked weeks stay in their month; false = the section at the bottom
+  const _bl=_boardLocks(monthEntries); // [208 · §267] the layout held when bidding closes; the locked card from the moment it closes
+  const _inPlace=_bl.inPlace; // [206 · §266] true = locked weeks stay in their month; false = the section at the bottom
   // For each month, compute its unlocked + view-filtered weeks
   const monthData=monthEntries.map(([monthName,weeks])=>{
     // L-4: collect locked weeks from ALL of this month's weeks, independent of the board
@@ -4665,9 +4700,9 @@ function renderCalendar(user,ap){
     // vanish and the "Locked Weeks" section wrongly reads "No weeks are currently locked."
     weeks.forEach(d=>{
       const wk=dateKey(d);
-      if(!_inPlace&&(locksData.globalLock||!!locksData.weeks?.[wk])){ if(!lockedDates.find(x=>x.getTime()===d.getTime())) lockedDates.push(d); } // [206] only when they gather at the bottom
+      if(!_inPlace&&_bl.place.has(wk)){ if(!lockedDates.find(x=>x.getTime()===d.getTime())) lockedDates.push(d); } // [206] only when they gather at the bottom · [208] the weeks locked before the close
     });
-    const unlocked=weeks.filter(weekPassesFilter).filter(d=>_inPlace||!(locksData.globalLock||!!locksData.weeks?.[dateKey(d)])); // [206] in place, a locked week stays (the name is older than that)
+    const unlocked=weeks.filter(weekPassesFilter).filter(d=>_inPlace||!_bl.place.has(dateKey(d))); // [206] in place, a locked week stays (the name is older than that) · [208] same set as above
     return {monthName,unlocked};
   });
   // Each month always gets its own full-width row regardless of how many weeks are shown.
@@ -4683,7 +4718,7 @@ function renderCalendar(user,ap){
       const others=getWeekUsers(wk).filter(x=>x.user!==user);
       const isSel=isVisibleBid(user,wk);
       const priorWon=getPriorPhaseWinners(wk).has(user);
-      const isGL=locksData.globalLock, isWL=!!locksData.weeks?.[wk], isLocked=isGL||isWL;
+      const isLocked=_bl.showLocked(wk); // [208 · §267] the week lock, the Freeze, or bidding closed
       if(isLocked){ grid.appendChild(_lockedCard(user,wk,ap)); return; } // [206 · §266] a locked week in its month: the grey card (green when won). The isLocked branches below stay unreachable, as they already were.
       const div=document.createElement("div"); div.className="week";
       div.dataset.wk=wk; // anchor for scroll-to-week from My Bids & Projections
@@ -4822,6 +4857,7 @@ function renderCalendar(user,ap){
   }); // end monthData.forEach
 
   // ── Locked Weeks Section at the very bottom ── [206 · §266] only when this phase's switch says "at the bottom" and some week
+  // [208 · §267] ("some week" = some week that was open before the close)
   // is still open. Grey, never red; each card is _lockedCard (the person's own bid only, or the green won card).
   if(_inPlace){
     // a view that leaves nothing to draw ('My Live Bids' with no live bid, the locked weeks in place) says so instead of a blank board
