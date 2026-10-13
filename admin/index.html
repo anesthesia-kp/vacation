@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 373;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 374;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -12156,7 +12156,7 @@ function renderTimerDigs(){
   el.innerHTML=`<div class="timer-digs"><div class="tdig"><span class="tdig-val">${p(h)}</span><span class="tdig-unit">hrs</span></div><span class="tdig-sep">:</span><div class="tdig"><span class="tdig-val">${p(m)}</span><span class="tdig-unit">min</span></div><span class="tdig-sep">:</span><div class="tdig"><span class="tdig-val">${p(s)}</span><span class="tdig-unit">sec</span></div></div>`;
 }
 // Auto-close on timer expiry: when the countdown hits 0, an open admin page performs
-// the "Close bidding" step automatically — it locks all 52 weeks (users are already
+// the "Close bidding" step automatically — it locks all 52 weeks and sets the server's biddingClosed flag [374 · §270] (users are already
 // blocked from bidding the instant the timer expires). It NEVER completes the phase;
 // approvals/denials and Complete stay manual. Runs from whichever admin page is open
 // at/after expiry; if none is open, the manual Close bidding step still works as before.
@@ -12170,7 +12170,10 @@ async function _autoCloseOnExpiry(){
   const remaining=getDurationMs()-(Date.now()-timerData.lastChange);
   if(remaining>0){ _autoCloseFired=false; return; }     // still running → re-arm for next expiry
   const allLocked = !!locksData.globalLock || mondays.every(d=>!!locksData?.weeks?.[dateKey(d)]);
-  if(allLocked){ _autoCloseFired=true; return; }        // already closed — nothing to do
+  // [374 · §270] "Already closed" now means BOTH: every week locked AND the server's biddingClosed flag set, the
+  // state ⏱ Close bidding leaves. Before 374 a run-out never set the flag, so switching the timer off afterwards
+  // took away the only server gate left and bids went through again.
+  if(allLocked&&timerData.biddingClosed===true){ _autoCloseFired=true; return; } // already closed — nothing to do
   if(_autoCloseFired) return;                           // fire once per expiry
   _autoCloseFired=true;
   try{
@@ -12182,8 +12185,22 @@ async function _autoCloseOnExpiry(){
     const _td=_fresh.exists()?_fresh.data():null;
     if(!_td||_td.enabled!==true||!_td.lastChange){ _autoCloseFired=false; return; } // timer gone/off → stand down
     if(((_td.durationHours||48)*3600000)-(Date.now()-_td.lastChange)>0){ _autoCloseFired=false; return; } // extended in the last second → stand down
-    await _lockEveryWeek();
-    toast('⏱ Timer expired — bidding closed automatically (all weeks locked). Decide approvals/denials next.','ok');
+    if(!allLocked) await _lockEveryWeek();
+    // [374 · §270] The flag, in ONE transaction that reads the timer again: written only while the SAME expiry still
+    // stands — timer on, the same last reset, still past its deadline, flag not yet set — so a ↩ Reopen bidding,
+    // ↺ Reset Timer or timer-off that lands in this second is never undone. Every path that opens bidding again
+    // (Begin Phase, ↩ Reopen / Start Round, ↺ Reset Timer, Reset Auction) already clears the flag.
+    let _flagged=false;
+    if(_td.biddingClosed!==true){
+      _flagged=await _withTimeout(runTransaction(db,async(tx)=>{
+        const _s=await tx.get(timerRef); const _d=_s.exists()?_s.data():null;
+        if(!_d||_d.enabled!==true||_d.lastChange!==_td.lastChange||_d.biddingClosed===true) return false;
+        if(((_d.durationHours||48)*3600000)-(Date.now()-_d.lastChange)>0) return false;
+        tx.set(timerRef,{biddingClosed:true},{merge:true});
+        return true;
+      }),15000,'closing bidding on the server');
+    }
+    if(!allLocked||_flagged) toast('⏱ Timer expired — bidding closed automatically (all weeks locked). Decide approvals/denials next.','ok');
   }catch(_){ _autoCloseFired=false; }                   // read/write failed — allow a retry next tick
 }
 function startTick(){
@@ -12197,9 +12214,9 @@ function fmtDuration(hrs){ return hrs+"h"; }
 
 // [341 · §209] ⏱ EXPIRE TIMER NOW — the window slider's former position 0, with IDENTICAL writes: the countdown is
 // made to have run out (lastChange moved back past the window), then every week is locked, exactly what an open
-// admin page does at a real expiry (_autoCloseOnExpiry). It deliberately does NOT set the server's biddingClosed
-// flag — that is ⏱ Close bidding, a different act (owner, 17 Sep: expiry "was a more realistic way to close
-// bidding"; TIMER-REVIEW correction). The window and the state are re-checked when OK is pressed.
+// admin page does at a real expiry (_autoCloseOnExpiry). [374 · §270] A real expiry now also sets the server's
+// biddingClosed flag, so this does too, in the same write as the expiry (owner, 17 Sep: expiry "was a more realistic
+// way to close bidding"; 13 Oct: "1-agree"). The window and the state are re-checked when OK is pressed.
 window.adminExpireTimer=function(){
   if(timerData.enabled!==true){ toast('The timer is off — there is no countdown to expire. Use ⏱ Close bidding to end bidding.','warn'); return; }
   if(_windowCompletedNow()){ toast('⛔ '+_phaseWindowLabel()+' is complete — there is no open countdown to expire.','err'); return; }
@@ -12212,7 +12229,7 @@ window.adminExpireTimer=function(){
     title:'⏱ Expire Timer Now',
     body:`<div>Make the countdown <strong>run out right now</strong> — exactly as if it had reached zero on its own. Bidding closes and users see the closed notice.</div>
           <div class="cmodal-warn" style="margin-top:8px">🔒 All ${mondays.length} weeks will also be locked, as an open admin page does at a real expiry.</div>
-          <div class="cmodal-info" style="margin-top:8px">Like a real expiry — and unlike ⏱ Close bidding — this does not set the server's "bidding closed" flag. Afterwards, do not switch the timer off (that would let bids through again); use ↩ Reopen bidding, or decide the bids and complete the ${_unit}.</div>`,
+          <div class="cmodal-info" style="margin-top:8px">Like a real expiry, this also closes bidding on the server, so switching the timer off afterwards does not reopen it. To let people bid again, use ↩ Reopen bidding.</div>`,
     okText:'Expire Timer & Lock All Weeks', danger:true,
     onConfirm:()=>{ confirmAgain({
       title:'⚠️ Confirm again — Expire Timer Now', // [343 · §211] styled like the Reset Auction dialog, without its "nuclear" wording
@@ -12222,7 +12239,7 @@ window.adminExpireTimer=function(){
       okText:'Yes, expire the timer', danger:true,
       onConfirm:async()=>{
         if(timerData.enabled!==true||_windowCompletedNow()){ toast('Nothing was expired — the timer or the '+_unit+' changed while this was open.','warn'); return; }
-        await setDoc(timerRef,{lastChange:Date.now()-getDurationMs()-1000},{merge:true});
+        await setDoc(timerRef,{lastChange:Date.now()-getDurationMs()-1000,biddingClosed:true},{merge:true}); // [374 · §270] the flag rides in the same write
         await _lockEveryWeek();
         try{ await adminLog('ALL','ALL','admin-timer-expire'); }catch(_){}
         toast('⏱ Timer expired — bidding closed, all weeks locked','warn');
@@ -12250,13 +12267,19 @@ window.toggleTimerEnabled=function(){
       // Switching the timer off also removes the thing that ENDS the phase: nothing expires,
       // bids stay writable, and the phase runs until Close Bidding is pressed by hand. The
       // staff page states that consequence plainly to doctors; this dialog now does too.
-      : `<div>Turn the countdown timer <strong>off</strong>? Users will no longer see a countdown.</div>
-         <div class="cmodal-warn" style="margin-top:10px">This also removes the deadline that ends the phase. Nothing will expire on its own — bidding stays open until you press <strong>Close Bidding</strong>.</div>`,
+      // [374 · §270] With the server's "bidding closed" flag set, switching the timer off no longer reopens anything — say so.
+      : (timerData?.biddingClosed===true
+        ? `<div>Turn the countdown timer <strong>off</strong>? Users will no longer see a countdown.</div>
+         <div class="cmodal-warn" style="margin-top:10px">Bidding is closed on the server and stays closed — switching the timer off does not reopen it. To let people bid again, use ↩ Reopen bidding.</div>`
+        : `<div>Turn the countdown timer <strong>off</strong>? Users will no longer see a countdown.</div>
+         <div class="cmodal-warn" style="margin-top:10px">This also removes the deadline that ends the phase. Nothing will expire on its own — bidding stays open until you press <strong>Close Bidding</strong>.</div>`),
     okText:nv?'Enable Timer':'Disable Timer', danger:!nv,
     onConfirm:()=>{ confirmAgain({
       title:nv?'⚠️ Confirm again — Enable Timer':'⚠️ Confirm again — Disable Timer', // [343 · §211]
       body:nv?'<div style="color:var(--red);font-weight:700;font-size:15px">Are you sure you want to turn the timer on?</div><ul style="margin:10px 0 10px 18px;color:var(--t2);font-size:13px;line-height:1.7"><li>The countdown shows to all users again</li><li>Bidding ends when the countdown reaches zero</li></ul><div class="cmodal-danger"><strong>Check the Timer card afterwards to see the countdown.</strong></div>'
-             :'<div style="color:var(--red);font-weight:700;font-size:15px">Are you sure you want to turn the timer off?</div><ul style="margin:10px 0 10px 18px;color:var(--t2);font-size:13px;line-height:1.7"><li>The countdown disappears for all users</li><li>Nothing ends bidding on its own — only ⏱ Close bidding does</li></ul><div class="cmodal-danger"><strong>Bidding stays open until you close it by hand.</strong></div>',
+             :(timerData?.biddingClosed===true // [374 · §270]
+               ?'<div style="color:var(--red);font-weight:700;font-size:15px">Are you sure you want to turn the timer off?</div><ul style="margin:10px 0 10px 18px;color:var(--t2);font-size:13px;line-height:1.7"><li>The countdown disappears for all users</li><li>Bidding stays closed — only ↩ Reopen bidding opens it again</li></ul><div class="cmodal-danger"><strong>Bidding stays closed until you reopen it.</strong></div>'
+               :'<div style="color:var(--red);font-weight:700;font-size:15px">Are you sure you want to turn the timer off?</div><ul style="margin:10px 0 10px 18px;color:var(--t2);font-size:13px;line-height:1.7"><li>The countdown disappears for all users</li><li>Nothing ends bidding on its own — only ⏱ Close bidding does</li></ul><div class="cmodal-danger"><strong>Bidding stays open until you close it by hand.</strong></div>'),
       okText:nv?'Yes, turn the timer on':'Yes, turn the timer off', danger:true,
       onConfirm:async()=>{
         if((timerData.enabled===true)===nv){ toast('Nothing changed — the timer is already '+(nv?'on':'off')+'.','warn'); return; }
@@ -12476,7 +12499,7 @@ window.adminResetTimer=function(){
           <div class="cmodal-info" id="rtCloses" style="margin-top:6px">Bidding will close at <strong>${fmtAt(_n0+defH*3600000)}</strong> unless a later bid lengthens the countdown.</div>
           <div style="margin-top:6px;font-size:12px;color:var(--t2)">A later bid that restarts the countdown can only make it longer, never shorter.</div>`
       +((owActive&&owr)?`<div class="cmodal-info" style="margin-top:6px">The opening window is active — the default restarts the full ${owr.days}-day window.</div>`:'')
-      +(timerData?.biddingClosed===true?`<div class="cmodal-warn" style="margin-top:6px">This also lifts the server's "bidding closed" flag set by ⏱ Close bidding.</div>`:''),
+      +(timerData?.biddingClosed===true?`<div class="cmodal-warn" style="margin-top:6px">This also lifts the server's "bidding closed" flag.</div>`:''),
     okText:'↺ Reset',
     // [FIX 25 Jul 2026 · delta-audit #3/#4] Reset Timer must also clear biddingClosed — a restarted countdown with the
     // flag still set is a live-looking board where every bid is denied server-side.
