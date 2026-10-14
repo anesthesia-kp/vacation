@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 211;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 212;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -662,7 +662,7 @@ body{zoom:1.15}
     <h1 class="header-top" id="headerTitle">Fall Vacation Auction</h1> <!-- [build 139 · TITLE] phase-derived: Fall (1-3) / Rolling (4) — set by renderPhaseLabel -->
     <p class="header-sub" style="margin:2px 0 0">MD</p> <!-- [build 274 · C7] site label, mirroring the CRNA site's (stamper swaps it) -->
     <p class="header-sub">Department of Anesthesia &nbsp;·&nbsp; <span id="acYearSub">2027</span></p>
-    <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-top:6px">
+    <div style="display:flex;align-items:center;justify-content:center;gap:6px 10px;margin-top:6px;flex-wrap:wrap">
       <span id="phaseLabel" style="font-size:.72rem;font-weight:800;color:#fff;background:linear-gradient(135deg,#3b82f6,#006ba6);padding:3px 12px;border-radius:12px;letter-spacing:.03em">Phase 1</span>
       <a onclick="openPhaseHistory()" style="font-size:.7rem;font-weight:600;color:#006ba6;cursor:pointer;text-decoration:underline;text-underline-offset:3px">📋 View previous phases</a>
     </div>
@@ -750,7 +750,7 @@ body{zoom:1.15}
   <div id="notStartedBanner" style="display:none;background:rgba(251,191,36,.14);border:1px solid rgba(251,191,36,.45);color:#7a4e00;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-weight:600;font-size:.9rem;text-align:center">⏳ Bidding has not started yet — the auction opens when admin begins Phase 1.</div>
   <!-- [159 · §78] Replaces the auction-closed POP-UP: a state the page states, not an
        obstruction the reader has to dismiss. -->
-  <div id="phaseClosedBanner" style="display:none;background:rgba(239,68,68,.10);border:1px solid rgba(239,68,68,.40);color:#b91c1c;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-weight:600;font-size:.9rem;text-align:center">🔒 <span id="pcbText">Bidding is closed — no more changes can be made.</span></div>
+  <div id="phaseClosedBanner" style="display:none;background:rgba(239,68,68,.10);border:1px solid rgba(239,68,68,.40);color:#b91c1c;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-weight:600;font-size:.9rem;text-align:center"><span id="pcbIcon">🔒</span> <span id="pcbText">Bidding is closed — no more changes can be made.</span></div>
   <div id="errorMessage" class="flash err"></div>
   <!-- [190 · §241] The board waits for its data. After sign-in the board's documents arrive one
        at a time; drawn from only some of them the board showed no bids, or every bidder as
@@ -2438,9 +2438,15 @@ function _setPhaseClosedBanner(on){
   // exists, and the login screen must not carry a board banner.
   if(on && (!mainContainer || mainContainer.style.display==="none")){ b.style.display="none"; return; }
   const t=document.getElementById("pcbText");
+  const _g=on?_gapInfo():null; // [212 · §273]
   if(t){ const ph=Number(phasesData.currentPhase||0);
-    t.textContent = ph ? (_phaseWindowLabel()+" bidding is closed — no more changes can be made.") // [166]
+    t.textContent = _g ? _gapBanner(_g)
+                  : ph ? (_phaseWindowLabel()+" bidding is closed — no more changes can be made.") // [166]
                        : "Bidding is closed — no more changes can be made."; }
+  const ic=document.getElementById("pcbIcon"); if(ic) ic.textContent=_g?"✅":"🔒";
+  b.style.background=_g?"rgba(59,130,246,.10)":"rgba(239,68,68,.10)";
+  b.style.borderColor=_g?"rgba(59,130,246,.40)":"rgba(239,68,68,.40)";
+  b.style.color=_g?"#1e4f8a":"#b91c1c";
   b.style.display = on ? "block" : "none";
 }
 
@@ -2487,6 +2493,15 @@ function renderCountdown(){
     // (and its label fixed) when a window closes, and its only clearing call sat BELOW this
     // early return. Pre-launch there is no closed window — clear it here too.
     _setPhaseClosedBanner(false);
+    return;
+  }
+  // [212 · §273] Once this phase's (or round's) results are sent the timer box is hidden, as before Phase 1, and the banner
+  // says what is complete and what is next. Begin Phase / Start Round end this state (the phases listener re-runs this).
+  if(_gapInfo()){
+    banner.classList.remove("visible","urgent","warning");
+    _setCountdownEnds('');
+    if(countdownInterval){clearInterval(countdownInterval);countdownInterval=null;}
+    _setPhaseClosedBanner(true);
     return;
   }
   if(!timerData.enabled||!timerData.lastChange){
@@ -4108,6 +4123,46 @@ function currentPhaseAnnounced(){
   const cur=Number(phasesData.currentPhase||1);
   return !!(phasesData.completedPhases?.[cur]&&phasesData.resultsSent?.[cur]);
 }
+// [212 · §273] AFTER RESULTS ARE SENT, SAY WHAT IS DONE AND WHAT IS NEXT (owner, 13 Oct 2026: "I want it to say Fall Vacation
+// Auction Complete after P3. I don't want it to say between phases. after P1 and p2, I want it to say that previous phase is
+// complete, phase x starting soon" - then "is next", not "starting soon": no timing promise, build 135). Phase 4 rounds the same
+// ("same was between 1-2 and 2-3"); after Phase 4, "Auction Complete". Starts when results are SENT - before that the phase's
+// record is admin-only and this page cannot see it. Display only: what stops bidding is still the closed flag and the locks.
+// null = not in that state. {kind:'phase'|'fall'|'round'|'end', done, next}
+function _gapInfo(){
+  if(!phasesData) return null;
+  const cur=Number(phasesData.currentPhase||1);
+  if(currentPhaseAnnounced()){
+    if(cur>=4) return {kind:'end'};
+    if(cur===3) return {kind:'fall'};
+    return {kind:'phase',done:cur,next:cur+1};
+  }
+  if(cur===4){
+    const r=Number(phasesData.p4Round||1);
+    if((phasesData.p4RoundResultsSent||{})[r]) return {kind:'round',done:r,next:r+1};
+  }
+  return null;
+}
+// The header pill and the sign-in line.
+function _gapLabel(g){
+  if(g.kind==='end') return 'Auction Complete';
+  if(g.kind==='fall') return 'Fall Vacation Auction Complete';
+  const w=g.kind==='round'?'Round ':'Phase ';
+  return w+g.done+' complete · '+w+g.next+' is next';
+}
+// The banner above the board (shown in blue with a ✅ in place of the red closed statement).
+function _gapBanner(g){
+  if(g.kind==='end') return 'The auction is complete.';
+  if(g.kind==='fall') return 'The Fall Vacation Auction is complete.';
+  const w=g.kind==='round'?'Round ':'Phase ';
+  return w+g.done+' is complete. '+w+g.next+' is next — no bids can be placed or changed until it begins.';
+}
+// The end of the empty My Bids line: "No selections yet — …".
+function _gapSlate(g){
+  if(g.kind==='end') return 'the auction is complete.';
+  if(g.kind==='fall') return 'the Fall Vacation Auction is complete.';
+  return (g.kind==='round'?'Round ':'Phase ')+g.next+' is next.';
+}
 function renderPhaseLabel(){
   // [build 139 · TITLE] The header title is phase-derived (owner spec 15 Aug): phases 1-3
   // (and pre-start) = "Fall Vacation Auction"; the rolling Phase 4 = "Rolling Vacation
@@ -4125,7 +4180,7 @@ function renderPhaseLabel(){
     // [build 135 · lead admin] No opens-timing promise anywhere — the admin opens the
     // next phase/round on their own schedule (possibly weeks out); the header must not
     // promise timing it cannot know. Completion alone is the whole truth here.
-    lbl.textContent=cur>=4?'Auction complete':('Phase '+cur+' complete');
+    lbl.textContent=_gapLabel(_gapInfo()); // [212 · §273]
     return;
   }
   // [build 133 · lead admin] Same rule at ROUND boundaries: once the current round's results
@@ -4134,7 +4189,7 @@ function renderPhaseLabel(){
   if(cur===4){
     const _rN=Number(phasesData.p4Round||1);
     if((phasesData.p4RoundResultsSent||{})[_rN]){
-      lbl.textContent='Phase 4: Round '+_rN+' complete'; // [135] no timing promise
+      lbl.textContent=_gapLabel(_gapInfo()); // [135] no timing promise · [212 · §273] his words
       return;
     }
   }
@@ -4565,7 +4620,8 @@ function renderSelections(user,ap){
   if(_announced||!Object.keys(uw).length){
     // "Click a week below" is only honest while bidding is actually open.
     const _canBid=biddingOpen()&&!isAuctionClosed()&&!_announced; // isAuctionClosed = server flag OR expired timer
-    selectionsEl.innerHTML='<div class="empty-msg">No selections yet'+(_canBid?' — click a week below.':' — bidding hasn\'t '+(_announced||!biddingOpen()?'begun':'reopened')+' yet.')+'</div>';
+    const _g=_canBid?null:_gapInfo(); // [212 · §273]
+    selectionsEl.innerHTML='<div class="empty-msg">No selections yet'+(_canBid?' — click a week below.':(_g?' — '+_gapSlate(_g):' — bidding hasn\'t '+(_announced||!biddingOpen()?'begun':'reopened')+' yet.'))+'</div>';
     return;
   }
   const locked=wk=>locksData.globalLock||locksData.weeks?.[wk];
@@ -5510,7 +5566,8 @@ function updateSigninPhase(){
   // the next one, the first thing a bidder saw said "Bidding open" while the board behind it
   // said closed. One question, one answer, on both surfaces.
   const _open=biddingOpen()&&!isAuctionClosed();
-  el.textContent=_open?(_phaseWindowLabel()+" · Bidding open"):"Bidding closed"; // [166] names the round in Phase 4 // [135] no timing promises anywhere
+  const _g=_open?null:_gapInfo(); // [212 · §273] after results are sent: what is done and what is next
+  el.textContent=_open?(_phaseWindowLabel()+" · Bidding open"):(_g?_gapLabel(_g):"Bidding closed"); // [166] names the round in Phase 4 // [135] no timing promises anywhere
 }
 window.updateSigninPhase=updateSigninPhase;
 // [174 · §196] DESTINATION OF THE DAY — a small round photo + the place name on the sign-in hero.
