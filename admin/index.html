@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 377;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 378;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -248,6 +248,8 @@ tbody tr:hover td{background:rgba(255,255,255,.02)}
 /* Toast */
 #toast{position:fixed;bottom:24px;left:50%;z-index:9999;background:var(--s2);border:1px solid var(--b2);color:var(--t1);padding:12px 20px;font-size:15px;text-align:center;box-shadow:0 10px 34px rgba(15,23,42,.30);opacity:0;transform:translate(-50%,14px);transition:opacity .2s,transform .2s;max-width:min(560px,calc(100vw - 32px))}
 #toast.show{transform:translate(-50%,0);opacity:1}
+#toast{pointer-events:none} /* [build 378 · §277] a message is text only, never tapped; a faded one kept its box and took the taps meant for a
+   dialog button under it (the Phase 4 month picker's, right after Begin Phase 4 / Start Round's message) */
 #toast.t-ok{border-left:3px solid var(--green)}#toast.t-err{border-left:3px solid var(--red)}#toast.t-warn{border-left:3px solid var(--yellow)}
 
 /* Slider */
@@ -289,6 +291,16 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
 .cmodal-danger{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:10px 12px;font-size:12px;color:#dc2626;margin:10px 0}
 .cmodal-info{background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.3);border-radius:8px;padding:10px 12px;font-size:12px;color:#005e93;margin:10px 0}
 .cmodal-buttons{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+/* [build 378 · §277] A dialog is never taller than the screen (100dvh = the height a phone shows right now; 100vh for
+   older browsers): the title and the buttons always stay on screen and only the
+   text between them scrolls (owner-found: the Phase 4 month picker's buttons went off a short or sideways phone). A
+   scrolling middle no longer merges its first and last items' outer margins with the box's own spacing, so those two
+   margins are zeroed (over an inline style too) — a dialog that already fits keeps its old height. */
+.cmodal-box{max-height:100vh;max-height:100dvh;display:flex;flex-direction:column}
+.cmodal-body{overflow-y:auto;min-height:0;overscroll-behavior:contain}
+.cmodal-title,.cmodal-buttons{flex:none}
+.cmodal-body>:first-child{margin-top:0!important}
+.cmodal-body>:last-child{margin-bottom:0!important}
 
 /* Spinning wheel */
 #wheelModal .cmodal-box{max-width:520px}
@@ -1327,7 +1339,7 @@ thead th{color:var(--t2)}
 <div id="wheelModal" class="cmodal">
   <div class="cmodal-box">
     <div class="cmodal-title">🎡 Wheel of Names</div>
-    <div class="cmodal-body">
+    <div class="cmodal-body" id="wheelBody">
       <div id="wheelWeekLabel" style="font-size:13px;color:var(--t1);font-weight:600;margin-bottom:4px"></div>
       <div style="font-size:11px;color:var(--t2);margin-bottom:4px">Each user has an equal chance of winning. No action is taken automatically — make any approvals manually after the spin.</div>
       <div class="wheel-wrap">
@@ -14331,6 +14343,7 @@ window.openConfirm=function({title,body,okText='Confirm',danger=false,onConfirm,
     if(cb){ try{ await cb(); }catch(err){ console.error('Confirm action failed:',err); try{ toast('Action failed: '+(err?.message||err),'err'); }catch(_){} } }
   };
   document.getElementById("confirmModal").classList.add("show");
+  document.getElementById("cmBody").scrollTop=0; // [378 · §277] the body scrolls now: every dialog opens at its top, never where the last one was left (after "show" - a hidden box ignores it)
 };
 window.closeConfirm=function(){
   document.getElementById("confirmModal").classList.remove("show");
@@ -14351,6 +14364,7 @@ window.openWheel=function(wk,users){
   document.getElementById("wheelSpinBtn").disabled=false;
   document.getElementById("wheelSpinBtn").textContent='Spin';
   document.getElementById("wheelModal").classList.add("show");
+  document.getElementById("wheelBody").scrollTop=0; // [378 · §277] opens at its top, as openConfirm does
 };
 window.closeWheel=function(){ document.getElementById("wheelModal").classList.remove("show"); };
 function drawWheel(){
