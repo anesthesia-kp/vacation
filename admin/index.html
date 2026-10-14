@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 374;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 375;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -605,10 +605,6 @@ thead th{color:var(--t2)}
             <button class="btn btn-ghost" style="padding:3px 8px;font-size:12px;line-height:1" onclick="syncEmailToUser()" title="Security · Sync login map — rebuilds the map that lets each user edit only their OWN bids. Updates automatically when you change login e-mails; only use this to force a refresh if a user says they can't place a bid.">🔑</button>
           </div>
           <div class="trow" style="align-items:center;margin-top:6px">
-            <div><div class="trow-label">Phase results</div><div class="trow-desc">E-mail every user their approved / denied results for the phase</div></div>
-            <button class="btn btn-success" style="flex:unset;white-space:nowrap" onclick="sendPhaseResultsEmails()">📮 Send Phase Results</button>
-          </div>
-          <div class="trow" style="align-items:center;margin-top:10px;padding-top:12px;border-top:1px solid var(--b1)">
             <div><div class="trow-label">Bid reminders</div><div class="trow-desc">Nudge users who haven't placed any bids in the current phase</div></div>
             <button class="btn btn-primary" style="flex:unset;white-space:nowrap" id="noBidsRemindBtn" onclick="sendReminderEmails()">📧 Send Reminders</button>
           </div>
@@ -2069,7 +2065,114 @@ function _sentAddrsFor(key){
   return new Set([...(( _sentLedger[key])||[]),...((phasesData.resultsSentTo?.[key])||[])].map(a=>String(a).trim().toLowerCase()));
 }
 function _writeSentLedger(key,sentAddrs){
-  return setDoc(phaseStagingRef,{resultsSentTo:{[key]:[...sentAddrs]}},{merge:true});
+  // [375 · §272] ADD to the list, never replace it: two pages writing at once can no longer erase each other's entries.
+  const a=[...sentAddrs]; if(!a.length) return Promise.resolve();
+  return setDoc(phaseStagingRef,{resultsSentTo:{[key]:arrayUnion(...a)}},{merge:true});
+}
+// [375 · §272] RESULTS SENT ONCE, HOWEVER MANY ADMINS CLICK. Owner-found 13 Oct 2026: Phase 3 results reached every
+// address twice - one send ran 53 minutes in a browser that kept sleeping, its 2-minute claim lapsed, a second send
+// found an empty ledger (it was written only at the end) and mailed everyone, and the first carried on when it woke.
+// Now the claim is a LEASE that must still be this page's before EVERY e-mail (renewed every 30 s while the send moves);
+// a page that finds it gone or someone else's STOPS - no e-mail, no stamp, no publish, no release of a claim not its own.
+// Each delivered address is added to the server ledger right after its e-mail, and the ledger is re-read before each.
+// No device's clock is ever compared with another's: a holder renews by counting a heartbeat (`beat`), and another
+// page treats the claim as abandoned only after watching it stay UNCHANGED for 2 minutes of its OWN clock
+// (independent review, 13 Oct 2026: a clock ~90 s fast could otherwise take over a live send).
+const RESULTS_CLAIM_MS=120000, RESULTS_CLAIM_RENEW_MS=30000;
+const _resultsSeen={}; // key -> {sig, since}: what this page last saw of ANOTHER page's claim, and since when (this page's clock)
+const _resultsMyIds=new Set(); // every claim THIS page has taken - a retry after a pause takes back its own claim at once (no 2-minute wait)
+function _resultsClaimStale(key,c){
+  const sig=String(c&&c.by)+'#'+String(Number(c&&c.beat)||0)+'#'+String((c&&c.at)||0);
+  const now=Date.now(), seen=_resultsSeen[key];
+  if(!seen||seen.sig!==sig||now<seen.since){ _resultsSeen[key]={sig:sig,since:now}; return false; }
+  return (now-seen.since)>=RESULTS_CLAIM_MS;
+}
+function _adminInitials(){
+  // The signed-in admin's roster initials, or '' - the ONLY form written to the world-readable phases doc (no address, ever: build 259's lesson).
+  try{
+    const em=String(_currentAdminEmail||'').trim().toLowerCase(); if(!em) return '';
+    const m=(typeof loginEmailsData!=='undefined'&&loginEmailsData)?loginEmailsData:{};
+    for(const u of Object.keys(m)){ if(String(m[u]||'').trim().toLowerCase()===em&&/^[A-Za-z0-9._-]{1,8}$/.test(u)) return u; }
+    return '';
+  }catch(_){ return ''; }
+}
+function _adminLabel(){
+  // For the ADMIN-ONLY E-mail Log: the initials, else the name part of the signed-in admin's address (his ruling, §272 q2).
+  try{
+    const i=_adminInitials(); if(i) return i;
+    return String(_currentAdminEmail||'').trim().toLowerCase().split('@')[0].replace(/[^A-Za-z0-9._-]/g,'').slice(0,20);
+  }catch(_){ return ''; }
+}
+async function _resultsLeaseTake(key,sendId){
+  // 'ok' | {held:claim} | 'error'. Fails CLOSED: no answer from the server -> no send.
+  let res='error';
+  try{
+    await runTransaction(db, async (tx)=>{
+      const snap=await tx.get(phasesRef);
+      const d=snap.exists()?snap.data():{};
+      const c=d.resultsSendClaim?.[key];
+      if(c&&c.by&&c.by!==sendId&&!_resultsMyIds.has(c.by)&&!_resultsClaimStale(key,c)){ res={held:c}; return; }
+      tx.set(phasesRef,{resultsSendClaim:{...(d.resultsSendClaim||{}),[key]:{by:sendId,at:Date.now(),beat:0,who:_adminInitials()}}},{merge:true});
+      res='ok';
+    });
+  }catch(e){ console.warn('results send claim failed (not sending):',e); return 'error'; }
+  if(res==='ok') _resultsMyIds.add(sendId);
+  return res;
+}
+async function _resultsLeaseHold(key,sendId){
+  // Before each e-mail: 'ok' (still this page's - renewed when 30 s old) | 'lost' (gone or another page's) | 'error'.
+  let res='lost';
+  try{
+    await runTransaction(db, async (tx)=>{
+      const snap=await tx.get(phasesRef);
+      const d=snap.exists()?snap.data():{};
+      const c=d.resultsSendClaim?.[key];
+      if(!c||c.by!==sendId){ res='lost'; return; }
+      res='ok';
+      const _age=Date.now()-(c.at||0); // this page's own clock against its own earlier write; a clock set BACK (age < 0) renews too
+      if(_age>=RESULTS_CLAIM_RENEW_MS||_age<0) tx.set(phasesRef,{resultsSendClaim:{...(d.resultsSendClaim||{}),[key]:{...c,at:Date.now(),beat:(Number(c.beat)||0)+1}}},{merge:true});
+    });
+  }catch(e){ console.warn('results send claim check failed (pausing):',e); return 'error'; }
+  return res;
+}
+async function _resultsLeaseRelease(key,sendId){
+  // Releases the claim ONLY while it is still this page's - a page that was overtaken never frees the new holder's claim.
+  try{
+    await runTransaction(db, async (tx)=>{
+      const snap=await tx.get(phasesRef);
+      const d=snap.exists()?snap.data():{};
+      const c=d.resultsSendClaim?.[key];
+      if(c&&c.by===sendId) tx.set(phasesRef,{resultsSendClaim:{...(d.resultsSendClaim||{}),[key]:{by:null,at:0,beat:0,who:''}}},{merge:true});
+    });
+  }catch(_){}
+}
+async function _resultsBeforeEmail(key,sendId,sentAddrs){
+  // 'ok' | 'lost' | 'error'. Still ours, and who already has it - from the server, merged into sentAddrs.
+  const h=await _resultsLeaseHold(key,sendId);
+  if(h!=='ok') return h;
+  const lf=await _ledgerFresh(key);
+  if(!lf.ok) return 'error';
+  for(const a of lf.sentSet) sentAddrs.add(a);
+  return 'ok';
+}
+async function _resultsRecord(key,sent){
+  // Right after an e-mail: add the delivered address(es) to the server ledger (one retry). false = could not record.
+  if(!sent||!sent.length) return true;
+  const w=()=>_withTimeout(_writeSentLedger(key,sent),20000,'results ledger'); // an offline write WAITS rather than fails - 20 s and it counts as failed
+  try{ await w(); return true; }
+  catch(_1){ try{ await w(); return true; }catch(_2){ return false; } }
+}
+async function _resultsStopped(stop,label,done,total,key,sendId){
+  if(stop==='lost'){
+    toast('This page stopped sending '+label+" results — another admin's page took over (or the send was reset) while this one was paused. Nothing more is sent from here.",'warn');
+    return;
+  }
+  await _resultsLeaseRelease(key,sendId);
+  toast(label+' results paused after '+done+' of '+total+' — the connection dropped. Click Send again to finish; nobody already e-mailed gets it twice.','err');
+}
+function _resultsBlockedText(c,label){
+  const who=(c&&typeof c.who==='string'&&/^[A-Za-z0-9._-]{1,8}$/.test(c.who))?(c.who+"'s page"):"Another admin's page";
+  return who+' is sending '+label+' results right now — not sending again. If that page has stopped, try again in 2 minutes; nobody already e-mailed gets it twice.';
 }
 // [build 269 · LEDG] SERVER-fresh ledger read for send-time decisions. The delivered-address
 // ledger is the only thing standing between a retry / post-restore resend and a duplicate
@@ -7202,7 +7305,7 @@ function _mailHistNote(user,rec){
     const pre=(cur===1&&!(ph&&ph.phase1Started));
     const rd=(cur===4)?Number((ph&&ph.p4Round)||1):NaN;
     const h=Object.assign({},rec,{u:String(user),by:'admin',phase:isNaN(cur)?null:(pre?0:cur),round:isNaN(rd)?null:rd});
-    try{ const f=(typeof getCurrentUser==='function')?String(getCurrentUser()||''):''; if(/^[A-Za-z0-9._-]{1,8}$/.test(f)) h.from=f; }catch(_){} // [187 / 354 · §238] whose page made this attempt (the signed-in initials; the admin page has none and adds nothing) - inside the try, so it can never delay or fail a send
+    try{ const f=(typeof _adminLabel==='function')?String(_adminLabel()||''):''; if(/^[A-Za-z0-9._-]{1,20}$/.test(f)) h.from=f; }catch(_){} // [375 · §272] the admin page now says whose page sent it (initials, or the address's name part for an admin not on the roster) // [187 / 354 · §238] whose page made this attempt (the signed-in initials; the admin page has none and adds nothing) - inside the try, so it can never delay or fail a send
     const key='h'+Number(rec.at).toString(36)+Math.random().toString(36).slice(2,8).padEnd(6,'0');
     const p=setDoc(mailLogRef,{[key]:h},{merge:true});
     if(p&&typeof p.catch==='function') p.catch(function(){});
@@ -7231,16 +7334,19 @@ function trackEmailSent(){
 // caught, the meter counts only real sends, and callers learn the true ok/fail counts.
 // The old version fired emailjs.send() without await, so failures were uncatchable and
 // every attempt counted — letting "results sent: N" show while zero e-mails went out.
-async function adminSendEmail(user,subject,body,skip){
-  const recips=recipientsFor(user); let ok=0,fail=0; const sent=[];
+async function adminSendEmail(user,subject,body,skip,hooks){
+  const recips=recipientsFor(user); let ok=0,fail=0; const sent=[]; let stopped=''; // [375 · §272] hooks: before() each address -> 'ok' | 'lost' | 'error'; after(email) each delivery -> recorded?
   for(const email of recips){
     if(skip && skip.has(email)) continue; // already delivered on a prior run — never re-send to it
+    if(hooks && hooks.before){ const h=await hooks.before(); if(h!=='ok'){ stopped=h; break; } if(skip && skip.has(email)) continue; } // [375] still this page's send, and not delivered meanwhile
+    let _went=false;
     try{
       await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body});
-      trackEmailSent(); ok++; sent.push(email); _mailLogNote(user,email,String(subject||'admin mail').slice(0,40),true); // [330 · §189]
+      trackEmailSent(); ok++; sent.push(email); _went=true; _mailLogNote(user,email,String(subject||'admin mail').slice(0,40),true); // [330 · §189]
     }catch(e){ console.warn('Email failed:',e); fail++; _mailLogNote(user,email,String(subject||'admin mail').slice(0,40),false,e); } // [330 · §189]
+    if(_went && hooks && hooks.after && !(await hooks.after(email))){ stopped='error'; break; } // [375] recorded the moment it went out, or the send stops
   }
-  return {ok,fail,sent};
+  return {ok,fail,sent,stopped};
 }
 
 // ── Welcome e-mail (admin side) ───────────────────────────────────────────────
@@ -7605,18 +7711,10 @@ window.sendPhaseResultsEmails=function(){
       // simultaneous-double-send window. A transient claim-write error falls through to send
       // (the per-address dedup is the backstop) rather than blocking a legitimate send.
       const _sendId=Date.now()+'_'+Math.floor(Math.random()*1e9);
-      let _claimed=false;
-      try{
-        await runTransaction(db, async (tx)=>{
-          const snap=await tx.get(phasesRef);
-          const d=snap.exists()?snap.data():{};
-          const claim=d.resultsSendClaim?.[cur];
-          if(claim && claim.by && claim.by!==_sendId && (Date.now()-(claim.at||0))<120000){ _claimed=false; return; }
-          tx.set(phasesRef,{resultsSendClaim:{...(d.resultsSendClaim||{}),[cur]:{by:_sendId,at:Date.now()}}},{merge:true});
-          _claimed=true;
-        });
-      }catch(e){ _claimed=true; console.warn('results send claim failed (proceeding):',e); }
-      if(!_claimed){ toast('Another admin session is sending Phase '+cur+' results right now — not sending again.','warn'); return; }
+      // [375 · §272] the claim is a lease held for every e-mail; taking it fails CLOSED (no answer = no send)
+      const _take=await _resultsLeaseTake(cur,_sendId);
+      if(_take==='error'){ toast('Could not reach the server to start the send — nothing was sent. Try again in a moment.','err'); return; }
+      if(_take!=='ok'){ toast(_resultsBlockedText(_take.held,'Phase '+cur),'warn'); return; }
       // Per-ADDRESS idempotency: every e-mail address already delivered to for THIS phase is
       // recorded in resultsSentTo[cur]. On a retry (after a partial failure) or an accidental
       // second click, those addresses are skipped inside adminSendEmail — so no address ever
@@ -7627,9 +7725,10 @@ window.sendPhaseResultsEmails=function(){
       // after a restore). Unverifiable ledger → NO send: nobody can be double-mailed.
       // typeof = sandbox convention (legacy scope ⇒ the pre-269 mirror read, exactly).
       const _lf=(typeof _ledgerFresh==='function')?await _ledgerFresh(cur):{ok:true,sentSet:_sentAddrsFor(cur)};
-      if(!_lf.ok){ toast('🚫 Could not verify on the server who already received Phase '+cur+' results (connection problem) — NOT sending, so nobody gets a duplicate e-mail. Try again in a moment.','err'); return; }
+      if(!_lf.ok){ await _resultsLeaseRelease(cur,_sendId); toast('🚫 Could not verify on the server who already received Phase '+cur+' results (connection problem) — NOT sending, so nobody gets a duplicate e-mail. Try again in a moment.','err'); return; }
       const sentAddrs=_lf.sentSet;
       let _prog=0; // [build 260] live progress toast so a slow send visibly advances and the admin isn't tempted to re-click
+      let _stop='', _done=0; // [375 · §272] why the loop stopped early ('lost' | 'error'), and after how many
       for(const u of usersWithResults){
         toast(`📮 Sending Phase ${cur} results — ${++_prog} of ${usersWithResults.length}…`,'ok',true);
         const recips=recipientsFor(u);
@@ -7646,10 +7745,13 @@ Phase ${cur} of the Vacation Auction is complete.
 Here are your Phase ${cur} results:
 
 ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.length?`DENIED (${denied.length}):\n${denLines}\n\nDenied bid numbers become available again for you to use in the next phase.`:''}`.trimEnd();
-        const r=await adminSendEmail(u,`Vacation Auction — Phase ${cur} Results`,bodyText,sentAddrs);
+        const r=await adminSendEmail(u,`Vacation Auction — Phase ${cur} Results`,bodyText,sentAddrs,{before:()=>_resultsBeforeEmail(cur,_sendId,sentAddrs),after:a=>_resultsRecord(cur,[a])}); // [375 · §272] checked before, recorded after, EVERY address
         ok+=r.ok; fail+=r.fail;
         for(const a of r.sent) sentAddrs.add(a); // record each address actually delivered to
+        if(r.stopped){ _stop=r.stopped; _done=_prog-1+((r.sent.length&&recips.every(a=>sentAddrs.has(a)))?1:0); break; } // [375 · §272] lost the send, or could not check / record; counts doctors fully e-mailed
       }
+      if(!_stop){ const _fin=await _resultsLeaseHold(cur,_sendId); if(_fin!=='ok'){ _stop=_fin; _done=usersWithResults.length; } } // [375] overtaken while finishing -> the other page stamps
+      if(_stop){ await _resultsStopped(_stop,'Phase '+cur,_done,usersWithResults.length,cur,_sendId); return; } // [375 · §272] no stamp, no publish; a claim not its own is never released
       // Persist which addresses have now been e-mailed, so a later retry can't double-send.
       // [BATCH D · M2 · build 234] This ledger is what makes "click Send again" SAFE — it is the
       // only thing preventing a retry from re-sending all ~37 results e-mails. It used to fail
@@ -7673,7 +7775,7 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
           // [AUDIT 2026-07-26 re-audit #2 low] Release the send-claim BEFORE bailing — otherwise the
           // stale claim (<120s, held by this _sendId) makes the very retry this toast instructs abort
           // with "another admin session is sending right now," locking the admin out of their own retry.
-          await setDoc(phasesRef,{resultsSendClaim:{...(phasesData.resultsSendClaim||{}),[cur]:{by:null,at:0}}},{merge:true}).catch(()=>{});
+          await _resultsLeaseRelease(cur,_sendId); // [375] only while still this page's
           toast('⚠️ Phase '+cur+' e-mails sent, but publishing the results FAILED ('+(e?.message||e)+'). Click Send again to finish publishing.'+_ledgerWarn,'err'); return;
         }
         // [build 235 · audit] The success toast carries the ledger warning too — a perfect send
@@ -7691,7 +7793,7 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
         toast(`⚠️ Phase ${cur} results: ${ok} sent, ${fail} FAILED — NOT marked complete. Click Send again to retry just the ones still owed.`+_ledgerWarn,'warn');
       }
       // Release the claim so a legitimate retry (this admin or another) isn't blocked for 2 min.
-      await setDoc(phasesRef,{resultsSendClaim:{...(phasesData.resultsSendClaim||{}),[cur]:{by:null,at:0}}},{merge:true}).catch(()=>{});
+      await _resultsLeaseRelease(cur,_sendId); // [375] only while still this page's
       }finally{ window._resultsSendInFlight=false; } // [build 260 · AUDIT MEDIUM E] release even on a partial-failure early return, so a legit retry isn't blocked
     }
   });
@@ -7848,25 +7950,18 @@ window.sendRoundResultsEmails=function(){
       // Cross-session claim (same pattern as the classic sender, its own per-round key).
       const _claimKey='p4r'+N;
       const _sendId=Date.now()+'_'+Math.floor(Math.random()*1e9);
-      let _claimed=false;
-      try{
-        await runTransaction(db, async (tx)=>{
-          const s=await tx.get(phasesRef);
-          const d=s.exists()?s.data():{};
-          const claim=d.resultsSendClaim?.[_claimKey];
-          if(claim && claim.by && claim.by!==_sendId && (Date.now()-(claim.at||0))<120000){ _claimed=false; return; }
-          tx.set(phasesRef,{resultsSendClaim:{...(d.resultsSendClaim||{}),[_claimKey]:{by:_sendId,at:Date.now()}}},{merge:true});
-          _claimed=true;
-        });
-      }catch(e){ _claimed=true; console.warn('round send claim failed (proceeding):',e); }
-      if(!_claimed){ toast('Another admin session is sending Round '+N+' results right now — not sending again.','warn'); return; }
+      // [375 · §272] the claim is a lease held for every e-mail; taking it fails CLOSED (no answer = no send)
+      const _take=await _resultsLeaseTake(_claimKey,_sendId);
+      if(_take==='error'){ toast('Could not reach the server to start the send — nothing was sent. Try again in a moment.','err'); return; }
+      if(_take!=='ok'){ toast(_resultsBlockedText(_take.held,'Phase 4: Round '+N),'warn'); return; }
       // [build 269 · LEDG] Same server-fresh skip-list as the classic sender (see _ledgerFresh).
       // typeof = sandbox convention (legacy scope ⇒ the pre-269 mirror read, exactly).
       const _lf=(typeof _ledgerFresh==='function')?await _ledgerFresh(_claimKey):{ok:true,sentSet:_sentAddrsFor(_claimKey)};
-      if(!_lf.ok){ toast('🚫 Could not verify on the server who already received Round '+N+' results (connection problem) — NOT sending, so nobody gets a duplicate e-mail. Try again in a moment.','err'); return; }
+      if(!_lf.ok){ await _resultsLeaseRelease(_claimKey,_sendId); toast('🚫 Could not verify on the server who already received Round '+N+' results (connection problem) — NOT sending, so nobody gets a duplicate e-mail. Try again in a moment.','err'); return; }
       const sentAddrs=_lf.sentSet;
       let ok=0, fail=0, skipped=0, alreadyDone=0;
       let _prog=0; // [build 260] live progress toast so a slow send visibly advances and the admin isn't tempted to re-click
+      let _stop='', _done=0; // [375 · §272] why the loop stopped early ('lost' | 'error'), and after how many
       for(const u of users){
         toast(`📮 Sending Round ${N} results — ${++_prog} of ${users.length}…`,'ok',true);
         const recips=recipientsFor(u);
@@ -7883,10 +7978,13 @@ Phase 4: Round ${N} of the Vacation Auction is complete.
 Here are your Phase 4: Round ${N} results:
 
 ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.length?`DENIED (${denied.length}):\n${denLines}\n\nDenied bid numbers become available again for you to use in the next bidding round.`:''}`.trimEnd();
-        const r=await adminSendEmail(u,`Vacation Auction — Phase 4: Round ${N} Results`,bodyText,sentAddrs);
+        const r=await adminSendEmail(u,`Vacation Auction — Phase 4: Round ${N} Results`,bodyText,sentAddrs,{before:()=>_resultsBeforeEmail(_claimKey,_sendId,sentAddrs),after:a=>_resultsRecord(_claimKey,[a])}); // [375 · §272] checked before, recorded after, EVERY address
         ok+=r.ok; fail+=r.fail;
         for(const a of r.sent) sentAddrs.add(a);
+        if(r.stopped){ _stop=r.stopped; _done=_prog-1+((r.sent.length&&recips.every(a=>sentAddrs.has(a)))?1:0); break; } // [375 · §272] lost the send, or could not check / record; counts doctors fully e-mailed
       }
+      if(!_stop){ const _fin=await _resultsLeaseHold(_claimKey,_sendId); if(_fin!=='ok'){ _stop=_fin; _done=users.length; } } // [375] overtaken while finishing -> the other page stamps
+      if(_stop){ await _resultsStopped(_stop,'Phase 4: Round '+N,_done,users.length,_claimKey,_sendId); return; } // [375 · §272] no stamp, no publish; a claim not its own is never released
       // Persist the delivered-address ledger (retry once; warn about the re-send trap on
       // double failure — same honesty contract as the classic sender).
       let _ledgerOk=true;
@@ -7903,7 +8001,7 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
           b.set(phaseStagingRef,{pendingP4Rounds:{[N]:deleteField()}},{merge:true});
           await b.commit();
         }catch(e){
-          await setDoc(phasesRef,{resultsSendClaim:{...(phasesData.resultsSendClaim||{}),[_claimKey]:{by:null,at:0}}},{merge:true}).catch(()=>{});
+          await _resultsLeaseRelease(_claimKey,_sendId); // [375] only while still this page's
           toast('⚠️ Round '+N+' e-mails sent, but publishing the round archive FAILED ('+(e?.message||e)+'). Click Send Round Results again to finish publishing.'+_ledgerWarn,'err'); return;
         }
         toast(`📮 Round ${N} results: ${ok} e-mail${ok!==1?'s':''} sent${alreadyDone?`, ${alreadyDone} already sent`:''}${skipped?` (${skipped} had no e-mail)`:''} — round announced. 🎉`+_ledgerWarn,_ledgerOk?'ok':'warn');
@@ -7922,7 +8020,7 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
       } else {
         toast(`⚠️ Round ${N} results: ${ok} sent, ${fail} FAILED — round NOT marked announced. Click Send Round Results again to retry just the ones still owed.`+_ledgerWarn,'warn');
       }
-      await setDoc(phasesRef,{resultsSendClaim:{...(phasesData.resultsSendClaim||{}),[_claimKey]:{by:null,at:0}}},{merge:true}).catch(()=>{});
+      await _resultsLeaseRelease(_claimKey,_sendId); // [375] only while still this page's
       }finally{ window._resultsSendInFlight=false; } // [build 260 · AUDIT MEDIUM E] release even on a partial-failure early return, so a legit retry isn't blocked
     }
   });
@@ -13062,7 +13160,7 @@ function _mailHistEntries(){
   for(const k of Object.keys(d)){
     const v=d[k]; if(!_isMailHist(k,v)) continue;
     out.push({k:k,at:(typeof v.at==='number'&&v.at>0)?v.at:0,u:String(v.u),to:String(v.to||''),kind:String(v.kind||'mail'),
-      ok:v.ok===true,tags:(Array.isArray(v.tags)?v.tags.filter(x=>typeof x==='string'&&x).slice(0,8).map(x=>x.slice(0,40)):[]),err:String(v.err||''),by:v.by==='admin'?'admin page':(v.by==='staff'?('staff page'+((typeof v.from==='string'&&/^[A-Za-z0-9._-]{1,8}$/.test(v.from))?' · '+v.from:'')):'—'),phase:_activityPhaseLabel(v)}); // [354 · §238] a staff row also says whose page made the attempt, inside this same column
+      ok:v.ok===true,tags:(Array.isArray(v.tags)?v.tags.filter(x=>typeof x==='string'&&x).slice(0,8).map(x=>x.slice(0,40)):[]),err:String(v.err||''),by:v.by==='admin'?('admin page'+((typeof v.from==='string'&&/^[A-Za-z0-9._-]{1,20}$/.test(v.from))?' · '+v.from:'')):(v.by==='staff'?('staff page'+((typeof v.from==='string'&&/^[A-Za-z0-9._-]{1,8}$/.test(v.from))?' · '+v.from:'')):'—'),phase:_activityPhaseLabel(v)}); // [354 · §238] a staff row also says whose page made the attempt, inside this same column
   }
   out.sort((a,b)=>(b.at-a.at)||(a.k<b.k?-1:a.k>b.k?1:0));
   return out;
