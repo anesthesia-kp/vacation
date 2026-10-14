@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 376;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 377;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -453,6 +453,7 @@ thead th{color:var(--t2)}
       <a onclick="nav('lowerings',this)">🔽 Bid Lowerings</a>
       <a onclick="nav('userbids',this)">🎟️ User Bids</a>
       <a onclick="nav('activity',this)">👣 User Activity</a>
+      <a onclick="nav('messages',this)">📨 Messages</a>
       <a onclick="nav('maillog',this)">✉️ E-mail Log</a>
       <a onclick="nav('whitelist',this)">📌 Whitelist Tracker</a>
       <div class="nav-section">Settings</div>
@@ -847,6 +848,15 @@ thead th{color:var(--t2)}
       <div style="overflow-x:auto;max-height:640px;overflow-y:auto;border:1px solid var(--b1)">
         <table><thead><tr><th>Initials</th><th>Full Name</th><th>Last active</th><th style="text-align:center">Bids this phase</th><th>Last e-mail</th></tr></thead><tbody id="uaBody"></tbody></table>
       </div>
+    </div>
+
+    <!-- MESSAGES [377 · §276] — one-time e-mails from the admin to everyone or to the people picked. Writes ONLY
+         vacations/adminMessages (admin-only, read on demand — no listener); sends through adminSendEmail like every admin e-mail. -->
+    <div class="panel" id="panel-messages">
+      <div class="page-head"><div class="page-title">📨 Messages</div><div class="page-sub">Write a one-time e-mail to everyone or to the people you pick. Each person gets their own copy at every address on file (Google and KP), under the site's usual subject line, starting "Hello" and their initials — the site link and the sign-off are added at the bottom, as on every site e-mail. Drafts are kept here, and so is every message sent.</div></div>
+      <div class="card"><div class="card-title">Write</div><div id="msgCompose"></div></div>
+      <div class="card"><div class="card-title">Drafts</div><div id="msgDrafts"></div></div>
+      <div class="card"><div class="card-title">Sent</div><div id="msgSent"></div></div>
     </div>
 
     <!-- E-MAIL LOG [352 · §234] — a READ-ONLY view of every e-mail attempt either page recorded. The only
@@ -1518,6 +1528,7 @@ window.syncEmailToUser=async function(){
 };
 const welcomeLogRef = doc(db,"vacations","welcomeLog"); // {sent:{<addrKey>:true}} — addresses already welcomed THIS cycle (cleared by Reset Auction)
 const loginLogRef   = doc(db,"vacations","loginLog");   // [330 · §189] {INITIALS:{at,phase,round}} — each user's LAST sign-in, written by the staff site (own key only); admin-read; cleared by Reset Auction and by User Activity's Clear · [364 · §260] plus v:{<key>:<code>} inside each key — the visits; trimmed here (_visitTrim)
+const adminMessagesRef = doc(db,"vacations","adminMessages"); // [377 · §276] {drafts:{id:{body,all,to,at,by}}, sent:{id:{body,all,to,at,by,status,page,beat,done,ok,fail}}} — admin-only, read on demand
 const mailLogRef    = doc(db,"vacations","mailLog");    // [330 · §189] {INITIALS:{at,to,kind,ok,err}} — each user's LAST e-mail and whether it sent, written beside every send on both pages; admin-read; cleared with loginLog
 // [build 268 · BL] Bid Lowerings — sanctioned per-phase bid DECREASES (mistake-fixing).
 // Current-window usage: {USER:{used:n}} — user-writable own-key-only (isBidDoc rules gates:
@@ -2575,6 +2586,7 @@ window.nav = function(id, el) {
   if(id==='lowerings'&&typeof renderBidLowerings==='function') renderBidLowerings(); // [build 268 · BL]
   if(id==='userbids'&&typeof renderUserBids==='function') renderUserBids(); // [325 · §178]
   if(id==='activity'&&typeof renderUserActivity==='function') renderUserActivity(); // [330 · §189]
+  if(id==='messages'&&typeof renderMessages==='function') renderMessages(); // [377 · §276]
   if(id==='maillog'&&typeof renderMailLog==='function') renderMailLog(); // [352 · §234]
   if(id==='capacity'&&typeof renderCapacityPage==='function') renderCapacityPage(); // [335 · §194]
   if(id==='reports'&&typeof renderReportsPage==='function') renderReportsPage(); // [337 · §203]
@@ -7354,19 +7366,323 @@ function trackEmailSent(){
 // The old version fired emailjs.send() without await, so failures were uncatchable and
 // every attempt counted — letting "results sent: N" show while zero e-mails went out.
 async function adminSendEmail(user,subject,body,skip,hooks){
-  const recips=recipientsFor(user); let ok=0,fail=0; const sent=[]; let stopped=''; // [375 · §272] hooks: before() each address -> 'ok' | 'lost' | 'error'; after(email) each delivery -> recorded?
+  const recips=recipientsFor(user); let ok=0,fail=0; const sent=[]; const unsure=[]; let stopped=''; // [375 · §272] hooks: before() each address -> 'ok' | 'lost' | 'error'; after(email) each delivery -> recorded?
   for(const email of recips){
     if(skip && skip.has(email)) continue; // already delivered on a prior run — never re-send to it
-    if(hooks && hooks.before){ const h=await hooks.before(); if(h!=='ok'){ stopped=h; break; } if(skip && skip.has(email)) continue; } // [375] still this page's send, and not delivered meanwhile
+    if(hooks && hooks.before){ const h=await hooks.before(email); if(h!=='ok'){ stopped=h; break; } if(skip && skip.has(email)) continue; } // [375] still this page's send, and not delivered meanwhile
     let _went=false;
     try{
       await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:email,changes:body});
       trackEmailSent(); ok++; sent.push(email); _went=true; _mailLogNote(user,email,String(subject||'admin mail').slice(0,40),true); // [330 · §189]
-    }catch(e){ console.warn('Email failed:',e); fail++; _mailLogNote(user,email,String(subject||'admin mail').slice(0,40),false,e); } // [330 · §189]
+    }catch(e){ console.warn('Email failed:',e); fail++; if(_mqNoAnswer(e)) unsure.push(email); _mailLogNote(user,email,String(subject||'admin mail').slice(0,40),false,e); } // [330 · §189] · [377 · §276] no answer = it may have gone out
     if(_went && hooks && hooks.after && !(await hooks.after(email))){ stopped='error'; break; } // [375] recorded the moment it went out, or the send stops
   }
-  return {ok,fail,sent,stopped};
+  return {ok,fail,sent,stopped,unsure}; // [377 · §276] unsure: no answer from the mail service
 }
+
+// ── [377 · §276] MESSAGES — one-time e-mails from the admin ─────────────────────────────────
+// His rulings (14 Oct 2026): one-time only; each person at EVERY address on file (recipientsFor:
+// Google + KP); drafts saved; every sent message stored; "Hello <initials>," added here — the
+// site link and the sign-off are added by the e-mail template itself, as on every site e-mail;
+// one confirm with the counts, a second red one for "Everyone". ONE admin-only document
+// (vacations/adminMessages), read when the panel opens and after each write — NO listener, so the
+// loading cover's feed list and the dangerous-action guard are untouched. NEVER SENT TWICE
+// (admin 375's machinery): before EVERY address a transaction checks this page still holds the
+// message's claim, moves its counter on and marks the address TRYING — all before the e-mail goes out; each
+// delivered address is recorded at once; a refusal from the mail service clears the mark. An address left
+// trying-but-not-delivered (the page died, slept or lost its connection, or the service gave no answer) MAY have
+// received it: it is shown as "not confirmed" and NEVER re-sent automatically. "Send to the rest" skips every
+// address reached or not confirmed. Another page's unfinished send is taken over only after THIS page has watched its
+// counter stand still for 2 minutes of its OWN clock — no device's clock compared with another's.
+const MSG_MAX_CHARS=5000, MSG_KEEP_SENT=100, MSG_MAX_DRAFTS=30, MSG_STILL_MS=120000, MSG_WRITE_MS=20000, MSG_KIND='Admin message';
+let _msgData={drafts:{},sent:{}}, _msgLoaded=false, _msgLoadErr='', _msgRunning=null;
+let _msgEd={id:null, body:'', all:true, pick:[]};
+const _msgPage='p'+Date.now().toString(36)+Math.random().toString(36).slice(2,8);
+const _msgSeen={}; // id -> {beat, since}: when THIS page first saw another page's send standing at that counter
+function _msgNewId(){ return 'm'+Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+function _msgIdOk(id){ return typeof id==='string' && /^m[a-z0-9]{6,24}$/.test(id); }
+function _msgObj(o){ return (o&&typeof o==='object'&&!Array.isArray(o))?o:{}; }
+function _msgTargets(all,pick){ const ros=names.slice(); if(all) return ros; const s=new Set(Array.isArray(pick)?pick:[]); return ros.filter(u=>s.has(u)); }
+function _msgCounts(users){ let people=0, mails=0; const none=[]; for(const u of users){ const r=recipientsFor(u); if(r.length){ people++; mails+=r.length; } else none.push(u); } return {people,mails,none}; }
+function _msgText(u,body){ return 'Hello '+u+',\n\n'+String(body||'').trim(); }
+function _msgOwed(to){ const out=[]; const seen=new Set(); for(const u of (Array.isArray(to)?to:[])){ for(const a of recipientsFor(u)){ if(!seen.has(a)){ seen.add(a); out.push(a); } } } return out; }
+function _msgProgressOf(r){ const owed=_msgOwed(r&&r.to); const done=new Set(Array.isArray(r&&r.done)?r.done:[]); const tr=new Set(Array.isArray(r&&r.trying)?r.trying:[]);
+  const unsure=owed.filter(a=>!done.has(a)&&tr.has(a)).length; return {owed:owed.length, done:owed.filter(a=>done.has(a)).length, unsure, left:owed.length-owed.filter(a=>done.has(a)).length-unsure}; }
+function _msgWhen(t){ const n=Number(t); return n?new Date(n).toLocaleString([], {month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'}):'—'; }
+function _msgToLabel(all,to){ const t=Array.isArray(to)?to:[]; if(all) return 'Everyone'+(t.length?' ('+t.length+')':''); if(!t.length) return 'nobody picked'; return t.slice(0,8).join(', ')+(t.length>8?' +'+(t.length-8)+' more':''); }
+function _msgMeter(){ try{ return Number(mailStatsData[emailCycleKey()]||0); }catch(_){ return 0; } }
+async function _msgLoad(){
+  try{
+    const s=await getDoc(adminMessagesRef); const d=s.exists()?s.data():{};
+    _msgData={drafts:_msgObj(d.drafts), sent:_msgObj(d.sent)}; _msgLoaded=true; _msgLoadErr='';
+    const now=Date.now();
+    for(const id of Object.keys(_msgData.sent)){ const r=_msgObj(_msgData.sent[id]);
+      if(r.status==='sending'&&r.page!==_msgPage){ const b=Number(r.beat||0), k=_msgSeen[id]; if(!k||k.beat!==b) _msgSeen[id]={beat:b,since:now}; } }
+  }catch(e){ _msgLoadErr=String((e&&e.message)||e||'could not load'); }
+}
+window.renderMessages=async function(){
+  _msgPaintCompose(); _msgPaintLists(true);
+  await _msgLoad(); _msgPaintLists(false); _msgSummary();
+};
+function _msgPaintCompose(){
+  const el=document.getElementById('msgCompose'); if(!el) return;
+  const ed=_msgEd;
+  el.innerHTML=`<textarea id="msgBody" maxlength="${MSG_MAX_CHARS}" rows="8" placeholder="Type your message…" oninput="msgInput(this)" style="width:100%;box-sizing:border-box;font:inherit;font-size:14px;line-height:1.45;padding:10px;border:1px solid var(--b2);background:var(--s1);color:var(--t1);resize:vertical"></textarea>
+    <div id="msgChars" style="font-size:11px;color:var(--t3);text-align:right;margin-top:2px"></div>
+    <div style="margin:10px 0 6px;font-size:12px;font-weight:600;color:var(--t2)">Send to</div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px">
+      <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="msgTo" id="msgToAll" onchange="msgSetAll(true)"${ed.all?' checked':''}> Everyone</label>
+      <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="msgTo" id="msgToSel" onchange="msgSetAll(false)"${ed.all?'':' checked'}> Selected people</label>
+    </div>
+    <div id="msgPeople" style="margin-top:8px"></div>
+    <div id="msgSummary" style="margin-top:10px;font-size:12px;color:var(--t2)"></div>
+    <div id="msgProgress" style="margin-top:6px;font-size:12px;font-weight:600"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+      <button class="btn btn-ghost" style="flex:unset" onclick="msgPreview()">👁 Preview</button>
+      <button class="btn btn-ghost" style="flex:unset" onclick="msgSaveDraft()">💾 Save draft</button>
+      <button class="btn btn-primary" style="flex:unset" id="msgSendBtn" onclick="msgSend()">📨 Send…</button>
+      <button class="btn btn-ghost" style="flex:unset" onclick="msgNew()">✚ New message</button>
+    </div>
+    <div id="msgEditing" style="margin-top:8px;font-size:11px;color:var(--t3)"></div>`;
+  const ta=document.getElementById('msgBody'); if(ta) ta.value=ed.body;
+  _msgPaintPeople(); _msgSummary();
+}
+function _msgPaintPeople(){
+  const el=document.getElementById('msgPeople'); if(!el) return;
+  if(_msgEd.all){ el.innerHTML=''; return; }
+  const pick=new Set(_msgEd.pick);
+  const rows=names.map(u=>{ const has=recipientsFor(u).length>0; const nm=(typeof usernamesData!=='undefined'&&usernamesData&&usernamesData[u])?usernamesData[u]:'';
+    return `<label style="display:flex;gap:6px;align-items:center;font-size:12px;padding:3px 4px;cursor:${has?'pointer':'default'};opacity:${has?1:.45}"><input type="checkbox" data-u="${esc(u)}" onchange="msgTogglePick(this)"${pick.has(u)&&has?' checked':''}${has?'':' disabled'}> <strong style="font-family:var(--mono)">${esc(u)}</strong> <span style="color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(nm)}${has?'':' — no e-mail on file'}</span></label>`; }).join('');
+  el.innerHTML=`<div style="display:flex;gap:8px;margin-bottom:6px"><button class="btn btn-ghost" style="flex:unset;padding:4px 10px;font-size:11px" onclick="msgPickAll(true)">Select all</button><button class="btn btn-ghost" style="flex:unset;padding:4px 10px;font-size:11px" onclick="msgPickAll(false)">Select none</button></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:2px;max-height:280px;overflow-y:auto;border:1px solid var(--b1);padding:6px">${rows||'<div style="font-size:12px;color:var(--t3)">The roster has not loaded yet.</div>'}</div>`;
+}
+function _msgSummary(){
+  const c=document.getElementById('msgChars'); if(c) c.textContent=String(_msgEd.body.length).replace(/\B(?=(\d{3})+(?!\d))/g,',')+' / 5,000';
+  const el=document.getElementById('msgSummary');
+  if(el){ const t=_msgTargets(_msgEd.all,_msgEd.pick), k=_msgCounts(t), n=_msgMeter();
+    el.innerHTML=`<strong>${k.people}</strong> ${k.people===1?'person':'people'} · <strong>${k.mails}</strong> e-mail${k.mails===1?'':'s'} · ${n.toLocaleString()} of ${MAIL_QUOTA.toLocaleString()} used this cycle`
+      +(k.none.length?` · <span style="color:var(--t3)">no e-mail on file: ${esc(k.none.join(', '))}</span>`:''); }
+  const ed=document.getElementById('msgEditing');
+  if(ed){ const d=_msgEd.id&&_msgData.drafts[_msgEd.id]; ed.textContent=_msgEd.id?('Editing the draft saved '+_msgWhen(d&&d.at)+' — Save draft keeps your changes.'):'New message — not saved yet.'; }
+}
+function _msgPaintLists(loading){
+  const dEl=document.getElementById('msgDrafts'), sEl=document.getElementById('msgSent'); if(!dEl||!sEl) return;
+  if(loading&&!_msgLoaded){ dEl.innerHTML=sEl.innerHTML='<div style="font-size:12px;color:var(--t3)">Loading…</div>'; return; }
+  if(_msgLoadErr&&!_msgLoaded){ dEl.innerHTML=sEl.innerHTML=`<div style="font-size:12px;color:var(--red)">Could not load the saved messages (${esc(_msgLoadErr)}). Open this page again in a moment.</div>`; return; }
+  const row='border-top:1px solid var(--b1);padding:10px 0';
+  const btn='class="btn btn-ghost" style="flex:unset;padding:4px 10px;font-size:11px"';
+  const drafts=Object.keys(_msgData.drafts).filter(_msgIdOk).map(id=>[id,_msgObj(_msgData.drafts[id])]).sort((x,y)=>(y[1].at||0)-(x[1].at||0));
+  dEl.innerHTML=drafts.length?drafts.map(([id,d])=>`<div style="${row}"><div style="font-size:11px;color:var(--t3)">Saved ${esc(_msgWhen(d.at))}${d.by?' by '+esc(d.by):''} · to ${esc(_msgToLabel(d.all,d.all?[]:d.to))}</div>
+      <div style="font-size:13px;margin:4px 0 6px;white-space:pre-wrap;word-break:break-word">${esc(String(d.body||'').slice(0,160))}${String(d.body||'').length>160?'…':''}</div>
+      <div style="display:flex;gap:6px"><button ${btn} data-id="${id}" onclick="msgOpenDraft(this)">✎ Open</button><button ${btn} data-id="${id}" onclick="msgDeleteDraft(this)">✕ Delete</button></div></div>`).join('')
+    :'<div style="font-size:12px;color:var(--t3)">No drafts saved.</div>';
+  const sent=Object.keys(_msgData.sent).filter(_msgIdOk).map(id=>[id,_msgObj(_msgData.sent[id])]).sort((x,y)=>(y[1].at||0)-(x[1].at||0));
+  sEl.innerHTML=sent.length?sent.map(([id,r])=>{ const p=_msgProgressOf(r);
+      const st=r.status==='sent'?'<span style="color:var(--green);font-weight:600">✓ Sent</span>'
+        :(r.status==='sending'&&_msgRunning===id)?'<span style="color:var(--yellow);font-weight:600">Sending now…</span>'
+        :r.status==='sending'?'<span style="color:var(--yellow);font-weight:600">Interrupted, or still sending on another page</span>'
+        :'<span style="color:var(--red);font-weight:600">Partly sent</span>';
+      const fail=Number(r.fail||0);
+      const rest=(r.status!=='sent'&&_msgRunning!==id&&(p.left>0||r.status==='sending'))?`<button ${btn} data-id="${id}" onclick="msgSendRest(this)">${p.left>0?'📨 Send to the rest':'✓ Finish this record'}</button>`:'';
+      return `<div style="${row}"><div style="font-size:11px;color:var(--t3)">${esc(_msgWhen(r.at))}${r.by?' · by '+esc(r.by):''} · to ${esc(_msgToLabel(r.all,r.to))}</div>
+      <div style="font-size:12px;margin:4px 0">${st} · ${p.done} of ${p.owed} e-mail${p.owed===1?'':'s'} delivered${p.unsure?` · <span style="color:var(--yellow)">${p.unsure} not confirmed — may have received it; never re-sent automatically</span>`:''}${fail?` · ${fail} failed attempt${fail===1?'':'s'}`:''}</div>
+      <details><summary style="cursor:pointer;font-size:12px;color:var(--t2)">Show message</summary><div style="font-size:13px;white-space:pre-wrap;word-break:break-word;margin-top:6px;padding:8px;background:var(--s2,rgba(0,0,0,.03));border:1px solid var(--b1)">${esc(String(r.body||''))}</div></details>
+      <div style="display:flex;gap:6px;margin-top:6px">${rest}<button ${btn} data-id="${id}" onclick="msgCopy(this)">⧉ Copy to new draft</button></div></div>`; }).join('')
+    :'<div style="font-size:12px;color:var(--t3)">No messages sent yet.</div>';
+}
+window.msgInput=function(el){ _msgEd.body=String(el&&el.value||'').slice(0,MSG_MAX_CHARS); _msgSummary(); };
+window.msgSetAll=function(all){ _msgEd.all=!!all; _msgPaintPeople(); _msgSummary(); };
+window.msgTogglePick=function(el){ const u=el&&el.getAttribute('data-u'); if(!u||!names.includes(u)) return; const s=new Set(_msgEd.pick); if(el.checked) s.add(u); else s.delete(u); _msgEd.pick=names.filter(n=>s.has(n)); _msgSummary(); };
+window.msgPickAll=function(on){ _msgEd.pick=on?names.filter(u=>recipientsFor(u).length>0):[]; _msgPaintPeople(); _msgSummary(); };
+function _msgCheck(){
+  const body=String(_msgEd.body||'').trim();
+  if(!body){ toast('Write a message first.','warn'); return null; }
+  if(_msgEd.body.length>MSG_MAX_CHARS){ toast('The message is longer than 5,000 characters.','warn'); return null; }
+  const to=_msgTargets(_msgEd.all,_msgEd.pick);
+  if(!_msgEd.all&&!to.length){ toast('Pick at least one person, or choose Everyone.','warn'); return null; }
+  return {body,to};
+}
+window.msgPreview=function(){
+  const c=_msgCheck(); if(!c) return;
+  const u=c.to.find(x=>recipientsFor(x).length>0)||c.to[0]||'XX';
+  openConfirm({title:'👁 Preview — the e-mail '+esc(u)+' would get',
+    body:`<div style="font-size:13px;white-space:pre-wrap;word-break:break-word;padding:10px;border:1px solid var(--b1);max-height:50vh;overflow-y:auto">${esc(_msgText(u,c.body))}</div>
+          <div class="cmodal-info" style="margin-top:8px">The e-mail service adds the site link and the sign-off at the bottom and uses the site's usual subject line, as on every site e-mail.</div>`,
+    okText:'Close', onConfirm:()=>{}});
+};
+window.msgSaveDraft=async function(){
+  const c=_msgCheck(); if(!c) return;
+  if(!_msgLoaded){ toast('The saved messages have not loaded yet — try again in a moment.','warn'); return; }
+  let id=_msgEd.id;
+  if(!_msgIdOk(id)||!_msgData.drafts[id]){
+    if(Object.keys(_msgData.drafts).length>=MSG_MAX_DRAFTS){ toast('There are already '+MSG_MAX_DRAFTS+' drafts — delete one first.','warn'); return; }
+    id=_msgNewId();
+  }
+  const rec={body:_msgEd.body.slice(0,MSG_MAX_CHARS), all:!!_msgEd.all, to:_msgEd.all?[]:c.to, at:Date.now(), by:String(_adminLabel()||'')};
+  try{ await setDoc(adminMessagesRef,{drafts:{[id]:rec}},{merge:true}); }catch(e){ toast('Could not save the draft: '+((e&&e.message)||e),'err'); return; }
+  _msgEd.id=id; _msgData.drafts[id]=rec; toast('💾 Draft saved','ok'); _msgPaintLists(false); _msgSummary();
+};
+window.msgOpenDraft=function(el){
+  const id=el&&el.getAttribute('data-id'); const d=_msgIdOk(id)&&_msgData.drafts[id]; if(!d) return;
+  const go=()=>{ _msgEd={id, body:String(d.body||'').slice(0,MSG_MAX_CHARS), all:!!d.all, pick:d.all?[]:names.filter(u=>(Array.isArray(d.to)?d.to:[]).includes(u))}; _msgPaintCompose(); };
+  if(_msgDirty()) openConfirm({title:'✎ Open this draft?',body:'<div>What is in the Write box now has not been saved and will be replaced.</div>',okText:'Open draft',onConfirm:go}); else go();
+};
+window.msgDeleteDraft=function(el){
+  const id=el&&el.getAttribute('data-id'); if(!_msgIdOk(id)||!_msgData.drafts[id]) return;
+  openConfirm({title:'✕ Delete this draft?',body:'<div>The draft is removed for good. Messages already sent are not affected.</div>',okText:'Delete draft',danger:true,onConfirm:async()=>{
+    try{ await updateDoc(adminMessagesRef,{['drafts.'+id]:deleteField()}); }catch(e){ toast('Could not delete the draft: '+((e&&e.message)||e),'err'); return; }
+    delete _msgData.drafts[id]; if(_msgEd.id===id) _msgEd.id=null; toast('Draft deleted','ok'); _msgPaintLists(false); _msgSummary(); }});
+};
+function _msgDirty(){ const b=String(_msgEd.body||'').trim(); if(!b) return false; const d=_msgEd.id&&_msgData.drafts[_msgEd.id];
+  return !d||String(d.body||'')!==_msgEd.body||!!d.all!==!!_msgEd.all||(!_msgEd.all&&JSON.stringify(Array.isArray(d.to)?d.to:[])!==JSON.stringify(_msgEd.pick)); }
+window.msgNew=function(){
+  const go=()=>{ _msgEd={id:null, body:'', all:true, pick:[]}; _msgPaintCompose(); };
+  if(_msgDirty()) openConfirm({title:'✚ Start a new message?',body:'<div>What is in the Write box now has not been saved and will be cleared.</div>',okText:'Clear it',onConfirm:go}); else go();
+};
+window.msgCopy=function(el){
+  const id=el&&el.getAttribute('data-id'); const r=_msgIdOk(id)&&_msgData.sent[id]; if(!r) return;
+  const go=()=>{ _msgEd={id:null, body:String(r.body||'').slice(0,MSG_MAX_CHARS), all:!!r.all, pick:r.all?[]:names.filter(u=>(Array.isArray(r.to)?r.to:[]).includes(u))}; _msgPaintCompose(); toast('Copied into the Write box — not saved yet.','ok'); };
+  if(_msgDirty()) openConfirm({title:'⧉ Copy this message?',body:'<div>What is in the Write box now has not been saved and will be replaced.</div>',okText:'Copy',onConfirm:go}); else go();
+};
+window.msgSend=function(){
+  if(!_feedsHealthyOrExplain('Send message')) return; // the addresses come from the live roster feeds
+  if(window._resultsSendInFlight){ toast('A send is already running — let it finish before sending again.','warn'); return; }
+  if(!_msgLoaded){ toast('The saved messages have not loaded yet — try again in a moment.','warn'); return; }
+  const c=_msgCheck(); if(!c) return;
+  const k=_msgCounts(c.to); if(!k.mails){ toast('Nobody picked has an e-mail address on file.','warn'); return; }
+  const n=_msgMeter(); const over=n+k.mails>MAIL_QUOTA;
+  const who=k.people<=12?c.to.filter(u=>recipientsFor(u).length).join(', '):c.to.filter(u=>recipientsFor(u).length).slice(0,12).join(', ')+' …';
+  const all=!!_msgEd.all, fromDraft=_msgEd.id;
+  openConfirm({title:'📨 Send this message?',
+    body:`<div>Send to <strong>${k.people}</strong> ${k.people===1?'person':'people'} — <strong>${k.mails}</strong> e-mail${k.mails===1?'':'s'}, one to each address on file.</div>
+          <div style="margin-top:6px;font-size:12px;color:var(--t2)">${esc(who)}</div>
+          ${k.none.length?`<div class="cmodal-info" style="margin-top:8px">No e-mail on file, skipped: ${esc(k.none.join(', '))}</div>`:''}
+          ${over?`<div class="cmodal-warn" style="margin-top:8px">This would pass the monthly limit: ${n.toLocaleString()} of ${MAIL_QUOTA.toLocaleString()} used this cycle.</div>`:''}
+          <div class="cmodal-info" style="margin-top:8px">An e-mail cannot be taken back once it is sent.</div>`,
+    okText:'Send', onConfirm:()=>{
+      if(!all) return _msgRun(null,c.body,c.to,all,fromDraft);
+      openConfirm({title:'⚠️ Send to EVERYONE?',
+        body:`<div class="cmodal-danger">This goes to <strong>everyone on the roster</strong> — ${k.people} people, ${k.mails} e-mails.</div><div style="margin-top:8px">Send it?</div>`,
+        okText:'Yes — send to everyone', danger:true, onConfirm:()=>_msgRun(null,c.body,c.to,all,fromDraft)});
+    }});
+};
+window.msgSendRest=function(el){
+  const id=el&&el.getAttribute('data-id'); const r=_msgIdOk(id)&&_msgData.sent[id]; if(!r) return;
+  if(!_feedsHealthyOrExplain('Send message')) return;
+  if(window._resultsSendInFlight){ toast('A send is already running — let it finish before sending again.','warn'); return; }
+  const left=_msgProgressOf(r).left;
+  if(!left&&r.status!=='sending'){ toast('Nothing left to send: every address on file was reached or is not confirmed.','ok'); return; }
+  openConfirm({title:'📨 Send to the rest?',
+    body:`${left?`<div>Send this message to the <strong>${left}</strong> address${left===1?'':'es'} it has not reached yet. Addresses it already reached, and any not confirmed, are skipped.</div>`:'<div>Nothing is left to send — this only marks the record finished.</div>'}
+          ${r.status==='sending'?'<div class="cmodal-warn" style="margin-top:8px">This message was being sent by another admin page. It is taken over only if that page has stopped — otherwise you are asked to wait.</div>':''}`,
+    okText:left?'Send to the rest':'Finish the record', onConfirm:()=>_msgRun(id,String(r.body||''),Array.isArray(r.to)?r.to:[],!!r.all,null)});
+};
+async function _msgClaim(id,body,to,all,fromDraft){
+  // A NEW message: the record is created with this page's claim (and the draft it came from removed, and
+  // the history trimmed to MSG_KEEP_SENT) in ONE transaction. An EXISTING one: taken over only when it is not
+  // being sent, or THIS page has watched another page's counter stand still for MSG_STILL_MS of its own clock.
+  return runTransaction(db, async tx=>{
+    const s=await tx.get(adminMessagesRef); const d=s.exists()?s.data():{}; const sent=_msgObj(d.sent), drafts=_msgObj(d.drafts);
+    if(id===null){
+      const nid=_msgNewId();
+      const rec={body, all, to, at:Date.now(), by:String(_adminLabel()||''), status:'sending', page:_msgPage, beat:0, done:[], trying:[], ok:0, fail:0};
+      if(!s.exists()){ tx.set(adminMessagesRef,{sent:{[nid]:rec}}); return {state:'ok',id:nid}; }
+      const upd={['sent.'+nid]:rec};
+      const old=Object.keys(sent).filter(k=>_msgObj(sent[k]).status==='sent').sort((x,y)=>(_msgObj(sent[x]).at||0)-(_msgObj(sent[y]).at||0));
+      const over=Object.keys(sent).length+1-MSG_KEEP_SENT; for(let i=0;i<over&&i<old.length;i++) upd['sent.'+old[i]]=deleteField();
+      if(_msgIdOk(fromDraft)&&drafts[fromDraft]) upd['drafts.'+fromDraft]=deleteField();
+      tx.update(adminMessagesRef,upd); return {state:'ok',id:nid};
+    }
+    const r=_msgObj(sent[id]); if(!sent[id]) return {state:'gone'};
+    if(r.status==='sent') return {state:'done'};
+    const b=Number(r.beat||0);
+    if(r.status==='sending'&&r.page!==_msgPage){
+      const k=_msgSeen[id];
+      if(!k||k.beat!==b){ _msgSeen[id]={beat:b,since:Date.now()}; return {state:'busy',wait:MSG_STILL_MS}; }
+      const waited=Date.now()-k.since; if(waited<MSG_STILL_MS) return {state:'busy',wait:MSG_STILL_MS-waited};
+    }
+    tx.update(adminMessagesRef,{['sent.'+id+'.status']:'sending',['sent.'+id+'.page']:_msgPage,['sent.'+id+'.beat']:b+1});
+    return {state:'ok',id};
+  });
+}
+async function _msgBefore(id,skip,addr){
+  // Before EVERY address: this page still holds the claim? Move the counter on, learn every address delivered or tried
+  // meanwhile (a tried-but-not-delivered one MAY have received it: never re-sent automatically), and mark THIS address
+  // as being tried — in the same transaction, before the e-mail goes out.
+  try{
+    return await _withTimeout(runTransaction(db, async tx=>{
+      const s=await tx.get(adminMessagesRef); const r=s.exists()?_msgObj(_msgObj(s.data().sent)[id]):{};
+      if(r.status!=='sending'||r.page!==_msgPage) return 'lost';
+      for(const a of (Array.isArray(r.done)?r.done:[])) skip.add(a);
+      for(const a of (Array.isArray(r.trying)?r.trying:[])) skip.add(a);
+      const upd={['sent.'+id+'.beat']:Number(r.beat||0)+1};
+      if(typeof addr==='string'&&addr&&!skip.has(addr)) upd['sent.'+id+'.trying']=arrayUnion(addr);
+      tx.update(adminMessagesRef,upd); return 'ok';
+    }),MSG_WRITE_MS,'message claim');
+  }catch(_){ return 'error'; }
+}
+async function _msgAfter(id,addr){
+  // The moment an address is delivered it is recorded — once more on a failure — or the send stops.
+  for(let i=0;i<2;i++){ try{ await _withTimeout(updateDoc(adminMessagesRef,{['sent.'+id+'.done']:arrayUnion(addr)}),MSG_WRITE_MS,'message record'); return true; }catch(_){} }
+  return false;
+}
+async function _msgUntry(id,addrs){
+  // A REFUSAL from the mail service means the e-mail did not go out: the address may be tried again. Best-effort — if
+  // this write fails the address stays "not confirmed" (never re-sent automatically), which is the safe side.
+  if(!addrs.length) return;
+  try{ await _withTimeout(updateDoc(adminMessagesRef,{['sent.'+id+'.trying']:arrayRemove(...addrs)}),MSG_WRITE_MS,'message retry mark'); }catch(_){}
+}
+async function _msgFinish(id,ok,fail){
+  try{
+    await _withTimeout(runTransaction(db, async tx=>{
+      const s=await tx.get(adminMessagesRef); const r=s.exists()?_msgObj(_msgObj(s.data().sent)[id]):{};
+      if(r.status!=='sending'||r.page!==_msgPage) return;
+      const done=new Set(Array.isArray(r.done)?r.done:[]), tr=new Set(Array.isArray(r.trying)?r.trying:[]);
+      const complete=_msgOwed(r.to).every(a=>done.has(a)||tr.has(a)); // nothing left that may be sent (not-confirmed ones are never re-sent)
+      tx.update(adminMessagesRef,{['sent.'+id+'.status']:complete?'sent':'partly',['sent.'+id+'.page']:deleteField(),
+        ['sent.'+id+'.ok']:Number(r.ok||0)+ok,['sent.'+id+'.fail']:Number(r.fail||0)+fail,['sent.'+id+'.last']:Date.now()});
+    }),MSG_WRITE_MS,'message finish');
+    return true;
+  }catch(_){ return false; }
+}
+async function _msgRun(existingId,body,to,all,fromDraft){
+  if(window._resultsSendInFlight){ toast('A send is already running — let it finish before sending again.','warn'); return; }
+  window._resultsSendInFlight=true;
+  let id=null, ok=0, fail=0, stopped='';
+  try{
+    let cl; try{ cl=await _msgClaim(existingId,body,to,all,fromDraft); }catch(e){ toast('Could not start the send — nothing was sent. ('+((e&&e.message)||e)+')','err'); return; }
+    if(cl.state==='busy'){ toast('Another admin page may still be sending this message. Try again in about '+Math.max(1,Math.ceil((cl.wait||MSG_STILL_MS)/60000))+' minute(s) — nothing was sent.','warn'); return; }
+    if(cl.state==='done'){ toast('This message has already reached every address.','ok'); return; }
+    if(cl.state!=='ok'){ toast('That message is no longer in the history — nothing was sent.','warn'); return; }
+    id=cl.id; _msgRunning=id;
+    if(existingId===null){ _msgEd={id:null, body:'', all:true, pick:[]}; _msgPaintCompose(); }
+    await _msgLoad(); _msgPaintLists(false);
+    const rec=_msgObj(_msgData.sent[id]); const skip=new Set(Array.isArray(rec.done)?rec.done:[]);
+    const people=to.filter(u=>recipientsFor(u).length); let i=0;
+    const _p=document.getElementById('msgProgress');
+    for(const u of to){
+      const rc=recipientsFor(u); if(!rc.length) continue; i++;
+      if(_p) _p.textContent='Sending… '+i+' of '+people.length+' — keep this page open.';
+      if(rc.every(a=>skip.has(a))) continue;
+      const tried=[];
+      const r=await adminSendEmail(u,MSG_KIND,_msgText(u,body),skip,{before:async em=>{ const h=await _msgBefore(id,skip,em); if(h==='ok'&&em&&!skip.has(em)) tried.push(em); return h; },after:a=>_msgAfter(id,a)});
+      ok+=r.ok; fail+=r.fail; for(const a of r.sent) skip.add(a);
+      const unsureNow=new Set(Array.isArray(r.unsure)?r.unsure:[]);
+      await _msgUntry(id,tried.filter(a=>!r.sent.includes(a)&&!unsureNow.has(a)&&!(r.stopped&&a===tried[tried.length-1]&&!r.fail))); // refused = not sent: may be tried again
+      if(r.stopped){ stopped=r.stopped; break; }
+    }
+    if(!stopped){ if(!(await _msgFinish(id,ok,fail))) stopped='error'; }
+  }finally{
+    window._resultsSendInFlight=false; _msgRunning=null;
+    const _p=document.getElementById('msgProgress'); if(_p) _p.textContent='';
+  }
+  if(id){ await _msgLoad(); _msgPaintLists(false); _msgSummary(); }
+  if(stopped==='lost') toast('⚠️ Stopped: another admin page took over this message. Nothing is sent twice — see Sent below.','warn');
+  else if(stopped) toast('⚠️ Stopped after '+ok+' e-mail'+(ok===1?'':'s')+': the send could not be checked or recorded. "Send to the rest" never re-sends an address already reached; one it cannot confirm is shown as not confirmed and left alone.','warn');
+  else toast(fail===0?('📨 Message sent — '+ok+' e-mail'+(ok===1?'':'s')+'.'):('⚠️ '+ok+' sent, '+fail+' FAILED — use "Send to the rest" under Sent to retry only those.'),fail===0?'ok':'warn');
+}
+window._msgText=_msgText; window._msgTargets=_msgTargets; window._msgCounts=_msgCounts; window._msgOwed=_msgOwed; window._msgProgressOf=_msgProgressOf; // testing
+
 
 // ── Welcome e-mail (admin side) ───────────────────────────────────────────────
 // Same enrollment/welcome e-mail the user site sends. Used when ADMIN enters or
