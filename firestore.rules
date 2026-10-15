@@ -89,6 +89,7 @@ service cloud.firestore {
     // What it buys: the anonymous-stranger hole is closed. What it does NOT buy: a
     // determined person with any Google account. That case is App Check's job (FB-4), not
     // this rule's. Tightening to isRegisteredUser later is a one-word change.
+    // [379 · §275, 14 Oct 2026] TIGHTENED: the read is now isRegisteredUser() || isAdmin() — see REGISTERED READS below.
     // [PREP 20 Aug 2026 · RA-H13, owner: prepare-and-hold] FB-5 finished: the remaining
     // world-readable bid data joins the same verified-sign-in gate. bestBids (every
     // user's strongest bid VALUE per week), changes (the full timestamped bid history),
@@ -152,7 +153,23 @@ service cloud.firestore {
     // staff site only WRITES (merge-writes need no read). Without this line both would
     // fall through to the world-readable default. Their write clauses are below.
     function isAdminReadDoc(docId) {
-      return docId in ['approvals', 'denials', 'changesDecisions', 'phaseStaging', 'changesArchive', 'loginLog', 'mailLog', 'adminMessages']; // [377 · §276] adminMessages: the admin's drafts and sent messages
+      return docId in ['approvals', 'denials', 'changesDecisions', 'phaseStaging', 'changesArchive', 'loginLog', 'mailLog', 'adminMessages', 'adminAccess', 'signInMisses']; // [377 · §276] adminMessages: the admin's drafts and sent messages · [379 · §275] adminAccess, signInMisses: the admin list, and the addresses of strangers who tried to sign in — no colleague page needs either
+    }
+
+    // ── [379 · §275, 14 Oct 2026] REGISTERED READS ────────────────────────────
+    // Owner: "let's only address site security for now" (§275). Until this change the address
+    // documents and the bid documents were readable by ANY verified Google account — a stranger
+    // who signed in on the site could read every colleague's two addresses and the whole live
+    // board from the browser's developer tools. Now: a colleague (isRegisteredUser — the SAME
+    // test every bid write already requires, so nobody who can bid loses a read), an auction
+    // admin, and for the three people documents a Daily Schedule admin too (its Users page
+    // reads them). Every page attaches these reads only after it knows who you are (staff
+    // 151/152/156, admin authReady, schedule admin sign-in); the staff sign-in tells "not a
+    // colleague" from a failed security check by one public read (staff 213). COST: the bid
+    // documents now pay one rules document access per read (loginEmails; adminAccess as well
+    // for an admin not on loginEmails) — the price the FB-1 note above priced; ruled 9:03 AM.
+    function isPeopleDoc(docId) {
+      return docId in ['loginEmails', 'emails', 'emailToUser'];
     }
 
     // ── Vacation Auction collection ───────────────────────────────────────────
@@ -380,11 +397,12 @@ service cloud.firestore {
 
     match /vacations/{docId} {
       // Read: live-decision docs (approvals/denials) require admin; sensitive PII
-      // docs require a verified sign-in; everything else (roster, usernames, phases,
+      // docs and the bids require a colleague or an admin [379 · §275]; everything else (roster, usernames, phases,
       // schedule, …) stays public for the anonymous login screen.
       allow read: if isAdminReadDoc(docId) ? isAdmin()
                    : (isRelayDoc(docId) ? (isRegisteredUser() || isAdmin())
-                   : ((isSensitiveDoc(docId) || isBidDataDoc(docId)) ? isVerifiedAccount() : true));
+                   : (isPeopleDoc(docId) ? (isRegisteredUser() || isAdmin() || isSchedAdmin()) // [379 · §275]
+                   : ((isSensitiveDoc(docId) || isBidDataDoc(docId)) ? (isRegisteredUser() || isAdmin()) : true))); // [379 · §275] was isVerifiedAccount()
       // welcomeLog records WHICH ADDRESSES have already been welcomed, keyed by the
       // address itself — so it is PII, and its READ is gated by isSensitiveDoc above
       // [RA-3, 20 Aug 2026; an earlier version of this comment claimed "no PII" and was

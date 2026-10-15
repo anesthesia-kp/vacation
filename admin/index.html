@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 378;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 379;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -2080,6 +2080,7 @@ function _mergeP4RoundsView(){
 // and, for one transition period, also union in any legacy phases.resultsSentTo entries so an
 // in-flight auction can't double-mail. Reset Auction wipes the staging doc → fresh ledger.
 let _sentLedger={};
+let _resultsTryingMirror={}; // [379 · §275 A/B] key -> addresses not confirmed (admin-only staging doc)
 function _sentAddrsFor(key){
   // [build 270 · M3] Membership is CASE-BLIND: ledger entries written before 270 carry the
   // address's typed case, while recipientsFor now returns lower-case. Without this map, a
@@ -2169,14 +2170,97 @@ async function _resultsLeaseRelease(key,sendId){
     });
   }catch(_){}
 }
-async function _resultsBeforeEmail(key,sendId,sentAddrs){
+// [379 · §275 B] One place builds a doctor's results e-mail - the senders and the per-doctor "send again" use the same
+// words. key: a phase number (1-4) or 'p4r'+N for a Phase 4 round. entry: {approved:[wk], denied:[wk]}.
+function _resultsBodyFor(key,u,entry,schedSrc){
+  entry=entry||{}; schedSrc=schedSrc||{};
+  if(/^p4r\d+$/.test(String(key))){
+    const N=Number(String(key).slice(3));
+    const approved=(entry.approved||[]).slice(), denied=(entry.denied||[]).slice();
+    approved.sort(); denied.sort();
+    const appLines=approved.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
+    const denLines=denied.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
+    return `Hello ${u},
+
+Phase 4: Round ${N} of the Vacation Auction is complete.
+
+Here are your Phase 4: Round ${N} results:
+
+${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.length?`DENIED (${denied.length}):\n${denLines}\n\nDenied bid numbers become available again for you to use in the next bidding round.`:''}`.trimEnd();
+  }
+  const cur=Number(key);
+  const approved=(entry.approved||[]).slice(), denied=(entry.denied||[]).slice();
+  approved.sort(); denied.sort();
+  const appLines=approved.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
+  const denLines=denied.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
+  return `Hello ${u},
+
+Phase ${cur} of the Vacation Auction is complete.
+
+Here are your Phase ${cur} results:
+
+${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.length?`DENIED (${denied.length}):\n${denLines}\n\nDenied bid numbers become available again for you to use in the next phase.`:''}`.trimEnd();
+}
+// [379 · §275] NEVER SENT TWICE, EVEN WHEN AN E-MAIL GOES OUT UNRECORDED. Admin 375 recorded an address the moment
+// its e-mail went out - but a page that died, slept or lost its connection between the send and the record, or a
+// send the mail service delivered without answering, left the address owed, and the next Send mailed it again.
+// Now the address is written into the delivered ledger BEFORE its e-mail (and onto a "trying" list, for naming):
+// delivered -> it stays, and leaves the trying list; a clear REFUSAL from the mail service -> taken back out of both,
+// so it is still owed; no answer, or the page stopped -> it stays: it MAY have received its results, so it is
+// counted as reached and never re-sent automatically (his ruling, §275 q1), and the closing message names it.
+// The mark IS a ledger entry, so it is carried wherever the ledger already is (publish, Begin Phase, Full Restore).
+function _resultsRun(){ return {tried:[], mine:new Set(), unsure:new Set(), seen:new Set()}; } // mine: every address THIS run marked (review H1)
+async function _resultsBeforeEmail(key,sendId,sentAddrs,addr,run){
   // 'ok' | 'lost' | 'error'. Still ours, and who already has it - from the server, merged into sentAddrs.
   const h=await _resultsLeaseHold(key,sendId);
   if(h!=='ok') return h;
   const lf=await _ledgerFresh(key);
   if(!lf.ok) return 'error';
   for(const a of lf.sentSet) sentAddrs.add(a);
+  if(run) for(const a of (lf.trySet||[])) run.seen.add(a);
+  const a=(typeof addr==='string')?addr.trim().toLowerCase():''; // [379] the ledger's case-blind form (build 270)
+  if(a && !sentAddrs.has(a)){
+    // [379] marked BEFORE the e-mail - no mark, no e-mail. A mark that timed out may still land: then the address
+    // reads as reached and is never re-sent - the safe side.
+    try{ await _withTimeout(setDoc(phaseStagingRef,{resultsSentTo:{[key]:arrayUnion(a)},resultsTrying:{[key]:arrayUnion(a)}},{merge:true}),20000,'results trying mark'); }
+    catch(_){ return 'error'; }
+    if(run){ run.tried.push(a); run.mine.add(a); }
+  }
   return 'ok';
+}
+async function _resultsUnmark(key,addrs,alsoLedger){
+  // [379] Best-effort: off the trying list (delivered), or out of the ledger too (refused - still owed). If this write
+  // fails, the address stays marked: counted as reached and named, never re-sent - the safe side.
+  if(!addrs.length) return;
+  try{ await _withTimeout(setDoc(phaseStagingRef,{...(alsoLedger?{resultsSentTo:{[key]:arrayRemove(...addrs)}}:{}),resultsTrying:{[key]:arrayRemove(...addrs)}},{merge:true}),20000,'results trying clear'); }catch(_){}
+}
+async function _resultsAfter(key,a){
+  // [379] Right after a delivered e-mail: recorded (as 375 - the send stops if it cannot be), then off the trying list.
+  const rec=await _resultsRecord(key,[a]);
+  if(rec) await _resultsUnmark(key,[String(a).trim().toLowerCase()],false);
+  return rec;
+}
+async function _resultsAfterUser(key,r,run,sentAddrs){
+  // [379] After one doctor's e-mails: no answer -> counted as reached (and named); refused -> taken back out, still owed.
+  // Returns how many of r.fail were "no answer" rather than refusals.
+  const lc=x=>String(x).trim().toLowerCase();
+  const un=new Set((Array.isArray(r&&r.unsure)?r.unsure:[]).map(lc)), sent=new Set((Array.isArray(r&&r.sent)?r.sent:[]).map(lc));
+  for(const a of un){ run.unsure.add(a); sentAddrs.add(a); }
+  const refused=run.tried.filter(a=>!sent.has(a)&&!un.has(a));
+  run.tried=[];
+  await _resultsUnmark(key,refused,true);
+  // [379 · review H1] a re-read of the ledger for this doctor's NEXT address saw the refused one's own mark and merged it in;
+  // it must leave sentAddrs too, or the closing ledger write would put it back and it would never be sent.
+  for(const a of refused) sentAddrs.delete(a);
+  return un.size;
+}
+function _resultsUnsureNote(users,run){
+  // [379] The closing message names every doctor with an address that may or may not have received it (initials only).
+  const maybe=new Set([...run.unsure,...[...run.seen].filter(a=>!run.mine.has(a))]); // [review H1] seen = OTHER pages' marks; this run's own are judged by what happened to them
+  const who=users.filter(u=>recipientsFor(u).some(a=>maybe.has(String(a).trim().toLowerCase())));
+  if(!who.length) return '';
+  return ' ⚠️ '+who.length+' not confirmed (no answer from the mail service, or a page stopped mid-send): '+who.slice().sort().join(', ')
+    +' — they may have received it, so they are NOT sent it again; check the E-mail Log.';
 }
 async function _resultsRecord(key,sent){
   // Right after an e-mail: add the delivered address(es) to the server ledger (one retry). false = could not record.
@@ -2185,7 +2269,106 @@ async function _resultsRecord(key,sent){
   try{ await w(); return true; }
   catch(_1){ try{ await w(); return true; }catch(_2){ return false; } }
 }
-async function _resultsStopped(stop,label,done,total,key,sendId){
+// [379 · §275 A/B, his "Go on A and B", 14 Oct 2026 11:55 PM] (A) A pause, or a send that ends with doctors the mail service
+// never confirmed, opens a DIALOG that stays until it is closed (a 3-second message was too short to read), naming each one;
+// a pause offers "Send to the rest". (B) Each not-confirmed doctor has "Send <initials>'s results again" behind a red confirm:
+// a second copy goes out ONLY by the admin's deliberate choice, one doctor at a time, to that doctor's not-confirmed
+// address(es) only - never automatically. The not-confirmed list is the server's resultsTrying list (a delivered address
+// leaves it), so the dialog can be reopened later from the Dashboard.
+function _resultsCtxOf(key){
+  const k=String(key), round=/^p4r\d+$/.test(k);
+  const arch=round?((phasesData.p4Rounds||{})[Number(k.slice(3))]||{}):((phasesData.completedPhases||{})[Number(k)]||{});
+  const summary={};
+  for(const wk of Object.keys(arch.approvals||{})) for(const u of (Array.isArray(arch.approvals[wk])?arch.approvals[wk]:[])){ (summary[u]=summary[u]||{approved:[],denied:[]}).approved.push(wk); }
+  for(const wk of Object.keys(arch.denials||{})) for(const u of (Array.isArray(arch.denials[wk])?arch.denials[wk]:[])){ (summary[u]=summary[u]||{approved:[],denied:[]}).denied.push(wk); }
+  const label=round?('Phase 4: Round '+k.slice(3)):('Phase '+k);
+  return {key:k, label, summary, users:Object.keys(summary), schedSrc:arch.schedule||(round?{}:scheduleData),
+    subject:round?('Vacation Auction — Phase 4: Round '+k.slice(3)+' Results'):('Vacation Auction — Phase '+k+' Results')};
+}
+let _resultsUnsureKey=null, _resultsUnsureOpts={};
+async function _resultsShowUnsure(key,opts){
+  // Shows the dialog when there is something to show: a pause, or at least one not-confirmed doctor. true = shown.
+  opts=opts||{}; _resultsUnsureKey=String(key); _resultsUnsureOpts=opts;
+  const c=_resultsCtxOf(key); const lc=a=>String(a).trim().toLowerCase();
+  const lf=(typeof _ledgerFresh==='function')?await _ledgerFresh(key):{ok:true,trySet:new Set()}; // typeof = sandbox convention (production always has it)
+  const ts=lf.ok?(lf.trySet||new Set()):new Set();
+  const who=c.users.filter(u=>recipientsFor(u).some(a=>ts.has(lc(a)))).sort();
+  if(lf.ok&&!who.length&&!opts.paused&&!opts.force) return false; // at the end of a send: only when someone is not confirmed
+  const ok=u=>/^[A-Za-z0-9._-]{1,8}$/.test(u);
+  const rows=who.map(u=>{
+    const addrs=recipientsFor(u).filter(a=>ts.has(lc(a)));
+    return `<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 10px;padding:8px 0;border-top:1px solid var(--b1)">
+      <div style="min-width:0"><strong class="mono">${esc(u)}</strong> <span style="color:var(--t2);font-size:12px;overflow-wrap:anywhere">${addrs.map(esc).join(' · ')}</span></div>
+      ${ok(u)?`<button type="button" class="btn btn-danger" style="flex:none;padding:5px 10px;font-size:12px" onclick="_resultsResendAsk('${_jsq(u)}','${_jsq(c.key)}')">Send ${esc(u)}'s results again</button>`:''}</div>`;
+  }).join('');
+  const body=(opts.note?`<div style="margin-bottom:10px">${esc(opts.note)}</div>`:'')
+    +(!lf.ok?`<div class="cmodal-warn">Could not read the list of not-confirmed e-mails from the server (connection problem). Close this and try again in a moment.</div>`
+      :who.length?`<div class="cmodal-warn"><strong>Not confirmed (${who.length}):</strong> the mail service did not confirm these e-mails, or a page stopped while sending. Each doctor below <strong>may already have it</strong>, so nothing sends it again by itself. Check the sent history in your EmailJS dashboard for the address; if it is not there, send it again here.</div>
+        <div style="margin-top:6px">${rows}</div>`
+      :`<div class="cmodal-info">Every e-mail sent so far was confirmed.</div>`)
+    +(opts.paused?`<div class="cmodal-info" style="margin-top:10px">If the mail service keeps not answering, this browser may be unable to reach it — try another browser or turn off an ad blocker before sending to the rest.</div>`:'');
+  openConfirm({title:(opts.paused?'⏸ '+c.label+' results paused':'📮 '+c.label+' results'), body,
+    okText:(opts.paused&&typeof opts.resume==='function')?'📮 Send to the rest…':'Close',
+    onConfirm:(opts.paused&&typeof opts.resume==='function')?opts.resume:()=>{}});
+  return true;
+}
+window._resultsShowUnsure=_resultsShowUnsure;
+window._resultsResendAsk=function(u,k){
+  const key=(k!=null)?String(k):_resultsUnsureKey, opts=_resultsUnsureOpts; if(key==null) return; // [review LOW] the key comes from the button itself
+  const c=_resultsCtxOf(key);
+  openConfirm({title:'⚠️ Send '+esc(u)+"'s results again?",
+    body:`<div><strong>${esc(u)}</strong> may already have their ${esc(c.label)} results — the mail service did not confirm the e-mail.</div>
+          <div class="cmodal-warn" style="margin-top:8px">Sending again could give ${esc(u)} a <strong>second copy</strong>. If you can, check the sent history in your EmailJS dashboard first.</div>`,
+    okText:"Send "+u+"'s results again", danger:true,
+    onConfirm:()=>_resultsResendOne(u,key),
+    onCancel:()=>{ _resultsShowUnsure(key,{...opts,force:true}); }});
+};
+async function _resultsResendOne(u,k){
+  const key=(k!=null)?String(k):_resultsUnsureKey, opts=_resultsUnsureOpts||{}; if(key==null) return;
+  const c=_resultsCtxOf(key), lc=a=>String(a).trim().toLowerCase();
+  if(window._resultsSendInFlight){ toast('A send is already running — let it finish first.','warn'); return; }
+  if(!c.summary[u]){ toast('No '+c.label+' results for '+u+' — nothing was sent.','warn'); return; }
+  window._resultsSendInFlight=true;
+  let r=null, why='';
+  const sendId=Date.now()+'_'+Math.floor(Math.random()*1e9);
+  try{
+    const t=await _resultsLeaseTake(key,sendId);
+    if(t==='error') why='Could not reach the server — nothing was sent to '+u+'.';
+    else if(t!=='ok') why=_resultsBlockedText(t.held,c.label);
+    else{
+      try{
+        const lf=await _ledgerFresh(key);
+        const mine=lf.ok?recipientsFor(u).filter(a=>(lf.trySet||new Set()).has(lc(a))):[];
+        if(!lf.ok) why='Could not read the not-confirmed list (connection problem) — nothing was sent to '+u+'.';
+        else if(!mine.length) why=u+' has no not-confirmed address any more — nothing was sent.';
+        else{
+          const skip=new Set(recipientsFor(u).filter(a=>!mine.includes(a)));
+          r=await adminSendEmail(u,c.subject,_resultsBodyFor(key,u,c.summary[u],c.schedSrc),skip,{
+            before:async()=>{ const h=await _resultsLeaseHold(key,sendId); return h; },
+            after:async a=>{ await _resultsUnmark(key,[lc(a)],false); return true; }}); // delivered: confirmed now (it stays on the ledger)
+        }
+      } finally { await _resultsLeaseRelease(key,sendId); }
+    }
+  } finally { window._resultsSendInFlight=false; }
+  const note=why?why
+    :(r.ok&&!r.fail)?('📮 '+u+"'s results sent again — "+r.ok+' e-mail'+(r.ok===1?'':'s')+'.')
+    :r.ok?('📮 '+u+': '+r.ok+' sent, '+r.fail+' not — the rest stay not confirmed.')
+    :r.stopped?('Stopped before sending to '+u+' — the send could not be checked. Nothing was sent.')
+    :((Array.isArray(r.unsure)&&r.unsure.length)?('The mail service again did not answer for '+u+' — it stays not confirmed.'):('The mail service refused the e-mail to '+u+' — it stays not confirmed.'));
+  await _resultsShowUnsure(key,{...opts,note,force:true});
+}
+async function _resultsStopped(stop,label,done,total,key,sendId,run){
+  if(stop==='unsure'){
+    // [379 · review H2 + A] The mail service did not answer: the send PAUSES here - that doctor is never re-sent by itself
+    // (his ruling, §275 q1), nothing is stamped, and a browser that cannot reach the mail service shows itself at once.
+    // [A] Said in a dialog that stays until closed (a 3-second message was too short to read), with "Send to the rest".
+    await _resultsLeaseRelease(key,sendId);
+    const who=[...(run&&run.unsureWho||[])].sort().join(', ');
+    const note=label+' results paused after '+done+' of '+total+' — the mail service did not answer for '+(who||'one doctor')+'. It may have received it, so it is NOT sent again.';
+    const shown=await _resultsShowUnsure(key,{paused:true,note,resume:run&&run.resume});
+    if(!shown) toast(note,'warn');
+    return;
+  }
   if(stop==='lost'){
     toast('This page stopped sending '+label+" results — another admin's page took over (or the send was reset) while this one was paused. Nothing more is sent from here.",'warn');
     return;
@@ -2208,8 +2391,10 @@ async function _ledgerFresh(key){
   try{
     const s=await getDocFromServer(phaseStagingRef);
     const led=(s.exists()?(s.data()||{}):{}).resultsSentTo||{};
+    const _try=(s.exists()?(s.data()||{}):{}).resultsTrying||{}; // [379 · §275] the "trying" list - for naming only (each mark is in the ledger too)
     // [build 270 · M3] Same case-blind membership as _sentAddrsFor, same reason.
-    return {ok:true, sentSet:new Set([...(led[key]||[]),...((phasesData.resultsSentTo?.[key])||[])].map(a=>String(a).trim().toLowerCase()))};
+    return {ok:true, sentSet:new Set([...(led[key]||[]),...((phasesData.resultsSentTo?.[key])||[])].map(a=>String(a).trim().toLowerCase())),
+            trySet:new Set((Array.isArray(_try[key])?_try[key]:[]).map(a=>String(a).trim().toLowerCase()))};
   }catch(e){ return {ok:false, error:e}; }
 }
 // [build 251] Live mirror of the Phase 4 round-send ledger (who was already e-mailed what).
@@ -2247,6 +2432,7 @@ onSnapshot(phaseStagingRef, snap=>{
   _p4RoundMailedMirror=snap.exists()?(snap.data().p4RoundMailed||{}):{};
   _stagedP4Rounds=snap.exists()?(snap.data().pendingP4Rounds||{}):{};
   _sentLedger=snap.exists()?(snap.data().resultsSentTo||{}):{}; // [build 259] delivered-address ledger lives on the ADMIN-ONLY staging doc now (PII)
+  _resultsTryingMirror=snap.exists()?(snap.data().resultsTrying||{}):{}; // [379 · §275 A/B]
   _mergeCompletedPhasesView();
   _mergeP4RoundsView();
   refreshAll(); // staged snapshots drive the phase workflow (complete/send gates)
@@ -6356,6 +6542,7 @@ async function _publishPhaseResults(fields){
   const _p4m=_d?(_d.p4RoundMailed||{}):(_p4RoundMailedMirror||{});
   const _p4p=_d?(_d.pendingP4Rounds||{}):(_stagedP4Rounds||{});
   const _led=_d?(_d.resultsSentTo||{}):(_sentLedger||{});
+  const _try=_d?(_d.resultsTrying||{}):((typeof _resultsTryingMirror!=='undefined'&&_resultsTryingMirror)||{}); // [379 · §275 A/B] the not-confirmed list travels with the ledger (typeof = sandbox convention)
   const hasStaged=Object.keys(_staged).length>0;
   const payload={...(fields||{})};
   const b=writeBatch(db);
@@ -6364,7 +6551,7 @@ async function _publishPhaseResults(fields){
     // [build 251] Clear staging in the SAME batch — NON-merge replace (an empty-map merge clears
     // nothing; Firestore deep-merges maps). [269] Every preserved field now comes from the
     // server read above — a stale tab can no longer erase what it cannot see.
-    b.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_p4m).length?{p4RoundMailed:_p4m}:{}),...(Object.keys(_p4p).length?{pendingP4Rounds:_p4p}:{}),...(Object.keys(_led).length?{resultsSentTo:_led}:{})}); // [259] the delivered-address ledger records e-mails that really went out — survives the publish replace
+    b.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_p4m).length?{p4RoundMailed:_p4m}:{}),...(Object.keys(_p4p).length?{pendingP4Rounds:_p4p}:{}),...(Object.keys(_led).length?{resultsSentTo:_led}:{}),...(Object.keys(_try).length?{resultsTrying:_try}:{})}); // [259] the delivered-address ledger records e-mails that really went out — survives the publish replace
   }
   b.set(phasesRef,payload,{merge:true});
   await b.commit();
@@ -6527,7 +6714,17 @@ function renderNextStep(){
       }
     }
   }catch(_){}
-  el.innerHTML=wlNote+fteNote+html;
+  // [379 · §275 A/B] results the mail service never confirmed stay findable: one line per phase / round, reopening the dialog
+  let unNote='';
+  try{
+    for(const k of Object.keys((typeof _resultsTryingMirror!=='undefined'&&_resultsTryingMirror)||{}).sort()){
+      const a=Array.isArray(_resultsTryingMirror[k])?_resultsTryingMirror[k]:[]; if(!a.length) continue;
+      if(!/^([1-4]|p4r\d{1,3})$/.test(k)) continue;
+      const lbl=/^p4r/.test(k)?('Phase 4: Round '+k.slice(3)):('Phase '+k);
+      unNote+=`<div style="background:rgba(234,179,8,.10);border:1px solid rgba(234,179,8,.35);border-radius:10px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:var(--t1);display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;justify-content:space-between"><span>⚠️ <strong>${lbl} results:</strong> ${a.length} e-mail${a.length===1?' was':'s were'} not confirmed by the mail service.</span><button type="button" class="btn" style="padding:4px 10px;font-size:12px" onclick="_resultsShowUnsure('${_jsq(k)}',{force:true})">Review</button></div>`;
+    }
+  }catch(_){}
+  el.innerHTML=wlNote+fteNote+unNote+html;
 }
 // [376 · §273] The small line under the phase heading once the window is complete - his wording, shorter than the staff
 // page's (13 Oct 2026): results not sent yet; "Phase N next" after Phases 1-2; "Fall auction complete" after Phase 3;
@@ -6954,6 +7151,7 @@ async function _commitBeginPhase(next){
       catch(e){ toast('🚫 Could not verify the results-e-mail ledger on the server (connection problem) — Phase '+next+' did NOT begin. Week locks may already have changed; check the Lock Weeks panel, then try again.','err'); return false; } // [234 · L2] honest wording: lock writes can precede this point
     }
     const _srvLedger=(_srvStg?_srvStg.resultsSentTo:_sentLedger)||{};
+    const _srvTry=(_srvStg?_srvStg.resultsTrying:(typeof _resultsTryingMirror!=='undefined'?_resultsTryingMirror:{}))||{}; // [379 · §275 A/B] travels with the ledger (typeof = sandbox convention)
     const _srvStaged=(_srvStg?_srvStg.pendingPhaseSnapshots:_stagedCompletedPhases)||{};
     // [360 · §254] The reset owed? Asked of the SERVER (this page's own copies can be stale - the lesson of the retry, 359): the live
     // log's stamp against the completion of the phase being left, published or staged. Owed, or unverifiable -> the phase does NOT begin.
@@ -7000,9 +7198,9 @@ async function _commitBeginPhase(next){
     // engine reads prior winners from the public phases doc; no torn instant.
     if(Object.keys(_srvStaged).length){ // [269] staged snapshot judged from the SERVER read (a stale-empty mirror can no longer wipe a real staged snapshot unpublished)
       _phasePayload.completedPhases={..._publishedCompletedPhases,..._srvStaged};
-      batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_srvLedger).length?{resultsSentTo:_srvLedger}:{})}); // NON-merge replace (empty-map merge clears nothing) · [259] ledger survives — it records real sends · [269] from the server read
+      batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_srvLedger).length?{resultsSentTo:_srvLedger}:{}),...(Object.keys(_srvTry).length?{resultsTrying:_srvTry}:{})}); // NON-merge replace (empty-map merge clears nothing) · [259] ledger survives — it records real sends · [269] from the server read
     } else if(next===4){
-      batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_srvLedger).length?{resultsSentTo:_srvLedger}:{})}); // [build 255] stale STAGED round archives self-destruct at a fresh Phase 4 too · [259] ledger survives · [269] from the server read
+      batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_srvLedger).length?{resultsSentTo:_srvLedger}:{}),...(Object.keys(_srvTry).length?{resultsTrying:_srvTry}:{})}); // [build 255] stale STAGED round archives self-destruct at a fresh Phase 4 too · [259] ledger survives · [269] from the server read
     }
     batch.set(phasesRef,_phasePayload,{merge:true});
     batch.set(approvalsRef,{});
@@ -8050,6 +8248,7 @@ window.sendPhaseResultsEmails=function(){
           <div class="cmodal-info">Each user gets a single e-mail listing every approved and denied week. Users without an e-mail address on file are skipped.</div>`,
     okText:'Send Results',
     onConfirm:async()=>{
+      let _unsureAfter=''; // [379 · §275 A] the closing words, shown again in the not-confirmed dialog when there is anyone to name
       window._resultsSendInFlight=true; try{ // [build 260 · AUDIT MEDIUM E] guard held for the whole send; released in finally below
       let ok=0, fail=0, skipped=0, alreadyDone=0;
       // [cross-session guard] Stop two admin sessions/tabs from both sending the whole roster
@@ -8074,6 +8273,8 @@ window.sendPhaseResultsEmails=function(){
       const _lf=(typeof _ledgerFresh==='function')?await _ledgerFresh(cur):{ok:true,sentSet:_sentAddrsFor(cur)};
       if(!_lf.ok){ await _resultsLeaseRelease(cur,_sendId); toast('🚫 Could not verify on the server who already received Phase '+cur+' results (connection problem) — NOT sending, so nobody gets a duplicate e-mail. Try again in a moment.','err'); return; }
       const sentAddrs=_lf.sentSet;
+      const _run=_resultsRun(); for(const a of (_lf.trySet||[])) _run.seen.add(a); // [379 · §275]
+      _run.resume=()=>window.sendPhaseResultsEmails(); // [379 · §275 A · review H1] "Send to the rest" opens the normal Send confirm, rebuilt from the data as it is NOW (a dialog left open never replays an old send)
       let _prog=0; // [build 260] live progress toast so a slow send visibly advances and the admin isn't tempted to re-click
       let _stop='', _done=0; // [375 · §272] why the loop stopped early ('lost' | 'error'), and after how many
       for(const u of usersWithResults){
@@ -8081,24 +8282,16 @@ window.sendPhaseResultsEmails=function(){
         const recips=recipientsFor(u);
         if(!recips.length){ skipped++; continue; }
         if(recips.every(a=>sentAddrs.has(a))){ alreadyDone++; continue; } // every address already got it
-        const {approved,denied}=summary[u];
-        approved.sort(); denied.sort();
-        const appLines=approved.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
-        const denLines=denied.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
-        const bodyText=`Hello ${u},
-
-Phase ${cur} of the Vacation Auction is complete.
-
-Here are your Phase ${cur} results:
-
-${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.length?`DENIED (${denied.length}):\n${denLines}\n\nDenied bid numbers become available again for you to use in the next phase.`:''}`.trimEnd();
-        const r=await adminSendEmail(u,`Vacation Auction — Phase ${cur} Results`,bodyText,sentAddrs,{before:()=>_resultsBeforeEmail(cur,_sendId,sentAddrs),after:a=>_resultsRecord(cur,[a])}); // [375 · §272] checked before, recorded after, EVERY address
-        ok+=r.ok; fail+=r.fail;
+        const bodyText=_resultsBodyFor(cur,u,summary[u],schedSrc); // [379 · §275 B] the same text, from one helper (the resend uses it too)
+        const r=await adminSendEmail(u,`Vacation Auction — Phase ${cur} Results`,bodyText,sentAddrs,{before:a=>_resultsBeforeEmail(cur,_sendId,sentAddrs,a,_run),after:a=>_resultsAfter(cur,a)}); // [375 · §272] checked before, recorded after, EVERY address · [379 · §275] marked before
+        const _un=await _resultsAfterUser(cur,r,_run,sentAddrs); // [379 · §275] no answer = reached (named); refused = still owed
+        ok+=r.ok; fail+=r.fail-_un;
         for(const a of r.sent) sentAddrs.add(a); // record each address actually delivered to
+        if(_un&&!r.stopped){ (_run.unsureWho=_run.unsureWho||new Set()).add(u); _stop='unsure'; _done=_prog; break; } // [379 · review H2] no answer -> stop here (named; never re-sent)
         if(r.stopped){ _stop=r.stopped; _done=_prog-1+((r.sent.length&&recips.every(a=>sentAddrs.has(a)))?1:0); break; } // [375 · §272] lost the send, or could not check / record; counts doctors fully e-mailed
       }
       if(!_stop){ const _fin=await _resultsLeaseHold(cur,_sendId); if(_fin!=='ok'){ _stop=_fin; _done=usersWithResults.length; } } // [375] overtaken while finishing -> the other page stamps
-      if(_stop){ await _resultsStopped(_stop,'Phase '+cur,_done,usersWithResults.length,cur,_sendId); return; } // [375 · §272] no stamp, no publish; a claim not its own is never released
+      if(_stop){ await _resultsStopped(_stop,'Phase '+cur,_done,usersWithResults.length,cur,_sendId,_run); return; } // [375 · §272] no stamp, no publish; a claim not its own is never released
       // Persist which addresses have now been e-mailed, so a later retry can't double-send.
       // [BATCH D · M2 · build 234] This ledger is what makes "click Send again" SAFE — it is the
       // only thing preventing a retry from re-sending all ~37 results e-mails. It used to fail
@@ -8127,7 +8320,9 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
         }
         // [build 235 · audit] The success toast carries the ledger warning too — a perfect send
         // over a lost ledger looked clean while leaving the re-send trap armed for the next click.
-        toast(`📮 Phase ${cur} results: ${ok} e-mail${ok!==1?'s':''} sent${alreadyDone?`, ${alreadyDone} already sent`:''}${skipped?` (${skipped} had no e-mail)`:''}`+_ledgerWarn,_ledgerOk?'ok':'warn');
+        const _unNote=_resultsUnsureNote(usersWithResults,_run); // [379 · §275]
+        toast(`📮 Phase ${cur} results: ${ok} e-mail${ok!==1?'s':''} sent${alreadyDone?`, ${alreadyDone} already sent`:''}${skipped?` (${skipped} had no e-mail)`:''}`+_ledgerWarn+_unNote,(_ledgerOk&&!_unNote)?'ok':'warn');
+        if(_unNote) _unsureAfter=`📮 Phase ${cur} results: ${ok} e-mail${ok!==1?'s':''} sent${alreadyDone?`, ${alreadyDone} already sent`:''}${skipped?` (${skipped} had no e-mail)`:''} — the phase is marked sent.`+_ledgerWarn; // [379 · §275 A]
       } else if(fail===0 && ok===0 && alreadyDone){
         // [297 · RA-3] "all N users" only ever counted the doctors who HAVE an address on
         // file. Anyone without one was quietly skipped and has still never been told anything.
@@ -8136,12 +8331,15 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
         toast(`📮 Phase ${cur} results were already sent to ${alreadyDone} user${alreadyDone!==1?'s':''}`
               +(skipped?` — but ${skipped} ${skipped!==1?'have':'has'} no e-mail address on file and ${skipped!==1?'have':'has'} NOT been told. Add an address on the Users tab, then send again.`
                        :' — nothing new to send.'),skipped?'warn':'ok');
+        _unsureAfter='📮 Phase '+cur+' results were already sent.'; // [379 · §275 A] shown only if someone is still not confirmed
       } else {
-        toast(`⚠️ Phase ${cur} results: ${ok} sent, ${fail} FAILED — NOT marked complete. Click Send again to retry just the ones still owed.`+_ledgerWarn,'warn');
+        toast(`⚠️ Phase ${cur} results: ${ok} sent, ${fail} FAILED — NOT marked complete. Click Send again to retry just the ones still owed.`+_ledgerWarn+_resultsUnsureNote(usersWithResults,_run),'warn'); // [379 · §275]
+        _unsureAfter=`⚠️ Phase ${cur} results: ${ok} sent, ${fail} FAILED — NOT marked complete. Click Send again to retry just the ones still owed.`+_ledgerWarn; // [379 · §275 A]
       }
       // Release the claim so a legitimate retry (this admin or another) isn't blocked for 2 min.
       await _resultsLeaseRelease(cur,_sendId); // [375] only while still this page's
       }finally{ window._resultsSendInFlight=false; } // [build 260 · AUDIT MEDIUM E] release even on a partial-failure early return, so a legit retry isn't blocked
+      if(_unsureAfter) await _resultsShowUnsure(cur,{note:_unsureAfter}); // [379 · §275 A] after the in-flight guard is released, so "send again" works from it
     }
   });
 };
@@ -8291,6 +8489,7 @@ window.sendRoundResultsEmails=function(){
           <div class="cmodal-info">Each user gets one e-mail with only this round's approved and denied weeks — earlier rounds are never repeated. Users without an e-mail address on file are skipped.</div>`,
     okText:'Send Phase 4: Round '+N+' Results',
     onConfirm:async()=>{
+      let _unsureAfter=''; // [379 · §275 A]
       window._resultsSendInFlight=true; try{ // [build 260 · AUDIT MEDIUM E] guard held for the whole send; released in finally below
       if(!_feedsHealthyOrExplain('Send Round Results')) return;
       if(Number(phasesData.currentPhase||1)!==4){ toast('Phase changed while the dialog was open — round results NOT sent.','warn'); return; }
@@ -8306,6 +8505,8 @@ window.sendRoundResultsEmails=function(){
       const _lf=(typeof _ledgerFresh==='function')?await _ledgerFresh(_claimKey):{ok:true,sentSet:_sentAddrsFor(_claimKey)};
       if(!_lf.ok){ await _resultsLeaseRelease(_claimKey,_sendId); toast('🚫 Could not verify on the server who already received Round '+N+' results (connection problem) — NOT sending, so nobody gets a duplicate e-mail. Try again in a moment.','err'); return; }
       const sentAddrs=_lf.sentSet;
+      const _run=_resultsRun(); for(const a of (_lf.trySet||[])) _run.seen.add(a); // [379 · §275]
+      _run.resume=()=>window.sendRoundResultsEmails(); // [379 · §275 A · review H1] rebuilt from the data as it is now
       let ok=0, fail=0, skipped=0, alreadyDone=0;
       let _prog=0; // [build 260] live progress toast so a slow send visibly advances and the admin isn't tempted to re-click
       let _stop='', _done=0; // [375 · §272] why the loop stopped early ('lost' | 'error'), and after how many
@@ -8314,24 +8515,16 @@ window.sendRoundResultsEmails=function(){
         const recips=recipientsFor(u);
         if(!recips.length){ skipped++; continue; }
         if(recips.every(a=>sentAddrs.has(a))){ alreadyDone++; continue; }
-        const {approved,denied}=summary[u];
-        approved.sort(); denied.sort();
-        const appLines=approved.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
-        const denLines=denied.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
-        const bodyText=`Hello ${u},
-
-Phase 4: Round ${N} of the Vacation Auction is complete.
-
-Here are your Phase 4: Round ${N} results:
-
-${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.length?`DENIED (${denied.length}):\n${denLines}\n\nDenied bid numbers become available again for you to use in the next bidding round.`:''}`.trimEnd();
-        const r=await adminSendEmail(u,`Vacation Auction — Phase 4: Round ${N} Results`,bodyText,sentAddrs,{before:()=>_resultsBeforeEmail(_claimKey,_sendId,sentAddrs),after:a=>_resultsRecord(_claimKey,[a])}); // [375 · §272] checked before, recorded after, EVERY address
-        ok+=r.ok; fail+=r.fail;
+        const bodyText=_resultsBodyFor('p4r'+N,u,summary[u],schedSrc); // [379 · §275 B] the same text, from one helper (the resend uses it too)
+        const r=await adminSendEmail(u,`Vacation Auction — Phase 4: Round ${N} Results`,bodyText,sentAddrs,{before:a=>_resultsBeforeEmail(_claimKey,_sendId,sentAddrs,a,_run),after:a=>_resultsAfter(_claimKey,a)}); // [379 · §275] marked before // [375 · §272] checked before, recorded after, EVERY address
+        const _un=await _resultsAfterUser(_claimKey,r,_run,sentAddrs); // [379 · §275] no answer = reached (named); refused = still owed
+        ok+=r.ok; fail+=r.fail-_un;
         for(const a of r.sent) sentAddrs.add(a);
+        if(_un&&!r.stopped){ (_run.unsureWho=_run.unsureWho||new Set()).add(u); _stop='unsure'; _done=_prog; break; } // [379 · review H2] no answer -> stop here (named; never re-sent)
         if(r.stopped){ _stop=r.stopped; _done=_prog-1+((r.sent.length&&recips.every(a=>sentAddrs.has(a)))?1:0); break; } // [375 · §272] lost the send, or could not check / record; counts doctors fully e-mailed
       }
       if(!_stop){ const _fin=await _resultsLeaseHold(_claimKey,_sendId); if(_fin!=='ok'){ _stop=_fin; _done=users.length; } } // [375] overtaken while finishing -> the other page stamps
-      if(_stop){ await _resultsStopped(_stop,'Phase 4: Round '+N,_done,users.length,_claimKey,_sendId); return; } // [375 · §272] no stamp, no publish; a claim not its own is never released
+      if(_stop){ await _resultsStopped(_stop,'Phase 4: Round '+N,_done,users.length,_claimKey,_sendId,_run); return; } // [375 · §272] no stamp, no publish; a claim not its own is never released
       // Persist the delivered-address ledger (retry once; warn about the re-send trap on
       // double failure — same honesty contract as the classic sender).
       let _ledgerOk=true;
@@ -8351,7 +8544,9 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
           await _resultsLeaseRelease(_claimKey,_sendId); // [375] only while still this page's
           toast('⚠️ Round '+N+' e-mails sent, but publishing the round archive FAILED ('+(e?.message||e)+'). Click Send Round Results again to finish publishing.'+_ledgerWarn,'err'); return;
         }
-        toast(`📮 Round ${N} results: ${ok} e-mail${ok!==1?'s':''} sent${alreadyDone?`, ${alreadyDone} already sent`:''}${skipped?` (${skipped} had no e-mail)`:''} — round announced. 🎉`+_ledgerWarn,_ledgerOk?'ok':'warn');
+        const _unNote=_resultsUnsureNote(users,_run); // [379 · §275]
+        toast(`📮 Round ${N} results: ${ok} e-mail${ok!==1?'s':''} sent${alreadyDone?`, ${alreadyDone} already sent`:''}${skipped?` (${skipped} had no e-mail)`:''} — round announced. 🎉`+_ledgerWarn+_unNote,(_ledgerOk&&!_unNote)?'ok':'warn');
+        if(_unNote) _unsureAfter=`📮 Round ${N} results: ${ok} e-mail${ok!==1?'s':''} sent${alreadyDone?`, ${alreadyDone} already sent`:''}${skipped?` (${skipped} had no e-mail)`:''} — round announced.`+_ledgerWarn; // [379 · §275 A]
       } else if(fail===0 && ok===0 && alreadyDone){
         // Every address already delivered (a pure retry) — finish the publish+stamp.
         try{
@@ -8363,12 +8558,15 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
           toast(`📮 Round ${N} results were already sent to ${alreadyDone} user${alreadyDone!==1?'s':''}`
                 +(skipped?` — but ${skipped} ${skipped!==1?'have':'has'} no e-mail address on file and ${skipped!==1?'have':'has'} NOT been told.`:'')
                 +' — round marked announced.',skipped?'warn':'ok');
+          _unsureAfter='📮 Round '+N+' results were already sent — round marked announced.'; // [379 · §275 A] shown only if someone is still not confirmed
         }catch(e){ toast('⚠️ Could not publish Round '+N+' — click Send Round Results again to retry ('+(e?.message||e)+').','err'); }
       } else {
-        toast(`⚠️ Round ${N} results: ${ok} sent, ${fail} FAILED — round NOT marked announced. Click Send Round Results again to retry just the ones still owed.`+_ledgerWarn,'warn');
+        toast(`⚠️ Round ${N} results: ${ok} sent, ${fail} FAILED — round NOT marked announced. Click Send Round Results again to retry just the ones still owed.`+_ledgerWarn+_resultsUnsureNote(users,_run),'warn'); // [379 · §275]
+        _unsureAfter=`⚠️ Round ${N} results: ${ok} sent, ${fail} FAILED — round NOT marked announced. Click Send Round Results again to retry just the ones still owed.`+_ledgerWarn; // [379 · §275 A]
       }
       await _resultsLeaseRelease(_claimKey,_sendId); // [375] only while still this page's
       }finally{ window._resultsSendInFlight=false; } // [build 260 · AUDIT MEDIUM E] release even on a partial-failure early return, so a legit retry isn't blocked
+      if(_unsureAfter) await _resultsShowUnsure('p4r'+N,{note:_unsureAfter}); // [379 · §275 A]
     }
   });
 };
@@ -15060,7 +15258,8 @@ async function _doFullRestore(f){
     { // [269] preserve from the PRE-FLIGHT 3 server read — never the tab mirrors (legacy sandbox scope: mirrors, pre-269 exact)
       const _p4m=(_srvStg269?_srvStg269.p4RoundMailed:_p4RoundMailedMirror)||{};
       const _led=(_srvStg269?_srvStg269.resultsSentTo:_sentLedger)||{};
-      batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_p4m).length?{p4RoundMailed:_p4m}:{}),...(Object.keys(_led).length?{resultsSentTo:_led}:{})}); // [259] same rationale as the mailed mirror: the ledger records e-mails that really went out — a restore cannot unsend them
+      const _try=(_srvStg269?_srvStg269.resultsTrying:(typeof _resultsTryingMirror!=='undefined'?_resultsTryingMirror:{}))||{}; // [379 · §275 A/B] travels with the ledger (typeof = sandbox convention)
+      batch.set(phaseStagingRef,{pendingPhaseSnapshots:{},...(Object.keys(_p4m).length?{p4RoundMailed:_p4m}:{}),...(Object.keys(_led).length?{resultsSentTo:_led}:{}),...(Object.keys(_try).length?{resultsTrying:_try}:{})}); // [259] same rationale as the mailed mirror: the ledger records e-mails that really went out — a restore cannot unsend them
     }
     await batch.commit();
   }catch(e){

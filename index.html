@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 212;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 213;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -794,7 +794,7 @@ body{zoom:1.15}
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, getDoc, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, increment, writeBatch, onSnapshot as _onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, doc, getDoc, getDocFromServer, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, increment, writeBatch, onSnapshot as _onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { initializeAppCheck, ReCaptchaV3Provider } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check.js";
 
@@ -5411,6 +5411,12 @@ function _unsubscribeSensitive(){
   _recipMapsLoaded=false;        // the relay's own gate — re-armed by the next sign-in
   if(_mqTimer){ try{ clearTimeout(_mqTimer); }catch(_){} _mqTimer=null; }
 }
+// [213 · §275] An account that is not a colleague: recorded on the admin's unmatched sign-ins and told so.
+// Exactly the two lines the handler below ran before 213, now reached from two places.
+function _signInNotRegistered(u){
+  try{ setDoc(doc(db,"vacations","signInMisses"),{[String(u.email||'').trim().toLowerCase()]:Date.now()},{merge:true}); }catch(_){ } // surface on the admin Users page
+  showSigninError("This Google account ("+u.email+") isn't registered for the auction. Please contact your admin.");
+}
 // SECOND auth handler (the anonymous bootstrap one above is left intact). Fires on
 // every auth change but only acts on a non-anonymous Google user with an email.
 onAuthStateChanged(auth, async u => {
@@ -5452,14 +5458,24 @@ onAuthStateChanged(auth, async u => {
       // device, not a blip. Saying "try again in a moment" sent exactly the person FB-4
       // says we must hear from into a silent retry loop instead of to the admin.
       if(_lemErr&&_lemErr.code==='permission-denied'){
-        showSigninError("This device could not be verified by the site's security check, so your account cannot be loaded here. This usually will not fix itself by retrying — please contact your admin and mention the security check.");
-        return;
+        // [213 · §275] Since the rules let only a COLLEAGUE read the login map, a refusal here has
+        // two causes: this account is not a colleague, or this device failed the security check
+        // (which refuses EVERY read). One read of a PUBLIC document, from the server, under this
+        // same sign-in tells them apart: it comes back -> not a colleague; refused too -> the
+        // security check; any other failure -> a connection problem.
+        let _pub='fail';
+        try{ await getDocFromServer(userListRef); _pub='ok'; }catch(e2){ if(e2&&e2.code==='permission-denied') _pub='denied'; }
+        if(!auth.currentUser||auth.currentUser.isAnonymous||auth.currentUser.uid!==u.uid) return; // [158 · RA-H5] same guard as above: the session moved on meanwhile
+        if(_pub==='ok'){ _signInNotRegistered(u); return; }
+        if(_pub==='denied'){
+          showSigninError("This device could not be verified by the site's security check, so your account cannot be loaded here. This usually will not fix itself by retrying — please contact your admin and mention the security check.");
+          return;
+        }
       }
       showSigninError("Couldn't verify your sign-in just now (temporary connection problem). Please try again in a moment.");
       return;
     }
-    try{ setDoc(doc(db,"vacations","signInMisses"),{[String(u.email||'').trim().toLowerCase()]:Date.now()},{merge:true}); }catch(_){ } // surface on the admin Users page
-    showSigninError("This Google account ("+u.email+") isn't registered for the auction. Please contact your admin.");
+    _signInNotRegistered(u);
     return;
   }
   _subscribeSensitiveOnce(); // [156 · AUD-L] registered account confirmed — attach now
