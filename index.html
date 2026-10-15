@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 213;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 214;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -2980,6 +2980,73 @@ function _wwWouldTip(user,wk){
 const COMP_TIP_TEXT='Your bid will make this a competition week. To bid here now, your bid must be at least as strong as the weakest bid there that is winning or under review. After that, you can only weaken your bid if it would still win, and if you remove it, a new bid must meet the level of the bids still there.';
 const COMP_LABEL_TEXT='Competition week';
 const COMP_LABEL_HTML='<span class="comp-tag" style="color:#b45309;font-weight:700;text-transform:none;letter-spacing:0;white-space:nowrap">'+COMP_LABEL_TEXT+'</span>';
+// [214 · §279, owner 14-15 Oct 2026: "I definitely want to add a minimum bid required label next to or below the competition week label"]
+// THE MINIMUM BID OF A COMPETITION WEEK: the level a NEW bid there must meet - the same number _weBlocks holds a newcomer to: the
+// weakest bid there that is winning or Under Review; with bids there but none winning or Under Review, the strongest of them; with
+// nobody there, the remembered level (_weLeftLevel). Nobody is left out of the picture, so it is one number per week, the same for
+// everyone looking (a newcomer's view). `ap` = the approvals of the live board when the caller has them (renderCalendar's own).
+// Returns the bid, or null: not a competition week, data not yet arrived, nothing known, NP (no minimum to show), anything thrown.
+// Paint only: nothing here decides, waits, writes or touches the page.
+function _wwMinBid(wk,ap){
+  try{
+    if(!(_boardLoaded&&_boardLoaded.changes===true)||!_lwLoaded.best||!weekMeta[wk]) return null;
+    if(_wwContested(wk)!==true) return null;
+    const a=((ap&&typeof ap==='object')?ap:computeApprovals(data))[wk];
+    if(!a) return null;
+    const prior=getPriorPhaseWinners(wk);
+    let n=0, up=null, upSc=-1, st=null, stSc=-1;
+    for(const u of new Set([...a.winners,...a.draws,...a.reviews,...a.losers])){
+      if(prior.has(u)) continue;
+      const p=(data&&data[u]&&typeof data[u]==='object')?data[u][wk]:undefined;
+      if(p===undefined||p===null) continue;
+      const sc=priorityScore(p); n++;
+      if((a.winners.has(u)||a.draws.has(u)||a.reviews.has(u))&&sc>upSc){ upSc=sc; up=p; }
+      if(stSc<0||sc<stSc){ stSc=sc; st=p; }
+    }
+    const lv=n?((upSc>=0)?up:st):_weLeftLevel(wk);
+    if(lv===undefined||lv===null||lv==='NP') return null;
+    const ls=priorityScore(lv);
+    if(typeof ls!=='number'||!isFinite(ls)||ls>=99) return null;
+    // Shown as the weakest REAL bid a newcomer could place (a forged level - 0, 1.5, "3/5" - is never printed as it is); the same cut
+    // _weBlocks makes, by score. Nothing placeable at all (a forged level stronger than 1/2/3): no number.
+    let show=null; for(const b of [[1,2,3],[1,2],1,2,3,4,5,6,7,8,9,10]){ if(priorityScore(b)<=ls) show=b; }
+    return show;
+  }catch(_){ return null; }
+}
+const COMP_MIN_TEXT='Minimum new bid: '; // [214 · §279, owner 10:06 AM] "new": the number is what a NEW bid there must meet; the bid box says when one's own limit is stricter
+// [214 · §279, owner 15 Oct 2026 10:06-10:13 AM] THE BID BOX SAYS WHEN YOUR OWN MINIMUM IS STRICTER. Someone already on a competition
+// week, or coming back to one, can be held to more than a new bid is (the rule that a bid weaker than one's own must still win
+// and be no lower than the lowest other winning bid). _wwMyMin finds their weakest allowed bid by asking the bid box's own rules -
+// the week's floor and _wwRefuses - for every bid, weakest first (which numbers they have free is left out, as the box shows that
+// itself). It answers only when that is STRONGER than the "Minimum new bid"; otherwise null. Paint only; anything unknown = null.
+function _wwMyMin(user,wk){
+  try{
+    if(!user||typeof _wwLabelOn!=='function'||_wwLabelOn(wk)!==true) return null;
+    const lv=_wwMinBid(wk); if(lv===null) return null;
+    const live=isVisibleBid(user,wk)?data[user][wk]:undefined;
+    const rebid=live!==undefined&&live!==null;
+    const fl=(bestBidsData&&bestBidsData[user]&&typeof bestBidsData[user]==='object')?bestBidsData[user][wk]:undefined;
+    const held=rebid?live:fl;
+    if(held===undefined||held===null||held==='NP') return null;
+    const f=bfFloorFor(wk);
+    // Judged on a copy where this person has ONLY this week's bid: a number they hold on another week would otherwise be disqualified
+    // by the engine's one-number-per-phase check and read as a RULE refusal (verifier, 15 Oct 2026). Which numbers are free is the box's
+    // own business. _wwRefuses already takes the picture (the swap passes one); its coming-in check reads the live board, which is right.
+    const pic=JSON.parse(JSON.stringify(data||{})); pic[user]={}; if(data&&data[user]&&typeof data[user]==='object'&&data[user][wk]!==undefined) pic[user][wk]=data[user][wk];
+    let n=null;
+    for(const p of [10,9,8,7,6,5,4,3,2,1,[1,2],[1,2,3]]){ if(!bfAllows(p,f)) continue; if(_wwRefuses(user,wk,p,pic)===false){ n=p; break; } }
+    if(n===null||!(priorityScore(n)<priorityScore(lv))) return null;
+    return {n:n,held:held,rebid:rebid,lv:lv};
+  }catch(_){ return null; }
+}
+// The note's words: the owner's two wordings ("1 and 2 are perfect", 10:10 AM). Escaped at the one place they are built.
+function _wwMyMinText(m){
+  const N=escH(bidLbl(m.n)), Bv=escH(bidLbl(m.held)), L=escH(bidLbl(m.lv));
+  return m.rebid
+    ?'<strong>Your minimum bid here is '+N+'.</strong> You already have a '+Bv+' on this competition week. You can lower it only if it would still win and is no lower than the lowest other winning bid, so '+N+' is the lowest you can go. The "Minimum new bid" of '+L+' is for people who have not bid on this week this phase.'
+    :'<strong>Your minimum bid here is '+N+'.</strong> You bid '+Bv+' on this competition week earlier this phase. A bid weaker than that is allowed only if it would still win and is no lower than the lowest other winning bid, so '+N+' is the lowest you can bid. The "Minimum new bid" of '+L+' is for people who have not bid on this week this phase.';
+}
+function _wwMinHtml(lv){ return '<span class="comp-min" style="color:#b45309;font-weight:600;text-transform:none;letter-spacing:0">'+COMP_MIN_TEXT+escH(bidLbl(lv))+'</span>'; }
 // On the approvals `ap` worked out from the picture `s` (which already holds `bid` for `user` on
 // `wk`, projected WIN): is that bid weaker than every other winning bid of this phase there - or is
 // there no other one? Winners locked in from an earlier phase or round are not bids of this phase.
@@ -3386,7 +3453,7 @@ function openPriorityModal(wk){
   if(winfo){
     let html=`<div style="font-weight:700;color:#132f49;font-size:.95rem">${meta.range}</div>`;
     if(meta.special) html+=`<div style="margin-top:4px;color:${meta.special.color};font-size:.72rem;font-weight:600">${meta.special.label}${summerAlso(meta)?' · ☀️ Summer':''}${meta.highPriorityOnly?' · High demand':''}</div>`;
-    if(typeof _wwLabelOn==='function'&&_wwLabelOn(wk)) html+='<div style="margin-top:4px;font-size:.72rem">'+COMP_LABEL_HTML+'</div>'; // [196 · §250] the same label as the week card; typeof = sandbox convention
+    if(typeof _wwLabelOn==='function'&&_wwLabelOn(wk)){ html+='<div style="margin-top:4px;font-size:.72rem">'+COMP_LABEL_HTML+'</div>'; const _mb=(typeof _wwMinBid==='function')?_wwMinBid(wk):null; if(_mb!==null) html+='<div id="wwMinLine" style="margin-top:2px;font-size:.72rem">'+_wwMinHtml(_mb)+'</div>'; } // [196 · §250] the same label as the week card; typeof = sandbox convention · [214 · §279] and the minimum bid
     if(typeof _wwWouldTip==='function'&&_wwWouldTip(user,wk)) html+='<div id="wwTipNote" style="margin-top:8px;padding:8px 10px;background:rgba(251,191,36,.18);border:1px solid rgba(217,119,6,.6);border-radius:8px;font-size:.8rem;color:#4a3000;line-height:1.45">'+COMP_TIP_TEXT+'</div>'; // [197 · §254] typeof = sandbox convention
     winfo.innerHTML=html;
   }
@@ -3436,9 +3503,13 @@ function openPriorityModal(wk){
       winfo.innerHTML+='<div id="wwNoneNote" style="margin-top:8px;padding:8px 10px;background:rgba(251,191,36,.18);border:1px solid rgba(217,119,6,.6);border-radius:8px;font-size:.8rem;color:#4a3000;line-height:1.45">'+((typeof _weAlone==='function'&&_weAlone(user,wk))?'No bid is available to you on this week right now. This week has had a bidding competition, and a new bid must be at least as strong as the last bid that was on it.':_wwBack?'No bid is available to you on this week right now. On a week with a bidding competition you can bid again only with your previous bid or stronger, or with a weaker bid that would still win and is no lower than the lowest other winning bid. If your previous bid number is on another week, moving it back makes it available here.':'No bid is available to you on this week right now. On a week with a bidding competition a new bid must be at least as strong as the weakest bid there that is winning or under review.')+'</div>';
     }
   }catch(_){}
+  // [214 · §279] When YOUR minimum here is stricter than the card's "Minimum new bid", say so, with the number. Not beside the all-greyed
+  // note (that one has its own words); not when the bid lowerings alone would refuse that number (no note rather than an untrue one -
+  // owner 10:13 AM: the bid-lowering items are left out). Paint only.
+  try{ if(winfo&&typeof _wwMyMin==='function'&&String(winfo.innerHTML).indexOf('wwNoneNote')<0){ const _mm=_wwMyMin(user,wk); if(_mm&&!(_blCapBlocks&&priorityScore(_mm.n)>capScore)) winfo.innerHTML+='<div id="wwMyMin" style="margin-top:8px;padding:8px 10px;background:rgba(251,191,36,.18);border:1px solid rgba(217,119,6,.6);border-radius:8px;font-size:.8rem;color:#4a3000;line-height:1.45">'+_wwMyMinText(_mm)+'</div>'; } }catch(_){}
   // [200 · §258, owner 10 Oct 2026] When the rule greys only SOME numbers the box used to say nothing. One short note, only then:
   // never beside the will-make-a-competition note, and never when EVERY number is greyed - _wwSomeNote answers nothing then (each of those has its own note). Paint only.
-  try{ if(winfo&&typeof _wwSomeNote==='function'&&String(winfo.innerHTML).indexOf('wwTipNote')<0){
+  try{ if(winfo&&typeof _wwSomeNote==='function'&&String(winfo.innerHTML).indexOf('wwTipNote')<0&&String(winfo.innerHTML).indexOf('wwMyMin')<0){ // [214] the own-minimum note says it already, with the number
     const _wwOpts=[...sel.querySelectorAll("option")].filter(o=>o.value);
     const _wwT=_wwSomeNote(_wwWhy,isRebid,_wwOpts.length>0&&_wwOpts.every(o=>o.disabled));
     if(_wwT) winfo.innerHTML+='<div id="wwSomeNote" style="margin-top:8px;padding:8px 10px;background:rgba(251,191,36,.18);border:1px solid rgba(217,119,6,.6);border-radius:8px;font-size:.8rem;color:#4a3000;line-height:1.45">'+_wwT+'</div>';
@@ -4831,7 +4902,7 @@ function renderCalendar(user,ap){
       wn.style.cssText="font-size:.62rem;font-weight:700;color:#006ba6;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px";
       wn.textContent="Week "+meta.weekNum; div.appendChild(wn);
       // [196 · §250] "Competition week", at the top, right of the week number (owner's placement). The row becomes two-ended ONLY on a labelled card.
-      if(typeof _wwLabelOn==='function'&&_wwLabelOn(wk)){ wn.style.display='flex'; wn.style.justifyContent='space-between'; wn.style.alignItems='baseline'; wn.style.gap='6px'; wn.insertAdjacentHTML('beforeend',COMP_LABEL_HTML); } // typeof = sandbox convention
+      if(typeof _wwLabelOn==='function'&&_wwLabelOn(wk)){ wn.style.display='flex'; wn.style.justifyContent='space-between'; wn.style.alignItems='baseline'; wn.style.gap='6px'; wn.insertAdjacentHTML('beforeend',COMP_LABEL_HTML); const _mb=(typeof _wwMinBid==='function')?_wwMinBid(wk,ap):null; if(_mb!==null){ const _mr=document.createElement('div'); _mr.className='comp-min-row'; _mr.style.cssText='font-size:.62rem;text-align:right;line-height:1.2;margin:-1px 0 2px'; _mr.innerHTML=_wwMinHtml(_mb); div.appendChild(_mr); } } // typeof = sandbox convention · [214 · §279] the minimum new bid on its own row under the label
       // Line 1: e.g. "Nov 21 – Nov 27" (Sunday-start range)
       const dl=document.createElement("div"); dl.className="week-day-label";
       dl.textContent=meta.range; div.appendChild(dl);
