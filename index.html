@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 214;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 215;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -599,7 +599,7 @@ body{zoom:1.15}
       <div class="modal-buttons">
         <button class="btn-secondary" onclick="closeModal()">Cancel</button>
         <button class="btn-secondary" onclick="backToStep1()">← Edit</button>
-        <button class="btn-primary" onclick="confirmPriority()">Submit Bid</button>
+        <button class="btn-primary" id="prioSubmitBtn" onclick="confirmPriority()">Submit Bid</button>
       </div>
     </div>
     <!-- [199 · §257] Swap bids: pick the other week, then confirm. Their refusal slots are NOT .dlg-err on purpose -
@@ -758,6 +758,8 @@ body{zoom:1.15}
        renderBoardLoading() shows it only once every board document has arrived; until then
        #boardLoading carries one line. In normal flow, like the banners above. -->
   <div id="boardLoading" role="status" aria-live="polite" style="display:none;background:rgba(15,39,68,.05);border:1px solid #c2cfdb;color:#132f49;padding:14px 16px;border-radius:8px;margin-bottom:16px;font-weight:600;font-size:.95rem;text-align:center"></div>
+  <!-- [215 · §282] Shown by _boardLivePaint only while the board is drawn and the page has lost touch with the server. Quiet, like the loading line. -->
+  <div id="boardLive" role="status" aria-live="polite" style="display:none;background:rgba(15,39,68,.05);border:1px solid #c2cfdb;color:#132f49;padding:8px 12px;border-radius:8px;margin-bottom:12px;font-weight:600;font-size:.85rem;text-align:center"></div>
   <div id="boardBody" style="display:none">
   <div class="selections-bar" style="margin-bottom:14px">
     <div class="selections-bar-title">My Bid Count<span id="blLeftLine" style="margin-left:auto;font-weight:400;font-size:.72rem;color:#48607a"></span></div> <!-- [156 · W-1] owner spec: plain muted "X of Y bid lowerings left"; hidden when unlimited -->
@@ -794,7 +796,7 @@ body{zoom:1.15}
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, getDoc, getDocFromServer, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, increment, writeBatch, onSnapshot as _onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, doc, getDoc, getDocFromServer, setDoc, updateDoc, arrayUnion, arrayRemove, deleteField, increment, writeBatch, runTransaction, onSnapshot as _onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { initializeAppCheck, ReCaptchaV3Provider } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check.js";
 
@@ -902,6 +904,30 @@ const BOARD_SLOW_TEXT='Still loading — your connection may be slow. If this st
 const BOARD_SLOW_MS=15000;
 const BOARD_RECHECK_MAX=8; // while the board is still waiting: one look every 15 s, for two minutes, then the line simply stays
 let _boardLoaded={}, _boardLoadSince=0, _boardLoadTimer=null, _boardRechecks=0;
+// [215 · §282, owner 15 Oct 2026] IS THE PAGE LIVE? "Arrived" (above) is set once and never undone, so a page that had lost its
+// connection still looked ready, and a bid saved then waited in the open tab and landed later, judged on nothing. _live is true
+// only while the second listener on the phases document (beside the phases listener, further down) says its data came from the
+// server. It shares the page's one connection to the server, so it speaks for every document. Anything unreadable, or an error
+// from that listener, counts as NOT live. The browser's own online / offline signal is deliberately not used: it can leave the
+// page stuck on "Reconnecting" after a quick network switch.
+let _live=false;
+const LIVE_RECONNECT_TEXT="Reconnecting to the auction — nothing was saved. Try again in a moment.";
+const BOARD_RECONNECT_TEXT='Reconnecting…';
+// Why a bid save may not start right now, in the words to show; null when it may. A page still loading keeps its own line.
+function _saveRefusal(){
+  if(typeof _boardReady==='function'&&!_boardReady()) return "The page is still loading — please try again in a moment.";
+  if(_live!==true) return LIVE_RECONNECT_TEXT;
+  return null;
+}
+// The quiet "Reconnecting…" line above the board: shown only while the board is drawn and the page is not live. Called by
+// renderBoardLoading on every render; writes to the page only when what is showing has to change.
+function _boardLivePaint(){
+  const el=document.getElementById('boardLive'); if(!el) return;
+  const show=_boardReady()&&_live!==true;
+  if(show&&el.textContent!==BOARD_RECONNECT_TEXT) el.textContent=BOARD_RECONNECT_TEXT;
+  const want=show?'block':'none';
+  if(el.style.display!==want) el.style.display=want;
+}
 // An arrival is a snapshot from the server, or one that carries a document. The one thing that is
 // NOT an arrival is the empty stand-in Firestore raises from its (empty) cache when it cannot
 // reach the server: that is the "no bids" picture itself. "From the server" means the snapshot says
@@ -968,6 +994,7 @@ function _boardLoadReset(){
 // drawn. Idempotent: it writes to the page only when what is showing has to change.
 function renderBoardLoading(){
   const box=document.getElementById('boardLoading'), body=document.getElementById('boardBody');
+  if(typeof _boardLivePaint==='function') _boardLivePaint(); // [215 · §282] the "Reconnecting…" line; typeof = sandbox convention
   if(_boardReady()){
     if(_boardLoadTimer){ try{ clearTimeout(_boardLoadTimer); }catch(_){} _boardLoadTimer=null; }
     if(box&&box.style.display!=='none') box.style.display='none';
@@ -1109,12 +1136,17 @@ const authReady = new Promise((resolve) => {
 // auth is ready, and surfaces listener errors instead of swallowing them.
 // Returns an unsubscribe fn synchronously, so every existing call site — including
 // `unsubSchedule = onSnapshot(...)` — keeps working unchanged.
-function onSnapshot(ref, next, error) {
+// [215 · §282] It also takes the options form, onSnapshot(ref, options, next, error): when the second argument is an options object
+// rather than a function, it is handed on to Firestore and the next two are the callbacks. Every older call is unchanged.
+function onSnapshot(ref, next, error, error4) {
+  let opts = null;
+  if (next && typeof next === 'object') { opts = next; next = error; error = error4; } // [215 · §282]
   let unsub = null, cancelled = false;
   authReady.then(() => {
     if (cancelled) return;
-    unsub = _onSnapshot(ref, next, error || (e =>
-      console.error('[Firestore listener]', ref && ref.path, e && e.code, e && e.message)));
+    const onErr = error || (e =>
+      console.error('[Firestore listener]', ref && ref.path, e && e.code, e && e.message));
+    unsub = opts ? _onSnapshot(ref, opts, next, onErr) : _onSnapshot(ref, next, onErr); // [215 · §282]
   }).catch(() => {});
   return () => { cancelled = true; if (unsub) unsub(); };
 }
@@ -1437,7 +1469,8 @@ function _awaitWrite(p){
   ]);
 }
 
-// Consume one lowering — called ONLY after the lowered bid's write has landed.
+// Consume one lowering. [215 · §282] No bid save calls this any more: the lowering is counted inside the save's own transaction (the
+// combined shape) or straight after it by _txAfter (the split shape). Kept, unchanged, for reference.
 // [adversarial audit 268] increment() (atomic, server-side) — a plain used:n+1 write
 // loses one spend when two of the same user's tabs lower simultaneously (both read 0,
 // both write 1). The local mirror still bumps optimistically; the snapshot echo corrects.
@@ -2152,6 +2185,25 @@ onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; _use
 // (approvals listener removed 15 Jul 2026 — same privacy rule as denials: the
 // user site must not react to live admin decisions during the current phase.)
 onSnapshot(phasesRef,  snap=>{ _boardMark('phases',snap); phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{}}; renderPhaseLabel(); scheduleRender(); if(typeof updateSigninPhase==='function') updateSigninPhase(); startCountdownTick(); }); // [173 · §195 audit] the closed statement is owned by renderCountdown — recompute it on every phase change too, so a Reset Auction clears it whichever of its writes lands first (and even when the timer doc does not change)
+// [215 · §282] THE "LIVE" LISTENER: a second listener on the phases document that also hears connection changes. It does not touch
+// phasesData or the board's arrival flags (the listener above still does that); it only says whether the page is in touch with
+// the server (_live, near the top of this script). Nothing unreadable counts as live; an error means not live.
+// A listener that errors is never retried by Firestore, so after an error this one is attached again in 10 s, and again every 10 s
+// while it keeps failing (never more than one retry waiting) - the page is never left refusing every save until a reload.
+let _liveUnsub=null, _liveRetry=null;
+function _liveListen(){
+  if(_liveUnsub){ try{ _liveUnsub(); }catch(_){} _liveUnsub=null; }
+  _liveUnsub=onSnapshot(phasesRef,{includeMetadataChanges:true},snap=>{
+    let v=false;
+    try{ v=!!(snap&&snap.metadata&&snap.metadata.fromCache===false); }catch(_){ v=false; }
+    if(v!==_live){ _live=v; scheduleRender(); }
+  },err=>{
+    console.error('[Firestore listener] live', err&&err.code, err&&err.message);
+    if(_live!==false){ _live=false; scheduleRender(); }
+    if(!_liveRetry) _liveRetry=setTimeout(()=>{ _liveRetry=null; _liveListen(); },10000);
+  });
+}
+_liveListen();
 // [build 152] bidPhase listener moved to _subscribeSensitiveOnce().
 // (denials listener removed 15 Jul 2026 — the user site must not react to live
 // admin decisions; denial outcomes reach users via completed-phase snapshots.)
@@ -2375,7 +2427,7 @@ async function relayMailQueue(){
   } finally { _mqBusy=false; scheduleMailQueueRelay(); }
 }
 window._relayMailQueue=relayMailQueue; // exposed for testing
-window._persistScheduleChange=persistScheduleChange; // exposed for testing
+// [215 · §282, owner Q4] window._persistScheduleChange is gone: a save typed into the browser console skipped the bid box's checks.
 onSnapshot(userListRef, snap=>{
   if(snap.exists()&&snap.data().users){
     const newNames=snap.data().users;
@@ -2561,33 +2613,41 @@ function renderCountdown(){
     <div class="time-block"><span class="time-value">${pad(s)}</span><span class="time-unit">secs</span></div>`;
 }
 
+// [215 · §282] The schedule listener's own normalising, moved out of it unchanged, so the save's judge builds the server's bids
+// exactly as the board does.
+// Normalize any legacy off-day weekKeys to their SUNDAY (all week keys are
+// Sundays; old Monday-anchored keys from before the timezone fix get snapped
+// back). Later-written (correct) keys always win.
+function _schedFromRaw(rawData){
+  const newData={};
+  for(const u in rawData){
+    const uw=rawData[u]; if(!uw||typeof uw!=='object'){newData[u]=uw; continue;}
+    const cleaned={};
+    for(const wk of Object.keys(uw)){
+      const nk=normalizeWk(wk);
+      // Prefer the correctly-keyed value if both are present
+      if(cleaned[nk]===undefined) cleaned[nk]=uw[wk];
+    }
+    newData[u]=cleaned;
+  }
+  return newData;
+}
 function startListening(){
   if(unsubSchedule) unsubSchedule();
   _boardLoaded.schedule=false; // [190 · §241] a fresh listener: the bids must arrive afresh
   unsubSchedule=onSnapshot(scheduleRef,snap=>{
     _boardMark('schedule',snap); // [190 · §241]
     const rawData=snap.exists()?snap.data():{};
-    // Normalize any legacy off-day weekKeys to their SUNDAY (all week keys are
-    // Sundays; old Monday-anchored keys from before the timezone fix get snapped
-    // back). Later-written (correct) keys always win.
-    const newData={};
-    for(const u in rawData){
-      const uw=rawData[u]; if(!uw||typeof uw!=='object'){newData[u]=uw; continue;}
-      const cleaned={};
-      for(const wk of Object.keys(uw)){
-        const nk=normalizeWk(wk);
-        // Prefer the correctly-keyed value if both are present
-        if(cleaned[nk]===undefined) cleaned[nk]=uw[wk];
-      }
-      newData[u]=cleaned;
-    }
-    data=newData;
+    data=_schedFromRaw(rawData); // [215 · §282] the normalising that stood here, now _schedFromRaw (above)
     scheduleRender();
   });
 }
 
-let _fpLastFacts=null; // [183 · §223] {user,wk,f:{tRem,tDur,tReset,aff}} — set by persistScheduleChange, consumed once by logOwnChange
-async function logOwnChange(user,wk,action,bidValue){
+let _fpLastFacts=null; // [183 · §223] the recorded facts waiting for logOwnChange's next row (user, week, the four facts). [215 · §282] No bid save sets it any more - the save hands its facts to _logEntry itself
+// [215 · §282] THE CHANGE-LOG ENTRY, built in one place: logOwnChange (below) uses it, and so does the bid save, which writes the entry
+// inside its transaction (the combined shape) or straight after it (the split shape, _txAfter). The same fields, id and time as before;
+// `facts` = the four recorded facts, or null.
+function _logEntry(user,wk,action,bidValue,facts){
   // id field guarantees uniqueness — arrayUnion deduplicates by value equality,
   // so two entries with identical fields (same ms timestamp) would silently drop one.
   const entry={id:Math.random().toString(36).slice(2),user,weekKey:wk,action,actor:'user',ts:Date.now()};
@@ -2598,12 +2658,17 @@ async function logOwnChange(user,wk,action,bidValue){
   // clock, aff = it changed another person's displayed projection. Captured at the timer
   // gate in persistScheduleChange; advisory only — never allowed to block or alter a bid.
   try{
-    const _f=_fpLastFacts;
-    if(_f&&_f.user===user&&_f.wk===wk){
-      _fpLastFacts=null;
-      for(const k of ['tRem','tDur','tReset','aff']){ const v=_f.f[k]; if((typeof v==='number'&&isFinite(v))||typeof v==='boolean') entry[k]=v; }
-    }
+    if(facts){ for(const k of ['tRem','tDur','tReset','aff']){ const v=facts[k]; if((typeof v==='number'&&isFinite(v))||typeof v==='boolean') entry[k]=v; } }
   }catch(_){}
+  return entry;
+}
+async function logOwnChange(user,wk,action,bidValue){
+  let _ff=null; // [215 · §282] the facts left for this row, if any; the entry itself is _logEntry's
+  try{
+    const _f=_fpLastFacts;
+    if(_f&&_f.user===user&&_f.wk===wk){ _fpLastFacts=null; _ff=_f.f; }
+  }catch(_){}
+  const entry=_logEntry(user,wk,action,bidValue,_ff);
   // Atomically append — preserves all existing entries even if local state is stale.
   // If the doc doesn't exist yet, create it with this entry as the first.
   try {
@@ -2618,18 +2683,387 @@ async function logOwnChange(user,wk,action,bidValue){
 
 
 
+// ── [215 · §282, owner 15 Oct 2026] EVERY BID SAVE IS ONE TRANSACTION, JUDGED AGAIN ON THE SERVER'S COPY ─────────────────────
+// His ruling: the page refuses to save while it is not live, and every save - add, edit, lower, NP, remove, swap - is judged again on
+// the server's copy at the moment of saving. A transaction does both: it cannot complete offline (nothing waits in the tab to land
+// later), and it reads the server's copy before it writes. The steps, for each attempt:
+//   1  read the server's copy of the 11 documents the bid box's checks use, all at once (_txPicture);
+//   2  put that copy in place of the page's own for an instant, run the SAME checks the box ran, put the page's copy back (_withPic);
+//   3  refused: nothing is written, and the person is told why; allowed: the bid and its tag are written - with its bookkeeping (the
+//      floor, the lowering count, the change-log row) in the SAME transaction (the combined shape, Q1), or, if the rules refuse that,
+//      straight after it (the split shape - the net, below). The bid time is always a separate write after the commit.
+// Retries are the page's own, one attempt at a time (_txSave), inside one 20-second budget.
+const SAVE_BUDGET_MS=20000;     // Q6: one time budget per save, "Saving…" meanwhile
+const SAVE_LAST_START_MS=15000; // no new attempt starts after this
+const SAVE_CHANGED_TEXT="The board changed before your change was saved — nothing was saved.";
+const SAVE_BUSY_TEXT="Many people are saving at once — nothing was saved. Please try again.";
+const SAVE_LATE_TEXT="Your change was saved after all.";
+// Small readers of a server copy (the picture _txPicture builds). Nothing found = undefined.
+function _picVal(pic,user,wk){ const m=(pic&&pic.data)?pic.data[user]:undefined; return (m&&typeof m==='object')?m[wk]:undefined; }
+function _picTag(pic,user,wk){ const m=(pic&&pic.bidPhaseData)?pic.bidPhaseData[user]:undefined; return (m&&typeof m==='object')?m[wk]:undefined; }
+function _picPhase(pic){ return Number((pic&&pic.phasesData&&pic.phasesData.currentPhase)||1); }
+function _picUsed(pic,user){ const e=(pic&&pic.bidLoweringsData)?pic.bidLoweringsData[user]:null; return Math.max(0,Number(e&&e.used)||0); }
+// Step 1: the server's copy, read all at once (one after another took 0.8 to 1.3 s - plan §10a), and shaped EXACTLY as each listener
+// shapes its document (the same stand-in for a missing one), without any listener's side effects. The bid times and the timer are
+// not read: the rules judge the clock and the closed flag on the server.
+async function _txPicture(tx){
+  const refs=[scheduleRef,bidPhaseRef,phasesRef,adminRef,locksRef,slotsRef,fteRef,changesRef,bestBidsRef,bidLoweringsRef,bidHoldsRef];
+  const s=await Promise.all(refs.map(r=>tx.get(r)));
+  const has=s.map(x=>!!(x&&typeof x.exists==='function'&&x.exists()));
+  const got=i=>has[i]?s[i].data():null;
+  const locks=got(4)||{globalLock:false,weeks:{}}; if(!locks.weeks) locks.weeks={};
+  const changes=got(7)||{log:[]}; if(!changes.log) changes.log=[];
+  return {
+    data:_schedFromRaw(got(0)||{}),
+    bidPhaseData:normalizeUserWkMap(got(1)||{}),
+    phasesData:got(2)||{currentPhase:1,completedPhases:{}},
+    adminSettings:got(3)||{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false},
+    locksData:locks,
+    slotsData:got(5)||{},
+    fteData:got(6)||{},
+    changesData:changes,
+    bestBidsData:got(8)||{},
+    bidLoweringsData:got(9)||{},
+    bidHoldsData:got(10)||{},
+    bidPhaseHas:has[1], changesHas:has[7]
+  };
+}
+// Step 2: the server's copy in place of the page's own, for an instant. Every global is captured IMMEDIATELY before it is replaced
+// (after every wait - red team #12) and put back in `finally`, whatever happens; nothing can run in between, because nothing in here
+// waits. The two "has arrived" flags the competition rule asks are set for the instant (the server's copy has arrived), and the
+// capacity is put onto the calendar from the server's copy, then back from the page's.
+function _withPic(pic,fn){
+  const keep=[data,bidPhaseData,phasesData,adminSettings,locksData,slotsData,fteData,changesData,bestBidsData,bidLoweringsData,bidHoldsData,_boardLoaded.changes,_lwLoaded.best];
+  try{
+    data=pic.data; bidPhaseData=pic.bidPhaseData; phasesData=pic.phasesData; adminSettings=pic.adminSettings; locksData=pic.locksData;
+    slotsData=pic.slotsData; fteData=pic.fteData; changesData=pic.changesData; bestBidsData=pic.bestBidsData; bidLoweringsData=pic.bidLoweringsData; bidHoldsData=pic.bidHoldsData;
+    _boardLoaded.changes=true; _lwLoaded.best=true;
+    applySlotOverrides();
+    return fn();
+  } finally {
+    data=keep[0]; bidPhaseData=keep[1]; phasesData=keep[2]; adminSettings=keep[3]; locksData=keep[4];
+    slotsData=keep[5]; fteData=keep[6]; changesData=keep[7]; bestBidsData=keep[8]; bidLoweringsData=keep[9]; bidHoldsData=keep[10];
+    _boardLoaded.changes=keep[11]; _lwLoaded.best=keep[12];
+    applySlotOverrides();
+  }
+}
+// The floor - saveBestBid's own decision, made on the server's copy: it moves only when the bid is stronger, or on a sanctioned lowering.
+function _txFloor(pic,user,wk,prio,allowDown){
+  const userBest=(pic.bestBidsData&&pic.bestBidsData[user])||{};
+  const prevScore=userBest[wk]!==undefined?priorityScore(userBest[wk]):999;
+  if(priorityScore(prio)<prevScore||(allowDown&&priorityScore(prio)>prevScore)) return {[wk]:prio};
+  return null;
+}
+// The change-log rows, appended in the same transaction (a swap's two in one append, wkA first); a missing log document is created.
+function _txLog(tx,pic,entries){
+  if(pic.changesHas) tx.update(changesRef,{log:arrayUnion(...entries)});
+  else tx.set(changesRef,{log:entries},{merge:true});
+}
+// [215 · §282] THE TWO SHAPES OF A SAVE - AND THE SAFETY NET BETWEEN THEM.
+// THE RULES' LIMIT - COUNT BEFORE ADDING A WRITE HERE. Firestore allows a limited number of document-access calls in the rules for a
+// whole transaction, summed over its writes (going over = permission-denied, the save refused). How OUR rules are counted is NOT proven
+// here (no real rules engine in reach): if each bid-document write costs 4 calls (adminAccess, loginEmails, emailToUser, timer), the
+// worst case - a lowering: schedule 4 + bidPhase 4 + bestBids 4 + bidLowerings 4 + changes 2 = 18 - fits the 20; if exists() and
+// get() of the same document count separately (about 8 a write, as firestore.rules' own note "a bid write is already near Firestore's
+// limit of 10" suggests), even schedule + bidPhase + bestBids is 24 and every first bid would be refused. The bid time (bidTimes) is
+// never written here for that reason - straight after a confirmed save instead, best-effort, as in 214 (_txBidTimes). Any new write
+// added to these three functions must be counted against the 20 first.
+// THE NET: a save first tries the COMBINED shape (the bid, its tag, the floor, the lowering count and the change-log row, all in one
+// transaction). If the rules refuse it (permission-denied), it at once tries the SPLIT shape - the same checks on the server's copy, but
+// the transaction writes ONLY the bid and its tag (the shape 214 has always written, proven live); the floor, the lowering count and the
+// change-log row then follow as 214's own separate best-effort writes, with the amounts and words that same check decided (_txAfter).
+// Only if the split shape is refused too is the person told bidding is closed. The page switches to the split shape for good (_txSplit)
+// only once a split commit has been ACCEPTED - directly, through "already there", or by the probe (_txProbe); from then on every save on
+// this page goes straight to the split shape. A refusal in both shapes (bidding closed) switches nothing. Remembered in this page
+// only, never written anywhere.
+let _txSplit=false;
+let _txGen={}; // per person AND week: a number that moves on whenever a save of that week starts, so an older save's pending _txProbe for that week stands down (no double follow-ups); a save of other weeks leaves it alone
+let _saveOwner=null; // the save that holds the save lock (saveInProgress) - only its owner releases it
+// The writes of one save. Each returns what the page needs afterwards (_txAfter): the phase tag written, the floors moved, the
+// lowerings spent and the server's count after them, the weeks whose bid time follows the save - and, in the split shape, the
+// change-log rows still to be written.
+// Add / edit / lower / NP. The action word as before: 'lowered' when a lowering is spent, else 'added' when the SERVER has no value
+// on that week, else 'edited'. The phase tag is the SERVER's current phase (red team #6).
+function _txWriteSet(tx,pic,user,wk,bid,v,facts,split){
+  const ph=_picPhase(pic), spend=v.blSpend?1:0;
+  tx.set(scheduleRef,{[user]:{[wk]:bid}},{merge:true});
+  tx.set(bidPhaseRef,{[user]:{[wk]:ph}},{merge:true});
+  const floor=_txFloor(pic,user,wk,bid,!!v.blSpend);
+  const entries=[_logEntry(user,wk,v.blSpend?'lowered':(_picVal(pic,user,wk)===undefined?'added':'edited'),bid,facts)];
+  if(!split){
+    if(floor) tx.set(bestBidsRef,{[user]:floor},{merge:true});
+    if(spend) tx.set(bidLoweringsRef,{[user]:{used:increment(spend)}},{merge:true});
+    _txLog(tx,pic,entries);
+  }
+  return {ph:ph,floor:floor,spend:spend,used:_picUsed(pic,user)+spend,timeWeeks:[wk],timeClear:false,split:!!split,entries:split?entries:null};
+}
+// Remove. The phase tag is deleted only when the bidPhase document exists - an update of a missing document would fail the whole
+// transaction (red team #10). The floor only ever moves up here, as before; the row carries the removed bid. The bid time is cleared
+// after the save (_txBidTimes).
+function _txWriteRemove(tx,pic,user,wk,facts,split){
+  const prio=_picVal(pic,user,wk);
+  tx.update(scheduleRef,{[`${user}.${wk}`]:deleteField()});
+  if(pic.bidPhaseHas) tx.update(bidPhaseRef,{[`${user}.${wk}`]:deleteField()});
+  const floor=(prio===undefined)?null:_txFloor(pic,user,wk,prio,false);
+  const entries=[_logEntry(user,wk,'removed',prio,facts)];
+  if(!split){
+    if(floor) tx.set(bestBidsRef,{[user]:floor},{merge:true});
+    _txLog(tx,pic,entries);
+  }
+  return {ph:_picPhase(pic),floor:floor,spend:0,used:_picUsed(pic,user),timeWeeks:[wk],timeClear:true,split:!!split,entries:split?entries:null};
+}
+// Swap. Both weeks and both tags in one write each, as before; the floors of both weeks, the lowerings spent (one or two), and both
+// rows in ONE append, wkA first (both bid times follow the save). `c` is _swapCheck's answer on the server's copy.
+function _txWriteSwap(tx,pic,user,wkA,wkB,c,facts,split){
+  const ph=_picPhase(pic), spend=Number(c.spends)||0;
+  tx.set(scheduleRef,{[user]:{[wkA]:c.b,[wkB]:c.a}},{merge:true});
+  tx.set(bidPhaseRef,{[user]:{[wkA]:ph,[wkB]:ph}},{merge:true});
+  let floor=null;
+  for(const w of [wkA,wkB]){ const f=_txFloor(pic,user,w,c.inc[w],!!c.low[w]); if(f) floor=Object.assign(floor||{},f); }
+  const entries=[wkA,wkB].map(w=>_logEntry(user,w,c.low[w]?'lowered':'edited',c.inc[w],(facts&&facts[w])||null));
+  if(!split){
+    if(floor) tx.set(bestBidsRef,{[user]:floor},{merge:true});
+    if(spend>0) tx.set(bidLoweringsRef,{[user]:{used:increment(spend)}},{merge:true});
+    _txLog(tx,pic,entries);
+  }
+  return {ph:ph,floor:floor,spend:spend,used:_picUsed(pic,user)+spend,timeWeeks:[wkA,wkB],timeClear:false,split:!!split,entries:split?entries:null};
+}
+// After a confirmed save in the combined shape: the page's own copies of what was written, so the board and the next box are right
+// before the listeners echo them (the echo stays the authority). The lowering count takes the larger of the echo and the server's count
+// after this save. Then the bid time.
+function _txMirrors(user,info){
+  try{
+    if(!info) return;
+    if(info.floor){ if(!bestBidsData[user]) bestBidsData[user]={}; for(const w of Object.keys(info.floor)) bestBidsData[user][w]=info.floor[w]; }
+    if(info.spend>0){ if(!bidLoweringsData[user]) bidLoweringsData[user]={}; bidLoweringsData[user].used=Math.max(blUsed(user),info.used); }
+  }catch(_){}
+  _txBidTimes(user,info);
+}
+// The change-log rows as one separate write (the split shape): one arrayUnion, created if the log document is missing - logOwnChange's
+// own way; bounded by the page's write deadline so a write that never answers cannot hold up the rest.
+async function _txLogWrite(entries){
+  try{ await _awaitWrite(updateDoc(changesRef,{log:arrayUnion(...entries)})); }
+  catch(e){ if(e&&(e.code==='not-found'||String(e.message||'').includes('No document'))) await _awaitWrite(setDoc(changesRef,{log:entries},{merge:true})); else throw e; }
+}
+// The bookkeeping after a confirmed save, `what` = 'bid', 'remove' or 'swap'. The combined shape wrote it already: only the page's own
+// copies and the bid time (_txMirrors). The SPLIT shape writes it now, as 214 did after its save, in 214's order and with 214's
+// words when something does not record: a bid - the floor, the lowering count, the change-log row; a remove - the floor, the row; a
+// swap - the two rows FIRST (the competition rule replays the log in the order the server took it), then the floors and the count.
+// Each write is its own attempt, its local copy stamped only once it lands; the bid time last. Returns once they are all answered.
+async function _txAfter(user,info,what){
+  if(!info) return;
+  if(!info.split){ _txMirrors(user,info); return; }
+  let bkFail=false, uncounted=false;
+  const rows=async()=>{ try{ if(info.entries&&info.entries.length) await _txLogWrite(info.entries); }catch(_){} };
+  const floor=async()=>{
+    if(!info.floor) return;
+    try{ await _awaitWrite(setDoc(bestBidsRef,{[user]:info.floor},{merge:true})); if(!bestBidsData[user]) bestBidsData[user]={}; for(const w of Object.keys(info.floor)) bestBidsData[user][w]=info.floor[w]; }
+    catch(_){ bkFail=true; }
+  };
+  const count=async()=>{
+    if(!(info.spend>0)) return;
+    const n=blUsed(user)+info.spend;
+    try{ await _awaitWrite(setDoc(bidLoweringsRef,{[user]:{used:increment(info.spend)}},{merge:true})); if(!bidLoweringsData[user]) bidLoweringsData[user]={}; bidLoweringsData[user].used=Math.max(blUsed(user),n); }
+    catch(_){ uncounted=true; }
+  };
+  if(what==='swap'){ await rows(); await floor(); await count(); }
+  else { await floor(); await count(); await rows(); }
+  _txBidTimes(user,info);
+  if(what==='remove') return; // 214's remove said nothing about its bookkeeping
+  if(bkFail) showCenterAlert(what==='swap'
+    ?"Your swap IS saved. Some bookkeeping (bid floor or timestamp) didn't record — it will self-correct on your next change; no action needed."
+    :"Your bid IS saved. Some bookkeeping (bid floor or timestamp) didn't record — it will self-correct on your next change; no action needed.");
+  if(uncounted) showCenterAlert(what==='swap'
+    ?"Your swap IS saved and the lower bid stands. One thing did NOT record: a lowering was not counted against your allowance, and it will not correct itself. Please tell your admin so the count can be put right."
+    :"Your bid IS saved and the lower bid stands. One thing did NOT record: this lowering was not counted against your allowance, and it will not correct itself. Please tell your admin so the count can be put right.");
+}
+// The bid time, written straight after a confirmed save (also on the late "saved after all" path), best-effort, as 214 did: a set with
+// merge, its local copy stamped once it lands; for a remove, the local copy cleared and the update-deleteField with the set-null
+// fallback. Not in the transaction (the rules' limit, above). A failure here never turns a saved bid into an error.
+function _txBidTimes(user,info){
+  try{
+    if(!info||!Array.isArray(info.timeWeeks)||!info.timeWeeks.length) return;
+    if(info.timeClear){
+      for(const wk of info.timeWeeks){
+        if(bidTimesData[user]) bidTimesData[user][wk]=null;
+        updateDoc(bidTimesRef,{[`${user}.${wk}`]:deleteField()}).catch(()=>setDoc(bidTimesRef,{[user]:{[wk]:null}},{merge:true})).catch(()=>{});
+      }
+      return;
+    }
+    const ts=Date.now(), m={};
+    for(const wk of info.timeWeeks) m[wk]=ts;
+    setDoc(bidTimesRef,{[user]:m},{merge:true}).then(()=>{
+      if(!bidTimesData[user]) bidTimesData[user]={};
+      for(const wk of info.timeWeeks) bidTimesData[user][wk]=ts;
+    }).catch(()=>{});
+  }catch(_){}
+}
+// The timer reset itself, once a save is confirmed (the decision was made before the save, so its change-log row could record it).
+// [AUDIT 2026-07-26 H5/H8] Extend-only, checked again at this moment: the rules reject a user timer write that would shorten it.
+function _timerResetWrite(){
+  const _n=Date.now(); const _resetH=timerResetHours(timerPhaseStartMs(),_n);
+  const _curDeadline=timerData.lastChange?(timerData.lastChange+((timerData.durationHours||48)*3600000)):0;
+  if(_n+_resetH*3600000>=_curDeadline) setDoc(timerRef,{lastChange:_n,durationHours:_resetH},{merge:true}).catch(()=>{});
+}
+// No answer from the server - the codes after which a commit MAY have landed (when the attempt had reached it).
+function _txNoAnswer(code){ return code==='unavailable'||code==='deadline-exceeded'||code==='unknown'||code==='cancelled'; }
+// THE QUESTION ASKED WHEN A SAVE MAY HAVE LANDED BUT NOBODY HEARD: did that commit land? Used when the page stops trying while a commit's
+// reply is lost, and when an attempt still in flight after the 20 s budget ends without an answer. Waits until the page is live
+// (looking once a second, for up to 2 minutes), then reads the same picture in a READ-ONLY transaction - it writes nothing - and asks
+// spec.done, as the "already there" step does (only when the first look did not already show it). Up to 3 more tries, about 1 s apart,
+// on contention or no answer. Answers `committed` (what the page needs for its follow-up steps) when the change is there, else null.
+// One probe per save, one try at a time; it stands down (null) as soon as the same person starts a NEW save of one of its weeks
+// (_txGen - a swap's probe has two), so its follow-ups can never run twice; a save of a different week leaves it be, so a landed save's
+// follow-ups (and, in the split shape, its floor, count and row) are never lost. Not getDocFromServer: that can answer from the page's
+// own listened copy instead of the server.
+async function _txProbe(spec,firstDone,committed,gens){
+  try{
+    const mine=()=>gens.every(g=>_txGen[g[0]]===g[1]);
+    const t0=performance.now();
+    while(_live!==true){
+      if(!mine()||performance.now()-t0>=120000) return null;
+      await new Promise(r=>setTimeout(r,1000));
+    }
+    for(let i=0;i<4;i++){
+      if(i>0) await new Promise(r=>setTimeout(r,1000));
+      if(!mine()) return null;
+      let there=false;
+      try{
+        there=await runTransaction(db,async tx=>{ const pic=await _txPicture(tx); return firstDone===false&&!!spec.done(pic); },{maxAttempts:1});
+      }catch(e){
+        const code=e&&e.code;
+        if(code==='failed-precondition'||code==='aborted'||code==='already-exists'||_txNoAnswer(code)) continue;
+        return null;
+      }
+      if(there&&committed&&committed.split) _txSplit=true; // a split commit, confirmed by the server: the split shape is accepted
+      return (there&&mine())?committed:null;
+    }
+    return null;
+  }catch(_){ return null; }
+}
+// The attempts. Each is ONE runTransaction with no retries of its own (maxAttempts 1), so every retry passes through here:
+//  - someone else saved in between (failed-precondition, aborted, already-exists): nothing was applied - judged again from scratch;
+//  - no answer from the server (_txNoAnswer): if the attempt had reached its commit, the change MAY have landed ("ambiguous") - only
+//    then may a later attempt find it "already there" and count it as saved, and only if the server shows exactly the intended result
+//    (with this phase's tag) when the first look did not (red team #1, #2, #9);
+//  - the rules refused (permission-denied): the combined shape - straight on to the split shape (the net, above), which is remembered
+//    for the page (_txSplit) only once a split attempt has been accepted; the split shape - bidding is closed;
+//  - anything else: the save failed.
+// Whenever a commit may have landed (ambiguous) and the save stops for ANY reason other than a refusal on the server's copy or a
+// confirmed "already there", the answer is "could not confirm", and _txProbe asks the server once the page is live again.
+// Before every other attempt after the first: a short random pause, and the page must still be live (unless ambiguous). No attempt
+// starts after 15 s. If the page stops while ambiguous, or the 20 s budget runs out while an attempt is in flight, the answer is "could
+// not confirm" - and `late` still says whether it saved: the attempt in flight when it answers, or _txProbe when it cannot say.
+// spec.user = whose save; spec.weeks = the weeks it changes; spec.done(pic) = the server already shows the intended result; spec.judge(pic) = the box's checks, run under
+// the server's copy; spec.writes(tx,pic,verdict,split) = adds the writes of that shape and returns what the page needs afterwards.
+// The answer's status: saved (with info), refused (with the check's verdict), live, busy, closed, timeout (with late), unknown (with
+// late), failed.
+async function _txSave(spec){
+  const t0=performance.now();
+  // A new save of these weeks: an older probe for any of them stands down; a probe for other weeks goes on.
+  const gens=(spec.weeks||[]).map(w=>{ const k=spec.user+'|'+w; _txGen[k]=(_txGen[k]||0)+1; return [k,_txGen[k]]; });
+  let tries=0, ambiguous=false, firstDone=null, committed=null, lastConn=false, straightOn=false, splitNow=false;
+  const probe=info=>_txProbe(spec,firstDone,info,gens);
+  const unsure=()=>({status:'unknown',late:probe(committed)}); // a commit may have landed: "could not confirm", and ask the server later
+  const stop=()=>ambiguous?unsure():{status:lastConn?'live':'busy'};
+  for(;;){
+    if(tries>0&&!straightOn){
+      if(performance.now()-t0>=SAVE_LAST_START_MS) return stop();
+      await new Promise(r=>setTimeout(r,150+Math.floor(Math.random()*250)));
+      if(!ambiguous&&_live!==true) return {status:'live'};
+      if(performance.now()-t0>=SAVE_LAST_START_MS) return stop();
+    }
+    straightOn=false;
+    tries++;
+    const split=_txSplit||splitNow;
+    const at={reached:false,info:null};
+    const p=runTransaction(db,async tx=>{
+      const pic=await _txPicture(tx);
+      if(firstDone===null) firstDone=!!spec.done(pic);
+      // "Already there" - a plain Error, which nothing retries, and which writes nothing (red team X1b).
+      if(ambiguous&&!firstDone&&spec.done(pic)){ const e=new Error('already saved'); e.__txAlready=true; throw e; }
+      const v=_withPic(pic,()=>spec.judge(pic));
+      if(!v||v.ok!==true){ const e=new Error('refused'); e.__txRefusal=true; e.verdict=v; throw e; }
+      at.info=spec.writes(tx,pic,v,split);
+      at.reached=true; // the last statement: from here the commit is the library's
+    },{maxAttempts:1});
+    const settled=p.then(()=>({ok:true}),e=>({err:e}));
+    let tm=null;
+    const r=await Promise.race([settled,new Promise(res=>{ tm=setTimeout(()=>res(null),Math.max(0,SAVE_BUDGET_MS-(performance.now()-t0))); })]);
+    clearTimeout(tm);
+    if(r===null){
+      // The budget ran out with this attempt in flight. When it answers: saved - its info; "already there" - the earlier commit's; a
+      // refusal on the server's copy - nothing; no answer after reaching its commit - ask the server about it (_txProbe); anything else
+      // while an earlier commit is still unconfirmed - ask the server about that one.
+      const prior=committed;
+      return {status:'timeout',late:settled.then(x=>{
+        if(x.ok){ if(split) _txSplit=true; return at.info; }
+        const e=x.err;
+        if(e&&e.__txAlready){ if(prior&&prior.split) _txSplit=true; return prior; }
+        if(e&&e.__txRefusal) return null;
+        if(_txNoAnswer(e&&e.code)&&at.reached) return probe(at.info);
+        if(ambiguous) return probe(prior);
+        return null;
+      })};
+    }
+    if(r.ok){ if(split) _txSplit=true; return {status:'saved',info:at.info}; } // a split attempt accepted: the page stays split from now on
+    const e=r.err, code=e&&e.code;
+    if(e&&e.__txAlready){ if(committed&&committed.split) _txSplit=true; return {status:'saved',info:committed}; } // "already there": if the commit that landed was a split one, the split shape is accepted
+    if(e&&e.__txRefusal) return {status:'refused',verdict:e.verdict};
+    if(code==='failed-precondition'||code==='aborted'||code==='already-exists'){ lastConn=false; continue; }
+    if(_txNoAnswer(code)){
+      if(at.reached){ ambiguous=true; committed=at.info; }
+      lastConn=true; continue;
+    }
+    if(code==='permission-denied'){
+      if(!split){ splitNow=true; straightOn=true; continue; } // the net: the rules refused the combined shape - the split shape, now
+      return ambiguous?unsure():{status:'closed'}; // refused in both shapes: bidding is closed (a genuine closing never sets _txSplit)
+    }
+    return ambiguous?unsure():{status:'failed',err:e};
+  }
+}
+// What the person is told, and the follow-up steps of a save that landed. `follow` = the caller's steps after a confirmed save (its
+// local copies, the timer, the alert e-mails, the bookkeeping - which may still be writing: a saved answer resolves once it is done);
+// `what` = 'bid' or 'swap', for the words of the no-answer line (today's, kept).
+function _txSaveEnd(res,follow,what){
+  const noAnswer=(what==='swap')
+    ?"Couldn't confirm your swap — your connection may have dropped. Check the board before you leave this page."
+    :"Couldn't confirm your bid — your connection may have dropped. Check the board before you leave this page.";
+  const st=res&&res.status;
+  if(st==='saved'){ let p=null; try{ p=follow(res.info); }catch(_){} return Promise.resolve(p).then(()=>true,()=>true); }
+  if(st==='refused'){
+    // The server's copy refused what the page's copy had allowed: one plain sentence, then why, in the check's own words.
+    const v=res.verdict||{};
+    showCenterAlert(SAVE_CHANGED_TEXT+((v.kind!=='limit'&&v.msg)?' '+v.msg:''));
+    if(v.kind==='limit') showBidLimitModal();
+    return false;
+  }
+  if(st==='live'){ showCenterAlert(LIVE_RECONNECT_TEXT); return false; }
+  if(st==='busy'){ showCenterAlert(SAVE_BUSY_TEXT); return false; }
+  if(st==='closed'){ showError("Bidding is closed — no more changes can be made."); return false; }
+  if(st==='timeout'||st==='unknown'){
+    showError(noAnswer);
+    // Still listening: a save the server confirms later gets its follow-up steps (timer, e-mails, bookkeeping) and the person is told.
+    if(res.late) res.late.then(info=>{ if(!info) return; try{ Promise.resolve(follow(info)).catch(()=>{}); }catch(_){} showCenterAlert(SAVE_LATE_TEXT); }).catch(()=>{});
+    return false;
+  }
+  showError("Save failed: "+((res&&res.err&&res.err.message)||'unknown error'));
+  return false;
+}
+
 // ── Save ──
 // SAFE concurrent-write helper: only touches one user's specific week, never overwrites the whole doc.
 // Returns TRUE only if the schedule write actually landed, so callers can gate
 // their side effects (priority-lock floor, bid timestamp, change log) on success
 // and never leave a phantom floor for a bid that a timer/lock rejected. Returns
 // FALSE on any gate bail, limit block, or write error.
-async function persistScheduleChange(user, wk, bid, prevSnapshot){
-  // bid===null or undefined → remove. Otherwise → set.
+async function persistScheduleChange(user, wk, bid, prevSnapshot, expect){
+  // bid===null or undefined → remove. Otherwise → set. [215 · §282] expect = (remove only) the bid the Remove box showed.
   // [190 · §241] Nothing is saved before every board document has arrived: the alerts and the
   // timer gate below compare the board before and after this bid, and two half-loaded pictures
   // agree that nobody was affected. typeof = sandbox convention; the page always defines it.
   if(typeof _boardReady==='function'&&!_boardReady()){ showCenterAlert("The page is still loading — please try again in a moment."); return false; }
+  { const _lr=(typeof _saveRefusal==='function')?_saveRefusal():null; if(_lr){ showCenterAlert(_lr); return false; } } // [215 · §282] not live: refused before anything is read or written
   if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); return false; }
   if(isAuctionClosed()){ showError("Bidding is closed — no more changes can be made."); return false; }
   if(locksData.globalLock||locksData.weeks?.[wk]){ showError("This week is locked — no more changes allowed."); return false; }
@@ -2655,7 +3089,7 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
   }
   if(saveInProgress){ showCenterAlert("Still saving your previous change — please wait a moment and try again."); return false; } // L-2: was a silent no-op; tell the user instead
   saveInProgress=true;
-  const safety=setTimeout(()=>{saveInProgress=false;},15000); // [162] must outlive WRITE_DEADLINE_MS
+  const _lock={}; _saveOwner=_lock; const safety=setTimeout(()=>{ if(_saveOwner===_lock){ saveInProgress=false; _saveOwner=null; } },SAVE_BUDGET_MS+1000); // [162] the lock's own safety release, at the 20 s save budget + 1 s - [215 · §282] it does NOT wait for a split save's bookkeeping, which can take longer: a later save may then start, and the ownership (_saveOwner) stops this older save from releasing or touching that newer save's lock
   try{
     // [154 · AUD-C2] Capture the bid's phase identity at ENTRY — the optimistic local tag
     // write below reclassifies a leftover completed-phase value as current-phase before the
@@ -2670,55 +3104,13 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
     // (no outbid mail, no mode-2/3 timer reset). Captured here; re-injected after the
     // commit for the SYNCHRONOUS model computations; removed by the deferred cleanup.
     const _preTagRaw=bidPhaseData[user]?bidPhaseData[user][wk]:undefined;
-    // [build 126 · CRITIC LEAD 3] The bid and its PHASE TAG now commit in ONE atomic batch.
-    // The old code awaited the schedule write and fire-and-forgot the bidPhase write with a
-    // swallowed error — so a deadline-second re-bid on a week lost in a completed phase could
-    // land its value but LOSE its tag (rules re-evaluate per write; one round-trip later the
-    // second write can be rejected). The engine then reclassifies the untagged re-bid to the
-    // OLD phase and silently drops it from the allocation, while this function returned true,
-    // logged the change, stamped the floor, and told the user it worked. Atomic = the two can
-    // never diverge: both land or NEITHER does, and a genuine failure falls to the catch below
-    // and reports honestly.
-    if(bid===null||bid===undefined){
-      const _b=writeBatch(db);
-      _b.update(scheduleRef, {[`${user}.${wk}`]: deleteField()});
-      _b.update(bidPhaseRef, {[`${user}.${wk}`]: deleteField()});
-      try{ await _awaitWrite(_b.commit()); } // [162] deadline
-      catch(e1){
-        // The bidPhase doc may legitimately not exist yet (fresh database) — batch update on a
-        // missing doc aborts the whole batch. Fall back to the schedule delete alone; a missing
-        // bidPhase doc has no tag to remove anyway.
-        if(e1&&e1.code==='not-found'){ await _awaitWrite(updateDoc(scheduleRef, {[`${user}.${wk}`]: deleteField()})); } // [162] deadline
-        else throw e1;
-      }
-      // [155 · AUD-H1] The local tag delete is DEFERRED to after the timer-gate/e-mail
-      // block below: deleting it here let getUserBidPhase fall back to a completed-phase
-      // archive and classify this LIVE bid as dead in the before-picture — so a cancel
-      // that flipped a competitor LOSE→WIN sent no e-mail and (modes 2/3) never reset the
-      // countdown. The after-model holds no value for the week, so the stale tag cannot
-      // affect it. (Audit 20 Aug; the cancel-path sibling of C-2.)
-      // [158 · RA-H2] ...and the deferral alone was NOT enough: the listener echo (see the
-      // capture note above) usually wipes the tag before commit() resolves. Re-inject the
-      // pre-change tag now. Safe because the timer gate AND sendEmailNotifications' outcome
-      // diff both run synchronously below (an async function runs synchronously to its
-      // first await), before the deferred cleanup removes the tag again.
-      if(_preTagCurrent&&data[user]&&true){
-        if(!bidPhaseData[user]) bidPhaseData[user]={};
-        bidPhaseData[user][wk]=_preTagRaw!==undefined?_preTagRaw:Number(phasesData.currentPhase||1);
-      }
-    } else {
-      const _ph=Number(phasesData.currentPhase||1);
-      const _b=writeBatch(db);
-      _b.set(scheduleRef, {[user]: {[wk]: bid}}, {merge:true});
-      _b.set(bidPhaseRef, {[user]: {[wk]: _ph}}, {merge:true});
-      await _awaitWrite(_b.commit()); // [162] deadline
-      // Optimistically tag the local phase too. Without this, a re-bid on a week the user
-      // lost in a COMPLETED phase has no local tag, so getUserBidPhase falls back to the
-      // completed-phase snapshot and the fresh bid is hidden as "prior phase" until the
-      // bidPhase snapshot round-trips. Setting it here shows the re-bid immediately.
-      if(!bidPhaseData[user]) bidPhaseData[user]={};
-      bidPhaseData[user][wk]=_ph;
-    }
+    // [215 · §282] THE SAVE IS ONE TRANSACTION now (_txSave). It replaces the batch that stood here: the bid and its PHASE TAG are
+    // written together (build 126's point, kept: they can never diverge), after the bid box's own checks are run again on the
+    // server's copy. The floor, the lowering count and the change-log row go in the SAME transaction (the combined shape) - or, if the
+    // rules refuse that, straight after it as 214's separate writes (the split shape, _txAfter). The bid time is always a separate
+    // write after the commit. What the timer and the alert e-mails are judged on is unchanged - the page's own before / after
+    // pictures, worked out first, below; the timer write and the e-mails still follow the save.
+    const _rm=(bid===null||bid===undefined);
     // Timer reset on bid activity — EXCEPT: (a) re-saving the same bid value (no
     // substantive change → no reset), and (b) inside the opening window
     // (the countdown runs continuously until the starting-reset mark).
@@ -2751,50 +3143,93 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot){
     }
     const _isNewBid=bid!==null&&bid!==undefined&&_prevVal===undefined;
     const _remBefore=timerData.lastChange?(((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)):1;
-    // [183 · §223 · §227] Record what the clock really read and whether this change touched
-    // anyone else — the same before/after comparison the alert e-mails make. Read-only; a
-    // failure here records nothing and can never block, alter or delay the bid.
-    let _fpF=null;
+    // [215 · §282] The Fair Play facts and the timer decision (below) are worked out BEFORE the save now, so the change-log row saved
+    // with the bid can record them. They must see this bid tagged with this phase, as they did when they ran just after the save (the
+    // optimistic local tag): the tag is put on for them here and taken off again straight after - nothing runs in between.
+    const _tagUser=!!bidPhaseData[user], _tagHad=_tagUser&&Object.prototype.hasOwnProperty.call(bidPhaseData[user],wk), _tagWas=_tagHad?bidPhaseData[user][wk]:undefined;
+    if(!_rm){ if(!bidPhaseData[user]) bidPhaseData[user]={}; bidPhaseData[user][wk]=Number(phasesData.currentPhase||1); }
+    let _fpF=null, _resetWanted=false;
     try{
-      _fpF={user,wk,f:{tReset:false}};
-      // tDur is capped at the starting reset length: an opening-window clock is days long, and its last
-      // hours must not read as "under 10% left" (the monitor has always measured against the stage length there).
-      if(timerData.enabled&&timerData.lastChange){ _fpF.f.tRem=Math.round(_remBefore); _fpF.f.tDur=Math.min((timerData.durationHours||48),stage0Hours())*3600000; }
-      if(prevSnapshot&&_afterSnap) _fpF.f.aff=_sameVal?false:!!_changeAffectsOthers(_beforeSnap,_afterSnap,user);
-    }catch(_){ _fpF=null; }
-    _fpLastFacts=_fpF;
-    if(timerData.enabled&&_remBefore>0&&!_sameVal&&!openingWindowActive()
-       &&_timerModeAllowsReset(_timerResetMode(),_isNewBid,_beforeSnap,_afterSnap,user)){ // [154 · AUD-C2]
-      const _n=Date.now(); const _resetH=timerResetHours(timerPhaseStartMs(),_n);
-      // [AUDIT 2026-07-26 H5/H8] Extend-only: firestore.rules now REJECT any user timer
-      // write whose deadline lands earlier than the current one, so a bidder can no longer
-      // truncate everyone's window from devtools. Skip the reset when it would not extend —
-      // the longer deadline stands, matching the server rule. (Admins can still shorten.)
-      const _curDeadline=timerData.lastChange?(timerData.lastChange+((timerData.durationHours||48)*3600000)):0;
-      if(_n+_resetH*3600000>=_curDeadline){ if(_fpF) _fpF.f.tReset=true; setDoc(timerRef,{lastChange:_n,durationHours:_resetH},{merge:true}).catch(()=>{}); }
+      // [183 · §223 · §227] Record what the clock really read and whether this change touched
+      // anyone else — the same before/after comparison the alert e-mails make. Read-only; a
+      // failure here records nothing and can never block, alter or delay the bid.
+      try{
+        _fpF={user,wk,f:{tReset:false}};
+        // tDur is capped at the starting reset length: an opening-window clock is days long, and its last
+        // hours must not read as "under 10% left" (the monitor has always measured against the stage length there).
+        if(timerData.enabled&&timerData.lastChange){ _fpF.f.tRem=Math.round(_remBefore); _fpF.f.tDur=Math.min((timerData.durationHours||48),stage0Hours())*3600000; }
+        if(prevSnapshot&&_afterSnap) _fpF.f.aff=_sameVal?false:!!_changeAffectsOthers(_beforeSnap,_afterSnap,user);
+      }catch(_){ _fpF=null; }
+      // The timer DECISION, made here; the timer write itself happens only once the save is confirmed (_timerResetWrite, which
+      // checks extend-only again then).
+      if(timerData.enabled&&_remBefore>0&&!_sameVal&&!openingWindowActive()
+         &&_timerModeAllowsReset(_timerResetMode(),_isNewBid,_beforeSnap,_afterSnap,user)){ // [154 · AUD-C2]
+        const _n=Date.now(); const _resetH=timerResetHours(timerPhaseStartMs(),_n);
+        // [AUDIT 2026-07-26 H5/H8] Extend-only: firestore.rules now REJECT any user timer
+        // write whose deadline lands earlier than the current one, so a bidder can no longer
+        // truncate everyone's window from devtools. Skip the reset when it would not extend —
+        // the longer deadline stands, matching the server rule. (Admins can still shorten.)
+        const _curDeadline=timerData.lastChange?(timerData.lastChange+((timerData.durationHours||48)*3600000)):0;
+        if(_n+_resetH*3600000>=_curDeadline){ if(_fpF) _fpF.f.tReset=true; _resetWanted=true; }
+      }
+    } finally {
+      if(!_rm){ if(!_tagUser) delete bidPhaseData[user]; else if(_tagHad) bidPhaseData[user][wk]=_tagWas; else delete bidPhaseData[user][wk]; }
     }
-    if(prevSnapshot&&adminSettings.emailNotifsEnabled!==false){
-      // Any change to another user's DISPLAYED outcome — lose/under-review -> win as well
-      // as win -> lose -> under review — is detected and notified. [§147] draw and review
-      // are one displayed state, so a tie forming or dissolving sends nothing and does not
-      // reset the clock. (_afterSnap built above, shared with the timer-mode gate.)
-      sendEmailNotifications(_beforeSnap,_afterSnap,user).catch(()=>{}); // [154 · AUD-C2]
-    }
-    if((bid===null||bid===undefined)&&bidPhaseData[user]) delete bidPhaseData[user][wk]; // [155 · AUD-H1] deferred remove-path tag cleanup (see note above)
-    return true;
+    const _val=_rm?null:(bid==="NP"?"NP":(Array.isArray(bid)?bid.join(','):String(bid))); // the bid as the box's checks read it
+    const _facts=_fpF?_fpF.f:null;
+    const _res=await _txSave({
+      user:user, weeks:[wk],
+      // "Already there" (asked only after an attempt whose reply was lost): the value AND this phase's tag, or, for a remove, no value.
+      done:pic=>_rm?(_picVal(pic,user,wk)===undefined):(JSON.stringify(_picVal(pic,user,wk))===JSON.stringify(bid)&&Number(_picTag(pic,user,wk))===_picPhase(pic)),
+      judge:()=>_rm?_removeCheck(user,wk,expect):_bidCheck(user,wk,_val),
+      writes:(tx,pic,v,split)=>_rm?_txWriteRemove(tx,pic,user,wk,_facts,split):_txWriteSet(tx,pic,user,wk,bid,v,_facts,split)
+    });
+    // After the save: the page's own copies, the timer and the alert e-mails - the steps that followed the batch before. One
+    // function, so a save the server confirms only after the page stopped waiting (the 20 s budget) runs the very same steps then.
+    const _follow=info=>{
+      if(_rm){
+        // [155 · AUD-H1] The local tag delete is DEFERRED to after the timer-gate/e-mail
+        // block below: deleting it here let getUserBidPhase fall back to a completed-phase
+        // archive and classify this LIVE bid as dead in the before-picture — so a cancel
+        // that flipped a competitor LOSE→WIN sent no e-mail and (modes 2/3) never reset the
+        // countdown. The after-model holds no value for the week, so the stale tag cannot
+        // affect it. (Audit 20 Aug; the cancel-path sibling of C-2.)
+        // [158 · RA-H2] ...and the deferral alone was NOT enough: the listener echo (see the
+        // capture note above) usually wipes the tag before commit() resolves. Re-inject the
+        // pre-change tag now. Safe because the timer gate AND sendEmailNotifications' outcome
+        // diff both run synchronously below (an async function runs synchronously to its
+        // first await), before the deferred cleanup removes the tag again.
+        if(_preTagCurrent&&data[user]&&true){
+          if(!bidPhaseData[user]) bidPhaseData[user]={};
+          bidPhaseData[user][wk]=_preTagRaw!==undefined?_preTagRaw:Number(phasesData.currentPhase||1);
+        }
+      } else {
+        // Optimistically tag the local phase too. Without this, a re-bid on a week the user
+        // lost in a COMPLETED phase has no local tag, so getUserBidPhase falls back to the
+        // completed-phase snapshot and the fresh bid is hidden as "prior phase" until the
+        // bidPhase snapshot round-trips. Setting it here shows the re-bid immediately.
+        // [215 · §282] With the tag the save wrote: the server's phase.
+        if(!bidPhaseData[user]) bidPhaseData[user]={};
+        bidPhaseData[user][wk]=info.ph;
+      }
+      if(_resetWanted) _timerResetWrite();
+      if(prevSnapshot&&adminSettings.emailNotifsEnabled!==false){
+        // Any change to another user's DISPLAYED outcome — lose/under-review -> win as well
+        // as win -> lose -> under review — is detected and notified. [§147] draw and review
+        // are one displayed state, so a tie forming or dissolving sends nothing and does not
+        // reset the clock. (_afterSnap built above, shared with the timer-mode gate.)
+        sendEmailNotifications(_beforeSnap,_afterSnap,user).catch(()=>{}); // [154 · AUD-C2]
+      }
+      if((bid===null||bid===undefined)&&bidPhaseData[user]) delete bidPhaseData[user][wk]; // [155 · AUD-H1] deferred remove-path tag cleanup (see note above)
+      return _txAfter(user,info,_rm?'remove':'bid'); // [215 · §282] then the bookkeeping (the split shape) and the bid time, as 214 did after its save
+    };
+    return await _txSaveEnd(_res,_follow,'bid');
   }catch(e){
-    // [162 · RA-4/H-2] A deadline is NOT a refusal. The write may still land when the
-    // connection returns, so say "couldn't confirm" and point them at the board rather
-    // than asserting a failure that may not be one.
-    if(e&&e.code==="write-deadline"){
-      showError("Couldn't confirm your bid — your connection may have dropped. Check the board before you leave this page.");
-    } else {
-      showError("Save failed: "+e.message);
-    }
+    showError("Save failed: "+e.message);
     return false;
   } finally {
     clearTimeout(safety);
-    saveInProgress=false;
+    if(_saveOwner===_lock){ saveInProgress=false; _saveOwner=null; } // [215 · §282] only this save's own lock
   }
 }
 
@@ -3413,6 +3848,7 @@ function _swapRowsPaint(sel){ // true = the buttons are on screen; false = the d
   }catch(_){ _swapRowsOff(); return false; }
 }
 function openPriorityModal(wk){
+  { const _lr=(typeof _saveRefusal==='function')?_saveRefusal():null; if(_lr){ showCenterAlert(_lr); return; } } // [215 · §282] not live (or still loading): the bid box does not open
   if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); return; }
   if(isAuctionClosed()){ showError("Bidding is closed — no more changes can be made."); return; }
   if(locksData.globalLock||locksData.weeks?.[wk]){ showError("This week is locked — no more changes allowed."); return; }
@@ -3442,7 +3878,7 @@ function openPriorityModal(wk){
   // was a fallback floor — so when admin cleared the lock, the live bid
   // silently re-imposed the same cap and "Clear Lock" appeared broken (in
   // every phase). If admin cleared it, the user really is free; their next
-  // bid re-establishes a floor via saveBestBid as usual.
+  // bid re-establishes a floor as usual - [215 · §282] written with the bid's save (in its transaction, or straight after it in the split shape).
   const capPrio=bestEver;
   const hasCap=prioLockOn&&capPrio!==undefined&&capPrio!=="NP";
   const capScore=hasCap?priorityScore(capPrio):999;
@@ -3608,6 +4044,92 @@ window.reviewBid=function(){
   document.getElementById("prioStep2").style.display="block";
 };
 
+// [215 · §282] THE BID BOX'S CONFIRM CHECKS, moved here unchanged from confirmPriority - the same order, the same words - so they can
+// run twice: on the page's copy when Submit is pressed, and again on the server's copy at the moment of saving. Read-only: nothing is
+// shown or written here. The answer: ok with blSpend (a sanctioned lowering, or null), newVal (the bid as saved) and isNP; or a
+// refusal with how the box showed it - kind 'error' = showError, 'center' = showCenterAlert, 'limit' = showBidLimitModal - and close
+// (the box closed after it). _checkShow shows it exactly so. `!val` stays in confirmPriority.
+function _bidCheck(user,wk,val){
+  const no=(kind,msg,close)=>({ok:false,kind:kind,msg:msg,close:close});
+  // ALL gates run BEFORE any write. Previously the priority-lock, change-log,
+  // and bid-time writes happened first, so a bid rejected by a gate (timer
+  // expired / limit hit / week locked while the modal was open) still left
+  // phantom side effects behind.
+  if(!biddingOpen()) return no('error',"Bidding hasn't started yet — it opens when the admin begins Phase 1.",true);
+  if(isAuctionClosed()) return no('error',"Bidding is closed — no more changes can be made.",true);
+  if(locksData.globalLock||locksData.weeks?.[wk]) return no('error',"This week is locked — no more changes allowed.",true);
+  if(!isVisibleBid(user,wk)&&bidLimitStatus(user).atLimit) return no('limit','',true);
+  if(val==="NP"&&!npAllowedNow()) return no('center',"NP bids are not enabled for Phase "+Number(phasesData.currentPhase||1)+" — the admin controls which phases allow them.",true);
+  // L-3: re-validate the prior-phase-won guard, high-demand restriction, and priority-lock
+  // FLOOR at confirm time — not just via disabled dropdown options set at modal-open. A
+  // two-tab race (or an option list built from stale state) could otherwise submit a
+  // below-floor or disallowed bid. All checks run BEFORE any write (gates-first contract).
+  if(getPriorPhaseWinners(wk).has(user)) return no('center',"You already won this week in an earlier phase or Phase 4 round — it's locked in for you.",true);
+  { const _ad=p4AnnouncedDecision(user,wk); // [133] announced denial = frozen until it retires at the next round
+    if(_ad&&_ad.status==='D') return no('center',"This bid was denied in Phase 4: Round "+_ad.round+" — it clears when the next round opens, and you can place a fresh bid then.",true); }
+  // [168 · §174] The "same bid, same answer" guard that stood here (131/134) is GONE: it existed only
+  // because p4AnnouncedDecision recognised a retired denial by VALUE. Now a denial binds only while its
+  // round is current, so a later-round re-bid — same value or not — is a fresh, live bid.
+  // [build 137 · BF] Week-category floor re-check at confirm time (L-3 pattern) — the floor
+  // comes from admin settings; NP is the weakest bid so any numeric floor blocks it here too.
+  { const _bfF=bfFloorFor(wk);
+    if(!bfAllows(_bfParse(val),_bfF)) return no('center',"This "+(weekMeta[wk]?.highPriorityOnly?"high-demand":"summer")+" week needs a bid of "+_bfF+" or better.",true); }
+  // [193 · §245] The weakest-winning-bid rule, re-checked at commit on the board as it stands NOW
+  // (a stale option list, a second tab, a competitor who left while the box was open). Before any write.
+  if(typeof _wwRefuses==='function'&&_wwRefuses(user,wk,_bfParse(val))!==false) return no('center',_wwMsg(),true); // typeof = sandbox convention
+  // Priority-lock FLOOR re-check now also covers NP: NP (score 99) is weaker than any
+  // numbered floor, so submitting NP under a numeric floor is a below-floor bid.
+  // [build 139 · BL] A below-floor submission is now a SANCTIONED LOWERING while the user
+  // has allowance left this phase/round (L-3 re-check at commit — a two-tab race or a
+  // stale option list can never spend a lowering that no longer exists). The spend and
+  // the floor move-down are committed only AFTER the bid write itself lands.
+  // [215 · §282] ...now decided on the server's copy too, and written with the bid's own save: in its transaction (the combined shape),
+  // or straight after it (the split shape, _txAfter).
+  let _blSpend=null;
+  if(adminSettings.priorityLockEnabled!==false){
+    const _floor=(bestBidsData[user]||{})[wk];
+    if(_floor!==undefined){
+      const _parsed=val==="NP"?"NP":(val.includes(',')?val.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n)):parseInt(val));
+      if(priorityScore(_parsed)>priorityScore(_floor)){
+        const _blRem=(typeof blRemaining==='function')?blRemaining(user):0; // typeof = sandbox convention (legacy scope ⇒ 0 ⇒ the classic refusal)
+        if(!(_blRem>0)) return no('center',typeof blExhaustedMsg==='function'?blExhaustedMsg(_floor):("Your bid on this week can only stay the same or get stronger — a previous bid set a floor here."+(val==="NP"?" NP is weaker than your existing bid.":"")),true);
+        _blSpend={from:_floor};
+      }
+    }
+  }
+  if(val==="NP") return {ok:true,blSpend:_blSpend,newVal:"NP",isNP:true};
+  const priorities=val.split(',').map(p=>parseInt(p.trim())).filter(p=>!isNaN(p));
+  if(!priorities.length) return no('error',"Invalid bid",false);
+  // Check not already used elsewhere. L-3: seed with prior-phase permanently-consumed numbers
+  // (from weeks won in earlier phases) so a race can't re-bid a number that's gone for good.
+  const usedElsewhere=[...getPriorPhaseUsedPriorities(user)];
+  for(const w of myCountedWeeks(user)){ if(w===wk)continue; const p=data[user][w]; if(p==="NP")continue; Array.isArray(p)?usedElsewhere.push(...p):usedElsewhere.push(p); }
+  const conflicts=priorities.filter(p=>usedElsewhere.includes(p));
+  if(conflicts.length) return no('error',"Bid"+(conflicts.length>1?"s":"")+" "+conflicts.join(", ")+" already used on another week.",false);
+  const isNew=!isVisibleBid(user,wk);
+  if(isNew&&bidLimitStatus(user).atLimit) return no('limit','',true);
+  return {ok:true,blSpend:_blSpend,newVal:priorities.length===1?priorities[0]:priorities,isNP:false};
+}
+// [215 · §282] Shows a refusal from _bidCheck or _removeCheck exactly as the code that stood in the box showed it.
+function _checkShow(c){
+  if(!c||c.ok) return;
+  if(c.kind==='error') showError(c.msg);
+  else if(c.kind==='center') showCenterAlert(c.msg);
+  else if(c.kind==='limit') showBidLimitModal();
+  if(c.close) window.closeModal();
+}
+// [215 · §282] "Saving…" on the bid box's Submit button while the save runs (Q6), and the button back afterwards: a second tap cannot
+// start a second save meanwhile.
+// The button belongs to the save that set it: a save gives it back only if no newer save has taken it since (a split save's bookkeeping
+// can outlast the save lock's safety release).
+let _prioSaveOwner=null;
+function _prioSaving(on,own){
+  try{
+    const b=document.getElementById('prioSubmitBtn'); if(!b) return;
+    if(on){ _prioSaveOwner=own; b.disabled=true; b.textContent='Saving…'; }
+    else if(_prioSaveOwner===own){ _prioSaveOwner=null; b.disabled=false; b.textContent='Submit Bid'; }
+  }catch(_){}
+}
 window.confirmPriority=async function(){
   if(!pendingWeek) return;
   // [DRYRUN 25 Jul 2026] Capture the target week ONCE. This function reads it again
@@ -3617,149 +4139,50 @@ window.confirmPriority=async function(){
   // bestBids.<user>.null and a change-log row with weekKey null. Use the local from here.
   const wk=pendingWeek;
   const sel=document.getElementById("prioritySelect"), val=sel.value.toUpperCase(), user=getCurrentUser();
-  let _blSpendUncounted=false; // [161 · RA-3] set when a sanctioned lowering's counter write is refused
   if(!val){showError("Please select a bid");return;}
-  // ALL gates run BEFORE any write. Previously the priority-lock, change-log,
-  // and bid-time writes happened first, so a bid rejected by a gate (timer
-  // expired / limit hit / week locked while the modal was open) still left
-  // phantom side effects behind.
-  if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); window.closeModal(); return; }
-  if(isAuctionClosed()){ showError("Bidding is closed — no more changes can be made."); window.closeModal(); return; }
-  if(locksData.globalLock||locksData.weeks?.[wk]){ showError("This week is locked — no more changes allowed."); window.closeModal(); return; }
-  if(!isVisibleBid(user,wk)&&bidLimitStatus(user).atLimit){ showBidLimitModal(); window.closeModal(); return; }
-  if(val==="NP"&&!npAllowedNow()){ showCenterAlert("NP bids are not enabled for Phase "+Number(phasesData.currentPhase||1)+" — the admin controls which phases allow them."); window.closeModal(); return; }
-  // L-3: re-validate the prior-phase-won guard, high-demand restriction, and priority-lock
-  // FLOOR at confirm time — not just via disabled dropdown options set at modal-open. A
-  // two-tab race (or an option list built from stale state) could otherwise submit a
-  // below-floor or disallowed bid. All checks run BEFORE any write (gates-first contract).
-  if(getPriorPhaseWinners(wk).has(user)){ showCenterAlert("You already won this week in an earlier phase or Phase 4 round — it's locked in for you."); window.closeModal(); return; }
-  { const _ad=p4AnnouncedDecision(user,wk); // [133] announced denial = frozen until it retires at the next round
-    if(_ad&&_ad.status==='D'){ showCenterAlert("This bid was denied in Phase 4: Round "+_ad.round+" — it clears when the next round opens, and you can place a fresh bid then."); window.closeModal(); return; } }
-  // [168 · §174] The "same bid, same answer" guard that stood here (131/134) is GONE: it existed only
-  // because p4AnnouncedDecision recognised a retired denial by VALUE. Now a denial binds only while its
-  // round is current, so a later-round re-bid — same value or not — is a fresh, live bid.
-  // [build 137 · BF] Week-category floor re-check at confirm time (L-3 pattern) — the floor
-  // comes from admin settings; NP is the weakest bid so any numeric floor blocks it here too.
-  { const _bfF=bfFloorFor(wk);
-    if(!bfAllows(_bfParse(val),_bfF)){ showCenterAlert("This "+(weekMeta[wk]?.highPriorityOnly?"high-demand":"summer")+" week needs a bid of "+_bfF+" or better."); window.closeModal(); return; } }
-  // [193 · §245] The weakest-winning-bid rule, re-checked at commit on the board as it stands NOW
-  // (a stale option list, a second tab, a competitor who left while the box was open). Before any write.
-  if(typeof _wwRefuses==='function'&&_wwRefuses(user,wk,_bfParse(val))!==false){ showCenterAlert(_wwMsg()); window.closeModal(); return; } // typeof = sandbox convention
-  // Priority-lock FLOOR re-check now also covers NP: NP (score 99) is weaker than any
-  // numbered floor, so submitting NP under a numeric floor is a below-floor bid.
-  // [build 139 · BL] A below-floor submission is now a SANCTIONED LOWERING while the user
-  // has allowance left this phase/round (L-3 re-check at commit — a two-tab race or a
-  // stale option list can never spend a lowering that no longer exists). The spend and
-  // the floor move-down are committed only AFTER the bid write itself lands.
-  let _blSpend=null;
-  if(adminSettings.priorityLockEnabled!==false){
-    const _floor=(bestBidsData[user]||{})[wk];
-    if(_floor!==undefined){
-      const _parsed=val==="NP"?"NP":(val.includes(',')?val.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n)):parseInt(val));
-      if(priorityScore(_parsed)>priorityScore(_floor)){
-        const _blRem=(typeof blRemaining==='function')?blRemaining(user):0; // typeof = sandbox convention (legacy scope ⇒ 0 ⇒ the classic refusal)
-        if(!(_blRem>0)){ showCenterAlert(typeof blExhaustedMsg==='function'?blExhaustedMsg(_floor):("Your bid on this week can only stay the same or get stronger — a previous bid set a floor here."+(val==="NP"?" NP is weaker than your existing bid.":""))); window.closeModal(); return; }
-        _blSpend={from:_floor};
-      }
-    }
-  }
+  { const _lr=(typeof _saveRefusal==='function')?_saveRefusal():null; if(_lr){ showCenterAlert(_lr); window.closeModal(); return; } } // [215 · §282] not live: nothing is saved
+  // [215 · §282] ALL the checks that stood here run in _bidCheck (above) now - moved, not rewritten: the same order, the same words,
+  // the same way of showing each. The save runs them once more on the server's copy, at the moment of saving.
+  const _bc=_bidCheck(user,wk,val);
+  if(!_bc.ok){ _checkShow(_bc); return; }
   const _prev=JSON.parse(JSON.stringify(data));
-  if(val==="NP"){
-    if(!data[user])data[user]={};
-    const isNewNP=data[user]?.[wk]===undefined;
-    data[user][wk]="NP";
-    // Persist FIRST; only stamp the floor/time/log if the write actually landed,
-    // so a bid rejected by the timer/lock re-check leaves no phantom priority floor.
-    const okSaveNP=await persistScheduleChange(user,wk,"NP",_prev);
-    if(okSaveNP){
-      // [BATCH D · M9 · build 127] The BID is saved at this point. If any bookkeeping write
-      // (floor, log, timestamp) fails, say so honestly and still close the modal — the old code
-      // let the rejection escape, so the modal stuck open over a bid that had actually saved.
-      // The local bidTimes mirror is stamped only AFTER its write lands (no phantom timestamp).
-      try{
-        await saveBestBid(user,wk,"NP",!!_blSpend); // [build 139 · BL] a sanctioned lowering moves the floor DOWN
-        // [161 · RA-3] The spend is now its own attempt. The floor has ALREADY moved down by
-        // this point; if the counter write is refused, the bidder has taken the benefit of a
-        // lowering that was never counted, and nothing anywhere re-derives it. That is not a
-        // "self-correcting" bookkeeping slip, so it no longer claims to be one.
-        if(_blSpend&&typeof _blCommitSpend==='function'){
-          try{ await _blCommitSpend(user); }catch(_bl){ _blSpendUncounted=true; }
-        }
-        logOwnChange(user,wk,_blSpend?'lowered':(isNewNP?'added':'edited'),"NP").catch(()=>{});
-        const nowTs=Date.now();
-        await setDoc(bidTimesRef,{[user]:{[wk]:nowTs}},{merge:true});
-        if(!bidTimesData[user]) bidTimesData[user]={};
-        bidTimesData[user][wk]=nowTs;
-      }catch(_bk){
-        showCenterAlert("Your bid IS saved. Some bookkeeping (bid floor or timestamp) didn't record — it will self-correct on your next change; no action needed.");
-      }
-      if(_blSpendUncounted) showCenterAlert("Your bid IS saved and the lower bid stands. One thing did NOT record: this lowering was not counted against your allowance, and it will not correct itself. Please tell your admin so the count can be put right.");
-    } else {
-      // L-2: write didn't land (save in flight, or a timer/lock re-check) — undo the optimistic
-      // change on THIS key only. Don't restore `data` wholesale: a fresher snapshot may have
-      // arrived during the await.
-      if(_prev[user]?.[wk]===undefined){ if(data[user]) delete data[user][wk]; }
-      else { data[user][wk]=_prev[user][wk]; }
-      scheduleRender();
-    }
-    window.closeModal(); return;
-  }
-  const priorities=val.split(',').map(p=>parseInt(p.trim())).filter(p=>!isNaN(p));
-  if(!priorities.length){showError("Invalid bid");return;}
-  // Check not already used elsewhere. L-3: seed with prior-phase permanently-consumed numbers
-  // (from weeks won in earlier phases) so a race can't re-bid a number that's gone for good.
-  const usedElsewhere=[...getPriorPhaseUsedPriorities(user)];
-  for(const w of myCountedWeeks(user)){ if(w===wk)continue; const p=data[user][w]; if(p==="NP")continue; Array.isArray(p)?usedElsewhere.push(...p):usedElsewhere.push(p); }
-  const conflicts=priorities.filter(p=>usedElsewhere.includes(p));
-  if(conflicts.length){showError("Bid"+(conflicts.length>1?"s":"")+" "+conflicts.join(", ")+" already used on another week.");return;}
-  const isNew=!isVisibleBid(user,wk);
-  if(isNew&&bidLimitStatus(user).atLimit){showBidLimitModal();window.closeModal();return;}
   if(!data[user])data[user]={};
-  const newPrio=priorities.length===1?priorities[0]:priorities;
-  const isNewBid=data[user]?.[wk]===undefined;
-  data[user][wk]=newPrio;
-  // Persist FIRST; only stamp the floor/time/log if the write actually landed, so a
-  // bid rejected by the timer/lock re-check leaves no phantom priority floor.
-  const okSaveBid=await persistScheduleChange(user,wk,newPrio,_prev);
-  if(okSaveBid){
-    // [BATCH D · M9 · build 127] Same honest bookkeeping guard as the NP branch above.
-    try{
-      await saveBestBid(user,wk,newPrio,!!_blSpend); // [build 139 · BL] a sanctioned lowering moves the floor DOWN
-      // [161 · RA-3] see the NP branch above — an uncounted lowering is reported, not glossed.
-      if(_blSpend&&typeof _blCommitSpend==='function'){
-        try{ await _blCommitSpend(user); }catch(_bl){ _blSpendUncounted=true; }
-      }
-      logOwnChange(user,wk,_blSpend?'lowered':(isNewBid?'added':'edited'),newPrio).catch(()=>{});
-      // Record the timestamp this bid was placed/replaced — local mirror AFTER the write lands
-      const nowTs2=Date.now();
-      await _awaitWrite(setDoc(bidTimesRef,{[user]:{[wk]:nowTs2}},{merge:true})); // [162] deadline
-      if(!bidTimesData[user]) bidTimesData[user]={};
-      bidTimesData[user][wk]=nowTs2;
-    }catch(_bk){
-      showCenterAlert("Your bid IS saved. Some bookkeeping (bid floor or timestamp) didn't record — it will self-correct on your next change; no action needed.");
-    }
-    if(_blSpendUncounted) showCenterAlert("Your bid IS saved and the lower bid stands. One thing did NOT record: this lowering was not counted against your allowance, and it will not correct itself. Please tell your admin so the count can be put right.");
+  data[user][wk]=_bc.newVal;
+  // Persist FIRST. [215 · §282] persistScheduleChange writes the bid and everything that goes with it - its floor, the lowering it
+  // spends and its change-log row, in its transaction (the combined shape) or straight after it as 214's separate writes with 214's
+  // messages (the split shape); then the bid time. It returns once all of that is answered. "Saving…" meanwhile.
+  const _own={};
+  _prioSaving(true,_own);
+  let okSave=false;
+  try{ okSave=await persistScheduleChange(user,wk,_bc.newVal,_prev); }
+  finally{ _prioSaving(false,_own); }
+  if(okSave){
     _clearDlgErrs(); // [162] the bid landed — never rescue a message the user already fixed
   } else {
     // L-2: write didn't land — undo the optimistic change on THIS key only (not `data` wholesale).
-    if(_prev[user]?.[wk]===undefined){ if(data[user]) delete data[user][wk]; }
-    else { data[user][wk]=_prev[user][wk]; }
+    // [215 · §282] And only while the board still shows what was typed: a newer snapshot may already show something else (red team #11).
+    if(data[user]&&JSON.stringify(data[user][wk])===JSON.stringify(_bc.newVal)){
+      if(_prev[user]?.[wk]===undefined) delete data[user][wk];
+      else data[user][wk]=_prev[user][wk];
+    }
     scheduleRender();
   }
-  window.closeModal();
+  if(pendingWeek===wk) window.closeModal(); // [215 · §282] only if the box is still this save's (the bidder may have closed it and opened another week)
 };
 
 // ── [199 · §257, owner 8 Oct 2026] SWAP THE BIDS ON TWO OF YOUR OWN WEEKS, IN ONE STEP ─────────────────────
 // Owner-found: a bidder who wants the numbers on two of their weeks the other way round cannot do it by Edit (each box
 // refuses a number that is on another week, and the engine throws out every bid of a person with one number on two
 // weeks), so they removed a bid and placed it again - and colleagues were e-mailed a projection that was out of date a
-// minute later. A swap exchanges the two bids in ONE batch write (both land or neither does, so no number is ever on
+// minute later. A swap exchanges the two bids in ONE transaction (both land or neither does, so no number is ever on
 // two weeks) and is judged ONCE: one timer decision, one alert e-mail per affected colleague, carrying the net result.
 // IT IS NEVER LOOSER THAN TWO EDITS. _swapCheck runs, for BOTH weeks and before any write, every gate the Edit path runs
 // (confirmPriority): the page loaded, bidding open, the locks, a bid of this phase on each week, already-won and
 // decided weeks, NP by phase, the week-category floor, held and spent numbers, the competition rule (_wwRefuses, on the
 // picture with both bids exchanged) and the priority lock with its lowering allowance (a swap can cost one lowering,
-// or two). The existing save, Edit and Remove code is not touched by any of this.
+// or two). [215 · §282] Since 215 the swap, Edit and Remove all save through one transaction helper (_txSave), judged again on the
+// server's copy; the bookkeeping goes in the transaction (combined shape) or straight after it (split shape); the bid times after it.
+let _swapOwner=null; // [215 · §282] the swap that holds _swapBusy - only its owner releases it
 let _swapWith=null, _swapExpect=null, _swapBusy=false;
 function _swapWeekName(wk){ const m=weekMeta[wk]; return m?('Week '+m.weekNum):String(wk); }
 // The other weeks this bidder could swap `wk` with: a bid of this phase, on the board, different from this week's.
@@ -3856,6 +4279,7 @@ function _swapEntrySync(user,wk,isRebid){
 }
 window.openSwapStep=function(){
   const wk=pendingWeek, user=getCurrentUser(); if(!wk||!user||!weekMeta[wk]) return;
+  { const _lr=(typeof _saveRefusal==='function')?_saveRefusal():null; if(_lr){ showError(_lr); return; } } // [215 · §282] not live: the Swap step does not open
   const list=_swapPartners(user,wk);
   if(!list.length){ showError("You have no other bid to swap with."); return; }
   const meta=weekMeta[wk];
@@ -3875,6 +4299,7 @@ window.reviewSwap=function(){
   const wkA=pendingWeek, user=getCurrentUser(); if(!wkA||!user) return;
   const sel=document.getElementById('swapSelect'), wkB=sel?sel.value:'';
   if(!wkB){ _swapErr("Please choose a week to swap with."); return; }
+  { const _lr=(typeof _saveRefusal==='function')?_saveRefusal():null; if(_lr){ _swapErr(_lr); return; } } // [215 · §282] not live
   const c=_swapCheck(user,wkA,wkB);
   if(!c.ok){ _swapErr(c.msg); return; }
   _swapErr('');
@@ -3892,11 +4317,16 @@ window.reviewSwap=function(){
   if(lw){ lw.textContent=note; lw.style.display=note?'block':'none'; }
   _swapShow('confirm');
 };
-// The save. ONE batch: both weeks and their phase tags. Then, once, on the same before / after pictures: the Fair Play
-// facts, the timer decision and the alert e-mails - the shape of persistScheduleChange, for two weeks instead of one.
-// Returns false (nothing saved, or it could not be confirmed) or {facts}. Bookkeeping is the caller's, as in Edit.
+// The save. [215 · §282] ONE TRANSACTION (it was one batch): both weeks and their phase tags, judged again on the server's copy at the
+// moment of saving (_swapCheck, and the bids the confirm panel named); the floors, the lowering count and the two change-log rows in
+// the same transaction (the combined shape) or straight after it, the rows first (the split shape, _txAfter); the bid times always
+// after the commit. Then, once, on the same before / after pictures as before: the Fair Play facts, the timer decision and the alert
+// e-mails - the shape of persistScheduleChange, for two weeks instead of one.
+// Returns true (saved, once all of it is answered) or false (nothing saved, or it could not be confirmed). The bookkeeping is no
+// longer the caller's.
 async function persistSwap(user,wkA,wkB,a,b,prevSnapshot){
   if(typeof _boardReady==='function'&&!_boardReady()){ showCenterAlert("The page is still loading — please try again in a moment."); return false; }
+  { const _lr=(typeof _saveRefusal==='function')?_saveRefusal():null; if(_lr){ showCenterAlert(_lr); return false; } } // [215 · §282] not live
   if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); return false; }
   if(isAuctionClosed()){ showError("Bidding is closed — no more changes can be made."); return false; }
   if(locksData.globalLock||locksData.weeks?.[wkA]||locksData.weeks?.[wkB]){ showError("This week is locked — no more changes allowed."); return false; }
@@ -3904,15 +4334,8 @@ async function persistSwap(user,wkA,wkB,a,b,prevSnapshot){
   if(!_pu||wkA===wkB||JSON.stringify(_pu[wkA])!==JSON.stringify(a)||JSON.stringify(_pu[wkB])!==JSON.stringify(b)||!isCurrentPhaseBid(user,wkA)||!isCurrentPhaseBid(user,wkB)){ showError("That swap is not available."); return false; }
   if(saveInProgress){ showCenterAlert("Still saving your previous change — please wait a moment and try again."); return false; }
   saveInProgress=true;
-  const safety=setTimeout(()=>{saveInProgress=false;},15000);
+  const _lock={}; _saveOwner=_lock; const safety=setTimeout(()=>{ if(_saveOwner===_lock){ saveInProgress=false; _saveOwner=null; } },SAVE_BUDGET_MS+1000); // [215 · §282] outlives the one save budget; only THIS save's lock is released
   try{
-    const _ph=Number(phasesData.currentPhase||1);
-    const _b=writeBatch(db);
-    _b.set(scheduleRef, {[user]: {[wkA]: b, [wkB]: a}}, {merge:true});
-    _b.set(bidPhaseRef, {[user]: {[wkA]: _ph, [wkB]: _ph}}, {merge:true});
-    await _awaitWrite(_b.commit());
-    if(!bidPhaseData[user]) bidPhaseData[user]={};
-    bidPhaseData[user][wkA]=_ph; bidPhaseData[user][wkB]=_ph;
     const _beforeSnap=prevSnapshot;
     const _afterSnap=JSON.parse(JSON.stringify(prevSnapshot));
     _afterSnap[user][wkA]=b; _afterSnap[user][wkB]=a;
@@ -3930,29 +4353,51 @@ async function persistSwap(user,wkA,wkB,a,b,prevSnapshot){
         if(timerData.enabled&&timerData.lastChange){ f.tRem=Math.round(_remBefore); f.tDur=Math.min((timerData.durationHours||48),stage0Hours())*3600000; }
         facts[w]=f; }
     }catch(_){ facts=null; }
+    // [215 · §282] The timer DECISION before the save (so the rows saved with the swap can record it); the write once it is confirmed.
+    let _resetWanted=false;
     if(timerData.enabled&&_remBefore>0&&!openingWindowActive()
        &&_timerModeAllowsReset(_timerResetMode(),false,_beforeSnap,_afterSnap,user)){
       const _n=Date.now(); const _resetH=timerResetHours(timerPhaseStartMs(),_n);
       const _curDeadline=timerData.lastChange?(timerData.lastChange+((timerData.durationHours||48)*3600000)):0;
-      if(_n+_resetH*3600000>=_curDeadline){ if(facts){ const w=(facts[wkA].aff||!facts[wkB].aff)?wkA:wkB; facts[w].tReset=true; } setDoc(timerRef,{lastChange:_n,durationHours:_resetH},{merge:true}).catch(()=>{}); }
+      if(_n+_resetH*3600000>=_curDeadline){ if(facts){ const w=(facts[wkA].aff||!facts[wkB].aff)?wkA:wkB; facts[w].tReset=true; } _resetWanted=true; }
     }
-    if(adminSettings.emailNotifsEnabled!==false){
-      sendEmailNotifications(_beforeSnap,_afterSnap,user).catch(()=>{});
-    }
-    return {facts:facts};
+    const _exp=JSON.stringify([a,b]);
+    const _res=await _txSave({
+      user:user, weeks:[wkA,wkB],
+      // "Already there" (only after an attempt whose reply was lost): both weeks exchanged, each with this phase's tag. Asked BEFORE
+      // the checks, so a swap that did land is never swapped back (red team #9).
+      done:pic=>JSON.stringify(_picVal(pic,user,wkA))===JSON.stringify(b)&&JSON.stringify(_picVal(pic,user,wkB))===JSON.stringify(a)&&Number(_picTag(pic,user,wkA))===_picPhase(pic)&&Number(_picTag(pic,user,wkB))===_picPhase(pic),
+      judge:()=>{
+        const c=_swapCheck(user,wkA,wkB);
+        if(!c.ok) return {ok:false,kind:'center',msg:c.msg};
+        // The confirm panel named two bids: if the server's are not those, nothing is swapped (confirmSwap's own check, here again),
+        // and the approved sentence is shown alone (_txSaveEnd). A refusal by _swapCheck above carries its own message after it.
+        if(JSON.stringify([c.a,c.b])!==_exp) return {ok:false,kind:'center',msg:''};
+        return c;
+      },
+      writes:(tx,pic,c,split)=>_txWriteSwap(tx,pic,user,wkA,wkB,c,facts,split)
+    });
+    // After the save: the page's own tags, the timer and the alert e-mails, as before, then the bookkeeping (_txAfter) - the same, late,
+    // if confirmed late.
+    const _follow=info=>{
+      if(!bidPhaseData[user]) bidPhaseData[user]={};
+      bidPhaseData[user][wkA]=info.ph; bidPhaseData[user][wkB]=info.ph;
+      if(_resetWanted) _timerResetWrite();
+      if(adminSettings.emailNotifsEnabled!==false){
+        sendEmailNotifications(_beforeSnap,_afterSnap,user).catch(()=>{});
+      }
+      return _txAfter(user,info,'swap'); // [215 · §282] then the bookkeeping (the split shape: the rows first) and the bid times
+    };
+    return await _txSaveEnd(_res,_follow,'swap');
   }catch(e){
-    if(e&&e.code==="write-deadline"){
-      showError("Couldn't confirm your swap — your connection may have dropped. Check the board before you leave this page.");
-    } else {
-      showError("Save failed: "+e.message);
-    }
+    showError("Save failed: "+e.message);
     return false;
   } finally {
     clearTimeout(safety);
-    saveInProgress=false;
+    if(_saveOwner===_lock){ saveInProgress=false; _saveOwner=null; } // [215 · §282] only this save's own lock
   }
 }
-window._persistSwap=persistSwap; // exposed for testing
+// [215 · §282, owner Q4] window._persistSwap is gone: a swap typed into the browser console skipped the swap's checks.
 window.confirmSwap=async function(){
   // One swap at a time: unlike re-saving the same bid, a second Confirm is NOT harmless - it would swap the bids back.
   // A second press of the same button finds the box no longer armed and says nothing; a DIFFERENT swap confirmed while
@@ -3960,9 +4405,10 @@ window.confirmSwap=async function(){
   if(_swapBusy){ if(pendingWeek&&_swapWith) showCenterAlert("Still saving your previous change — please wait a moment and try again."); return; }
   const wkA=pendingWeek, wkB=_swapWith, user=getCurrentUser();
   if(!wkA||!wkB||!user) return;
-  _swapBusy=true;
+  const _swapLock={}; _swapBusy=true; _swapOwner=_swapLock; // [215 · §282] this swap owns the lock until it is done
   let _btn=null;
   try{
+    { const _lr=(typeof _saveRefusal==='function')?_saveRefusal():null; if(_lr){ showCenterAlert(_lr); window.closeModal(); return; } } // [215 · §282] not live: nothing is swapped
     // ALL gates again, on the board as it stands NOW, before any write (the L-3 pattern of confirmPriority).
     const c=_swapCheck(user,wkA,wkB);
     if(!c.ok){ showCenterAlert(c.msg); window.closeModal(); return; }
@@ -3972,66 +4418,54 @@ window.confirmSwap=async function(){
     try{ _btn=document.getElementById('swapConfirmBtn'); if(_btn){ _btn.disabled=true; _btn.textContent='Saving…'; } }catch(_){ _btn=null; }
     const _prev=JSON.parse(JSON.stringify(data));
     const saved=await persistSwap(user,wkA,wkB,c.a,c.b,_prev);
-    if(!saved){ scheduleRender(); window.closeModal(); return; }
+    if(!saved){ scheduleRender(); if(pendingWeek===wkA) window.closeModal(); return; } // [215 · §282] closes only this swap's own box
     // The board, only where it still shows the old bid: a newer snapshot may already have brought the new one, or something newer still.
     if(data[user]&&typeof data[user]==='object'){
       if(JSON.stringify(data[user][wkA])===JSON.stringify(c.a)) data[user][wkA]=c.b;
       if(JSON.stringify(data[user][wkB])===JSON.stringify(c.b)) data[user][wkB]=c.a;
     }
-    // BOTH change-log rows go out now, before any other bookkeeping is waited for: the competition rule replays that log in the
-    // order the server took the rows, and a row that arrived AFTER a later removal of the same bid would read as that person
-    // coming back (audit, 9 Oct 2026). logOwnChange takes its facts before its first await, so each row gets its own.
-    for(const w of [wkA,wkB]){
-      try{ _fpLastFacts=(saved.facts&&saved.facts[w])?{user:user,wk:w,f:saved.facts[w]}:null; }catch(_){}
-      logOwnChange(user,w,c.low[w]?'lowered':'edited',c.inc[w]).catch(()=>{});
-    }
-    scheduleRender();
-    // Then the floors and the lowering count - a week that spends a lowering first. The box stays up, its button reading
-    // "Saving…", until they are in: an Edit of one of these weeks made before then would be judged on the old floor and the
-    // old count (audit, 9 Oct 2026 - the same wait the ordinary bid box makes). Each write is its own attempt, so a failure on
-    // one never costs another.
-    let _bkFail=false, _uncounted=false;
-    for(const w of ((c.low[wkB]&&!c.low[wkA])?[wkB,wkA]:[wkA,wkB])){
-      try{
-        await saveBestBid(user,w,c.inc[w],!!c.low[w]);
-        if(c.low[w]&&typeof _blCommitSpend==='function'){ try{ await _blCommitSpend(user); }catch(_bl){ _uncounted=true; } }
-      }catch(_bk){ _bkFail=true; }
-    }
-    // Now the box closes - but only if it is still THIS swap's box (the bidder may have closed it and opened another week).
+    // [215 · §282] persistSwap has finished everything that goes with the swap before returning: the two change-log rows, the floors
+    // and the lowering count - in the swap's own transaction (the combined shape), or straight after it, the rows first (the split
+    // shape, _txAfter) - and it has started the bid times, a separate best-effort write after the commit (kept out of the transaction
+    // by the rules' access-call limit). Nothing more to wait for here. The box closes now - but only if it is still THIS swap's box
+    // (the bidder may have closed it and opened another week), as on the failure path above.
     _clearDlgErrs(); if(pendingWeek===wkA) window.closeModal();
-    // Last, the bid times.
-    for(const w of [wkA,wkB]){
-      try{
-        const ts=Date.now();
-        await _awaitWrite(setDoc(bidTimesRef,{[user]:{[w]:ts}},{merge:true}));
-        if(!bidTimesData[user]) bidTimesData[user]={};
-        bidTimesData[user][w]=ts;
-      }catch(_bk){ _bkFail=true; }
-    }
-    if(_bkFail) showCenterAlert("Your swap IS saved. Some bookkeeping (bid floor or timestamp) didn't record — it will self-correct on your next change; no action needed.");
-    if(_uncounted) showCenterAlert("Your swap IS saved and the lower bid stands. One thing did NOT record: a lowering was not counted against your allowance, and it will not correct itself. Please tell your admin so the count can be put right.");
     scheduleRender();
   } finally {
-    _swapBusy=false;
-    try{ if(_btn){ _btn.disabled=false; _btn.textContent='Swap Bids'; } }catch(_){}
+    if(_swapOwner===_swapLock){ _swapBusy=false; _swapOwner=null; try{ if(_btn){ _btn.disabled=false; _btn.textContent='Swap Bids'; } }catch(_){} } // [215 · §282] only this swap's own lock and button
   }
 };
 
-async function removeSelection(wk){
-  if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); return; }
-  if(isAuctionClosed()){ showError("Bidding is closed — no more changes can be made."); return; }
-  if(locksData.globalLock||locksData.weeks?.[wk]){ showError("This week is locked — no more changes allowed."); return; }
-  const user=getCurrentUser(); if(!data[user])return;
+// [215 · §282] THE REMOVE BOX'S CHECKS, moved here unchanged from removeSelection - the same order, the same words - so they run
+// twice: on the page's copy before the box opens, and again on the server's copy at the moment of saving, where one more is asked:
+// is the bid still the one the box showed (`expect`)? A win or a Phase 4 denial that arrives while the box is open is caught now
+// (red team #8). Read-only. The answer: ok, or a refusal with how it is shown - 'error' = showError, 'center' = showCenterAlert,
+// 'silent' = nothing at all, as before (_checkShow).
+function _removeCheck(user,wk,expect){
+  if(!biddingOpen()) return {ok:false,kind:'error',msg:"Bidding hasn't started yet — it opens when the admin begins Phase 1."};
+  if(isAuctionClosed()) return {ok:false,kind:'error',msg:"Bidding is closed — no more changes can be made."};
+  if(locksData.globalLock||locksData.weeks?.[wk]) return {ok:false,kind:'error',msg:"This week is locked — no more changes allowed."};
+  if(!data[user]) return {ok:false,kind:'silent',msg:''};
   // [build 132 · LIVE BUG, lead admin] A WON week can never be cancelled — in rolling
   // Phase 4 the week may be UNLOCKED for later rounds, so the lock check above no longer
   // covers it (in phases 1–3 a won week's bid was structurally uncancellable). Without
   // this, cancelling deleted the winning bid's data: the win survived via the archive,
   // but the bid's numbers wrongly returned to the user's pool.
-  if(getPriorPhaseWinners(wk).has(user)){ showCenterAlert("You won this week — it's locked in and cannot be edited or cancelled."); return; }
+  if(getPriorPhaseWinners(wk).has(user)) return {ok:false,kind:'center',msg:"You won this week — it's locked in and cannot be edited or cancelled."};
   // [build 133] An announced round DENIAL is frozen history too — the bid clears by itself
   // when the next round opens, and the week is then re-biddable fresh.
   { const _ad=p4AnnouncedDecision(user,wk);
-    if(_ad&&_ad.status==='D'){ showCenterAlert("This bid was denied in Phase 4: Round "+_ad.round+" — it will clear automatically when the next round opens, and you can bid this week again then."); return; } }
+    if(_ad&&_ad.status==='D') return {ok:false,kind:'center',msg:"This bid was denied in Phase 4: Round "+_ad.round+" — it will clear automatically when the next round opens, and you can bid this week again then."}; }
+  // [215 · §282] At the moment of saving: the bid is still the one the box showed, and still a live bid of this phase. If not, the
+  // approved sentence alone is shown ("The board changed before your change was saved — nothing was saved." - _txSaveEnd).
+  if(expect!==undefined&&!(JSON.stringify(data[user][wk])===JSON.stringify(expect)&&isVisibleBid(user,wk))) return {ok:false,kind:'center',msg:''};
+  return {ok:true};
+}
+async function removeSelection(wk){
+  { const _lr=(typeof _saveRefusal==='function')?_saveRefusal():null; if(_lr){ showCenterAlert(_lr); return; } } // [215 · §282] not live: the Remove box does not open
+  const user=getCurrentUser();
+  // [215 · §282] The checks that stood here run in _removeCheck (above) now - moved, not rewritten; each shown exactly as before.
+  { const _rc=_removeCheck(user,wk); if(!_rc.ok){ _checkShow(_rc); return; } }
   // (Rule removed 12 Jul 2026: users may cancel any bid, including on weeks
   // they are currently projected to win.)
   const prio=data[user][wk];
@@ -4095,18 +4529,15 @@ async function removeSelection(wk){
   const msg=`<div style="font-size:.95rem;font-weight:600;color:#132f49">You are removing your bid for <span style="color:#006ba6">Week ${meta.weekNum}</span> (${meta.range}).</div>
   <div style="margin-top:8px;font-size:.85rem;color:#2c4257">Current bid: <strong style="color:#005e93">${bidLbl(prio)}</strong></div>${_editMsg}${lockMsg}`;
   if(!await showConfirm(msg,{yesText:'Confirm Remove',noText:'Cancel'})) return;
+  { const _lr=(typeof _saveRefusal==='function')?_saveRefusal():null; if(_lr){ showCenterAlert(_lr); return; } } // [215 · §282] and again after Confirm
   const _prev=JSON.parse(JSON.stringify(data));
-  // Persist the removal FIRST; only clear the local bid, stamp the floor, drop the
-  // bid time, and log it if the delete actually landed — a removal rejected by the
-  // timer/lock re-check must leave the bid (and its state) untouched.
-  const okRemove=await persistScheduleChange(user,wk,null,_prev);
+  // Persist the removal FIRST; only clear the local bid if the delete actually landed — a removal refused must leave the bid (and its
+  // state) untouched. [215 · §282] The save runs the checks above again on the server's copy, with the bid this box showed (prio), and
+  // writes the removal with its floor and change-log row - in its transaction (the combined shape) or straight after it (the split
+  // shape); the bid time is cleared after the commit.
+  const okRemove=await persistScheduleChange(user,wk,null,_prev,prio);
   if(okRemove){
-    delete data[user][wk];
-    await saveBestBid(user,wk,prio);
-    // Clear bid timestamp — atomic delete of nested key
-    if(bidTimesData[user]) bidTimesData[user][wk]=null;
-    await updateDoc(bidTimesRef,{[`${user}.${wk}`]:deleteField()}).catch(()=>setDoc(bidTimesRef,{[user]:{[wk]:null}},{merge:true}));
-    logOwnChange(user,wk,'removed',prio);
+    if(data[user]) delete data[user][wk];
   }
 }
 window.removeSelection=removeSelection;
