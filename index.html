@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 216;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 217;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -373,6 +373,14 @@ select:focus{outline:none;border-color:#006ba6}
 .swap-rows{display:flex;flex-direction:column;gap:8px;margin-bottom:14px}
 .swap-row{flex:none;display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:50px;padding:8px 14px;border:2px solid #006ba6;border-radius:10px;background:#fff;color:#005e93;font-size:.95rem;font-weight:700;text-align:left}
 .swap-row-bid{font-size:1.05rem;white-space:nowrap}
+/* [217 · §285] THE TWO SCREENS of the bid box. Screen 1 = the single numbers and NP (#bidTiles), the "Combination bids ›" button
+   (#comboEntry), Swap and the "Not available" row; screen 2 = the combinations (#comboScreen). The class .combo-on on #prioStep1 is the
+   only switch: the title row with its refusal slot, the week panel and the button row are on both screens. !important: the holders
+   carry an inline display, set by the paint. */
+#prioStep1.combo-on>.modal-label,#prioStep1.combo-on>#bidTiles,#prioStep1.combo-on>#comboEntry,#prioStep1.combo-on>#swapEntry,#prioStep1.combo-on>#bidTilesNA{display:none!important}
+#prioStep1:not(.combo-on)>#comboScreen{display:none!important}
+.combo-open[aria-pressed="true"]{background:#006ba6!important;color:#fff!important} /* a combination is the chosen bid: the button is filled */
+.combo-place{font-size:.8rem;font-weight:600;opacity:.85;text-align:right} /* a combination tile's place ("better than 2"), in small type */
 /* The list the bid is read from stays in the page, out of sight, ONLY while its buttons are drawn (the script sets .tiles-on last).
    min-width:0 undoes the 180px every drop-down on this page is given on a wide screen. */
 .tiles-on>.priority-input{position:absolute;width:1px;min-width:0;height:1px;margin:-1px;padding:0;border:0;opacity:0;overflow:hidden;clip-path:inset(50%);pointer-events:none}
@@ -569,6 +577,8 @@ body{zoom:1.15}
       </select>
       <!-- [202 · §259] Filled by _bidTilesPaint each time the box opens: one button per number that can be chosen. Empty and hidden until then. -->
       <div id="bidTiles" class="bid-tiles" style="display:none"></div>
+      <!-- [217 · §285] Screen 1's "Combination bids ›" button and its line. Filled by _comboPaint each time the box opens; empty and hidden until then, and whenever the admin allows no combination. -->
+      <div id="comboEntry" style="display:none;margin:0 0 14px;text-align:center"></div>
       <!-- [199 · §257] Shown by _swapEntrySync only when this is an existing bid and another bid of this phase exists to swap with. -->
       <div id="swapEntry" style="display:none;margin:0 0 14px;text-align:center">
         <button type="button" id="swapOpenBtn" class="btn-secondary" onclick="openSwapStep()" style="width:100%;min-height:50px;font-weight:700;font-size:1.2rem;border-color:#006ba6;color:#005e93;background:rgba(0,107,166,.07)">⇄ Swap bids</button>
@@ -576,6 +586,8 @@ body{zoom:1.15}
       </div>
       <!-- [202 · §259] The numbers that cannot be chosen, small and last: visible, out of the way. Filled by _bidTilesPaint. -->
       <div id="bidTilesNA" class="bid-tiles-na" style="display:none"></div>
+      <!-- [217 · §285] Screen 2, the combination bids: filled by _comboPaint; on screen only while #prioStep1 carries .combo-on. The title row and the week panel above stay. -->
+      <div id="comboScreen" style="display:none"></div>
       <div class="modal-buttons">
         <button class="btn-secondary" onclick="closeModal()">Cancel</button>
         <button class="btn-primary" onclick="reviewBid()">Continue →</button>
@@ -944,7 +956,20 @@ const RULE_NOWEAKEN_STD='On a competition week, a new bid must be at least as st
 function _ruleNoWeakenText(){ return (typeof _strictOn==='function'&&_strictOn())?_strictW4():RULE_NOWEAKEN_STD; }
 function _compTipText(){ return (typeof _strictOn==='function'&&_strictOn())?STRICT_W5:COMP_TIP_TEXT; }
 // The Rules & Reminders line follows the set. It writes only when what shows has to change - under Standard it never does.
-function _ruleSetSync(){ try{ const el=document.getElementById('ruleNoWeaken'); if(!el) return; const t=_ruleNoWeakenText(); if(el.textContent!==t) el.textContent=t; }catch(_){} }
+function _ruleSetSync(){ try{ const el=document.getElementById('ruleNoWeaken'); if(!el) return; const t=_ruleNoWeakenText(); if(el.textContent!==t) el.textContent=t; }catch(_){} if(typeof _comboRuleSync==='function') _comboRuleSync(); } // [217 · §285] and the combination bids' line (W9): asked by the settings listener and every render, as this one
+// [217 · §285] W9: the one Rules & Reminders line on the allowed combinations, straight after "A combined bid like 1/2/3 …" (which stays word
+// for word). The line exists only while the set is not today's: it is put in when needed and taken out when not, so with the setting
+// never saved the list is the 216 markup exactly.
+function _comboRuleSync(){
+  try{
+    const np=document.getElementById('ruleNpPhases'); if(!np||!np.parentNode) return;
+    const t=(typeof comboRulesBullets==='function'?comboRulesBullets():[])[0]||'';
+    let li=document.getElementById('ruleCombo');
+    if(!t){ if(li&&typeof li.remove==='function') li.remove(); return; }
+    if(!li){ li=document.createElement('li'); li.id='ruleCombo'; np.parentNode.insertBefore(li,np); }
+    if(li.textContent!==t) li.textContent=t;
+  }catch(_){}
+}
 // The quiet "Reconnecting…" line above the board: shown only while the board is drawn and the page is not live. Called by
 // renderBoardLoading on every render; writes to the page only when what is showing has to change.
 function _boardLivePaint(){
@@ -1307,7 +1332,7 @@ AC.holidays.forEach(h=>{
 });
 // [build 137 · BF] Bid floors by week category — admin-controlled (adminSettings.bidFloors).
 // ONE RULE: a bid may be placed on a week only if it is at least as strong as the week
-// category's floor, on the ladder 1/2/3 › 1/2 › 1 › 2 › … › 10 › NP. NP is the weakest
+// category's floor, on the ladder 1/2/3 › 1/2 › 1 › 2 › … › 10 › NP ([217 · §285] with 2/3, 3/4 and 4/5 between, when allowed). NP is the weakest
 // bid, so ANY numeric floor blocks NP automatically. 'none' = No floor — all bids allowed.
 // Categories: highDemand (config HD weeks; wins on overlap) · summer (config summer window)
 // · all other weeks are ALWAYS 'none' (fixed by design). Defaults reproduce the former
@@ -1343,7 +1368,57 @@ function bfAllows(p,floor){
 function _bfEngineFilter(u,wk,p){
   if(!bfAllows(p,bfFloorFor(wk))) return false;
   if(p==="NP"&&!npAllowedForPhase(getUserBidPhase(u,wk))) return false;
+  if(Array.isArray(p)&&typeof comboAllowed==='function'&&!comboAllowed(p)&&(typeof comboJudgedNow!=='function'||comboJudgedNow())) return false; // [FIX1 · F1] not in a decided phase's gap · [217 · §285] a combination the admin does not allow is not a competitor (as a below-floor bid). typeof = sandbox convention
   return true;
+}
+// ── [217 · §285, owner 16 Oct 2026] COMBINATION BIDS — which ones the admin allows (twin: admin 381, the same lines) ────────────────
+// One setting, adminSettings.comboBids: the allowed combinations, written in strength order, e.g. ["1,2,3","1,2","2,3"]. Never saved, or
+// anything malformed (not a list; an entry that is not one of the five, exactly as written; a duplicate) = today's set, 1/2/3 and 1/2.
+// The five in another order are put into strength order. [] is a real choice: no combinations at all. Read LIVE from adminSettings.
+// The order of all 15, strongest first (his ruling "2/3 stronger than 2"): 1/2/3 › 1/2 › 1 › 2/3 › 2 › 3/4 › 3 › 4/5 › 4 › 5 … 10 › NP.
+const COMBO_ALL=['1,2,3','1,2','2,3','3,4','4,5'];   // the five, strongest first
+const COMBO_STD=['1,2,3','1,2'];                     // today's set: the setting never saved
+const COMBO_ORDER=['1,2,3','1,2','1','2,3','2','3,4','3','4,5','4','5','6','7','8','9','10']; // every bid but NP, strongest first
+function comboNormalize(raw){
+  if(!Array.isArray(raw)) return null;
+  const seen=[];
+  for(const v of raw){ if(typeof v!=='string'||COMBO_ALL.indexOf(v)<0||seen.indexOf(v)>=0) return null; seen.push(v); }
+  return COMBO_ALL.filter(v=>seen.indexOf(v)>=0);
+}
+function comboSet(){ try{ return comboNormalize((typeof adminSettings!=='undefined'&&adminSettings)?adminSettings.comboBids:null)||COMBO_STD.slice(); }catch(_){ return COMBO_STD.slice(); } }
+function comboLbl(v){ return String(v).split(',').join('/'); }
+// A bid of two or more numbers is allowed only when its combination is in the set (read the way the score reads it: sorted, joined).
+// Anything else is not a combination: true.
+function comboAllowed(p){
+  if(!Array.isArray(p)||p.length<2) return true;
+  return comboSet().indexOf([...p].sort((a,b)=>a-b).join(','))>=0;
+}
+// The allowed ladder, strongest first: as list values ('1,2,3' … '10', then 'NP') and as bids ([1,2,3] … 10, no NP).
+// Never saved: exactly the ladders the pages wrote out by hand before 217.
+function comboLadderVals(){ const c=comboSet(); return COMBO_ORDER.filter(v=>v.indexOf(',')<0||c.indexOf(v)>=0).concat(['NP']); }
+function comboLadder(){ return comboLadderVals().filter(v=>v!=='NP').map(v=>v.indexOf(',')>=0?v.split(',').map(Number):Number(v)); }
+// [FIX1 · F1] A phase, or a Phase 4 round, whose results are SENT is decided: in that gap (the only time the setting can change) its
+// combinations are judged as they were, so switching one off never turns a finished phase's WIN into LOSE. The same test as the pages'
+// own gap (admin _phaseGapNow, staff _gapInfo, firestore.rules inPhaseGap): completed AND results sent, or the Phase 4 round's results
+// sent. true = the allowed-set test applies (a phase or round still open, before Phase 1, or phasesData unknown).
+function comboJudgedNow(){
+  try{
+    if(typeof phasesData==='undefined'||!phasesData) return true;
+    const cur=Number(phasesData.currentPhase||1);
+    if(phasesData.completedPhases?.[cur]&&phasesData.resultsSent?.[cur]) return false;
+    if(cur===4&&(phasesData.p4RoundResultsSent||{})[Number(phasesData.p4Round||1)]) return false;
+    return true;
+  }catch(_){ return true; }
+}
+// W9: the ONE Rules & Reminders / welcome e-mail line, only when the allowed set is not today's (never saved: no line - the lists as before).
+function comboRulesBullets(){
+  try{
+    const c=comboSet();
+    if(c.join('|')===COMBO_STD.join('|')) return [];
+    const L=c.map(comboLbl), v=comboLadderVals();
+    const list=!L.length?'none':(L.length===1?L[0]:L.slice(0,-1).join(', ')+' and '+L[L.length-1]);
+    return ['Combination bids allowed: '+list+'. Strength order, strongest first: '+v.slice(0,v.indexOf('5')+1).map(comboLbl).join(' › ')+' … 10 › NP.'];
+  }catch(_){ return []; }
 }
 // Rules/welcome-e-mail wording, driven by the live floors.
 function bfRulesBullets(){
@@ -1616,6 +1691,7 @@ function priorityScore(p){
     const s=[...p].sort((a,b)=>a-b).join(',');
     if(s==='1,2,3') return 0;
     if(s==='1,2') return 1;
+    if(s==='2,3') return 2.5; if(s==='3,4') return 3.5; if(s==='4,5') return 4.5; // [217 · §285] each just above the lower of its numbers (as 1/2 above 1); every score of 216 unchanged
     return Math.min(...p)+1;
   }
   return p+1;
@@ -3511,7 +3587,7 @@ function _wwMinBid(wk,ap){
     if(typeof ls!=='number'||!isFinite(ls)||ls>=99) return null;
     // Shown as the weakest REAL bid a newcomer could place (a forged level - 0, 1.5, "3/5" - is never printed as it is); the same cut
     // _weBlocks makes, by score. Nothing placeable at all (a forged level stronger than 1/2/3): no number.
-    let show=null; for(const b of [[1,2,3],[1,2],1,2,3,4,5,6,7,8,9,10]){ if(priorityScore(b)<=ls) show=b; }
+    let show=null; for(const b of ((typeof comboLadder==='function')?comboLadder():[[1,2,3],[1,2],1,2,3,4,5,6,7,8,9,10])){ if(priorityScore(b)<=ls) show=b; } // [217 · §285] the allowed ladder (never saved: this very list)
     return show;
   }catch(_){ return null; }
 }
@@ -3537,7 +3613,7 @@ function _wwMyMin(user,wk){
     // own business. _wwRefuses already takes the picture (the swap passes one); its coming-in check reads the live board, which is right.
     const pic=JSON.parse(JSON.stringify(data||{})); pic[user]={}; if(data&&data[user]&&typeof data[user]==='object'&&data[user][wk]!==undefined) pic[user][wk]=data[user][wk];
     let n=null;
-    for(const p of [10,9,8,7,6,5,4,3,2,1,[1,2],[1,2,3]]){ if(!bfAllows(p,f)) continue; if(_wwRefuses(user,wk,p,pic)===false){ n=p; break; } }
+    for(const p of ((typeof comboLadder==='function')?comboLadder().reverse():[10,9,8,7,6,5,4,3,2,1,[1,2],[1,2,3]])){ if(!bfAllows(p,f)) continue; if(_wwRefuses(user,wk,p,pic)===false){ n=p; break; } } // [217 · §285] the allowed ladder, weakest first (never saved: this very list)
     if(n===null||!(priorityScore(n)<priorityScore(lv))) return null;
     return {n:n,held:held,rebid:rebid,lv:lv};
   }catch(_){ return null; }
@@ -3841,26 +3917,134 @@ function _pickFocus(hostId,altId){ // altId: the holder to use when the first on
     h.setAttribute('tabindex','-1'); if(typeof h.focus==='function') h.focus({preventScroll:true});
   }catch(_){}
 }
-function _bidTilesOff(){ _pickOff('prioStep1','prioritySelect',['bidTiles','bidTilesNA']); }
+function _bidTilesOff(){ _pickOff('prioStep1','prioritySelect',['bidTiles','bidTilesNA','comboEntry','comboScreen']); try{ const st=document.getElementById('prioStep1'); if(st&&st.classList) st.classList.remove('combo-on'); }catch(_){} } // [217 · §285] the combination holders too, and back on screen 1
 function _bidTilesSync(){
   try{
     const sel=document.getElementById('prioritySelect'), host=document.getElementById('bidTiles'); if(!sel||!host) return;
     const v=sel.value; let lbl='';
     const tiles=Array.from(host.querySelectorAll('.bid-tile'));
     tiles.forEach(b=>{ const on=!!v&&b.getAttribute('data-v')===v; b.setAttribute('aria-pressed',on?'true':'false'); if(on) lbl=b.textContent; });
+    if(typeof _comboSync==='function'){ const _cl=_comboSync(v,lbl); if(_cl) lbl=_cl; } // [217 · §285] screen 2's tiles and the button that opens it; a chosen combination is "Your bid" on screen 1 too (W2)
     const h=document.getElementById('bidTilesHint'); if(!h) return;
     if(lbl){ h.textContent=BID_TILE_PICKED; const s=document.createElement('b'); s.textContent=lbl; h.appendChild(s); }
     else h.textContent=tiles.length?BID_TILE_HINT:'';
   }catch(_){}
 }
 function _bidTilePick(v){ _pickSet('prioritySelect',v); _bidTilesSync(); }
+// ── [217 · §285, owner 16 Oct 2026: "1 screen for single number bids and a separate one for all combo bids"] THE SECOND SCREEN ──────────
+// Two screens always (even with the setting never saved). Screen 1: the single numbers and NP as before, then ONE full-width button
+// "Combination bids ›" (the look of "⇄ Swap bids") with a line saying which can be chosen here. Screen 2 (the same box: the title row with
+// its refusal slot and the week panel stay): "‹ Back to single numbers", a heading and its line, one full-width tile per combination that can
+// be chosen, strongest first, each with its place, the hint, and its own "Not available" row. PAINT ONLY, as the rest of the buttons: the
+// list stays the one thing the bid is read from, a tile can only set it to a value it allows, and the double-tap guard starts again on
+// every switch of screen. With no combination allowed at all, the button and its line are not drawn (his ruling).
+const COMBO_BTN='Combination bids ›';
+const COMBO_BTN_ON='Combination bid: ';              // + "2/3 ✓"
+const COMBO_AVAIL='Available: ';                     // + "1/2/3 · 2/3 · 4/5"
+const COMBO_NONE='None available to you on this week';
+const COMBO_BACK='‹ Back to single numbers';
+const COMBO_HEAD='Combination bids';
+const COMBO_LINE='A combination bid uses all of its numbers at once. Strongest first.';
+const COMBO_TILE_HINT='Tap a combination to choose your bid.';
+const COMBO_PLACE={'1,2,3':'better than 1/2','1,2':'better than 1','2,3':'better than 2','3,4':'better than 3','4,5':'better than 4'}; // his words, 16 Oct 2026 9:21-9:22 PM
+// The list itself follows the setting: rebuilt in strength order ONLY when its lines are not the allowed ladder already (never saved: the
+// 216 markup is the allowed ladder, so the list is never touched). A rebuilt list carries no remembered places, so _groupOptions
+// takes its order afresh - strength order. true = the list is the allowed ladder; false = it could not be checked or rebuilt (as before).
+function _comboOptsSync(sel){
+  try{
+    if(!sel||typeof sel.querySelectorAll!=='function'||typeof document==='undefined'||!document||typeof document.createElement!=='function') return false;
+    const want=[''].concat(comboLadderVals());
+    const opts=Array.from(sel.querySelectorAll('option'));
+    const ord=o=>{ const v=o.getAttribute('data-ord'); return (v===null||v===undefined||v==='')?NaN:Number(v); };
+    const now=opts.every(o=>isFinite(ord(o)))?opts.slice().sort((a,b)=>ord(a)-ord(b)):opts;
+    if(now.length===want.length&&now.every((o,i)=>o.value===want[i])) return true;
+    const parts=Array.from(sel.querySelectorAll('option,optgroup'));
+    if(parts.some(x=>!x||typeof x.remove!=='function')||typeof sel.appendChild!=='function') return false;
+    const lbl=Object.create(null); opts.forEach(o=>{ lbl[o.value]=String(o.textContent||''); });
+    parts.forEach(x=>x.remove());
+    want.forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=(v in lbl)?lbl[v]:(v===''?'-- Select bid --':(v==='NP'?'NP (No Priority)':comboLbl(v))); sel.appendChild(o); });
+    return true;
+  }catch(_){ return false; }
+}
+// Draws the button (screen 1) and screen 2 from the list's combination lines. true = drawn, or nothing to draw (no combination allowed);
+// false = the drop-down must show (the caller puts every button away).
+function _comboPaint(cOpts){
+  if(!cOpts||!cOpts.length) return true;
+  const ent=document.getElementById('comboEntry'), scr=document.getElementById('comboScreen');
+  if(!ent||!scr||typeof document.createElement!=='function') return false;
+  const on=cOpts.filter(o=>!o.disabled), off=cOpts.filter(o=>o.disabled);
+  const mk=(tag,cls,css)=>{ const e=document.createElement(tag); if(cls) e.className=cls; if(css) e.setAttribute('style',css); return e; };
+  // screen 1: the button, the size and look of "⇄ Swap bids", and the line under it (the look of Swap's note)
+  const b=mk('button','btn-secondary combo-open','width:100%;min-height:50px;font-weight:700;font-size:1.2rem;border-color:#006ba6;color:#005e93;background:rgba(0,107,166,.07)');
+  b.type='button'; b.id='comboOpenBtn'; b.setAttribute('aria-pressed','false'); b.textContent=COMBO_BTN;
+  b.addEventListener('click',()=>_comboScreen(true));
+  const ln=mk('div','','font-size:.78rem;color:#48607a;margin-top:5px'); ln.id='comboAvail';
+  ln.textContent=on.length?COMBO_AVAIL+on.map(o=>_tileLabel(o)).join(' · '):COMBO_NONE;
+  ent.appendChild(b); ent.appendChild(ln);
+  // screen 2: back, the heading and its line, the tiles in the list's own order (strength order), the hint, "Not available"
+  const bk=mk('div','','margin:0 0 14px'), bb=mk('button','btn-secondary','width:100%;min-height:46px;font-weight:700;font-size:1rem;border-color:#006ba6;color:#005e93');
+  bb.type='button'; bb.id='comboBackBtn'; bb.textContent=COMBO_BACK; bb.addEventListener('click',()=>_comboScreen(false)); bk.appendChild(bb);
+  const hd=mk('div','','margin:0 0 10px'), h1=mk('div','','font-size:1rem;font-weight:700;color:#132f49'), h2=mk('div','','font-size:.82rem;color:#48607a;margin-top:3px');
+  h1.textContent=COMBO_HEAD; h2.textContent=COMBO_LINE; hd.appendChild(h1); hd.appendChild(h2);
+  const rows=mk('div','swap-rows',''); rows.id='comboRows'; rows.setAttribute('role','group'); rows.setAttribute('aria-label',COMBO_HEAD);
+  on.forEach(o=>{
+    const v=o.value, t=_tileLabel(o), pl=COMBO_PLACE[v]||'';
+    const r=mk('button','swap-row',''); r.type='button'; r.setAttribute('data-v',v); r.setAttribute('aria-pressed','false'); if(pl) r.setAttribute('aria-label',t+', '+pl);
+    const s1=mk('span','swap-row-bid',''); s1.textContent=t; r.appendChild(s1);
+    if(pl){ const s2=mk('span','combo-place',''); s2.textContent=pl; r.appendChild(s2); }
+    r.addEventListener('click',()=>_bidTilePick(v));
+    rows.appendChild(r);
+  });
+  const hint=mk('div','bid-tiles-hint','margin-bottom:12px'); hint.id='comboHint'; hint.setAttribute('aria-live','polite');
+  const na=mk('div','bid-tiles-na',''); na.id='comboNA';
+  if(off.length){
+    const nh=mk('div','bid-tiles-na-h',''); nh.textContent=NA_GROUP_LABEL;
+    const list=mk('div','bid-tiles-na-list','');
+    off.forEach(o=>{ const c=mk('span','bid-tiles-na-chip',''); c.textContent=_tileLabel(o); list.appendChild(c); });
+    na.appendChild(nh); na.appendChild(list);
+  }
+  scr.appendChild(bk); scr.appendChild(hd); scr.appendChild(rows); scr.appendChild(hint); scr.appendChild(na);
+  // Counted back, as screen 1 is: one button; every combination that can be chosen exactly one tile, every other exactly one chip.
+  if(ent.querySelectorAll('.combo-open').length!==1||rows.querySelectorAll('.swap-row').length!==on.length||na.querySelectorAll('.bid-tiles-na-chip').length!==off.length) return false;
+  rows.style.display=on.length?'flex':'none'; hint.style.display=on.length?'block':'none'; na.style.display=off.length?'block':'none';
+  ent.style.display='block'; scr.style.display='block';
+  return true;
+}
+// Paint only: which combination tile is pressed, screen 2's hint and the button on screen 1. Returns the chosen combination's label, or ''.
+function _comboSync(v,lbl1){ // [FIX1 · F5] lbl1: the single number chosen on screen 1 (screen 2's hint names ANY chosen bid)
+  let lbl='';
+  try{
+    const rows=document.getElementById('comboRows'), list=rows?Array.from(rows.querySelectorAll('.swap-row')):[];
+    list.forEach(b=>{ const on=!!v&&b.getAttribute('data-v')===v; b.setAttribute('aria-pressed',on?'true':'false'); if(on){ const s=b.querySelector('.swap-row-bid'); lbl=s?String(s.textContent||''):''; } });
+    const h=document.getElementById('comboHint');
+    const any=lbl||(typeof lbl1==='string'?lbl1:''); // [FIX1 · F5] "Your bid: 5" when a single number is the chosen bid; "Tap a combination …" only when nothing is chosen
+    if(h){ if(any){ h.textContent=BID_TILE_PICKED; const s=document.createElement('b'); s.textContent=any; h.appendChild(s); } else h.textContent=list.length?COMBO_TILE_HINT:''; if(h.style) h.style.display=(any||list.length)?'block':'none'; }
+    const btn=document.getElementById('comboOpenBtn');
+    if(btn){ btn.textContent=lbl?COMBO_BTN_ON+lbl+' ✓':COMBO_BTN; btn.setAttribute('aria-pressed',lbl?'true':'false'); }
+  }catch(_){}
+  return lbl;
+}
+// Screen 2 (true) or screen 1 (false). Nothing is chosen here. The tap that switched lands where a tile now is: the guard starts again
+// (and a tap still inside the guard of the last switch, or of the opening, switches nothing). The box goes to its top, the keyboard to the
+// holder of the new screen's tiles. true = switched.
+function _comboScreen(on){
+  try{
+    if(Date.now()-_pickClock.at<PICK_GUARD_MS) return false;
+    const st=document.getElementById('prioStep1'); if(!st||!st.classList||!st.classList.contains('tiles-on')) return false;
+    if(on) st.classList.add('combo-on'); else st.classList.remove('combo-on');
+    _pickClock.at=Date.now();
+    if(typeof _pickFocus==='function'){ if(on) _pickFocus('comboRows','comboNA'); else _pickFocus('bidTiles','bidTilesNA'); }
+    return true;
+  }catch(_){ return false; }
+}
 function _bidTilesPaint(sel){ // true = the buttons are on screen; false = the drop-down is
   _bidTilesOff();
   try{
     const st=document.getElementById('prioStep1'), host=document.getElementById('bidTiles'), na=document.getElementById('bidTilesNA');
     if(!sel||!st||!st.classList||!host||!na||typeof sel.querySelectorAll!=='function'||typeof document.createElement!=='function') return false;
-    const opts=Array.from(sel.querySelectorAll('option')).filter(o=>o.value);
-    if(!opts.length) return false;
+    const all=Array.from(sel.querySelectorAll('option')).filter(o=>o.value);
+    if(!all.length) return false;
+    const opts=all.filter(o=>String(o.value).indexOf(',')<0), cOpts=all.filter(o=>String(o.value).indexOf(',')>=0); // [217 · §285] screen 1: the single numbers and NP; screen 2: the combinations (_comboPaint)
     const on=opts.filter(o=>!o.disabled), off=opts.filter(o=>o.disabled);
     const grid=document.createElement('div'); grid.className='bid-tiles-grid';
     on.forEach(o=>{
@@ -3878,6 +4062,9 @@ function _bidTilesPaint(sel){ // true = the buttons are on screen; false = the d
       off.forEach(o=>{ const c=document.createElement('span'); c.className='bid-tiles-na-chip'; c.textContent=_tileLabel(o); list.appendChild(c); });
       na.appendChild(hd); na.appendChild(list);
     }
+    // [217 · §285] The combinations: the button on screen 1 and screen 2, counted back the same way inside _comboPaint. No _comboPaint
+    // (a sandbox) draws them nowhere, so then only a list without combinations may be put out of sight.
+    if(!((typeof _comboPaint==='function')?_comboPaint(cOpts)===true:!cOpts.length)){ _bidTilesOff(); return false; }
     // Counted back before the list is put out of sight: every number that can be chosen has exactly one button, every other exactly one chip.
     if(host.querySelectorAll('.bid-tile').length!==on.length||na.querySelectorAll('.bid-tiles-na-chip').length!==off.length){ _bidTilesOff(); return false; }
     host.setAttribute('role','group'); host.setAttribute('aria-label','Bid Level');
@@ -3968,6 +4155,7 @@ function openPriorityModal(wk){
   if(typeof _swapEntrySync==='function') _swapEntrySync(user,wk,isRebid); // [199 · §257] typeof = sandbox convention
   _clearDlgErrs(); // [160] a refusal from the last attempt never greets the next one
   const sel=document.getElementById("prioritySelect"); sel.value="";
+  try{ if(typeof _comboOptsSync==='function') _comboOptsSync(sel); }catch(_){} // [217 · §285] the list = the allowed ladder, strongest first (never saved: untouched)
   const isHighPrioOnly=weekMeta[wk]?.highPriorityOnly||false;
   const isSummerOnly=weekMeta[wk]?.summerOnly||false;
   // [build 139 · BL] While the user still has lowerings left this phase/round, options
@@ -3983,7 +4171,7 @@ function openPriorityModal(wk){
     const _bfF=bfFloorFor(wk);
     if(v!=="NP"&&!bfAllows(_bfParse(v),_bfF)){opt.disabled=true;return;}
     if(v==="NP"){opt.disabled=_blCapBlocks||_bfF!=='none'||!npAllowedNow();return;} // NP: below any numeric floor; and only in admin-enabled phases
-    if(v==="1,2"||v==="1,2,3"){
+    if(v.indexOf(',')>=0){ // [217 · §285] any combination (never saved: the same two, 1,2 and 1,2,3)
       const nums=v.split(',').map(Number);
       opt.disabled=nums.some(n=>used.includes(n))||(_blCapBlocks&&priorityScore(nums)>capScore);
     } else {
@@ -4136,6 +4324,8 @@ function _bidCheck(user,wk,val){
   if(locksData.globalLock||locksData.weeks?.[wk]) return no('error',"This week is locked — no more changes allowed.",true);
   if(!isVisibleBid(user,wk)&&bidLimitStatus(user).atLimit) return no('limit','',true);
   if(val==="NP"&&!npAllowedNow()) return no('center',"NP bids are not enabled for Phase "+Number(phasesData.currentPhase||1)+" — the admin controls which phases allow them.",true);
+  // [217 · §285] W6: a combination the admin does not allow is refused (a stale page, a hand-edited list) - on the page's copy and on the server's.
+  if(val!=="NP"&&typeof comboAllowed==='function'&&!comboAllowed(String(val).split(',').map(p=>parseInt(p.trim())).filter(p=>!isNaN(p)))) return no('center',"That combination bid is not available in this auction.",true);
   // L-3: re-validate the prior-phase-won guard, high-demand restriction, and priority-lock
   // FLOOR at confirm time — not just via disabled dropdown options set at modal-open. A
   // two-tab race (or an option list built from stale state) could otherwise submit a
@@ -5977,7 +6167,7 @@ function _lwWeakerWins(snap,user,wk,wide){
     const curScore=priorityScore(cur);
     const _wwOn=(typeof _wwContested==='function')&&_wwContested(wk,snap); // [193 · §245] judged on the same picture as the question; typeof = sandbox convention
     const out=[];
-    for(const v of _LW_LADDER){
+    for(const v of ((typeof comboLadderVals==='function')?comboLadderVals():_LW_LADDER)){ // [217 · §285] the allowed ladder + NP (never saved: _LW_LADDER exactly)
       const p=_bfParse(v);
       if(!(priorityScore(p)>curScore)) continue;
       if(v==="NP"){ if(bf!=='none'||!npAllowedNow()) continue; }
@@ -7001,6 +7191,7 @@ ${bullets([
   `Each number can only be used once, numbers from weeks that were approved in earlier phases are unavailable to be used again`,
   `Bids that do not win are returned to you when the next phase begins.`,
   `A combined bid like 1/2/3 uses bids 1, 2, and 3 at once`,
+  ...((typeof comboRulesBullets==='function')?comboRulesBullets():[]), // [217 · §285] W9: one line, only when the allowed set is not today's; word for word as on the page
   npPhasesDescription(),
   ...prioLockBullets(), // [build 139 · BL/COPY] Option A wording, allowance-derived
   `To exchange the bids on two of your weeks, use ✎ Edit, then ⇄ Swap bids — both change together.`, // [199 · §257] word for word as on the page

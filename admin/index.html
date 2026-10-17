@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 380;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 381;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1097,7 +1097,7 @@ thead th{color:var(--t2)}
         <div class="card-title">🎚 Bid Floors by Week Category</div>
         <div class="trow" style="align-items:flex-start;flex-direction:column;gap:8px">
           <div>
-            <div class="trow-desc">The minimum bid strength allowed per week category — a bid may be placed only if it is <strong>at least as strong</strong> as the week's floor (strength order: 1/2/3 › 1/2 › 1 › 2 › … › 10 › NP). NP is the weakest bid, so any numeric floor blocks NP on those weeks; where "No floor" is set, NP still follows the per-phase toggles above. Enforced in the bid picker AND the decision engine on both sites. Changing a floor affects NEW bids only — existing bids stay as placed. <strong>Locked while a phase is running; editable before Phase 1 and between phases (once results are sent); values survive reset.</strong></div>
+            <div class="trow-desc">The minimum bid strength allowed per week category — a bid may be placed only if it is <strong>at least as strong</strong> as the week's floor (strength order: <span id="bfOrder">1/2/3 › 1/2 › 1 › 2 › … › 10 › NP</span>). NP is the weakest bid, so any numeric floor blocks NP on those weeks; where "No floor" is set, NP still follows the per-phase toggles above. Enforced in the bid picker AND the decision engine on both sites. Changing a floor affects NEW bids only — existing bids stay as placed. <strong>Locked while a phase is running; editable before Phase 1 and between phases (once results are sent); values survive reset.</strong></div>
           </div>
           <div id="bfControls" style="display:grid;grid-template-columns:auto auto;gap:8px 14px;align-items:center">
             <label style="font-size:12px;color:var(--t2);font-weight:600">High demand weeks</label><select id="bfHd" class="inp" style="width:236px" onchange="_bfChanged()"></select>
@@ -1211,6 +1211,20 @@ thead th{color:var(--t2)}
             <div id="ruleSetState" class="trow-desc" style="margin-top:4px;font-weight:700"></div>
           </div>
           <div class="tog" id="ruleSetTog" onclick="toggleRuleSet()"></div>
+        </div>
+      </div>
+      <!-- COMBINATION BIDS [381 · §285] — one stored value, adminSettings.comboBids: the combinations bidders may use, written in strength order
+           (e.g. ["1,2,3","1,2","2,3"]); never saved or malformed = today's set (1/2/3 and 1/2); [] = none. A FROZEN key (FROZEN_CONFIG_KEYS +
+           firestore.rules frozenConfigKeys()), like the bid rule set: editable before Phase 1 and in the gaps between phases and Phase 4 rounds
+           once results are sent; survives Reset Auction. The switches are drawn by renderComboToggles. -->
+      <div class="card">
+        <div class="card-title">Combination bids</div>
+        <div class="trow" style="align-items:flex-start;flex-direction:column;gap:8px">
+          <div>
+            <div class="trow-desc">Which combination bids bidders may use. Each one uses all of its numbers. Strength order, strongest first: 1/2/3 › 1/2 › 1 › 2/3 › 2 › 3/4 › 3 › 4/5 › 4 › 5 … 10 › NP. <strong>Locked while a phase is running; editable before Phase 1 and between phases (once results are sent); the setting survives reset.</strong></div>
+            <div id="comboState" class="trow-desc" style="margin-top:4px;font-weight:700"></div>
+          </div>
+          <div id="comboToggles" style="display:flex;gap:22px;flex-wrap:wrap"></div>
         </div>
       </div>
       <!-- LOCKED WEEKS ON THE STAFF BOARD [370 · §266] — one stored map, adminSettings.lockedInPlace {1..4: true|false}. true = on
@@ -2884,7 +2898,7 @@ function _acCheckRemote(settings){
 // stay IDENTICAL to frozenConfigKeys() in firestore.rules — a pin test compares the two
 // files and goes red if they ever drift. 'bidLowerings' is forward-declared for the
 // feature that ships it (frozen from day one, no second rules publish).
-const FROZEN_CONFIG_KEYS=['auctionConfig','bidFloors','npAllowedPhases','maxBidsPerPhase','maxBidsCumulative','reviewThreshold','bidLowerings','bidRuleSet']; // [380 · §282] the rule set (Standard / Strict) is frozen like the others (his q8) - IDENTICAL to frozenConfigKeys() in firestore.rules
+const FROZEN_CONFIG_KEYS=['auctionConfig','bidFloors','npAllowedPhases','maxBidsPerPhase','maxBidsCumulative','reviewThreshold','bidLowerings','bidRuleSet','comboBids']; // [381 · §285] the combination bids are frozen like the rule set (his Q3) · [380 · §282] the rule set (Standard / Strict) is frozen like the others (his q8) - IDENTICAL to frozenConfigKeys() in firestore.rules
 // Stable stringify (sorted keys, recursive) so two configs compare by CONTENT — Firestore
 // gives no key-order guarantee, and a false "different" would wrongly abort a restore.
 function _cfgCanon(v){
@@ -2953,7 +2967,7 @@ function _rbGateCheck(){
 function _rbOnSnap(){ _rbGateCheck(); _rbRatchet(); }
 // [build 266 · BF] Bid floors by week category — admin-controlled (adminSettings.bidFloors).
 // ONE RULE: a bid may be placed on a week only if it is at least as strong as the week
-// category's floor (ladder: 1/2/3 › 1/2 › 1 › 2 › … › 10 › NP; NP is the weakest bid, so any
+// category's floor (ladder: 1/2/3 › 1/2 › 1 › 2 › … › 10 › NP, [381 · §285] with 2/3, 3/4, 4/5 between when allowed; NP is the weakest bid, so any
 // numeric floor blocks NP automatically). 'none' = No floor — all bids allowed. Categories:
 // highDemand (HD weeks; wins on overlap) · summer (config summer window) · all other weeks
 // ALWAYS 'none' (fixed). Defaults reproduce the former hardwired behavior EXACTLY. Read LIVE
@@ -2985,7 +2999,69 @@ function bfAllows(p,floor){
 function _bfEngineFilter(u,wk,p){
   if(!bfAllows(p,bfFloorFor(wk))) return false;
   if(p==="NP"&&!npAllowedForPhase(getUserBidPhaseAdmin(u,wk))) return false;
+  if(Array.isArray(p)&&typeof comboAllowed==='function'&&!comboAllowed(p)&&(typeof comboJudgedNow!=='function'||comboJudgedNow())) return false; // [FIX1 · F1] not in a decided phase's gap · [381 · §285] a combination the admin does not allow is not a competitor (as a below-floor bid). typeof = sandbox convention
   return true;
+}
+// ── [381 · §285, owner 16 Oct 2026] COMBINATION BIDS — which ones the admin allows (twin: staff 217, the same lines) ────────────────
+// One setting, adminSettings.comboBids: the allowed combinations, written in strength order, e.g. ["1,2,3","1,2","2,3"]. Never saved, or
+// anything malformed (not a list; an entry that is not one of the five, exactly as written; a duplicate) = today's set, 1/2/3 and 1/2.
+// The five in another order are put into strength order. [] is a real choice: no combinations at all. Read LIVE from adminSettings.
+// The order of all 15, strongest first (his ruling "2/3 stronger than 2"): 1/2/3 › 1/2 › 1 › 2/3 › 2 › 3/4 › 3 › 4/5 › 4 › 5 … 10 › NP.
+const COMBO_ALL=['1,2,3','1,2','2,3','3,4','4,5'];   // the five, strongest first
+const COMBO_STD=['1,2,3','1,2'];                     // today's set: the setting never saved
+const COMBO_ORDER=['1,2,3','1,2','1','2,3','2','3,4','3','4,5','4','5','6','7','8','9','10']; // every bid but NP, strongest first
+function comboNormalize(raw){
+  if(!Array.isArray(raw)) return null;
+  const seen=[];
+  for(const v of raw){ if(typeof v!=='string'||COMBO_ALL.indexOf(v)<0||seen.indexOf(v)>=0) return null; seen.push(v); }
+  return COMBO_ALL.filter(v=>seen.indexOf(v)>=0);
+}
+function comboSet(){ try{ return comboNormalize((typeof adminSettings!=='undefined'&&adminSettings)?adminSettings.comboBids:null)||COMBO_STD.slice(); }catch(_){ return COMBO_STD.slice(); } }
+function comboLbl(v){ return String(v).split(',').join('/'); }
+// A bid of two or more numbers is allowed only when its combination is in the set (read the way the score reads it: sorted, joined).
+// Anything else is not a combination: true.
+function comboAllowed(p){
+  if(!Array.isArray(p)||p.length<2) return true;
+  return comboSet().indexOf([...p].sort((a,b)=>a-b).join(','))>=0;
+}
+// The allowed ladder, strongest first: as list values ('1,2,3' … '10', then 'NP') and as bids ([1,2,3] … 10, no NP).
+// Never saved: exactly the ladders the pages wrote out by hand before 217.
+function comboLadderVals(){ const c=comboSet(); return COMBO_ORDER.filter(v=>v.indexOf(',')<0||c.indexOf(v)>=0).concat(['NP']); }
+function comboLadder(){ return comboLadderVals().filter(v=>v!=='NP').map(v=>v.indexOf(',')>=0?v.split(',').map(Number):Number(v)); }
+// [FIX1 · F1] A phase, or a Phase 4 round, whose results are SENT is decided: in that gap (the only time the setting can change) its
+// combinations are judged as they were, so switching one off never turns a finished phase's WIN into LOSE. The same test as the pages'
+// own gap (admin _phaseGapNow, staff _gapInfo, firestore.rules inPhaseGap): completed AND results sent, or the Phase 4 round's results
+// sent. true = the allowed-set test applies (a phase or round still open, before Phase 1, or phasesData unknown).
+function comboJudgedNow(){
+  try{
+    if(typeof phasesData==='undefined'||!phasesData) return true;
+    const cur=Number(phasesData.currentPhase||1);
+    if(phasesData.completedPhases?.[cur]&&phasesData.resultsSent?.[cur]) return false;
+    if(cur===4&&(phasesData.p4RoundResultsSent||{})[Number(phasesData.p4Round||1)]) return false;
+    return true;
+  }catch(_){ return true; }
+}
+// W9: the ONE Rules & Reminders / welcome e-mail line, only when the allowed set is not today's (never saved: no line - the lists as before).
+function comboRulesBullets(){
+  try{
+    const c=comboSet();
+    if(c.join('|')===COMBO_STD.join('|')) return [];
+    const L=c.map(comboLbl), v=comboLadderVals();
+    const list=!L.length?'none':(L.length===1?L[0]:L.slice(0,-1).join(', ')+' and '+L[L.length-1]);
+    return ['Combination bids allowed: '+list+'. Strength order, strongest first: '+v.slice(0,v.indexOf('5')+1).map(comboLbl).join(' › ')+' … 10 › NP.'];
+  }catch(_){ return []; }
+}
+// [381 · §285] Admin only. The admin's bid lists (Edit Selections' row drop-down, the ✏️ Edit Bid dialog, the Add box, the simulator):
+// 1 … 10, NP, then the allowed combinations - never saved, exactly the list those places have always had ('1,2' before '1,2,3').
+function comboAdminList(){ const c=comboSet(); return ['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3','2,3','3,4','4,5'].filter(v=>v.indexOf(',')<0||c.indexOf(v)>=0); }
+// "1/2/3 · 1/2", or "none" (the card's Now line, W8, the log row)
+function comboNowText(c){ const s=Array.isArray(c)?c:comboSet(); return s.length?s.map(comboLbl).join(' · '):'none'; }
+// The floors card's strength order: the allowed ladder written out as far as the single number just past the weakest allowed combination
+// (never saved: "1/2/3 › 1/2 › 1 › 2 › … › 10 › NP", the card's words before 381).
+function comboFloorOrder(){
+  const c=comboSet(), v=comboLadderVals(); let k=2;
+  c.forEach(x=>{ const lo=Number(x.split(',')[0]); if(lo+1>k) k=lo+1; });
+  return v.slice(0,v.indexOf(String(k))+1).map(comboLbl).join(' › ')+' › … › 10 › NP';
 }
 // An explicit admin approval of a floor-filtered bid is the SANCTIONED override path (admin
 // authority, never-events philosophy): eligible only when the floor/NP-phase filter is the
@@ -3380,7 +3456,7 @@ function usersTrulyMissingFte(){ return _fteScored().filter(u=>{ const v=fteData
 function usersOffGridFte(){ return _fteScored().filter(u=>{ const v=fteData[u]; if(v===undefined||v===null||v==='') return false; const n=Number(v); return !isNaN(n)&&n>=FTE_MIN&&n<=1&&Math.abs(n*10-Math.round(n*10))>1e-9; }).sort(); }
 window.usersTrulyMissingFte=usersTrulyMissingFte; window.usersOffGridFte=usersOffGridFte;
 
-function pScore(p){ if(p==="NP")return 99; if(Array.isArray(p)){ const s=[...p].sort((a,b)=>a-b).join(','); if(s==='1,2,3')return 0; if(s==='1,2')return 1; return Math.min(...p)+1; } return p+1; }
+function pScore(p){ if(p==="NP")return 99; if(Array.isArray(p)){ const s=[...p].sort((a,b)=>a-b).join(','); if(s==='1,2,3')return 0; if(s==='1,2')return 1; if(s==='2,3')return 2.5; if(s==='3,4')return 3.5; if(s==='4,5')return 4.5; return Math.min(...p)+1; } return p+1; } // [381 · §285] 2/3, 3/4, 4/5 each just above the lower of its numbers; every score of 380 unchanged (twin: staff priorityScore)
 // [AUDIT 2026-07-26 mediums] A bid the ENGINE will actually score: "NP", an integer 1-10, or
 // a 2-3 element array of integers 1-10. Mirrors the inline filter in computeApprovals (kept
 // inline THERE for self-contained test extraction; this shared copy is for the non-engine
@@ -3983,9 +4059,12 @@ function _unusedWinningBids(u,wk,nat){
     const have=new Set(availableNumbersFor(u));
     (own==='NP'?[]:(Array.isArray(own)?own:[own])).forEach(n=>have.add(Number(n)));
     const cands=[];
+    if(typeof comboLadder==='function'){ for(const b of comboLadder()){ if(Array.isArray(b)?b.every(n=>have.has(n)):have.has(b)) cands.push(b); } } // [381 · §285] the allowed ladder, strongest first (never saved: the very candidates below, in their order)
+    else{
     if(have.has(1)&&have.has(2)&&have.has(3)) cands.push([1,2,3]);
     if(have.has(1)&&have.has(2)) cands.push([1,2]);
     for(let n=1;n<=10;n++){ if(have.has(n)) cands.push(n); }
+    }
     const prior=a.priorWinners||new Set();
     const others=[]; const seen=new Set();
     const add=x=>{
@@ -5383,6 +5462,8 @@ function syncControls(){
   if(rst) rst.className="tog"+(adminSettings.bidRuleSet==='strict'?" on":"");
   const rss=document.getElementById("ruleSetState");
   if(rss) rss.textContent='Now: '+(adminSettings.bidRuleSet==='strict'?'Strict':'Standard')+((typeof cfgUnlockedNow==='function'&&!cfgUnlockedNow())?' — locked while a phase is running':'');
+  if(typeof renderComboToggles==='function') renderComboToggles(); // [381 · §285] the Combination bids card
+  if(typeof renderAddPriorityOpts==='function') renderAddPriorityOpts(); // [381 · §285] the Add box offers the allowed combinations
   const ecd=document.getElementById("emailCycleDayInp");
   if(ecd&&document.activeElement!==ecd){ const d=parseInt(adminSettings?.emailCycleResetDay,10); ecd.value=(!isNaN(d)&&d>=1&&d<=28)?d:22; }
   if(typeof renderMailMeter==='function') renderMailMeter(); // keep "resets the Nth" in sync
@@ -5980,7 +6061,7 @@ function simGetAllowedBids(wk){
   // toggle a real user's UI enforces — and is blocked outright by any numeric floor.
   const f=bfFloorFor(wk);
   const cur=Number(phasesData.currentPhase||1);
-  return SIM_ALL_BIDS.filter(b=>b==="NP"?(f==='none'&&npAllowedForPhase(cur)):bfAllows(_bfParse(b),f));
+  return ((typeof comboAdminList==='function')?comboAdminList():SIM_ALL_BIDS).filter(b=>b==="NP"?(f==='none'&&npAllowedForPhase(cur)):bfAllows(_bfParse(b),f)); // [381 · §285] only the allowed combinations (never saved: SIM_ALL_BIDS exactly, in its order)
 }
 
 function simHasBids(){
@@ -6553,6 +6634,7 @@ function renderBidFloorsCard(){
     el.disabled=locked;
   }
   const note=document.getElementById('bfLockNote'); if(note) note.style.display=locked?'':'none';
+  try{ const o=document.getElementById('bfOrder'); if(o&&typeof comboFloorOrder==='function'){ const t=comboFloorOrder(); if(o.textContent!==t) o.textContent=t; } }catch(_){} // [381 · §285] the allowed ladder (never saved: the words as before)
 }
 window._bfChanged=function(){
   // Click-time guard is the enforcement (NE-11 pattern); the disabled selects are paint.
@@ -6610,6 +6692,66 @@ window.toggleRuleSet=function(){
     },
     onCancel:()=>syncControls() });
 };
+// ── [381 · §285, owner 16 Oct 2026] COMBINATION BIDS: which ones bidders may use ─────────────────────────────────────────────────
+// One stored value, adminSettings.comboBids (read by comboSet). FROZEN like the bid rule set: editable before Phase 1 and in the gaps between
+// phases and Phase 4 rounds once results are sent; survives Reset Auction. One switch per combination, strongest first; one confirmation;
+// once the auction is under way a second, in red (the rule set's pattern). The write checks the feeds and the lock again at the moment of
+// action, writes the whole list by merge in strength order, and logs one system entry; the server refuses it mid-phase whatever this page believes.
+const COMBO_ADMIN_LBL={'1,2,3':'1/2/3 (better than 1/2)','1,2':'1/2 (better than 1)','2,3':'2/3 (better than 2)','3,4':'3/4 (better than 3)','4,5':'4/5 (better than 4)'};
+const COMBO_LOCKED_TEXT='🔒 Combination bids are locked while a phase is running — editable between phases, once results are sent.';
+function renderComboToggles(){
+  const el=document.getElementById('comboToggles'); if(!el) return;
+  const c=comboSet();
+  el.innerHTML=COMBO_ALL.map((v,i)=>`<div style="display:flex;align-items:center;gap:8px">
+    <span style="font-size:12px;color:var(--t1);font-weight:700">${COMBO_ADMIN_LBL[v]}</span>
+    <div class="tog${c.indexOf(v)>=0?' on':''}" id="comboTog${i}" onclick="toggleComboBid('${_jsq(v)}')"></div></div>`).join('');
+  const st=document.getElementById('comboState');
+  if(st) st.textContent='Now: '+comboNowText(c)+((typeof cfgUnlockedNow==='function'&&!cfgUnlockedNow())?' — locked while a phase is running':'');
+}
+async function _comboWrite(v,on){ // [FIX1 · F6] this click's ONE change (v switched on / off), applied to the setting as it is NOW
+  if(!_feedsHealthyOrExplain('Changing the combination bids')){ syncControls(); return; } // asked again at the moment of action: a dialog can sit open while a feed dies
+  if(!cfgUnlockedNow()){ toast(COMBO_LOCKED_TEXT,'err'); syncControls(); return; }
+  if(COMBO_ALL.indexOf(v)<0){ syncControls(); return; }
+  const cur=comboSet(); // re-read at the moment of the write: another admin or tab may have changed it since the click
+  const val=comboNormalize(COMBO_ALL.filter(x=>x===v?!!on:cur.indexOf(x)>=0));
+  if(!val){ toast('⚠️ Invalid combination bids — nothing saved.','err'); syncControls(); return; }
+  if(val.join('|')===comboSet().join('|')){ toast('Combination bids are already '+comboNowText(val)+' — nothing changed.','warn'); syncControls(); return; }
+  try{ await setDoc(adminRef,{comboBids:val},{merge:true}); }
+  catch(e){ toast(_cfgDeniedMsg(e,'the combination bids')?COMBO_LOCKED_TEXT:('⚠️ Combination bids NOT saved — nothing changed ('+(e?.message||e)+'). Try again.'),'err'); syncControls(); return; } // [FIX1 · F3] a server refusal = the approved lock words
+  try{ await adminLog('ALL','ALL','admin-combobids',undefined,{choice:val.join('|')}); }catch(_){}
+  toast('Combination bids: '+comboNowText(val)+' — the staff site follows within a moment','ok');
+}
+window.toggleComboBid=function(v){
+  if(!_feedsHealthyOrExplain('Changing the combination bids')){ syncControls(); return; } // never from a page whose data has not all arrived, or whose live feeds are down
+  if(!cfgUnlockedNow()){ toast(COMBO_LOCKED_TEXT,'err'); syncControls(); return; }
+  if(COMBO_ALL.indexOf(v)<0){ syncControls(); return; }
+  const cur=comboSet(), on=cur.indexOf(v)<0, lbl=comboLbl(v);
+  const next=COMBO_ALL.filter(x=>x===v?on:cur.indexOf(x)>=0);
+  const confirmAgain=o=>{ openConfirm(o); try{ const b=document.getElementById('cmOk'); if(b){ b.disabled=true; setTimeout(()=>{ b.disabled=false; },1000); } }catch(_){} };
+  const body=`<div>${on?'Allow':'Switch off'} the combination bid <strong>${esc(lbl)}</strong>? Combination bids allowed would then be: <strong>${esc(comboNowText(next))}</strong>.</div>`
+    +`<div class="cmodal-info" style="margin-top:8px">${on?'':'A combination already won stays won. '}The Rules &amp; Reminders and the welcome e-mail follow the setting.</div>`;
+  openConfirm({ title:(on?'Allow the combination bid ':'Switch off the combination bid ')+lbl+'?', body, okText:(on?'Allow ':'Switch off ')+lbl,
+    onConfirm:()=>{
+      if(!phase1Started()) return _comboWrite(v,on); // [FIX1 · F6]
+      confirmAgain({ title:'⚠️ Confirm again — the auction is under way',
+        body:`<div style="color:var(--red);font-weight:700;font-size:15px">This changes the bids allowed in a LIVE auction, from its next ${(Number(phasesData.currentPhase||1)===4)?'round':'phase'} on.</div><div class="cmodal-danger" style="margin-top:8px">Every staff page follows it within a moment.</div>`,
+        okText:(on?'Yes, allow ':'Yes, switch off ')+lbl, danger:true, onConfirm:()=>_comboWrite(v,on), onCancel:()=>syncControls() });
+    },
+    onCancel:()=>syncControls() });
+};
+// The Add box offers the allowed combinations too, after NP (owner, 16 Oct 2026: "Admin add box can add combos"). Rebuilt only when they differ.
+function renderAddPriorityOpts(){
+  try{
+    const sel=document.getElementById('addPriority'); if(!sel||!sel.options) return;
+    const want=comboAdminList().filter(v=>v.indexOf(',')>=0);
+    const have=Array.from(sel.options).filter(o=>String(o.value).indexOf(',')>=0);
+    if(have.map(o=>o.value).join('|')===want.join('|')) return;
+    const keep=sel.value;
+    have.forEach(o=>o.remove());
+    want.forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=comboLbl(v); sel.appendChild(o); });
+    if(Array.from(sel.options).some(o=>o.value===keep)) sel.value=keep;
+  }catch(_){}
+}
 window.toggleNpPhase=async function(p){
   if(!cfgUnlockedNow()){ toast('🔒 NP-by-phase is locked while a phase is running — editable between phases, once results are sent.','err'); syncControls(); return; } // [build 268 · FRZ8/GAP]
   const next=!npAllowedForPhase(p);
@@ -8123,6 +8265,7 @@ ${bullets([
   `Each number can only be used once, numbers from weeks that were approved in earlier phases are unavailable to be used again`,
   `Bids that do not win are returned to you when the next phase begins.`,
   `A combined bid like 1/2/3 uses bids 1, 2, and 3 at once`,
+  ...((typeof comboRulesBullets==='function')?comboRulesBullets():[]), // [381 · §285] W9: one line, only when the allowed set is not today's; word for word as on the staff page
   npPhasesDescription(),
   ...prioLockBullets(), // [build 268 · BL/COPY] Option A wording, allowance-derived
   `To exchange the bids on two of your weeks, use ✎ Edit, then ⇄ Swap bids — both change together.`, // [361 · §257] word for word as on the staff page
@@ -10029,7 +10172,7 @@ function outcomeRank(o){ const m={approved:0,win:1,draw:2,review:3,lose:4,denied
 // Measured 24 Aug over 6,000 week states: computeApprovals(true) and (false) are IDENTICAL post-§77
 // and neither moves when a decision is written, so this key is stable by construction.
 function projRank(o){ const m={win:0,winning:0,draw:1,review:1,lose:2,losing:2}; return (o in m)?m[o]:3; }
-// Strongest bid first; pScore already ranks 1/2/3 › 1/2 › 1 › 2 … › 10 › NP (lower is stronger).
+// Strongest bid first; pScore already ranks 1/2/3 › 1/2 › 1 › 2 … › 10 › NP (lower is stronger; [381 · §285] 2/3, 3/4, 4/5 between).
 function bidRank(p){ return p===undefined?999:pScore(p); }
 window.renderAppDenials=function(){
   initAppDenialsFilters();
@@ -10714,6 +10857,11 @@ window.adApprove=function(user,wk,currentOutcome){
     toast('⚠ Cannot approve '+user+' on Wk '+(_wkNumByISO[wk]||wk)+' — their stored bid is not a valid value (edit it first).','err');
     return;
   }
+  // [381 · §285] A combination bid that is switched off is not a competitor (both engines ignore it, as a below-floor bid): not approvable.
+  if(Array.isArray(scheduleData[user]?.[wk])&&typeof comboAllowed==='function'&&!comboAllowed(scheduleData[user][wk])){
+    toast('🚫 Cannot approve '+user+' on Wk '+(_wkNumByISO[wk]||wk)+' — that combination bid is switched off. To allow it, switch it on in Controls (between phases) — that changes the rule for everyone.','err');
+    return;
+  }
   // [296 · §72] Floors are absolute: approving a below-floor (or NP-off) bid is refused —
   // the sanctioned route to an exception is changing the floor / NP setting itself.
   if(typeof _bfEngineFilter==='function'&&!_bfEngineFilter(user,wk,scheduleData[user]?.[wk])){
@@ -11235,9 +11383,9 @@ window.renderEditTable=function(){
           // rendered as a normal valid selection while both engines silently dropped it. Gate
           // on _isScorableBid(p) — the same predicate the engine uses — so any unscorable value
           // (whatever its type) shows the explicit ⚠ option and NO normal option is pre-selected.
-          (()=>{ const _scor=_isScorableBid(p);
+          (()=>{ const _scor=_isScorableBid(p)&&(typeof comboAllowed!=='function'||comboAllowed(p)); // [381 · §285] a stored combination that is switched off shows the ⚠ line too
             return (_scor?'':`<option value="" selected disabled>⚠ invalid: ${String(pl).replace(/[<>&"]/g,'')}</option>`)
-              +['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3'].map(v=>`<option value="${v}"${(_scor&&String(pl)===v.replace(/,/g,'/'))?' selected':''}>${v.replace(/,/g,'/')}</option>`).join('');
+              +((typeof comboAdminList==='function')?comboAdminList():['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3']).map(v=>`<option value="${v}"${(_scor&&String(pl)===v.replace(/,/g,'/'))?' selected':''}>${v.replace(/,/g,'/')}</option>`).join('');
           })()}</select>`;
       const removeBtn=isHistorical?'':`<button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminRemove('${_jsq(u)}','${_jsq(wk)}')">Remove</button>`;
       rows.push(`<tr>
@@ -11420,6 +11568,7 @@ function adminDupFatal(u,wk,val){
 function adminFloorFatal(u,wk,val){
   try{
     const p=_bfParse(String(val));
+    if(Array.isArray(p)&&p.length>=2&&typeof comboAllowed==='function'&&!comboAllowed(p)) return {kind:'combo'}; // [381 · §285] W8: a switched-off combination is refused like a below-floor bid (§72)
     const _fl=bfFloorFor(wk);
     if(_fl!=='none'&&!bfAllows(p,_fl)) return {kind:'floor',floor:_fl};
     if(p==="NP"&&!npAllowedForPhase(Number(phasesData.currentPhase||1))) return {kind:'np'};
@@ -11429,8 +11578,11 @@ function adminFloorFatal(u,wk,val){
 function refuseAdminFloor(u,wk,val,why,after){
   const _done=()=>{ try{ if(typeof after==='function') after(); else refreshAll(); }catch(_){} };
   openConfirm({
-    title:why.kind==='np'?'🚫 NP is off this phase — nothing saved':'🚫 Below the week\'s bid floor — nothing saved',
-    body: why.kind==='np'
+    title:why.kind==='combo'?'🚫 That combination bid is switched off — nothing saved.':why.kind==='np'?'🚫 NP is off this phase — nothing saved':'🚫 Below the week\'s bid floor — nothing saved', // [381 · §285] W8
+    body: why.kind==='combo'
+      ?`<div>Combination bids allowed: ${esc((typeof comboNowText==='function')?comboNowText():'')}.</div>
+         <div class="cmodal-warn" style="margin-top:8px">To allow another, switch it on in Controls (between phases) — that changes the rule for everyone.</div>`
+      :why.kind==='np'
       ?`<div>NP bids are switched off for Phase ${esc(String(Number(phasesData.currentPhase||1)))} — no bidder may place one, and neither may an admin entry (§72: the rules bidders see are absolute).</div>
          <div class="cmodal-warn" style="margin-top:8px">To allow NP, switch it on for this phase in Controls — that changes the rule for everyone, honestly.</div>`
       :`<div>This week's bid floor is <strong>${esc(String(why.floor))} or better</strong>. A below-floor bid cannot be entered for anyone — the engine will not score it, and every bidder can see the rule (§72: floors are absolute, even for admin).</div>
@@ -11673,6 +11825,7 @@ window._adminChangePriorityRaw=async function(u,wk,val,_atOpen){
   if(_atOpen&&typeof _decisionGuard==='function'&&!_decisionGuard(_atOpen)){ _edSnapBack(); return; }
   // [296 · §72] write-level backstop: below-floor / NP-off values never reach the server.
   { const _flR=(typeof adminFloorFatal==='function')?adminFloorFatal(u,wk,String(val)):null;
+    if(_flR&&_flR.kind==='combo'){ toast('🚫 That combination bid is switched off — nothing saved.','err'); _edSnapBack(); return; } // [381 · §285] W8's words at the write-level backstop
     if(_flR){ toast('🚫 Not saved — '+(_flR.kind==='np'?('NP is switched off for Phase '+Number(phasesData.currentPhase||1)):('this week\'s floor is '+_flR.floor+' or better'))+'. §72: floors are absolute; change the setting itself to make an exception.','err'); _edSnapBack(); return; } }
   // Direct dropdown change in Edit Selections — real per-field writes via
   // mergeFields() (updateDoc-based); plain setDoc+merge on a nested object
@@ -11819,7 +11972,7 @@ window.adminAddSelection=function(){
     openConfirm({
       title:_rIss.length?'⚠️ Replace dead bid — breaks the rules users follow':'♻️ Replace a dead prior-phase bid?',
       body:`<div><strong>${esc(u)}</strong> has a Phase ${esc(String(_oldPh))} bid (<strong style="font-family:var(--mono)">${esc(_oldVal)}</strong>) on <strong>${esc(wLabel(_mD))}</strong> that did not win and is no longer in play.</div>
-            <div style="margin-top:8px">Replace it with a <strong>Phase ${esc(String(Number(phasesData.currentPhase||1)))}</strong> bid of <strong style="font-family:var(--mono)">${esc(String(pv))}</strong>?</div>`
+            <div style="margin-top:8px">Replace it with a <strong>Phase ${esc(String(Number(phasesData.currentPhase||1)))}</strong> bid of <strong style="font-family:var(--mono)">${/* [FIX1 · F4] */esc(String(pv).replace(/,/g,'/'))}</strong>?</div>`
         +(_rIss.length?`<ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">${_rIss.map(i=>'<li>'+i+'</li>').join('')}</ul>
             <div class="cmodal-danger">Admin entries bypass every check the bidding engine applies. Only continue if this override is deliberate.</div>`:'')
         +`<div class="cmodal-warn" style="margin-top:8px">${esc(u)}'s priority lock moves to the new bid; any leftover approval/denial is cleared, and colleagues whose projection changes may be e-mailed.</div>`,
@@ -11835,7 +11988,7 @@ window.adminAddSelection=function(){
   const _dsA=(typeof _decisionStamp==='function')?_decisionStamp():null; // [292 · RA-M1]
   openConfirm({
     title:_iss.length?'⚠️ Add Bid — breaks the rules users follow':'➕ Add Bid',
-    body:`<div>Add bid <strong style="font-family:var(--mono)">${pv}</strong> for <strong>${u}</strong> on week of <strong>${wLabel(m)}</strong> (${wRange(m)})?</div>`
+    body:`<div>Add bid <strong style="font-family:var(--mono)">${/* [FIX1 · F4] 2/3, not 2,3 */String(pv).replace(/,/g,'/')}</strong> for <strong>${u}</strong> on week of <strong>${wLabel(m)}</strong> (${wRange(m)})?</div>`
       +(_iss.length?`<ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">${_iss.map(i=>'<li>'+i+'</li>').join('')}</ul>
           <div class="cmodal-danger">Admin entries bypass every check the bidding engine applies. Only continue if this override is deliberate.</div>`:''),
     okText:_iss.length?'Add anyway':'Add', danger:!!_iss.length,
@@ -11848,6 +12001,7 @@ window.adminAddSelection=function(){
         if(_d2.length){ toast('🚫 Not added — '+u+' now has bid '+[...new Set(_d2.map(c=>c.n))].join(', ')+' on another week (it arrived while this dialog was open). Nothing was written.','err'); try{ refreshAll(); }catch(_){ } return; } }
       { const _h2=(typeof _adminHoldFatal==='function')?_adminHoldFatal(u,String(pv)):[]; if(_h2.length){ toast('🚫 Not added — '+_h2.join(', ')+' is withheld from '+u+' (release it on User Bids first). Nothing was written.','err'); try{ refreshAll(); }catch(_){ } return; } } // [327 · RA-9 #4]
       { const _f2=(typeof adminFloorFatal==='function')?adminFloorFatal(u,wk,String(pv)):null; // [296 · §72]
+        if(_f2&&_f2.kind==='combo'){ toast('🚫 That combination bid is switched off — nothing saved.','err'); try{ refreshAll(); }catch(_){ } return; } // [381 · §285] W8's words at the Add write-time re-check
         if(_f2){ toast('🚫 Not added — the value violates the week\'s floor or the NP-phase rule (§72: absolute). Nothing was written.','err'); try{ refreshAll(); }catch(_){ } return; } }
       const _prev=snapshotSchedule();
       if(!scheduleData[u])scheduleData[u]={};
@@ -12259,6 +12413,7 @@ function systemActionText(e){
   if(t==='admin-blind-off') return 'Admin turned <strong>Blinded bidding</strong> OFF — bidder names shown on the staff site'; // [365 · §261]
   if(t==='admin-ruleset-strict') return 'Bid rule set changed to <strong>Strict</strong>'; // [380 · §282]
   if(t==='admin-ruleset-standard') return 'Bid rule set changed to <strong>Standard</strong>'; // [380 · §282]
+  if(t==='admin-combobids'){ const L=(typeof e.choice==='string')?e.choice.split('|').filter(x=>x).map(x=>String(x).split(',').join('/')):null; return L?('Combination bids changed to: <strong>'+esc(L.length?L.join(' · '):'none')+'</strong>'):'Combination bids changed'; } // [381 · §285]
   if(t==='admin-fte-bulk') return 'Admin bulk-set an FTE value';
   if(t==='admin-hold') return 'Admin <strong>withheld</strong> bid number <strong>'+esc(String(e.bidValue??''))+'</strong> from <strong>'+who+'</strong>'+(e.reason?' — '+esc(e.reason):''); // [327 · §180]
   if(t==='admin-release') return 'Admin <strong>released</strong> bid number <strong>'+esc(String(e.bidValue??''))+'</strong> to <strong>'+who+'</strong>'+(e.reason?' — '+esc(e.reason):''); // [327 · §180]
@@ -15034,7 +15189,7 @@ window.confirmAdminEdit=function(user,wk){
           <div style="margin-top:8px;font-size:12px;color:var(--t2)">Current bid: <strong style="font-family:var(--mono)">${curLbl}</strong></div>
           <div style="margin-top:14px"><label style="font-size:11px;color:var(--t2)">New bid: </label>
             <select id="cmEditSel" class="sel" style="margin-left:6px">
-              ${['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3'].map(v=>`<option value="${v}"${String(curLbl)===v.replace(/,/g,'/')?' selected':''}>${v.replace(/,/g,'/')}</option>`).join('')}
+              ${/* [381 · §285] the allowed set */((typeof comboAdminList==='function')?comboAdminList():['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3']).map(v=>`<option value="${v}"${String(curLbl)===v.replace(/,/g,'/')?' selected':''}>${v.replace(/,/g,'/')}</option>`).join('')}
             </select>
           </div>
           <div class="cmodal-warn">The new bid becomes this user's Priority Lock for the week — their own bids may only hold or strengthen from it. To let them rebid weaker, clear the lock on the Priority Locks page.</div>`,
@@ -15299,7 +15454,8 @@ async function _doFullRestore(f){
   if(typeof _cfgCanon==='function'&&typeof phase1Started==='function'&&phase1Started()){ // typeof = sandbox convention
     const _live=adminSettings||{}, _bk=(d.adminSettings&&typeof d.adminSettings==='object')?d.adminSettings:{};
     const _rsC=v=>(v===undefined||v==='standard')?'standard':_cfgCanon(v); // [380 · §282] F2: the rule set ABSENT is "standard" (a backup from before the key existed)
-    const _cfgDiff=FROZEN_CONFIG_KEYS.filter(k=>(k==='bidRuleSet')?(_rsC(_bk[k])!==_rsC(_live[k])):(_cfgCanon(_bk[k])!==_cfgCanon(_live[k]))); // [380 · §282] every other key exactly as before
+    const _cbC=v=>(typeof comboNormalize==='function')?_cfgCanon(comboNormalize(v)||['1,2,3','1,2']):((v===undefined)?_cfgCanon(['1,2,3','1,2']):_cfgCanon(v)); // [FIX1 · F2] compared as the pages read them (normalised: absent, junk and today's set in any order are all today's set) · [381 · §285]
+    const _cfgDiff=FROZEN_CONFIG_KEYS.filter(k=>(k==='bidRuleSet')?(_rsC(_bk[k])!==_rsC(_live[k])):(k==='comboBids')?(_cbC(_bk[k])!==_cbC(_live[k])):(_cfgCanon(_bk[k])!==_cfgCanon(_live[k]))); // [380 · §282] every other key exactly as before
     if(_cfgDiff.length){
       toast('🛟 Restore ABORTED — this backup was made under a different auction setup ('
         +_cfgDiff.join(', ')+') and the auction is already underway. Restoring it would mix two '
@@ -15359,6 +15515,7 @@ async function _doFullRestore(f){
       // rehearsal after a restore is a deliberate flip of the switch, never a side effect.
       if(k==='adminSettings'&&v&&v.simulatorEnabled===true){ v={...v,simulatorEnabled:false}; }
       if(k==='adminSettings'&&v&&typeof v==='object'){ const _lv=((typeof adminSettings!=='undefined'&&adminSettings)||{}).bidRuleSet, _bv=v.bidRuleSet, _std=x=>x===undefined||x==='standard'; if(_lv!==_bv&&_std(_lv)&&_std(_bv)){ v={...v}; if(_lv===undefined) delete v.bidRuleSet; else v.bidRuleSet=_lv; } } // [380 · §282] F2: absent and "standard" are the same rule set - the live value is written, so the frozen key is not touched (a backup that equals live is written unchanged)
+      if(k==='adminSettings'&&v&&typeof v==='object'){ const _lc=((typeof adminSettings!=='undefined'&&adminSettings)||{}).comboBids, _bc=v.comboBids, _cn=x=>(typeof comboNormalize==='function')?_cfgCanon(comboNormalize(x)||['1,2,3','1,2']):((x===undefined)?_cfgCanon(['1,2,3','1,2']):_cfgCanon(x)); if(_cfgCanon(_lc)!==_cfgCanon(_bc)&&_cn(_lc)===_cn(_bc)){ /* [FIX1 · F2] equal once normalised: the LIVE value is written */ v={...v}; if(_lc===undefined) delete v.comboBids; else v.comboBids=_lc; } } // [381 · §285] as 380's F2: absent and today's set are the same setting - the live value is written, so the frozen key is not touched (a backup that equals live is written unchanged)
       if(k==='timer'&&v&&v.enabled&&typeof v.lastChange==='number'){
         const resumed=Date.now()-(f.ts-v.lastChange);
         // If the backup's countdown had already run out, don't resurrect it as a live
