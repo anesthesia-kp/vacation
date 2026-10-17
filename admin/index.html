@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 379;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 380;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1197,6 +1197,20 @@ thead th{color:var(--t2)}
             <div class="trow-desc">When ON, each person sees their own bids as usual and every other bid without initials. Bid numbers and W / R / L stay visible. The admin site still shows names.</div>
           </div>
           <div class="tog" id="blindTog" onclick="toggleBlindedBidding()"></div>
+        </div>
+      </div>
+      <!-- BID RULE SET [380 · §282] — one stored value, adminSettings.bidRuleSet: "standard" or "strict"; absent = Standard. OFF = Standard
+           (the rules as they have always been); ON = Strict (plan §3). A FROZEN key (FROZEN_CONFIG_KEYS + firestore.rules frozenConfigKeys()):
+           editable before Phase 1 and in the gaps between phases and Phase 4 rounds once results are sent; survives Reset Auction (§283). -->
+      <div class="card">
+        <div class="card-title">Bid rule set</div>
+        <div class="trow">
+          <div>
+            <div class="trow-label">Strict: a winning bid on a competition week can only be moved</div>
+            <div class="trow-desc">OFF = Standard, the rules as they have always been. ON = Strict: on a competition week a winning numbered bid cannot be removed; it can only be moved, in one step, to a week where another bid knocked its owner out of winning and where it would win, and a moved bid cannot be lowered on its new week for the rest of the phase (Phase 4: the round). Tied, Under Review and losing bids, and NP bids, can always be removed. You can still remove any bid from Edit Selections. <strong>Locked while a phase is running; editable before Phase 1 and between phases (once results are sent); the setting survives reset.</strong></div>
+            <div id="ruleSetState" class="trow-desc" style="margin-top:4px;font-weight:700"></div>
+          </div>
+          <div class="tog" id="ruleSetTog" onclick="toggleRuleSet()"></div>
         </div>
       </div>
       <!-- LOCKED WEEKS ON THE STAFF BOARD [370 · §266] — one stored map, adminSettings.lockedInPlace {1..4: true|false}. true = on
@@ -2870,7 +2884,7 @@ function _acCheckRemote(settings){
 // stay IDENTICAL to frozenConfigKeys() in firestore.rules — a pin test compares the two
 // files and goes red if they ever drift. 'bidLowerings' is forward-declared for the
 // feature that ships it (frozen from day one, no second rules publish).
-const FROZEN_CONFIG_KEYS=['auctionConfig','bidFloors','npAllowedPhases','maxBidsPerPhase','maxBidsCumulative','reviewThreshold','bidLowerings'];
+const FROZEN_CONFIG_KEYS=['auctionConfig','bidFloors','npAllowedPhases','maxBidsPerPhase','maxBidsCumulative','reviewThreshold','bidLowerings','bidRuleSet']; // [380 · §282] the rule set (Standard / Strict) is frozen like the others (his q8) - IDENTICAL to frozenConfigKeys() in firestore.rules
 // Stable stringify (sorted keys, recursive) so two configs compare by CONTENT — Firestore
 // gives no key-order guarantee, and a false "different" would wrongly abort a restore.
 function _cfgCanon(v){
@@ -4500,7 +4514,7 @@ function _fpPieces(phase,ev,isCurrent){
 // A log the auction could not have produced is not screened: the replay does work per person on a week, so thousands of invented
 // names would freeze the Dashboard (review, 11 Oct 2026). A real phase is some hundreds of entries by a few dozen people.
 const FP_MAX_EVENTS=6000, FP_MAX_PEOPLE=400, FP_MAX_WEEKS=120;
-function _fpBailPass(phase,all,isCurrent,bump,fair,notes){
+function _fpBailPass(phase,all,isCurrent,bump,fair,notes,info){ // [380 · §282] info: the information rows
   const ev=_fpBidEvents(all,0);   // the caller has already fenced the log (an archive holds one phase; the live log is cut at its reset stamp)
   if(ev.length>FP_MAX_EVENTS) throw new Error('the log is too long to screen ('+ev.length+' entries)');
   const people=new Set(), weeks=new Set();
@@ -4512,9 +4526,31 @@ function _fpBailPass(phase,all,isCurrent,bump,fair,notes){
   const back=ev.filter(e=>_fpResetKind(e)==='back');
   const backN=new Set(back.map(e=>String(e.user))).size;
   if(back.length&&notes) notes.push('the admin restored '+backN+' user'+(backN!==1?'s':'')+' from a backup during this phase (first: '+String(back[0].user)+') — the bids that came back are not in the change log, so entries after that moment may be wrong');
-  for(const piece of _fpPieces(phase,ev,isCurrent)) _fpBailPiece(piece,isCurrent,bump,fair);
+  for(const piece of _fpPieces(phase,ev,isCurrent)) _fpBailPiece(piece,isCurrent,bump,fair,info); // [380 · §282] info: the information rows
 }
-function _fpBailPiece(piece,isCurrent,bump,fair){
+// [380 · §282, fix round 1] THE REPORT'S ONE STRICT QUESTION: true only while the stored rule set is exactly "strict" when the report runs.
+// Every Strict rule of the report (rule 7, the widened knock-out, the move verdict, the koUnknown row, the move's timer-stall exemption and
+// its single late-timer count) asks it; otherwise every verdict, incident and fair row is admin 379's, byte for byte. Asked as
+// (typeof _fpStrict==='function'&&_fpStrict()): a test that lifts the report out without it judges Standard (379), as before.
+function _fpStrict(){ try{ return !!(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.bidRuleSet==='strict'); }catch(_){ return false; } }
+// [380 · §282] The information table (tie / Under Review exits) is shown in BOTH rule sets (owner, 16 Oct 2026). The koUnknown row is
+// Strict only. Read through typeof (sandbox convention).
+const FP_INFO_IN_STANDARD=true;
+// [380 · §282, owner 16 Oct 2026 "2-yes"] One INFORMATION row, never counted and never a verdict: a tied or Under Review numbered bid taken off a
+// competition week by its owner ('tieExit' / 'reviewExit' - a tie and Under Review may always be removed), or a removal the staff page saved
+// while it could not work out the move rule ('koUnknown', Strict only). Escaped where it is drawn (_fpDetailHtml), like every row.
+function _fpInfoRow(type,piece,e,u,wk,val,before,now){
+  const rp=(piece&&piece.multi)?('Round '+piece.round+': '):'';
+  const lbl=(val===undefined||val===null)?'?':bidLblAdmin(val), WK=_fpWkL(wk);
+  const gained=[]; for(const x in now){ if(_fpRank(now[x])<_fpRank(before[x])) gained.push(x+' ('+_fpPosLbl(before[x])+' → '+_fpPosLbl(now[x])+')'); }
+  const head=type==='tieExit'?(rp+'Took a tied bid '+lbl+' off '+WK+', a competition week. Information only — a tie may be removed at any time.')
+    :type==='reviewExit'?(rp+'Took an Under Review bid '+lbl+' off '+WK+', a competition week. Information only — an Under Review bid may be removed at any time.')
+    :(rp+'Removed bid '+lbl+' from '+WK+' while the staff page could not work out the move rule. Check this one in the Change Log.');
+  const g=gained.length?gained.join(', '):'Nobody';
+  return {user:u,type:type,wk:wk,ts:e.ts,view:{head:head,rows:[['Who gained',g]]},detail:head+' Who gained: '+g+'.'};
+}
+function _fpBailPiece(piece,isCurrent,bump,fair,info){ // [380 · §282] info: the information rows (may be absent - a three-argument caller)
+  const _fpS=(typeof _fpStrict==='function')&&_fpStrict(); // [380 · §282, fix round 1] Strict rules of the report only when the rule set is exactly "strict"
   const ev=piece.ev, capOf=piece.capOf, priorOf=piece.priorOf;
   let board=Object.create(null);   // wk -> {user: bid}        the bids of this phase (round) on the week, right now in the replay
   let comp=Object.create(null);    // wk -> true                once the week has been a competition week
@@ -4551,7 +4587,9 @@ function _fpBailPiece(piece,isCurrent,bump,fair){
       delete bw[u];
       now=_fpOutcomes(bw,cap,pr);
       // The ADMIN taking a winning bid off is a knock-out by someone else (the person did nothing): remembered until they win there again.
-      if(e.actor==='admin'&&before[u]==='win') (knocked[u]=knocked[u]||Object.create(null))[wk]={ts:e.ts,by:'the admin'};
+      // [380 · §282, owner 15 Oct 2:10 PM "2-agree, doesn't count"] UNDER STRICT ONLY, rule 7: the admin taking a person's OWN bid off (the way out at
+      // their request) is NOT their knock-out - otherwise it is an exit ticket for the rest of the phase. Under Standard this is 379's line.
+      if(!_fpS&&e.actor==='admin'&&before[u]==='win') (knocked[u]=knocked[u]||Object.create(null))[wk]={ts:e.ts,by:'the admin'}; // [380 · §282] Standard only (379's line)
       if(e.actor!=='admin'&&val!==undefined&&val!==null&&val!=='NP'&&before[u]==='win'&&isComp){
         const gained=[]; for(const x in now){ if(_fpRank(now[x])<_fpRank(before[x])) gained.push(x+' ('+_fpPosLbl(before[x])+' → '+_fpPosLbl(now[x])+')'); }
         const a=arr[u+'|'+wk]||null, others=new Set();
@@ -4559,6 +4597,12 @@ function _fpBailPiece(piece,isCurrent,bump,fair){
         const mine=Object.create(null);                         // this person's other weeks at this moment: wk -> projection
         for(const w2 in board){ if(w2!==wk&&Object.prototype.hasOwnProperty.call(board[w2],u)) mine[w2]=(last[w2]||_fpOutcomes(board[w2],capOf(w2),priorOf(w2)))[u]; }
         cands.push({i,e,u,wk,val,thin:!had,gained,a,others:others.size,mine,knocked:Object.assign(Object.create(null),knocked[u]||{})});
+      }
+      // [380 · §282, owner 16 Oct 2026 "2-yes"] INFORMATION ONLY, never counted: a tied or Under Review numbered bid taken off a competition week
+      // by its owner, and any removal the staff page saved while it could not work out the move rule (koUnknown). Nothing else reads `info`.
+      if(info&&e.actor!=='admin'){
+        if((_fpS||(typeof FP_INFO_IN_STANDARD!=='undefined'&&FP_INFO_IN_STANDARD===true))&&val!==undefined&&val!==null&&val!=='NP'&&isComp&&(before[u]==='draw'||before[u]==='review')) info.push(_fpInfoRow(before[u]==='draw'?'tieExit':'reviewExit',piece,e,u,wk,val,before,now)); // [380 · §282] the information table, in both rule sets (FP_INFO_IN_STANDARD)
+        if(_fpS&&e.koUnknown===true) info.push(_fpInfoRow('koUnknown',piece,e,u,wk,val,before,now)); // [380 · §282] Strict only: a koUnknown mark is never trusted under Standard
       }
       delete arr[u+'|'+wk];
     } else {
@@ -4579,9 +4623,12 @@ function _fpBailPiece(piece,isCurrent,bump,fair){
     }
     last[wk]=now;
     // Knocked out = was winning, is not any more, and not by one's own act (the admin changing someone's bid is not that person's act).
+    // [380 · §282] UNDER STRICT ONLY (his 2:07 PM ruling, and rule 7): was winning and is not any more, OR was Under Review / tied and is now
+    // losing - by SOMEONE ELSE's bid (the admin changing a person's own bid is not their knock-out; the admin changing someone else's bid is, "by the
+    // admin"); a record already standing is kept as it is. Under Standard the test is 379's, character for character.
     const own=e.actor!=='admin';
     for(const x in now){
-      if((x!==u||!own)&&before[x]==='win'&&now[x]!=='win') (knocked[x]=knocked[x]||Object.create(null))[wk]={ts:e.ts,by:own?u:'the admin'};
+      if(_fpS?(x!==u&&((before[x]==='win'&&now[x]!=='win')||((before[x]==='review'||before[x]==='draw')&&now[x]==='lose'))&&!(knocked[x]&&knocked[x][wk])):((x!==u||!own)&&before[x]==='win'&&now[x]!=='win')) (knocked[x]=knocked[x]||Object.create(null))[wk]={ts:e.ts,by:own?u:'the admin'}; // [380 · §282] Strict: the widened test; Standard: 379's
       if(now[x]==='win') endKnock(x,wk);
     }
   }
@@ -4611,6 +4658,18 @@ function _fpBailPiece(piece,isCurrent,bump,fair){
       if(back) vw.rows.push(['Afterwards','Back on '+WK+' '+backL+(disturbed?', after others had changed bids there.':'.')]);
       fair.push({user:u,type:'fairNeeded',wk,ts:t0,view:vw,detail:rp+'took a winning bid ('+lbl+') off a competition week — FAIR, the number was needed: placed on '+_fpWk(need.weekKey)+' '+_fpDur(need.ts-t0)+' later, where they had been knocked out of winning '+_fpDur(t0-kn.ts)+' earlier by '+kn.by+'\'s change'+(c.mine[need.weekKey]===undefined?' (and had left that week)':'')+(back?'; '+backTxt+(disturbed?', after others had changed bids there':''):'')});
       continue;
+    }
+    // [380 · §282] A MOVE (the Strict rule's one step: this removal and its arrival, written together, both marked as a move with one id) is ONE move,
+    // never a Bail. When the test above found it needed, it is "Fair — needed" as before; when not (the report's replay and the staff page's can
+    // differ - a lost entry, a finished phase's recorded capacity), it is listed as a move and not counted. A removal marked as a move with no
+    // arriving half is read like any other removal.
+    if(_fpS&&c.e.mv==='out'&&typeof c.e.mvId==='string'&&c.e.mvId){ // [380 · §282] Strict only: under Standard a move mark is never trusted (379's verdicts)
+      let arrive=null; for(let j=c.i+1;j<ev.length;j++){ const x=ev[j]; if(x.user===u&&x.mv==='in'&&x.mvId===c.e.mvId&&x.weekKey!==wk&&x.action!=='removed'){ arrive=x; break; } }
+      if(arrive){
+        const kn=c.knocked[arrive.weekKey];
+        fair.push({user:u,type:'move',wk,ts:t0,view:{head:rp+'Moved winning bid '+lbl+' from '+WK+' to '+_fpWkL(arrive.weekKey)+' in one step (the Strict rule). Not counted.',rows:[['Where it went',_fpWkL(arrive.weekKey)+', in the same step.'],['Knock-out there',kn?('Knocked out of winning there '+_fpDurL(t0-kn.ts)+' earlier, by '+kn.by+'\'s change.'):'Not found in the report\'s replay of the change log.']]},detail:rp+'moved a winning bid ('+lbl+') from a competition week to '+_fpWk(arrive.weekKey)+' in one step (the Strict rule) — a move, not counted'});
+        continue;
+      }
     }
     if(back&&!disturbed){
       const pair=[c.e,back], rec=pair.some(x=>typeof x.tReset==='boolean'), rs=pair.filter(x=>x.tReset===true);
@@ -4650,6 +4709,7 @@ function _fpAnalyzePhase(phase,events,isCurrent,allEvents){
   const flags={};
   const bump=(u,k,wk,ts,detail,view)=>{ const f=(flags[u]=flags[u]||{bail:0,lateTimer:0,timerStall:0,overLower:0,incidents:[]}); f[k]++; const inc={type:k,wk:wk||null,ts:ts||null,detail:detail||''}; if(view) inc.view=view; f.incidents.push(inc); };
   const live={};                 // wk -> user -> {val, placedTs, known, resets} — bids live at this point in the replay
+  const _fpS=(typeof _fpStrict==='function')&&_fpStrict(), _lateMv=new Set(); // [380 · §282, fix round 1] Strict rules only when the rule set is exactly "strict"; the moves already counted late
   for(const e of events){
     const u=e.user,wk=e.weekKey; if(!u||!wk) continue;
     const wkMap=(live[wk]=live[wk]||{});
@@ -4661,7 +4721,8 @@ function _fpAnalyzePhase(phase,events,isCurrent,allEvents){
     const rec=typeof e.tReset==='boolean';   // entry written by staff 183+
     const aff=e.aff===true;                  // absent / false -> affected nobody, or unknown: no flag
     // Late-timer move: under 10% of the running countdown left AND it changed someone else's projection.
-    if(aff&&typeof e.tRem==='number'&&typeof e.tDur==='number'&&e.tDur>0&&e.tRem>0&&e.tRem<0.10*e.tDur){
+    const _mk=(_fpS&&(e.mv==='out'||e.mv==='in')&&typeof e.mvId==='string'&&e.mvId)?(u+'|'+e.mvId):null; // [380 · §282] F4, Strict only: a logged move's two rows are ONE move
+    if(aff&&typeof e.tRem==='number'&&typeof e.tDur==='number'&&e.tDur>0&&e.tRem>0&&e.tRem<0.10*e.tDur&&!(_mk&&_lateMv.has(_mk))){ if(_mk) _lateMv.add(_mk); // [380 · §282] counted once (_mk is null under Standard)
       const verb=e.action==='removed'?'canceled':(e.action==='added'?'placed':'changed');
       bump(u,'lateTimer',wk,e.ts,verb+' a bid with '+Math.max(1,Math.round(e.tRem/e.tDur*100))+'% of the timer left (~'+Math.floor(e.tRem/3600000)+'h '+Math.floor((e.tRem%3600000)/60000)+'m remaining) — it changed another bidder\'s projection');
     }
@@ -4670,7 +4731,7 @@ function _fpAnalyzePhase(phase,events,isCurrent,allEvents){
       // trip. It is flagged only when the trip REALLY restarted everyone's countdown — so it
       // is right under whichever Timer Reset Mode was live when the bids were made. NP bids
       // count too. Needs every step of the trip recorded (staff 183+); otherwise no flag.
-      if(prev&&prev.known&&rec&&(e.ts-prev.placedTs)<=12*3600000){
+      if(prev&&prev.known&&rec&&(e.ts-prev.placedTs)<=12*3600000&&!(_fpS&&e.mv==='out')){ // [380 · §282] Strict only: a move's removal is not a placed-then-cancelled round trip (the bid went to another week); under Standard 379's test
         const n=prev.resets+(e.tReset?1:0);
         if(n>0){
           const hrs=Math.round((e.ts-prev.placedTs)/360000)/10;
@@ -4709,9 +4770,9 @@ function _fpAnalyzePhase(phase,events,isCurrent,allEvents){
   // [366 · §263] The bail screen. Its fair verdicts ride on the result without being counted or listed as a user's incident, under
   // two SYMBOL keys (Symbol.for('fp.fair'), Symbol.for('fp.bailError')) - no user id can be one, and the per-user loop never sees them. A throw here must not take the Dashboard
   // down: it is reported on the result and shown in the report instead of a silent empty list.
-  const fair=[], notes=[]; let bailError='';
-  try{ _fpBailPass(phase,allEvents||events,isCurrent,bump,fair,notes); }catch(err){ bailError=String((err&&err.message)||err||'error'); }
-  flags[Symbol.for('fp.fair')]=fair; flags[Symbol.for('fp.bailError')]=bailError; flags[Symbol.for('fp.bailNotes')]=notes;
+  const fair=[], notes=[], info=[]; let bailError=''; // [380 · §282] info: information-only rows (never counted)
+  try{ _fpBailPass(phase,allEvents||events,isCurrent,bump,fair,notes,info); }catch(err){ bailError=String((err&&err.message)||err||'error'); }
+  flags[Symbol.for('fp.fair')]=fair; flags[Symbol.for('fp.bailError')]=bailError; flags[Symbol.for('fp.bailNotes')]=notes; flags[Symbol.for('fp.info')]=info;
   return flags;
 }
 function computeBadBehavior(){
@@ -4722,7 +4783,7 @@ function computeBadBehavior(){
     const rows=Object.entries(flags).map(([user,f])=>({user,...f,total:(f.bail||0)+f.lateTimer+(f.timerStall||0)+(f.overLower||0)}))
       .filter(r=>r.total>0).sort((a,b)=>b.total-a.total||a.user.localeCompare(b.user));
     // [366 · §263] fair = the winning bids taken off a competition week that were judged fair, each with its reason; never counted.
-    sections.push({phase:ph.phase,closed:ph.closed,rows,fair:(flags[Symbol.for('fp.fair')]||[]).slice().sort((a,b)=>a.ts-b.ts||String(a.user).localeCompare(String(b.user))),bailError:flags[Symbol.for('fp.bailError')]||'',bailNotes:flags[Symbol.for('fp.bailNotes')]||[]});
+    sections.push({phase:ph.phase,closed:ph.closed,rows,fair:(flags[Symbol.for('fp.fair')]||[]).slice().sort((a,b)=>a.ts-b.ts||String(a.user).localeCompare(String(b.user))),bailError:flags[Symbol.for('fp.bailError')]||'',bailNotes:flags[Symbol.for('fp.bailNotes')]||[],info:(flags[Symbol.for('fp.info')]||[]).slice().sort((a,b)=>a.ts-b.ts||String(a.user).localeCompare(String(b.user)))}); // [380 · §282]
   }
   return sections;
 }
@@ -4749,8 +4810,8 @@ function renderBadBehavior(){
 window.openBadBehaviorReport=function(){
   const stamp=new Date().toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
   const sections=computeBadBehavior();
-  const TYPE_LABEL={bail:'Bail',lateTimer:'Late-timer move',timerStall:'Timer stalling',overLower:'Over-limit lowering',fairNeeded:'Fair — needed',bailReturn:'Bail and return'};
-  const TYPE_COLOR={bail:'#dc2626',lateTimer:'#d97706',timerStall:'#0e7490',overLower:'#b91c1c',fairNeeded:'#15803d',bailReturn:'#64748b'};
+  const TYPE_LABEL={bail:'Bail',lateTimer:'Late-timer move',timerStall:'Timer stalling',overLower:'Over-limit lowering',fairNeeded:'Fair — needed',bailReturn:'Bail and return',move:'Moved (Strict)',tieExit:'Tie exit',reviewExit:'Under Review exit',koUnknown:'Move rule not checked'}; // [380 · §282] the last four
+  const TYPE_COLOR={bail:'#dc2626',lateTimer:'#d97706',timerStall:'#0e7490',overLower:'#b91c1c',fairNeeded:'#15803d',bailReturn:'#64748b',move:'#0f766e',tieExit:'#64748b',reviewExit:'#64748b',koUnknown:'#b45309'};
   const whenTxt=ts=>ts?new Date(ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'—';
   // [366 · §263] The second table of a phase: every winning bid taken off a competition week that was judged FAIR, and why.
   const fairBlock=s=>{
@@ -4766,6 +4827,19 @@ window.openBadBehaviorReport=function(){
     return err+`<div class="wk"><div class="wk-head">Winning bids taken off a competition week — reviewed, fair<span class="fte">${s.fair.length} · not counted</span></div>
       <table><thead><tr><th>User</th><th>Verdict</th><th>Week</th><th>When</th><th>Detail</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   };
+  // [380 · §282] The third table of a phase: information only, never counted - tied and Under Review bids taken off a competition week, and removals
+  // the staff page could not check against the move rule.
+  const infoBlock=s=>{
+    if(!(s.info&&s.info.length)) return '';
+    const rows=s.info.map(i=>`<tr>
+      <td>${esc(i.user)}</td>
+      <td><span class="chip" style="background:${TYPE_COLOR[i.type]||'#64748b'}">${TYPE_LABEL[i.type]||esc(i.type)}</span></td>
+      <td>${i.wk?('W'+(_wkNumByISO[i.wk]||'?')+' · '+fmtWk(i.wk)):'—'}</td>
+      <td>${whenTxt(i.ts)}</td>
+      <td style="white-space:normal;min-width:340px;max-width:760px">${_fpDetailHtml(i)}</td></tr>`).join('');
+    return `<div class="wk"><div class="wk-head">Tied and Under Review bids taken off a competition week, and removals the page could not check — information only<span class="fte">${s.info.length} · not counted</span></div>
+      <table><thead><tr><th>User</th><th>Type</th><th>Week</th><th>When</th><th>Detail</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  };
   const userBlock=r=>{
     const rows=r.incidents.map(i=>`<tr>
       <td><span class="chip" style="background:${TYPE_COLOR[i.type]||'#64748b'}">${TYPE_LABEL[i.type]||i.type}</span></td>
@@ -4777,7 +4851,7 @@ window.openBadBehaviorReport=function(){
   };
   const body=sections.map(s=>{
     const inner=s.rows.length?s.rows.map(userBlock).join(''):'<p style="margin:4px 0 0;color:#4a7a54">✅ No users flagged in this phase.</p>';
-    return `<div style="margin:22px 0 8px;padding:8px 12px;background:#eef2f7;border-left:4px solid #006ba6;font-weight:800;font-size:15px">Phase ${s.phase} ${s.closed?'(completed)':'(current)'}</div>${inner}${fairBlock(s)}`;
+    return `<div style="margin:22px 0 8px;padding:8px 12px;background:#eef2f7;border-left:4px solid #006ba6;font-weight:800;font-size:15px">Phase ${s.phase} ${s.closed?'(completed)':'(current)'}</div>${inner}${fairBlock(s)}${infoBlock(s)}`; // [380 · §282] the information table (see FP_INFO_IN_STANDARD)
   }).join('')||'<p>✅ No activity yet this auction.</p>';
   const ok=openReportTab('Vacation Auction — Fair Play Report','All phases since last auction reset',
     `Snapshot ${stamp} · Heuristic screen reconstructed from the change log — verify in the Change Log before acting. A "Bail" = a winning bid taken off a competition week when its bid number was not needed on a week where the same person had already been knocked out of winning. Winning bids taken off for that reason ("Fair — needed"), or put straight back before any colleague changed a bid there ("Bail and return"), are listed under each phase as reviewed and fair, and are not counted.`,
@@ -5305,6 +5379,10 @@ function syncControls(){
   if(dt) dt.className="tog"+(adminSettings.destinationOfDay!==false?" on":"");
   const bt=document.getElementById("blindTog"); // [365 · §261] only an explicit true is on
   if(bt) bt.className="tog"+(adminSettings.blindedBidding===true?" on":"");
+  const rst=document.getElementById("ruleSetTog"); // [380 · §282] only the exact string "strict" is on
+  if(rst) rst.className="tog"+(adminSettings.bidRuleSet==='strict'?" on":"");
+  const rss=document.getElementById("ruleSetState");
+  if(rss) rss.textContent='Now: '+(adminSettings.bidRuleSet==='strict'?'Strict':'Standard')+((typeof cfgUnlockedNow==='function'&&!cfgUnlockedNow())?' — locked while a phase is running':'');
   const ecd=document.getElementById("emailCycleDayInp");
   if(ecd&&document.activeElement!==ecd){ const d=parseInt(adminSettings?.emailCycleResetDay,10); ecd.value=(!isNaN(d)&&d>=1&&d<=28)?d:22; }
   if(typeof renderMailMeter==='function') renderMailMeter(); // keep "resets the Nth" in sync
@@ -6500,6 +6578,38 @@ window._bfChanged=function(){
     onCancel:()=>renderBidFloorsCard()
   });
 };
+// ── [380 · §282, owner 16 Oct 2026] THE BID RULE SET: Standard or Strict ───────────────────────────────────────────────────────
+// One stored value, adminSettings.bidRuleSet ("standard" | "strict"); absent = Standard. FROZEN like the fairness keys: editable before Phase 1
+// and in the gaps between phases and Phase 4 rounds once results are sent (his q8 "yes"); survives Reset Auction (§283). One confirmation;
+// once the auction is under way a second, in red (the blinded-bidding pattern). The write checks the lock and the stored value again at the
+// moment of action, writes by merge, and logs one system entry; the server refuses it mid-phase whatever this page believes.
+async function _ruleSetWrite(next){
+  if(!_feedsHealthyOrExplain('Changing the bid rule set')){ syncControls(); return; } // [380 · §282] asked again at the moment of action: a dialog can sit open while a feed dies
+  if(!cfgUnlockedNow()){ toast('🔒 The bid rule set is locked while a phase is running — editable between phases, once results are sent.','err'); syncControls(); return; }
+  const now=(adminSettings&&adminSettings.bidRuleSet==='strict')?'strict':'standard';
+  if(now===next){ toast('The bid rule set is already '+(next==='strict'?'Strict':'Standard')+' — nothing changed.','warn'); syncControls(); return; }
+  try{ await setDoc(adminRef,{bidRuleSet:next},{merge:true}); }
+  catch(e){ toast(_cfgDeniedMsg(e,'the bid rule set')||('⚠️ Rule set NOT saved — nothing changed ('+(e?.message||e)+'). Try again.'),'err'); syncControls(); return; }
+  try{ await adminLog('ALL','ALL',next==='strict'?'admin-ruleset-strict':'admin-ruleset-standard'); }catch(_){}
+  toast(next==='strict'?'Bid rule set: STRICT — the staff site follows within a moment':'Bid rule set: STANDARD — the staff site follows within a moment', next==='strict'?'warn':'ok');
+}
+window.toggleRuleSet=function(){
+  if(!_feedsHealthyOrExplain('Changing the bid rule set')){ syncControls(); return; } // [380 · §282] never from a page whose data has not all arrived, or whose live feeds are down (the guard of every dangerous admin action)
+  if(!cfgUnlockedNow()){ toast('🔒 The bid rule set is locked while a phase is running — editable between phases, once results are sent.','err'); syncControls(); return; }
+  const next=(adminSettings&&adminSettings.bidRuleSet==='strict')?'standard':'strict';
+  const confirmAgain=o=>{ openConfirm(o); try{ const b=document.getElementById('cmOk'); if(b){ b.disabled=true; setTimeout(()=>{ b.disabled=false; },1000); } }catch(_){} };
+  const body=next==='strict'
+    ?`<div>Use <strong>Strict</strong>? On a competition week a winning numbered bid can then only be <strong>moved</strong>, in one step, to a week where another bid knocked its owner out of winning and where it would win; a moved bid can't be lowered on its new week for the rest of the phase (Phase 4: the round). Tied, Under Review and losing bids, and NP bids, can still be removed.</div><div class="cmodal-info" style="margin-top:8px">The Rules &amp; Reminders line and the welcome e-mail change with it. You can still remove any bid from Edit Selections.</div>`
+    :`<div>Use <strong>Standard</strong>? Every bid rule goes back to exactly what it was before the rule sets existed: any bid can be removed at any time.</div>`;
+  openConfirm({ title:next==='strict'?'Use the Strict rule set?':'Use the Standard rule set?', body, okText:next==='strict'?'Use Strict':'Use Standard',
+    onConfirm:()=>{
+      if(!phase1Started()) return _ruleSetWrite(next);
+      confirmAgain({ title:'⚠️ Confirm again — the auction is under way',
+        body:`<div style="color:var(--red);font-weight:700;font-size:15px">This changes the bid rules of a LIVE auction, from its next ${(Number(phasesData.currentPhase||1)===4)?'round':'phase'} on.</div><div class="cmodal-danger" style="margin-top:8px">Every staff page follows it within a moment.</div>`,
+        okText:next==='strict'?'Yes, use Strict':'Yes, use Standard', danger:true, onConfirm:()=>_ruleSetWrite(next), onCancel:()=>syncControls() });
+    },
+    onCancel:()=>syncControls() });
+};
 window.toggleNpPhase=async function(p){
   if(!cfgUnlockedNow()){ toast('🔒 NP-by-phase is locked while a phase is running — editable between phases, once results are sent.','err'); syncControls(); return; } // [build 268 · FRZ8/GAP]
   const next=!npAllowedForPhase(p);
@@ -7241,6 +7351,7 @@ async function _commitBeginPhase(next){
           if(getUserBidPhaseAdmin(u,wk)>=next) continue; // current/future-tagged entries stay live
           if(_wonAt(u,wk)) continue;                     // a win is permanent — never scrubbed
           _schedDel[`${u}.${wk}`]=deleteField(); _bpDel[`${u}.${wk}`]=deleteField(); _retired++;
+          if(typeof _admMvHas==='function'&&_admMvHas(u,wk)) _bpDel[`${u}.mv.${wk}`]=deleteField(); // [380 · §282] F3: a moved mark, only if one exists
         }
       }
       if(_retired){ batch.update(scheduleRef,_schedDel); batch.update(bidPhaseRef,_bpDel); }
@@ -7974,6 +8085,15 @@ function cumulativeCapEmailText(){
   }
   return 'Running cap on total weeks you can win across the auction (only weeks you win count) — '+parts.join(' · ');
 }
+// [380 · §282] The competition-week rule line of the welcome e-mail follows the rule set - word for word the staff page's (its RULE_NOWEAKEN_STD /
+// _strictW4; tests/test-216-380-texts.mjs compares the two pages' outputs). Under Standard these very words, as before.
+const RULE_NOWEAKEN_STD='On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.';
+function _ruleNoWeakenText(){
+  const strict=!!(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.bidRuleSet==='strict');
+  if(!strict) return RULE_NOWEAKEN_STD;
+  const w=(Number((typeof phasesData!=='undefined'&&phasesData&&phasesData.currentPhase)||1)===4)?'round':'phase';
+  return "On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen a bid. A winning bid on a competition week can't be removed — it can only be moved, to a week where another bid knocked you out of winning and where it would win, and once moved it can't be lowered there for the rest of the "+w+". A tied, under-review or losing bid, and an NP, can be removed at any time. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.";
+}
 function buildWelcomeEmailBody(user){
   const _capTxt=cumulativeCapEmailText();
   const capBullets=_capTxt.startsWith('Running cap')
@@ -8007,7 +8127,7 @@ ${bullets([
   ...prioLockBullets(), // [build 268 · BL/COPY] Option A wording, allowance-derived
   `To exchange the bids on two of your weeks, use ✎ Edit, then ⇄ Swap bids — both change together.`, // [361 · §257] word for word as on the staff page
   `A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.`, // [358 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
-  `On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.`,
+  ((typeof _ruleNoWeakenText==='function')?_ruleNoWeakenText():`On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.`), // [380 · §282] follows the rule set; under Standard these very words (the fallback is for test sandboxes)
   ...bfRulesBullets(),
   ...((typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.blindedBidding===true)?[`Bidder names are hidden for this auction. You see your own bids as usual; every other bid shows without initials.`]:[]), // [365 · §261] only while the Blinded bidding switch is on; word for word as on the staff page
   `Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
@@ -8612,7 +8732,7 @@ window.startNextP4Round=function(){
   const denials=arch.denials||{};
   let retire=0; const schedDel={}, bpDel={};
   for(const wk of Object.keys(denials)) for(const u of (Array.isArray(denials[wk])?denials[wk]:[])){
-    if(scheduleData[u]?.[wk]!==undefined){ schedDel[`${u}.${wk}`]=deleteField(); bpDel[`${u}.${wk}`]=deleteField(); retire++; }
+    if(scheduleData[u]?.[wk]!==undefined){ schedDel[`${u}.${wk}`]=deleteField(); bpDel[`${u}.${wk}`]=deleteField(); retire++; if(typeof _admMvHas==='function'&&_admMvHas(u,wk)) bpDel[`${u}.mv.${wk}`]=deleteField(); } // [380 · §282] F3: a moved mark, only if one exists
   }
   openConfirm({
     title:'▶ Start Phase 4: Round '+(N+1),
@@ -11587,8 +11707,11 @@ window._adminChangePriorityRaw=async function(u,wk,val,_atOpen){
 // bid ever placed) may not have all five docs yet, and batch.update aborts wholesale on the
 // first missing one. Per-doc retry skips ONLY docs that don't exist (nothing to delete there);
 // a real mid-retry rejection is reported as PARTIAL, never as success.
+// [380 · §282, fix round 1] F3: a Strict MOVED bid carries a mark beside its phase tag (bidPhase USER.mv.WEEK). An admin removal takes it too - only
+// when it exists, so every admin write with no mark present is exactly 379's.
+function _admMvHas(u,wk){ try{ const m=bidPhaseData?bidPhaseData[u]:undefined; return !!(m&&typeof m==='object'&&m.mv&&typeof m.mv==='object'&&Object.prototype.hasOwnProperty.call(m.mv,wk)); }catch(_){ return false; } }
 async function _adminDeleteBidAtomic(u,wk){
-  const _ops=[[scheduleRef,{[`${u}.${wk}`]:deleteField()}],[bidPhaseRef,{[`${u}.${wk}`]:deleteField()}],[worstBidsRef,{[`${u}.${wk}`]:deleteField()}],[approvalsRef,{[wk]:arrayRemove(u)}],[deniedRef,{[wk]:arrayRemove(u)}]];
+  const _ops=[[scheduleRef,{[`${u}.${wk}`]:deleteField()}],[bidPhaseRef,Object.assign({[`${u}.${wk}`]:deleteField()},(typeof _admMvHas==='function'&&_admMvHas(u,wk))?{[`${u}.mv.${wk}`]:deleteField()}:{})],[worstBidsRef,{[`${u}.${wk}`]:deleteField()}],[approvalsRef,{[wk]:arrayRemove(u)}],[deniedRef,{[wk]:arrayRemove(u)}]]; // [380 · §282] F3: the moved mark too, only if one exists
   try{
     const batch=writeBatch(db);
     for(const [ref,upd] of _ops) batch.update(ref,upd);
@@ -12134,6 +12257,8 @@ function systemActionText(e){
   if(t==='admin-destination-off') return 'Admin turned the sign-in <strong>Destination of the Day</strong> OFF'; // [336 · §196]
   if(t==='admin-blind-on') return 'Admin turned <strong>Blinded bidding</strong> ON — bidder names hidden on the staff site'; // [365 · §261]
   if(t==='admin-blind-off') return 'Admin turned <strong>Blinded bidding</strong> OFF — bidder names shown on the staff site'; // [365 · §261]
+  if(t==='admin-ruleset-strict') return 'Bid rule set changed to <strong>Strict</strong>'; // [380 · §282]
+  if(t==='admin-ruleset-standard') return 'Bid rule set changed to <strong>Standard</strong>'; // [380 · §282]
   if(t==='admin-fte-bulk') return 'Admin bulk-set an FTE value';
   if(t==='admin-hold') return 'Admin <strong>withheld</strong> bid number <strong>'+esc(String(e.bidValue??''))+'</strong> from <strong>'+who+'</strong>'+(e.reason?' — '+esc(e.reason):''); // [327 · §180]
   if(t==='admin-release') return 'Admin <strong>released</strong> bid number <strong>'+esc(String(e.bidValue??''))+'</strong> to <strong>'+who+'</strong>'+(e.reason?' — '+esc(e.reason):''); // [327 · §180]
@@ -15173,7 +15298,8 @@ async function _doFullRestore(f){
   // keys and passes untouched; only a backup from a DIFFERENT auction setup differs.
   if(typeof _cfgCanon==='function'&&typeof phase1Started==='function'&&phase1Started()){ // typeof = sandbox convention
     const _live=adminSettings||{}, _bk=(d.adminSettings&&typeof d.adminSettings==='object')?d.adminSettings:{};
-    const _cfgDiff=FROZEN_CONFIG_KEYS.filter(k=>_cfgCanon(_bk[k])!==_cfgCanon(_live[k]));
+    const _rsC=v=>(v===undefined||v==='standard')?'standard':_cfgCanon(v); // [380 · §282] F2: the rule set ABSENT is "standard" (a backup from before the key existed)
+    const _cfgDiff=FROZEN_CONFIG_KEYS.filter(k=>(k==='bidRuleSet')?(_rsC(_bk[k])!==_rsC(_live[k])):(_cfgCanon(_bk[k])!==_cfgCanon(_live[k]))); // [380 · §282] every other key exactly as before
     if(_cfgDiff.length){
       toast('🛟 Restore ABORTED — this backup was made under a different auction setup ('
         +_cfgDiff.join(', ')+') and the auction is already underway. Restoring it would mix two '
@@ -15232,6 +15358,7 @@ async function _doFullRestore(f){
       // verbatim. A restore is exactly the moment the rails should be up, not down; re-enabling
       // rehearsal after a restore is a deliberate flip of the switch, never a side effect.
       if(k==='adminSettings'&&v&&v.simulatorEnabled===true){ v={...v,simulatorEnabled:false}; }
+      if(k==='adminSettings'&&v&&typeof v==='object'){ const _lv=((typeof adminSettings!=='undefined'&&adminSettings)||{}).bidRuleSet, _bv=v.bidRuleSet, _std=x=>x===undefined||x==='standard'; if(_lv!==_bv&&_std(_lv)&&_std(_bv)){ v={...v}; if(_lv===undefined) delete v.bidRuleSet; else v.bidRuleSet=_lv; } } // [380 · §282] F2: absent and "standard" are the same rule set - the live value is written, so the frozen key is not touched (a backup that equals live is written unchanged)
       if(k==='timer'&&v&&v.enabled&&typeof v.lastChange==='number'){
         const resumed=Date.now()-(f.ts-v.lastChange);
         // If the backup's countdown had already run out, don't resurrect it as a live

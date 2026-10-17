@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 215;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 216;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -595,6 +595,7 @@ body{zoom:1.15}
       <!-- [build 139 · BL] Filled by reviewBid() ONLY when this submission LOWERS an existing
            bid: states the from→to change and the lowering cost/remaining count BEFORE commit. -->
       <div id="confirmLowering" style="display:none;background:rgba(234,88,12,.08);border:1px solid rgba(234,88,12,.35);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:.82rem;color:#7c2d12;font-weight:600"></div>
+      <div id="confirmStrict" style="display:none;background:rgba(251,191,36,.18);border:1px solid rgba(217,119,6,.6);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:.82rem;color:#4a3000;font-weight:600;line-height:1.45"></div><!-- [216 · §282] W3, Strict only: filled and shown by reviewBid; never touched under Standard -->
       <div style="font-size:.78rem;color:#48607a;margin-bottom:14px">Review the details above. Once submitted, your bid is recorded and may be edited or removed before the auction closes.</div>
       <div class="modal-buttons">
         <button class="btn-secondary" onclick="closeModal()">Cancel</button>
@@ -919,6 +920,31 @@ function _saveRefusal(){
   if(_live!==true) return LIVE_RECONNECT_TEXT;
   return null;
 }
+// ── [216 · §282, owner 16 Oct 2026] THE RULE SET: Standard or Strict ──────────────────────────────────────────────────────────
+// His gate, verbatim: "i want to make sure that when standard is selected, the rules would be identical to how they are now. that's a
+// critical check." So every Strict behaviour on this page asks ONE question, _strictOn(), and nothing else. True ONLY when the admin
+// settings document has really arrived (its own snapshot set _boardLoaded.settings) and its bidRuleSet is exactly "strict". Absent,
+// "standard", any other value, or not yet arrived = Standard: every rule is then the one staff 215 runs. Outside this block it is asked as
+// (typeof _strictOn==='function'&&_strictOn()) - the sandbox convention: a test that lifts one function out without this one judges Standard.
+function _strictOn(){ try{ return !!(_boardLoaded&&_boardLoaded.settings===true&&adminSettings&&adminSettings.bidRuleSet==='strict'); }catch(_){ return false; } }
+// "this phase" reads "this round" in Phase 4 (plan §5b).
+function _strictWord(){ try{ return Number((phasesData&&phasesData.currentPhase)||1)===4?'round':'phase'; }catch(_){ return 'phase'; } }
+// The owner's approved words (plan §5b W1-W6; DECISIONS §282, 16 Oct 2026 6:00 AM "w2-w6 good", 6:04 AM "w1 approved"), word for word.
+const STRICT_HELD_TEXT="Your bid is winning on this competition week, so it can't be removed.";
+const STRICT_W1_LEAD="Your bid is winning on this competition week, so it can't be removed. You can move it instead, to a week where another bid knocked you out of winning and where this bid would win:";
+function _strictW1Freed(bid,weekNum){ return "Your bid of "+bidLbl(bid)+" on Week "+weekNum+" will become available to use on another week."; }
+function _strictW1Last(){ return "Once moved, it can't be lowered on its new week for the rest of this "+_strictWord()+". You can still raise it, or move it again under the same rule."; }
+const STRICT_W2="Your bid is winning on this competition week, so it can't be removed. A winning bid on a competition week can only be moved, to a week where another bid knocked you out of winning and where it would win. None of your weeks is like that right now.";
+const STRICT_W3="This is a competition week. While your bid is winning here, it can't be removed — only moved to a week where another bid knocked you out of winning.";
+function _strictW4(){ return "On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen a bid. A winning bid on a competition week can't be removed — it can only be moved, to a week where another bid knocked you out of winning and where it would win, and once moved it can't be lowered there for the rest of the "+_strictWord()+". A tied, under-review or losing bid, and an NP, can be removed at any time. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it."; }
+const STRICT_W5="Your bid will make this a competition week. To bid here now, your bid must be at least as strong as the weakest bid there that is winning or under review. After that, you can only weaken your bid if it would still win, and while it is winning it can't be removed — only moved to a week where another bid knocked you out of winning.";
+function _strictW6(){ return "This bid was moved here, so it can't be lowered on this week for the rest of this "+_strictWord()+". You can raise it."; }
+// Standard's competition-week rule line, as the Rules list (#ruleNoWeaken) and the welcome e-mail have carried it since 198 - these very words.
+const RULE_NOWEAKEN_STD='On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.';
+function _ruleNoWeakenText(){ return (typeof _strictOn==='function'&&_strictOn())?_strictW4():RULE_NOWEAKEN_STD; }
+function _compTipText(){ return (typeof _strictOn==='function'&&_strictOn())?STRICT_W5:COMP_TIP_TEXT; }
+// The Rules & Reminders line follows the set. It writes only when what shows has to change - under Standard it never does.
+function _ruleSetSync(){ try{ const el=document.getElementById('ruleNoWeaken'); if(!el) return; const t=_ruleNoWeakenText(); if(el.textContent!==t) el.textContent=t; }catch(_){} }
 // The quiet "Reconnecting…" line above the board: shown only while the board is drawn and the page is not live. Called by
 // renderBoardLoading on every render; writes to the page only when what is showing has to change.
 function _boardLivePaint(){
@@ -2003,7 +2029,7 @@ function _rbGateCheck(){
 // during the anonymous bootstrap it was rejected permission-denied (a dead, error-logging
 // listener that never recovers). The signed-in path (_subscribeSensitiveOnce + a getDoc)
 // covers it after login; _emailsReady already initializes true so sign-in never waits on it.
-onSnapshot(adminRef,    snap=>{ _boardMark('settings',snap); adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _acCheckRemote(adminSettings); _rbGateCheck(); _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); if(typeof renderDestinationPill==='function') renderDestinationPill(); if(typeof renderSimModeBanner==='function') renderSimModeBanner(); if(typeof _blindSync==='function') _blindSync(); if(typeof _lipSync==='function') _lipSync(); }); // [204 · §261] the blind follows this doc · [177 · §201] the test-mode banner follows this doc too // [build 136 · B5] config check first · [build 139 · GATE] · [174 · §196] the destination pill follows this doc
+onSnapshot(adminRef,    snap=>{ _boardMark('settings',snap); adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _acCheckRemote(adminSettings); _rbGateCheck(); _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); if(typeof renderDestinationPill==='function') renderDestinationPill(); if(typeof renderSimModeBanner==='function') renderSimModeBanner(); if(typeof _blindSync==='function') _blindSync(); if(typeof _lipSync==='function') _lipSync(); if(typeof _ruleSetSync==='function') _ruleSetSync(); }); // [204 · §261] the blind follows this doc · [216 · §282] the competition-week rule line follows the rule set · [177 · §201] the test-mode banner follows this doc too // [build 136 · B5] config check first · [build 139 · GATE] · [174 · §196] the destination pill follows this doc
 
 // ── Maximum bids per phase (admin-set; 'none' = no limit) ──
 // NP bids allowed this phase? Admin toggles per phase (Controls → NP Bids by
@@ -2647,7 +2673,7 @@ let _fpLastFacts=null; // [183 · §223] the recorded facts waiting for logOwnCh
 // [215 · §282] THE CHANGE-LOG ENTRY, built in one place: logOwnChange (below) uses it, and so does the bid save, which writes the entry
 // inside its transaction (the combined shape) or straight after it (the split shape, _txAfter). The same fields, id and time as before;
 // `facts` = the four recorded facts, or null.
-function _logEntry(user,wk,action,bidValue,facts){
+function _logEntry(user,wk,action,bidValue,facts,extra){ // [216 · §282] extra (Strict only): a move's marks or a koUnknown removal's mark
   // id field guarantees uniqueness — arrayUnion deduplicates by value equality,
   // so two entries with identical fields (same ms timestamp) would silently drop one.
   const entry={id:Math.random().toString(36).slice(2),user,weekKey:wk,action,actor:'user',ts:Date.now()};
@@ -2660,6 +2686,7 @@ function _logEntry(user,wk,action,bidValue,facts){
   try{
     if(facts){ for(const k of ['tRem','tDur','tReset','aff']){ const v=facts[k]; if((typeof v==='number'&&isFinite(v))||typeof v==='boolean') entry[k]=v; } }
   }catch(_){}
+  if(extra&&typeof extra==='object'){ try{ for(const k of Object.keys(extra)) entry[k]=extra[k]; }catch(_){} } // [216 · §282] Strict only - no Standard save passes `extra`, so a Standard entry has exactly 215's fields
   return entry;
 }
 async function logOwnChange(user,wk,action,bidValue){
@@ -2703,6 +2730,8 @@ function _picVal(pic,user,wk){ const m=(pic&&pic.data)?pic.data[user]:undefined;
 function _picTag(pic,user,wk){ const m=(pic&&pic.bidPhaseData)?pic.bidPhaseData[user]:undefined; return (m&&typeof m==='object')?m[wk]:undefined; }
 function _picPhase(pic){ return Number((pic&&pic.phasesData&&pic.phasesData.currentPhase)||1); }
 function _picUsed(pic,user){ const e=(pic&&pic.bidLoweringsData)?pic.bidLoweringsData[user]:null; return Math.max(0,Number(e&&e.used)||0); }
+function _picStrict(pic){ return !!(pic&&pic.adminSettings&&pic.adminSettings.bidRuleSet==='strict'); } // [216 · §282] the SERVER copy's rule set - the writes run outside _withPic, so they ask the copy, not _strictOn()
+function _picMark(pic,user,wk){ const m=(pic&&pic.bidPhaseData)?pic.bidPhaseData[user]:undefined; const mv=(m&&typeof m==='object'&&m.mv&&typeof m.mv==='object')?m.mv:null; const x=mv?mv[wk]:null; return (x&&typeof x==='object')?x:null; } // [216 · §282] the moved mark on the server copy (rule 3)
 // Step 1: the server's copy, read all at once (one after another took 0.8 to 1.3 s - plan §10a), and shaped EXACTLY as each listener
 // shapes its document (the same stand-in for a missing one), without any listener's side effects. The bid times and the timer are
 // not read: the rules judge the clock and the closed flag on the server.
@@ -2800,17 +2829,20 @@ function _txWriteSet(tx,pic,user,wk,bid,v,facts,split){
 // Remove. The phase tag is deleted only when the bidPhase document exists - an update of a missing document would fail the whole
 // transaction (red team #10). The floor only ever moves up here, as before; the row carries the removed bid. The bid time is cleared
 // after the save (_txBidTimes).
-function _txWriteRemove(tx,pic,user,wk,facts,split){
+function _txWriteRemove(tx,pic,user,wk,facts,split,extra){ // [216 · §282] extra (Strict only): {koUnknown:true}
   const prio=_picVal(pic,user,wk);
+  const dropMark=_picStrict(pic)&&!!_picMark(pic,user,wk); // [216 · §282] Strict only: a MOVED bid's mark leaves with it, in the same bidPhase write (no new document)
   tx.update(scheduleRef,{[`${user}.${wk}`]:deleteField()});
-  if(pic.bidPhaseHas) tx.update(bidPhaseRef,{[`${user}.${wk}`]:deleteField()});
+  if(pic.bidPhaseHas) tx.update(bidPhaseRef,dropMark?{[`${user}.${wk}`]:deleteField(),[`${user}.mv.${wk}`]:deleteField()}:{[`${user}.${wk}`]:deleteField()}); // [216 · §282] under Standard dropMark is false: 215's payload
   const floor=(prio===undefined)?null:_txFloor(pic,user,wk,prio,false);
-  const entries=[_logEntry(user,wk,'removed',prio,facts)];
+  const entries=[_logEntry(user,wk,'removed',prio,facts,extra)]; // [216 · §282] extra is undefined under Standard
   if(!split){
     if(floor) tx.set(bestBidsRef,{[user]:floor},{merge:true});
     _txLog(tx,pic,entries);
   }
-  return {ph:_picPhase(pic),floor:floor,spend:0,used:_picUsed(pic,user),timeWeeks:[wk],timeClear:true,split:!!split,entries:split?entries:null};
+  const r={ph:_picPhase(pic),floor:floor,spend:0,used:_picUsed(pic,user),timeWeeks:[wk],timeClear:true,split:!!split,entries:split?entries:null};
+  if(dropMark) r.markGone=true; // [216 · §282] Strict only
+  return r;
 }
 // Swap. Both weeks and both tags in one write each, as before; the floors of both weeks, the lowerings spent (one or two), and both
 // rows in ONE append, wkA first (both bid times follow the save). `c` is _swapCheck's answer on the server's copy.
@@ -2827,6 +2859,36 @@ function _txWriteSwap(tx,pic,user,wkA,wkB,c,facts,split){
     _txLog(tx,pic,entries);
   }
   return {ph:ph,floor:floor,spend:spend,used:_picUsed(pic,user)+spend,timeWeeks:[wkA,wkB],timeClear:false,split:!!split,entries:split?entries:null};
+}
+// [216 · §282] THE MOVE'S WRITES (Strict only - plan §3 rule 2). ONE write per document, so the rules' count is a swap's (design §4): the
+// bid off the source and onto the destination (schedule); the source's tag off, the destination's tag on, and the moved mark onto the
+// destination and off the source (bidPhase - the bid's own record, rule 3); both floors in ONE write; the lowering the destination
+// costs, if any; and the two change-log rows in ONE append - the removal first and stamped strictly earlier, both marked as a move with
+// one id, so the Fair Play report reads one move (never a Bail) and the page's own replays read them in order. The bid times follow
+// the save (_txBidTimes: the source cleared, the destination set). `v` = _moveCheck's answer on the server copy; `facts` = {src:{…},dst:{…}}.
+function _txWriteMove(tx,pic,user,src,dst,bid,v,facts,split){
+  const ph=_picPhase(pic), spend=v.blSpend?1:0;
+  const rnd=(ph===4)?Number((pic.phasesData&&pic.phasesData.p4Round)||1):0;
+  const outE=_logEntry(user,src,'removed',bid,(facts&&facts[src])||null,{mv:'out',mvTo:dst});
+  const inE=_logEntry(user,dst,v.blSpend?'lowered':(_picVal(pic,user,dst)===undefined?'added':'edited'),bid,(facts&&facts[dst])||null,{mv:'in',mvFrom:src});
+  if(!(inE.ts>outE.ts)) inE.ts=outE.ts+1; // the arrival strictly after the removal
+  outE.mvId=outE.id; inE.mvId=outE.id;
+  const mark={ph:ph,r:rnd,id:inE.id,from:src,ts:inE.ts};
+  tx.update(scheduleRef,{[`${user}.${src}`]:deleteField(),[`${user}.${dst}`]:bid});
+  if(pic.bidPhaseHas){
+    const bp={[`${user}.${src}`]:deleteField(),[`${user}.${dst}`]:ph,[`${user}.mv.${dst}`]:mark};
+    if(_picMark(pic,user,src)) bp[`${user}.mv.${src}`]=deleteField();
+    tx.update(bidPhaseRef,bp);
+  } else tx.set(bidPhaseRef,{[user]:{[dst]:ph,mv:{[dst]:mark}}},{merge:true});
+  let floor=null;
+  { const fs=_txFloor(pic,user,src,bid,false), fd=_txFloor(pic,user,dst,bid,!!v.blSpend); if(fs) floor=Object.assign(floor||{},fs); if(fd) floor=Object.assign(floor||{},fd); }
+  const entries=[outE,inE];
+  if(!split){
+    if(floor) tx.set(bestBidsRef,{[user]:floor},{merge:true});
+    if(spend) tx.set(bidLoweringsRef,{[user]:{used:increment(spend)}},{merge:true});
+    _txLog(tx,pic,entries);
+  }
+  return {ph:ph,floor:floor,spend:spend,used:_picUsed(pic,user)+spend,timeWeeks:[dst],timeGone:[src],timeClear:false,split:!!split,entries:split?entries:null,mark:mark};
 }
 // After a confirmed save in the combined shape: the page's own copies of what was written, so the board and the next box are right
 // before the listeners echo them (the echo stays the authority). The lowering count takes the larger of the echo and the server's count
@@ -2866,7 +2928,7 @@ async function _txAfter(user,info,what){
     try{ await _awaitWrite(setDoc(bidLoweringsRef,{[user]:{used:increment(info.spend)}},{merge:true})); if(!bidLoweringsData[user]) bidLoweringsData[user]={}; bidLoweringsData[user].used=Math.max(blUsed(user),n); }
     catch(_){ uncounted=true; }
   };
-  if(what==='swap'){ await rows(); await floor(); await count(); }
+  if(what==='swap'||what==='move'){ await rows(); await floor(); await count(); } // [216 · §282] a move (Strict only) writes its two rows first, as a swap does
   else { await floor(); await count(); await rows(); }
   _txBidTimes(user,info);
   if(what==='remove') return; // 214's remove said nothing about its bookkeeping
@@ -2882,6 +2944,7 @@ async function _txAfter(user,info,what){
 // fallback. Not in the transaction (the rules' limit, above). A failure here never turns a saved bid into an error.
 function _txBidTimes(user,info){
   try{
+    if(info&&Array.isArray(info.timeGone)){ for(const wk of info.timeGone){ if(bidTimesData[user]) bidTimesData[user][wk]=null; updateDoc(bidTimesRef,{[`${user}.${wk}`]:deleteField()}).catch(()=>setDoc(bidTimesRef,{[user]:{[wk]:null}},{merge:true})).catch(()=>{}); } } // [216 · §282] a move's source week (Strict only - no other save sets timeGone)
     if(!info||!Array.isArray(info.timeWeeks)||!info.timeWeeks.length) return;
     if(info.timeClear){
       for(const wk of info.timeWeeks){
@@ -3028,6 +3091,7 @@ async function _txSave(spec){
 function _txSaveEnd(res,follow,what){
   const noAnswer=(what==='swap')
     ?"Couldn't confirm your swap — your connection may have dropped. Check the board before you leave this page."
+    :(what==='move')?"Couldn't confirm your move — your connection may have dropped. Check the board before you leave this page." // [216 · §282] a move (Strict only)
     :"Couldn't confirm your bid — your connection may have dropped. Check the board before you leave this page.";
   const st=res&&res.status;
   if(st==='saved'){ let p=null; try{ p=follow(res.info); }catch(_){} return Promise.resolve(p).then(()=>true,()=>true); }
@@ -3044,7 +3108,7 @@ function _txSaveEnd(res,follow,what){
   if(st==='timeout'||st==='unknown'){
     showError(noAnswer);
     // Still listening: a save the server confirms later gets its follow-up steps (timer, e-mails, bookkeeping) and the person is told.
-    if(res.late) res.late.then(info=>{ if(!info) return; try{ Promise.resolve(follow(info)).catch(()=>{}); }catch(_){} showCenterAlert(SAVE_LATE_TEXT); }).catch(()=>{});
+    if(res.late) res.late.then(info=>{ if(!info) return; try{ Promise.resolve(follow(info)).catch(()=>{}); }catch(_){} showCenterAlert((what==='move')?"Your move was saved after all.":SAVE_LATE_TEXT); }).catch(()=>{}); // [216 · §282] a move (Strict only) says move
     return false;
   }
   showError("Save failed: "+((res&&res.err&&res.err.message)||'unknown error'));
@@ -3057,7 +3121,7 @@ function _txSaveEnd(res,follow,what){
 // their side effects (priority-lock floor, bid timestamp, change log) on success
 // and never leave a phantom floor for a bid that a timer/lock rejected. Returns
 // FALSE on any gate bail, limit block, or write error.
-async function persistScheduleChange(user, wk, bid, prevSnapshot, expect){
+async function persistScheduleChange(user, wk, bid, prevSnapshot, expect, rmMode){ // [216 · §282] rmMode (remove only, Strict only): 'koUnknown'
   // bid===null or undefined → remove. Otherwise → set. [215 · §282] expect = (remove only) the bid the Remove box showed.
   // [190 · §241] Nothing is saved before every board document has arrived: the alerts and the
   // timer gate below compare the board before and after this bid, and two half-loaded pictures
@@ -3181,8 +3245,8 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot, expect){
       user:user, weeks:[wk],
       // "Already there" (asked only after an attempt whose reply was lost): the value AND this phase's tag, or, for a remove, no value.
       done:pic=>_rm?(_picVal(pic,user,wk)===undefined):(JSON.stringify(_picVal(pic,user,wk))===JSON.stringify(bid)&&Number(_picTag(pic,user,wk))===_picPhase(pic)),
-      judge:()=>_rm?_removeCheck(user,wk,expect):_bidCheck(user,wk,_val),
-      writes:(tx,pic,v,split)=>_rm?_txWriteRemove(tx,pic,user,wk,_facts,split):_txWriteSet(tx,pic,user,wk,bid,v,_facts,split)
+      judge:()=>_rm?_removeCheck(user,wk,expect,rmMode):_bidCheck(user,wk,_val), // [216 · §282] rmMode undefined under Standard
+      writes:(tx,pic,v,split)=>_rm?_txWriteRemove(tx,pic,user,wk,_facts,split,(rmMode==='koUnknown')?{koUnknown:true}:undefined):_txWriteSet(tx,pic,user,wk,bid,v,_facts,split)
     });
     // After the save: the page's own copies, the timer and the alert e-mails - the steps that followed the batch before. One
     // function, so a save the server confirms only after the page stopped waiting (the 20 s budget) runs the very same steps then.
@@ -3221,6 +3285,7 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot, expect){
         sendEmailNotifications(_beforeSnap,_afterSnap,user).catch(()=>{}); // [154 · AUD-C2]
       }
       if((bid===null||bid===undefined)&&bidPhaseData[user]) delete bidPhaseData[user][wk]; // [155 · AUD-H1] deferred remove-path tag cleanup (see note above)
+      if(info&&info.markGone&&bidPhaseData[user]&&bidPhaseData[user].mv&&typeof bidPhaseData[user].mv==='object') delete bidPhaseData[user].mv[wk]; // [216 · §282] Strict only: the page's copy of the moved mark leaves with the bid (markGone is never set under Standard)
       return _txAfter(user,info,_rm?'remove':'bid'); // [215 · §282] then the bookkeeping (the split shape) and the bid time, as 214 did after its save
     };
     return await _txSaveEnd(_res,_follow,'bid');
@@ -3298,7 +3363,7 @@ function flash(el,msg,dur){
 // phase (193 allowed it, and a winner then stepped down in two edits). Weeks with no competition are
 // untouched. Page-enforced (bid box, review step, confirm step) and mirrored in _lwWeakerWins so
 // no alert e-mail names a bid the box refuses. The admin page's own bid entry is not bound by it.
-function _wwMsg(){ return (_wwRefuses.why==='left')?"This week has had a bidding competition. A new bid must be at least as strong as the last bid that was on it.":(_wwRefuses.why==='in')?"On a week with a bidding competition, a new bid must be at least as strong as the weakest bid there that is winning or under review.":"On a week with a bidding competition, a bid can only be weakened if it would still win and is no lower than the lowest other winning bid."; } // [195 · §249] coming in, or coming down
+function _wwMsg(){ if(_wwRefuses.why==='moved'&&typeof _strictW6==='function') return _strictW6(); return (_wwRefuses.why==='left')?"This week has had a bidding competition. A new bid must be at least as strong as the last bid that was on it.":(_wwRefuses.why==='in')?"On a week with a bidding competition, a new bid must be at least as strong as the weakest bid there that is winning or under review.":"On a week with a bidding competition, a bid can only be weakened if it would still win and is no lower than the lowest other winning bid."; } // [195 · §249] coming in, or coming down · [216 · §282] 'moved' is set only under Strict
 // [196 · §251, owner 7 Oct 2026: "I need at the same time and previous phases don't matter"] A bidding
 // competition has happened on a week when, at ONE MOMENT in this phase (in Phase 4, this round), the
 // people with a bid on it together came to more than it has available: their FTE plus the FTE of
@@ -3339,9 +3404,11 @@ function _wwContested(wk,snap){
     if(over(now)) return true;
     const since=_wwSince();
     const log=(changesData&&Array.isArray(changesData.log))?changesData.log:[];
+    const _wwRoster=(typeof _strictOn==='function'&&_strictOn()&&Array.isArray(names)&&names.length)?names:null; // [216 · §282] rule 8, Strict only (see the loop below)
     const ev=[], there=new Set(), seen=new Set(), always=new Set(), late=Date.now()+600000;
     for(const e of log){
       if(!e||e.weekKey!==wk||typeof e.user!=='string'||!e.user) continue;
+      if(_wwRoster&&_wwRoster.indexOf(e.user)<0) continue; // [216 · §282] Strict only (rule 8, his q7 "yes"): an entry naming someone not on the roster is ignored
       if(typeof e.ts==='number'&&e.ts<since) continue; // before this phase's (round's) record - 195's own skip, kept FIRST so nothing it skipped is counted here
       if(typeof e.ts!=='number'||!isFinite(e.ts)||e.ts>late){ always.add(e.user); there.add(e.user); seen.add(e.user); continue; } // no usable time, or a clock running ahead: counted throughout
       ev.push(e);
@@ -3457,6 +3524,7 @@ const COMP_MIN_TEXT='Minimum new bid: '; // [214 · §279, owner 10:06 AM] "new"
 function _wwMyMin(user,wk){
   try{
     if(!user||typeof _wwLabelOn!=='function'||_wwLabelOn(wk)!==true) return null;
+    if(typeof _strictOn==='function'&&_strictOn()&&_mvOn(user,wk)) return null; // [216 · §282] Strict only: a MOVED bid's limit is its own value (W6 says so); the 194 wording here would be untrue
     const lv=_wwMinBid(wk); if(lv===null) return null;
     const live=isVisibleBid(user,wk)?data[user][wk]:undefined;
     const rebid=live!==undefined&&live!==null;
@@ -3659,6 +3727,7 @@ function _wwRefuses(user,wk,bid,pic){ // [199 · §257] `pic` (optional): the pi
       if(ref===undefined||ref===null) return false;
       if(!(priorityScore(bid)>priorityScore(ref))) return false;
     }catch(_){ return false; }
+    if(typeof _strictOn==='function'&&_strictOn()&&_mvOn(user,wk)){ _wwRefuses.why='moved'; return true; } // [216 · §282] Strict only (rule 3): a MOVED bid cannot be made weaker on its new week, competition or not - every Edit and Swap judgment passes here
     if(!_wwContested(wk)) return false;
     const s=JSON.parse(JSON.stringify((pic&&typeof pic==='object')?pic:(data||{})));
     if(!s[user]||typeof s[user]!=='object') s[user]={};
@@ -3690,6 +3759,7 @@ function _wwSomeNote(why,isRebid,allGreyed){
     if(allGreyed||!why) return '';
     const n=k=>{ const v=Number(why[k]); return (isFinite(v)&&v>0)?v:0; };
     if(!isRebid){ if(n('left')) return WW_SOME_LEFT; if(n('in')) return WW_SOME_IN; }
+    if(n('moved')&&typeof _strictW6==='function') return _strictW6(); // [216 · §282] Strict only: the 'moved' count exists only under Strict
     return n('down')?WW_SOME_DOWN:'';
   }catch(_){ return ''; }
 }
@@ -3890,7 +3960,7 @@ function openPriorityModal(wk){
     let html=`<div style="font-weight:700;color:#132f49;font-size:.95rem">${meta.range}</div>`;
     if(meta.special) html+=`<div style="margin-top:4px;color:${meta.special.color};font-size:.72rem;font-weight:600">${meta.special.label}${summerAlso(meta)?' · ☀️ Summer':''}${meta.highPriorityOnly?' · High demand':''}</div>`;
     if(typeof _wwLabelOn==='function'&&_wwLabelOn(wk)){ html+='<div style="margin-top:4px;font-size:.72rem">'+COMP_LABEL_HTML+'</div>'; const _mb=(typeof _wwMinBid==='function')?_wwMinBid(wk):null; if(_mb!==null) html+='<div id="wwMinLine" style="margin-top:2px;font-size:.72rem">'+_wwMinHtml(_mb)+'</div>'; } // [196 · §250] the same label as the week card; typeof = sandbox convention · [214 · §279] and the minimum bid
-    if(typeof _wwWouldTip==='function'&&_wwWouldTip(user,wk)) html+='<div id="wwTipNote" style="margin-top:8px;padding:8px 10px;background:rgba(251,191,36,.18);border:1px solid rgba(217,119,6,.6);border-radius:8px;font-size:.8rem;color:#4a3000;line-height:1.45">'+COMP_TIP_TEXT+'</div>'; // [197 · §254] typeof = sandbox convention
+    if(typeof _wwWouldTip==='function'&&_wwWouldTip(user,wk)) html+='<div id="wwTipNote" style="margin-top:8px;padding:8px 10px;background:rgba(251,191,36,.18);border:1px solid rgba(217,119,6,.6);border-radius:8px;font-size:.8rem;color:#4a3000;line-height:1.45">'+((typeof _compTipText==='function')?_compTipText():COMP_TIP_TEXT)+'</div>'; // [197 · §254] typeof = sandbox convention · [216 · §282] the words follow the rule set
     winfo.innerHTML=html;
   }
   document.getElementById("prioStep1").style.display="block";
@@ -3925,7 +3995,7 @@ function openPriorityModal(wk){
   // win below the weakest other winning bid is greyed out like a number already in use.
   // [200 · §258] …and counts WHICH half of the rule refused each one ('in' / 'left' / 'down'), for the note below. A refusal that
   // could not be told (null) greys the number exactly as before and is not counted: the note never speaks on a guess.
-  const _wwWhy=Object.create(null); _wwWhy.in=0; _wwWhy.left=0; _wwWhy.down=0;
+  const _wwWhy=Object.create(null); _wwWhy.in=0; _wwWhy.left=0; _wwWhy.down=0; if(typeof _strictOn==='function'&&_strictOn()) _wwWhy.moved=0; // [216 · §282] Strict only
   if(typeof _wwRefuses==='function'){ sel.querySelectorAll("option").forEach(opt=>{ if(opt.value&&!opt.disabled){ const _r=_wwRefuses(user,wk,_bfParse(opt.value)); if(_r!==false){ opt.disabled=true; if(_r===true&&typeof _wwWhy[_wwRefuses.why]==='number') _wwWhy[_wwRefuses.why]++; } } }); } // typeof = sandbox convention
   // [194 · §248, owner 7 Oct 2026] The box must never sit silent: when EVERY number is greyed and this rule refuses at least one
   // of them (someone who left a fought-over week, put that number elsewhere and came back), the week panel says why and the way
@@ -4040,6 +4110,12 @@ window.reviewBid=function(){
   document.getElementById("confirmBidLevel").textContent=val==="NP"?"NP (No Priority)":val.replace(/,/g,'/');
   { const _lw=document.getElementById("confirmLowering");
     if(_lw){ _lw.textContent=_blNote; _lw.style.display=_blNote?'block':'none'; } }
+  // [216 · §282] Strict only (plan rule 4, W3): a NUMBERED bid on a competition week - or on the week this bid makes one - is told before
+  // Submit that while it is winning it can't be removed. Written only to show the note, or to hide it if it is showing: under Standard,
+  // nothing here is ever written.
+  if(typeof _strictOn==='function'){ try{ const _cs=document.getElementById("confirmStrict");
+    const _on=_strictOn()&&val!=="NP"&&((typeof _wwLabelOn==='function'&&_wwLabelOn(pendingWeek)===true)||(typeof _wwWouldTip==='function'&&_wwWouldTip(user,pendingWeek)===true));
+    if(_cs&&(_on||(_cs.style.display&&_cs.style.display!=='none'))){ _cs.textContent=_on?STRICT_W3:''; _cs.style.display=_on?'block':'none'; } }catch(_){} }
   document.getElementById("prioStep1").style.display="none";
   document.getElementById("prioStep2").style.display="block";
 };
@@ -4441,7 +4517,7 @@ window.confirmSwap=async function(){
 // is the bid still the one the box showed (`expect`)? A win or a Phase 4 denial that arrives while the box is open is caught now
 // (red team #8). Read-only. The answer: ok, or a refusal with how it is shown - 'error' = showError, 'center' = showCenterAlert,
 // 'silent' = nothing at all, as before (_checkShow).
-function _removeCheck(user,wk,expect){
+function _removeCheck(user,wk,expect,mode){ // [216 · §282] mode (Strict only): 'move' = the source of a move; 'koUnknown' = the plain Remove opened because the move rule could not be worked out
   if(!biddingOpen()) return {ok:false,kind:'error',msg:"Bidding hasn't started yet — it opens when the admin begins Phase 1."};
   if(isAuctionClosed()) return {ok:false,kind:'error',msg:"Bidding is closed — no more changes can be made."};
   if(locksData.globalLock||locksData.weeks?.[wk]) return {ok:false,kind:'error',msg:"This week is locked — no more changes allowed."};
@@ -4459,13 +4535,26 @@ function _removeCheck(user,wk,expect){
   // [215 · §282] At the moment of saving: the bid is still the one the box showed, and still a live bid of this phase. If not, the
   // approved sentence alone is shown ("The board changed before your change was saved — nothing was saved." - _txSaveEnd).
   if(expect!==undefined&&!(JSON.stringify(data[user][wk])===JSON.stringify(expect)&&isVisibleBid(user,wk))) return {ok:false,kind:'center',msg:''};
+  // [216 · §282] STRICT ONLY (plan §3 rule 1, as he ruled 15 Oct 2:07 PM): on a competition week a WINNING numbered bid is held - it can
+  // only be moved. Tied, Under Review and losing bids, and an NP, are removed exactly as before. Asked before the box opens (removeSelection
+  // opens the move step instead) and again on the server's copy at the moment of saving. Not loaded yet: "try again" - never the plain box (rule 5).
+  if(typeof _strictOn==='function'&&_strictOn()){
+    const _h=_strictHeld(user,wk);
+    if(_h==='wait') return {ok:false,kind:'center',msg:"The page is still loading — please try again in a moment."};
+    if(mode==='move') return (_h===true)?{ok:true}:{ok:false,kind:'center',msg:''};
+    if(_h===true){
+      if(mode==='koUnknown'){ let _thrown=false; try{ _mvDests(user,wk); }catch(_){ _thrown=true; } if(_thrown) return {ok:true}; } // rule 5: only while the move rule still cannot be worked out
+      return {ok:false,kind:'center',msg:STRICT_HELD_TEXT,held:true};
+    }
+  }
   return {ok:true};
 }
 async function removeSelection(wk){
   { const _lr=(typeof _saveRefusal==='function')?_saveRefusal():null; if(_lr){ showCenterAlert(_lr); return; } } // [215 · §282] not live: the Remove box does not open
   const user=getCurrentUser();
   // [215 · §282] The checks that stood here run in _removeCheck (above) now - moved, not rewritten; each shown exactly as before.
-  { const _rc=_removeCheck(user,wk); if(!_rc.ok){ _checkShow(_rc); return; } }
+  let _rmMode; // [216 · §282] Strict only: 'koUnknown' when the move rule could not be worked out (rule 5); undefined under Standard
+  { const _rc=_removeCheck(user,wk); if(!_rc.ok){ if(_rc.held===true){ if(_mvOpen(user,wk)) return; _rmMode='koUnknown'; } else { _checkShow(_rc); return; } } } // [216 · §282] a held bid opens the move step instead (Strict only - .held is never set under Standard)
   // (Rule removed 12 Jul 2026: users may cancel any bid, including on weeks
   // they are currently projected to win.)
   const prio=data[user][wk];
@@ -4535,12 +4624,345 @@ async function removeSelection(wk){
   // state) untouched. [215 · §282] The save runs the checks above again on the server's copy, with the bid this box showed (prio), and
   // writes the removal with its floor and change-log row - in its transaction (the combined shape) or straight after it (the split
   // shape); the bid time is cleared after the commit.
-  const okRemove=await persistScheduleChange(user,wk,null,_prev,prio);
+  const okRemove=await persistScheduleChange(user,wk,null,_prev,prio,_rmMode); // [216 · §282] _rmMode undefined under Standard
   if(okRemove){
     if(data[user]) delete data[user][wk];
   }
 }
 window.removeSelection=removeSelection;
+// ── [216 · §282] THE KNOCK-OUT TEST (plan §3 rule 2a) - a PORT of the Fair Play report's own (admin _fpResetKind, _fpNums, _fpBidEvents,
+// _fpOutcomes and the knock-out lines of _fpBailPiece) as the report reads it from admin 380 on: knocked out = the person was WINNING on a
+// week and someone else's change made them not winning, OR Under Review / tied and someone else's change made them losing (his 2:07 PM
+// ruling); an admin change to a person's OWN bid is never their knock-out (rule 7, his 2:10 PM "doesn't count"); it ends when they win
+// there again. The record says where, not when (the page needs only where). Pinned to the report: tests/test-216-380-ko-twin.mjs (the
+// three small functions byte-identical to the admin's after renaming; the replay agrees on random logs and on his real leaves).
+// `keep` (Strict, rule 8): only entries naming someone on the roster - the system entries (a user deleted, everyone deleted) are kept
+// whoever they name. It never throws on size (the report's FP_MAX limits are not ported - they would switch Strict off for everyone).
+function _koResetKind(e){ const t=String((e&&e.type)||''); return t==='admin-delete-all-users'?'all':(t==='admin-remove-user'?'user':(t==='admin-restore-user'?'back':'')); }
+function _koNums(p){ if(p===undefined||p===null||p==='NP') return []; return Array.isArray(p)?(p.length<=3?p.slice():[]):[p]; }   // a combined bid is two or three numbers; a longer list is not a bid (and must not be walked)
+function _koEvents(list,fence,keep){
+  return (list||[]).filter(e=>e&&typeof e.ts==='number'&&isFinite(e.ts)&&e.ts>=(fence||0)&&(_koResetKind(e)||(typeof e.user==='string'&&e.user&&e.user!=='ALL'
+      &&typeof e.weekKey==='string'&&e.weekKey&&e.weekKey!=='ALL'
+      &&(e.action==='added'||e.action==='edited'||e.action==='lowered'||e.action==='removed')
+      &&(!keep||keep(e.user)))))
+    .sort((a,b)=>(a.ts-b.ts)||((a.action==='removed'?1:0)-(b.action==='removed'?1:0)));
+}
+function _koOutcomes(wkMap,cap,priorSet){
+  const out={}, reqs=[];
+  let won=0; for(const u of priorSet) won+=getUserFTE(u);
+  for(const u in wkMap){
+    if(priorSet.has(u)) continue;
+    const p=wkMap[u]; if(p===undefined||p===null) continue;
+    out[u]='lose';
+    if(!(p==="NP"||(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10)))) continue;
+    reqs.push({user:u,score:priorityScore(p),fte:getUserFTE(u)});
+  }
+  reqs.sort((a,b)=>a.score-b.score);
+  const T=getReviewThreshold();
+  let i=0, settled=false;
+  while(i<reqs.length&&!settled){
+    const s=reqs[i].score, g=[];
+    while(i<reqs.length&&reqs[i].score===s){ g.push(reqs[i]); i++; }
+    const gf=g.reduce((a,r)=>a+r.fte,0);
+    if(Math.round((won+gf-cap)*10)/10<=0){ for(const r of g) out[r.user]='win'; won+=gf; }
+    else{
+      settled=true;
+      if(g.length>1){ if(g.some(r=>Math.round(((won+r.fte)-cap)*10)/10<=T)){ for(const r of g) out[r.user]='draw'; } }
+      else{ const ov=Math.round(((won+g[0].fte)-cap)*10)/10; if(ov>0&&ov<=T) out[g[0].user]='review'; }
+    }
+  }
+  return out;
+}
+function _koHit(b,n){ return (b==='win'&&n!=='win')||((b==='review'||b==='draw')&&n==='lose'); }
+// The weeks where `user` stands knocked out at the end of `ev` (a _koEvents list): {week:true}. The board is everyone's; only `user`'s record is kept.
+function _koKnocked(ev,user,capOf,priorOf){
+  let board=Object.create(null), last=Object.create(null), ko=Object.create(null);
+  const offBoard=(w2,who)=>{ delete board[w2][who]; const n2=_koOutcomes(board[w2],capOf(w2),priorOf(w2)); last[w2]=n2; if(n2[user]==='win') delete ko[w2]; };
+  for(let i=0;i<ev.length;i++){
+    const e=ev[i], u=e.user, wk=e.weekKey, rk=_koResetKind(e);
+    if(rk){
+      if(rk==='all'){ board=Object.create(null); last=Object.create(null); ko=Object.create(null); }
+      else if(rk==='user'){ for(const w2 in board){ if(Object.prototype.hasOwnProperty.call(board[w2],u)) offBoard(w2,u); } if(u===user) ko=Object.create(null); }
+      continue;
+    }
+    const pr=priorOf(wk), cap=capOf(wk), bw=(board[wk]=board[wk]||{});
+    let before=last[wk]||_koOutcomes(bw,cap,pr), now;
+    if(e.action==='removed'){
+      const had=Object.prototype.hasOwnProperty.call(bw,u);
+      const val=had?bw[u]:e.bidValue;
+      if(!had&&val!==undefined&&val!==null){ const t=Object.assign({},bw); t[u]=val; before=_koOutcomes(t,cap,pr); }
+      delete bw[u];
+      now=_koOutcomes(bw,cap,pr);
+    } else {
+      if(e.bidValue===undefined||e.bidValue===null) continue;
+      for(const n of _koNums(e.bidValue)){ for(const w2 in board){ if(w2===wk) continue; const o=board[w2][u];
+        if(o===undefined||_koNums(o).indexOf(n)<0) continue;
+        let swap=false; for(let j=i+1;j<ev.length&&ev[j].ts-e.ts<=2000;j++){ if(ev[j].user===u&&ev[j].weekKey===w2&&ev[j].action!=='removed'&&!_koResetKind(ev[j])){ swap=true; break; } }
+        if(!swap) offBoard(w2,u); } }
+      bw[u]=e.bidValue;
+      now=_koOutcomes(bw,cap,pr);
+    }
+    last[wk]=now;
+    if(u!==user&&Object.prototype.hasOwnProperty.call(now,user)&&_koHit(before[user],now[user])) ko[wk]=true;
+    if(now[user]==='win') delete ko[wk];
+  }
+  return ko;
+}
+
+// ── [216 · §282] HELD? (plan §3 rule 1, as ruled) - Strict only. true = a NUMBERED bid of this phase, on a competition week (the label's own test,
+// _wwContested - roster-filtered under Strict), projected WIN (a tie - 'draw' - and Under Review are NOT winning). 'wait' = cannot tell yet (the
+// page still loading or not live, or the floors not yet arrived - _wwContested would otherwise answer "competition" on a guess): the caller says
+// "try again" and opens nothing (rule 5). Anything thrown = 'wait' too. false = not held (removed as before).
+function _strictHeld(user,wk){
+  try{
+    if(!(typeof _strictOn==='function'&&_strictOn())) return false;
+    if((typeof _boardReady==='function'&&!_boardReady())||!_lwLoaded.best||_live!==true) return 'wait';
+    if(!isVisibleBid(user,wk)) return false;
+    const p=data[user][wk]; if(p===undefined||p===null||p==='NP') return false;
+    if(_wwContested(wk)!==true) return false;
+    return getOutcome(wk,user,computeApprovals(data))==='win';
+  }catch(_){ return 'wait'; }
+}
+
+// ── [216 · §282] THE MOVED MARK (plan §3 rule 3) - Strict only. Kept with the bid's own record: vacations/bidPhase, USER.mv.WEEK =
+// {ph, r, id, from, ts} (the phase, the Phase 4 round or 0, the id of the move's arrival row, the week it came from, its time). Written in the
+// move's own transaction (_txWriteMove), so a lost log row cannot free the bid. It holds while: the person still has a bid of this phase on the
+// week; the mark is of THIS phase (and, in Phase 4, this round) - by number, no clocks; and, when the move's own row is in the log, no later row
+// (in the log's own order) removes that bid or deletes the person (the admin's removal, or "delete user / all users"). The person's own
+// removal and their next move take the mark off in the same write. Unreadable = held (errs strict: the bid stays as it is).
+function _mvMark(user,wk){ try{ const m=bidPhaseData?bidPhaseData[user]:undefined; const mv=(m&&typeof m==='object'&&m.mv&&typeof m.mv==='object')?m.mv:null; const x=mv?mv[wk]:null; return (x&&typeof x==='object')?x:null; }catch(_){ return null; } }
+function _mvOn(user,wk){
+  if(!(typeof _strictOn==='function'&&_strictOn())) return false;
+  try{
+    if(!isVisibleBid(user,wk)) return false;
+    const m=_mvMark(user,wk); if(!m) return false;
+    const cur=Number(phasesData.currentPhase||1);
+    if(Number(m.ph)!==cur) return false;
+    if(cur===4&&Number(m.r)!==Number(phasesData.p4Round||1)) return false;
+    const log=(changesData&&Array.isArray(changesData.log))?changesData.log:[];
+    let at=-1; if(typeof m.id==='string'&&m.id){ for(let i=log.length-1;i>=0;i--){ if(log[i]&&log[i].id===m.id){ at=i; break; } } }
+    if(at>=0){ for(let i=at+1;i<log.length;i++){ const e=log[i]; if(!e) continue; const rk=_koResetKind(e);
+      if(rk==='all'||(rk==='user'&&e.user===user)) return false;
+      if(e.user===user&&e.weekKey===wk&&e.action==='removed') return false; } }
+    return true;
+  }catch(_){ return true; }
+}
+function _mvVal(b){ return b==="NP"?"NP":(Array.isArray(b)?b.join(','):String(b)); } // the bid as the bid box's checks read it
+
+// ── [216 · §282] WHERE A HELD BID MAY MOVE (plan §3 rule 2) - Strict only. Every gate a plain bid on the destination passes, judged on the board
+// with the source's bid taken off (so the cap counts the move as no new bid, and the source's numbers are free): the bid box's own confirm
+// checks (_bidCheck - bidding open, locks, the cap, NP by phase, already won, a Phase 4 denial, the week floor, the competition rule incl. the
+// entry level and the moved mark, the priority lock and its lowerings, numbers held or used elsewhere). On a copy: the page's own board is put
+// back in the finally, and nothing in between waits.
+function _mvGate(user,src,dst,val){
+  const keep=data;
+  try{
+    const pic=JSON.parse(JSON.stringify(data||{}));
+    if(pic[user]&&typeof pic[user]==='object') delete pic[user][src];
+    data=pic;
+    return _bidCheck(user,dst,val);
+  } finally { data=keep; }
+}
+// The destinations, sorted: (a) knocked out there by someone else's change this phase (Phase 4: this round) and still standing - the port above,
+// over the change log since _wwSince(), roster-filtered (rule 8); (b) not winning there now; (c) the bid WOULD WIN there; and every plain-bid gate.
+// Weeks where they no longer have a bid are destinations too (owner 6:04 AM). THROWS if the knock-out code throws: removeSelection then opens the
+// plain Remove box and the removal is marked koUnknown (rule 5) - the one place Strict fails open.
+function _mvDests(user,src){
+  const prio=data[user][src];
+  const keep=(Array.isArray(names)&&names.length)?(u=>names.indexOf(u)>=0):null;
+  const ev=_koEvents((changesData&&Array.isArray(changesData.log))?changesData.log:[],_wwSince(),keep);
+  const ko=_koKnocked(ev,user,w=>(weekMeta[w]?Number(weekMeta[w].slots):0),w=>getPriorPhaseWinners(w));
+  const ap=computeApprovals(data), val=_mvVal(prio), out=[];
+  for(const w of Object.keys(ko)){
+    if(w===src||!weekMeta[w]) continue;
+    if(getOutcome(w,user,ap)==='win') continue;           // (b)
+    if(_lwBidWins(data,user,w,prio)!==true) continue;      // (c) - on a copy with the source taken off (it holds the same numbers) and this week's tag set for the question
+    const g=_mvGate(user,src,w,val); if(!g||g.ok!==true) continue;
+    out.push(w);
+  }
+  return out.sort();
+}
+// The move, judged (the move box's confirm on the page's copy, and the save's judge on the server's copy). The source: the Remove box's own checks
+// on it with the bid the box showed, and still HELD; the destination: still holding what the box showed (`expDst` - W1's middle line named it),
+// still one of _mvDests, every plain-bid gate. Answers _bidCheck's shape: {ok:true,blSpend,newVal,isNP:false} or a refusal {ok:false,kind,msg}.
+function _moveCheck(user,src,dst,expSrc,expDst){
+  const no=m=>({ok:false,kind:'center',msg:m||''});
+  if(!(typeof _strictOn==='function'&&_strictOn())) return no('');
+  if(!user||!src||!dst||src===dst||!weekMeta[src]||!weekMeta[dst]) return no('');
+  const rc=_removeCheck(user,src,expSrc,'move'); if(!rc.ok) return rc;
+  const nowDst=isVisibleBid(user,dst)?data[user][dst]:undefined;
+  if(JSON.stringify(nowDst)!==JSON.stringify(expDst)) return no('');
+  let ds; try{ ds=_mvDests(user,src); }catch(_){ return no(''); }
+  if(ds.indexOf(dst)<0) return no('');
+  const g=_mvGate(user,src,dst,_mvVal(data[user][src]));
+  if(!g||g.ok!==true) return g||no('');
+  return {ok:true,blSpend:g.blSpend,newVal:g.newVal,isNP:false};
+}
+
+// ── [216 · §282] THE MOVE'S SAVE (Strict only) - build 0's machinery, the shape of persistSwap for a removal and an arrival: ONE transaction
+// (_txSave, judged again on the server's copy by _moveCheck), ONE timer decision, ONE alert judgment (sendEmailNotifications on one before /
+// after picture: the source off, the destination on). The destination's tag is put on for the synchronous facts and timer questions and
+// taken off again (persistScheduleChange's device); after the save the source's tag is put back for the alert work and taken off after it
+// (the 158 device - the listener echo can wipe it before the commit answers). Returns true (saved) or false.
+async function persistMove(user,src,dst,bid,prevSnapshot,expDst){
+  if(typeof _boardReady==='function'&&!_boardReady()){ showCenterAlert("The page is still loading — please try again in a moment."); return false; }
+  { const _lr=(typeof _saveRefusal==='function')?_saveRefusal():null; if(_lr){ showCenterAlert(_lr); return false; } }
+  if(!biddingOpen()){ showError("Bidding hasn't started yet — it opens when the admin begins Phase 1."); return false; }
+  if(isAuctionClosed()){ showError("Bidding is closed — no more changes can be made."); return false; }
+  if(locksData.globalLock||locksData.weeks?.[src]||locksData.weeks?.[dst]){ showError("This week is locked — no more changes allowed."); return false; }
+  const _pu=(prevSnapshot&&prevSnapshot[user]&&typeof prevSnapshot[user]==='object')?prevSnapshot[user]:null;
+  if(!_pu||src===dst||JSON.stringify(_pu[src])!==JSON.stringify(bid)||!isCurrentPhaseBid(user,src)){ showCenterAlert(SAVE_CHANGED_TEXT); return false; }
+  if(saveInProgress){ showCenterAlert("Still saving your previous change — please wait a moment and try again."); return false; }
+  saveInProgress=true;
+  const _lock={}; _saveOwner=_lock; const safety=setTimeout(()=>{ if(_saveOwner===_lock){ saveInProgress=false; _saveOwner=null; } },SAVE_BUDGET_MS+1000);
+  try{
+    const _preTagRaw=bidPhaseData[user]?bidPhaseData[user][src]:undefined;
+    let _beforeSnap=prevSnapshot;
+    if(_pu[dst]!==undefined&&!isCurrentPhaseBid(user,dst)){ _beforeSnap=JSON.parse(JSON.stringify(prevSnapshot)); delete _beforeSnap[user][dst]; } // a value left from an earlier phase is not a live bid (154 · AUD-C2)
+    const _afterSnap=JSON.parse(JSON.stringify(_beforeSnap));
+    if(!_afterSnap[user]||typeof _afterSnap[user]!=='object') _afterSnap[user]={};
+    delete _afterSnap[user][src]; _afterSnap[user][dst]=JSON.parse(JSON.stringify(bid));
+    const _isNewBid=!isVisibleBid(user,dst); // a week with no bid of theirs: what a plain bid there would be (timer mode 3)
+    const _remBefore=timerData.lastChange?(((timerData.durationHours||48)*3600000)-(Date.now()-timerData.lastChange)):1;
+    let facts=null, _resetWanted=false;
+    const _tagUser=!!bidPhaseData[user], _tagHad=_tagUser&&Object.prototype.hasOwnProperty.call(bidPhaseData[user],dst), _tagWas=_tagHad?bidPhaseData[user][dst]:undefined;
+    if(!bidPhaseData[user]) bidPhaseData[user]={};
+    bidPhaseData[user][dst]=Number(phasesData.currentPhase||1);
+    try{
+      try{
+        const pa=computeApprovals(_beforeSnap), na=computeApprovals(_afterSnap);
+        const affOn=w=>{ for(const u of new Set([...Object.keys(_beforeSnap),...Object.keys(_afterSnap)])){ if(u===user) continue;
+            const pu=(_beforeSnap[u]&&typeof _beforeSnap[u]==='object')?_beforeSnap[u]:{}, nu=(_afterSnap[u]&&typeof _afterSnap[u]==='object')?_afterSnap[u]:{};
+            if(pu[w]===undefined&&nu[w]===undefined) continue;
+            if(uiOutcome(getOutcome(w,u,pa))!==uiOutcome(getOutcome(w,u,na))) return true; } return false; };
+        facts={};
+        for(const w of [src,dst]){ const f={tReset:false,aff:affOn(w)};
+          if(timerData.enabled&&timerData.lastChange){ f.tRem=Math.round(_remBefore); f.tDur=Math.min((timerData.durationHours||48),stage0Hours())*3600000; }
+          facts[w]=f; }
+      }catch(_){ facts=null; }
+      if(timerData.enabled&&_remBefore>0&&!openingWindowActive()
+         &&_timerModeAllowsReset(_timerResetMode(),_isNewBid,_beforeSnap,_afterSnap,user)){
+        const _n=Date.now(); const _resetH=timerResetHours(timerPhaseStartMs(),_n);
+        const _curDeadline=timerData.lastChange?(timerData.lastChange+((timerData.durationHours||48)*3600000)):0;
+        if(_n+_resetH*3600000>=_curDeadline){ if(facts) facts[dst].tReset=true; _resetWanted=true; } // on the ARRIVAL row: a move's removal row never reads as a placed-then-cancelled stall
+      }
+    } finally {
+      if(!_tagUser) delete bidPhaseData[user]; else if(_tagHad) bidPhaseData[user][dst]=_tagWas; else delete bidPhaseData[user][dst];
+    }
+    const _res=await _txSave({
+      user:user, weeks:[src,dst],
+      done:pic=>_picVal(pic,user,src)===undefined&&JSON.stringify(_picVal(pic,user,dst))===JSON.stringify(bid)&&Number(_picTag(pic,user,dst))===_picPhase(pic),
+      judge:()=>_moveCheck(user,src,dst,bid,expDst),
+      writes:(tx,pic,v,split)=>_txWriteMove(tx,pic,user,src,dst,bid,v,facts,split)
+    });
+    const _follow=info=>{
+      if(!bidPhaseData[user]) bidPhaseData[user]={};
+      bidPhaseData[user][src]=_preTagRaw!==undefined?_preTagRaw:Number(phasesData.currentPhase||1); // the 158 device: the source's tag back for the synchronous work below
+      bidPhaseData[user][dst]=info.ph;
+      if(info.mark){ const mv=Object.assign({},(bidPhaseData[user].mv&&typeof bidPhaseData[user].mv==='object')?bidPhaseData[user].mv:{}); mv[dst]=info.mark; delete mv[src]; bidPhaseData[user].mv=mv; }
+      if(_resetWanted) _timerResetWrite();
+      if(adminSettings.emailNotifsEnabled!==false) sendEmailNotifications(_beforeSnap,_afterSnap,user).catch(()=>{});
+      if(bidPhaseData[user]) delete bidPhaseData[user][src];
+      return _txAfter(user,info,'move');
+    };
+    return await _txSaveEnd(_res,_follow,'move');
+  }catch(e){
+    showError("Save failed: "+e.message);
+    return false;
+  } finally {
+    clearTimeout(safety);
+    if(_saveOwner===_lock){ saveInProgress=false; _saveOwner=null; }
+  }
+}
+
+// ── [216 · §282] THE MOVE BOX (Strict only; markup at the end of the page, #moveModal). W1 with one button per destination, or W2 with Close.
+// A tap within PICK_GUARD_MS of opening is the second tap of the one that opened it and chooses nothing (the bid box's rule).
+let _mvState=null;
+function _mvEl(id){ return document.getElementById(id); }
+function _mvLowNote(user,src,dst,bid){ // the lowering the destination would cost, in reviewBid's own words; '' when none
+  try{ const g=_mvGate(user,src,dst,_mvVal(bid)); if(!g||g.ok!==true||!g.blSpend) return ''; const _floor=g.blSpend.from, _rem=blRemaining(user);
+    return (blAllowance(Number(phasesData.currentPhase||1))===Infinity)
+      ?('⚠️ This LOWERS your bid on this week from '+blFmtBid(_floor)+' to '+blFmtBid(bid)+'.')
+      :('⚠️ This LOWERS your bid on this week from '+blFmtBid(_floor)+' to '+blFmtBid(bid)+'. It will use 1 of your '+_rem+' remaining bid lowering'+(_rem!==1?'s':'')+' for '+_blWindowLabel()+'.');
+  }catch(_){ return ''; }
+}
+function _mvPaint(){
+  const st=_mvState; if(!st) return;
+  const meta=weekMeta[st.src]||{};
+  const set=(id,txt,show)=>{ const e=_mvEl(id); if(!e) return; e.textContent=txt||''; e.style.display=show?'block':'none'; };
+  const head=_mvEl('moveHead'); if(head) head.innerHTML='Your bid for <span style="color:#006ba6">Week '+escH(meta.weekNum)+'</span> ('+escH(meta.range)+').';
+  const cur=_mvEl('moveCur'); if(cur) cur.innerHTML='Current bid: <strong style="color:#005e93">'+escH(bidLbl(st.bid))+'</strong>';
+  const rows=_mvEl('moveRows'), go=_mvEl('moveGo'), cancel=_mvEl('moveCancel');
+  if(!st.dests.length){
+    set('moveLead',STRICT_W2,true);
+    if(rows){ rows.innerHTML=''; rows.style.display='none'; }
+    set('moveFreed','',false); set('moveWarn','',false); set('moveLowering','',false);
+    if(go){ go.style.display='none'; go.disabled=true; }
+    if(cancel) cancel.textContent='Close';
+    return;
+  }
+  set('moveLead',STRICT_W1_LEAD,true);
+  if(rows){
+    rows.innerHTML='';
+    for(const w of st.dests){
+      const m=weekMeta[w]; if(!m) continue;
+      const b=document.createElement('button'); b.type='button'; b.className='swap-row'; b.setAttribute('data-v',w); b.setAttribute('aria-pressed',st.pick===w?'true':'false');
+      const l=document.createElement('span'); l.textContent='Week '+m.weekNum+' ('+(m.shortDate||m.range)+')'; b.appendChild(l);
+      const mine=isVisibleBid(st.user,w)?data[st.user][w]:undefined;
+      if(mine!==undefined&&mine!==null){ const r=document.createElement('span'); r.className='swap-row-bid'; r.textContent='bid '+bidLbl(mine); b.appendChild(r); }
+      b.addEventListener('click',()=>_mvPick(w));
+      rows.appendChild(b);
+    }
+    rows.style.display='flex';
+  }
+  const has=!!(st.pick&&st.dstWas!==undefined&&st.dstWas!==null);
+  set('moveFreed',has?_strictW1Freed(st.dstWas,weekMeta[st.pick].weekNum):'',has);
+  set('moveWarn',_strictW1Last(),true);
+  set('moveLowering',st.lowNote||'',!!st.lowNote);
+  if(go){ go.style.display=''; go.disabled=!st.pick||st.busy; go.textContent=st.busy?'Saving…':(st.pick?('Move to Week '+weekMeta[st.pick].weekNum):'Move bid'); }
+  if(cancel) cancel.textContent='Cancel';
+}
+function _mvPick(w){
+  const st=_mvState; if(!st||st.busy) return;
+  if(performance.now()-st.openedAt<PICK_GUARD_MS) return;
+  if(st.dests.indexOf(w)<0) return;
+  st.pick=w; st.dstWas=isVisibleBid(st.user,w)?JSON.parse(JSON.stringify(data[st.user][w])):undefined;
+  st.lowNote=_mvLowNote(st.user,st.src,w,st.bid);
+  _mvPaint();
+}
+// Opens the move step for a HELD bid. false = the knock-out code threw (removeSelection then opens the plain Remove box, marked koUnknown).
+function _mvOpen(user,wk){
+  let ds;
+  try{ ds=_mvDests(user,wk); }catch(_){ return false; }
+  try{
+    _mvState={user:user,src:wk,bid:JSON.parse(JSON.stringify(data[user][wk])),dests:ds,pick:null,dstWas:undefined,lowNote:'',openedAt:performance.now(),busy:false};
+    _mvPaint();
+    const m=_mvEl('moveModal'); if(m) m.classList.add('show');
+    try{ const f=ds.length?document.querySelector('#moveRows .swap-row'):_mvEl('moveCancel'); if(f&&typeof f.focus==='function') f.focus(); }catch(_){}
+  }catch(_){ _mvState=null; showCenterAlert(STRICT_HELD_TEXT); }
+  return true;
+}
+window.closeMoveBox=function(){ try{ const m=_mvEl('moveModal'); if(m) m.classList.remove('show'); }catch(_){} _mvState=null; };
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&_mvState) window.closeMoveBox(); }); // does nothing unless the move box is open (never under Standard)
+window.confirmMove=async function(){
+  const st=_mvState; if(!st||!st.pick||st.busy) return;
+  const user=getCurrentUser(); if(!user||user!==st.user){ window.closeMoveBox(); return; }
+  { const _lr=(typeof _saveRefusal==='function')?_saveRefusal():null; if(_lr){ showCenterAlert(_lr); window.closeMoveBox(); return; } }
+  const c=_moveCheck(user,st.src,st.pick,st.bid,st.dstWas); // on the board as it stands NOW (the box may have been open a while)
+  if(!c.ok){ window.closeMoveBox(); if(c.msg||c.kind==='limit') _checkShow(Object.assign({},c,{close:false})); else showCenterAlert(SAVE_CHANGED_TEXT); scheduleRender(); return; }
+  st.busy=true; _mvPaint();
+  const src=st.src, dst=st.pick, bid=st.bid, was=st.dstWas;
+  const _prev=JSON.parse(JSON.stringify(data));
+  let ok=false;
+  try{ ok=await persistMove(user,src,dst,bid,_prev,was); }
+  finally{ st.busy=false; }
+  if(ok&&data[user]&&typeof data[user]==='object'){ // the board, only where it still shows what the box showed (a newer snapshot may already be here)
+    if(JSON.stringify(data[user][src])===JSON.stringify(bid)) delete data[user][src];
+    if(data[user][dst]===undefined||JSON.stringify(data[user][dst])===JSON.stringify(was)) data[user][dst]=JSON.parse(JSON.stringify(bid));
+  }
+  if(_mvState===st) window.closeMoveBox();
+  scheduleRender();
+};
 
 // ── Phase visibility helpers ──
 // A bid is tagged with the phase it was placed/edited in (bidPhaseData). Bids from a
@@ -4889,6 +5311,7 @@ function render(){
   popcornRefresh();
   renderSimModeBanner();
   renderWhitelistBanner();
+  if(typeof _ruleSetSync==='function') _ruleSetSync(); // [216 · §282] writes only when the line has to change (never under Standard)
   document.getElementById("globalLockBanner").style.display=locksData.globalLock?"block":"none";
   const nsb=document.getElementById("notStartedBanner"); if(nsb) nsb.style.display=biddingOpen()?"none":"block";
   if(!renderBoardLoading()) return; // [190 · §241] nothing of the board is drawn from a half-arrived picture
@@ -5538,12 +5961,13 @@ function _lwWeakerWins(snap,user,wk,wide){
     if(getPriorPhaseWinners(wk).has(user)) return [];
     if(p4AnnouncedDecision(user,wk)) return [];
     if(locksData.globalLock||locksData.weeks?.[wk]) return [];
+    if(typeof _strictOn==='function'&&_strictOn()&&_mvOn(user,wk)) return []; // [216 · §282] Strict only: a MOVED bid cannot be lowered on its week (rule 3) - no alert may say it could
     const used=[...getPriorPhaseUsedPriorities(user)];
     const elsewhere=[]; // [192 · §244] only filled when `wide`
     for(const w of Object.keys(mine)){
       if(w===wk||mine[w]===undefined||mine[w]===null||!isCurrentPhaseBid(user,w)) continue;
       const p=mine[w]; if(p==="NP") continue;
-      if(wide&&!_lwStuck(user,w)){ elsewhere.push({w,nums:Array.isArray(p)?p:[p]}); continue; }
+      if(wide&&!_lwStuck(user,w,snap)){ elsewhere.push({w,nums:Array.isArray(p)?p:[p]}); continue; } // [216 · §282] snap: Strict asks whether that bid is held on this picture
       if(Array.isArray(p)) used.push(...p); else used.push(p);
     }
     const lockOn=adminSettings.priorityLockEnabled!==false;
@@ -5629,8 +6053,21 @@ function _lwOpenings(prevSnap,newSnap,actor,newAp){
 // Any one missing → nothing is sent.
 // Can this user NOT take their bid off week `w` — it is locked, they already won it, or it was decided
 // in this Phase-4 round? A number sitting on such a week cannot be moved to another week.
-function _lwStuck(user,w){
-  return !!(locksData.weeks?.[w]||getPriorPhaseWinners(w).has(user)||p4AnnouncedDecision(user,w));
+function _lwStuck(user,w,snap){ // [216 · §282] snap (optional): the picture the caller judges on
+  return !!(locksData.weeks?.[w]||getPriorPhaseWinners(w).has(user)||p4AnnouncedDecision(user,w)||(typeof _strictOn==='function'&&_strictOn()&&_lwHeld(user,w,snap))); // [216 · §282] Strict only: a WINNING numbered bid on a competition week cannot be taken off (only moved, and only to a week where its owner was knocked out of winning)
+}
+// [216 · §282] Strict only (the alerts' mirror of the held rule): is `user`'s bid on `w` held on the picture `snap` (the board when none)? Unknown =
+// held: the alert then says less, never more. The engine's answer is kept per picture for the one synchronous run of the alerts.
+const _lwApCache=new WeakMap();
+function _lwHeld(user,w,snap){
+  try{
+    const s=(snap&&typeof snap==='object')?snap:data;
+    const p=(s[user]&&typeof s[user]==='object')?s[user][w]:undefined;
+    if(p===undefined||p===null||p==='NP'||!isCurrentPhaseBid(user,w)) return false;
+    if(_wwContested(w,s)!==true) return false;
+    let ap=_lwApCache.get(s); if(!ap){ ap=computeApprovals(s); _lwApCache.set(s,ap); }
+    return getOutcome(w,user,ap)==='win';
+  }catch(_){ return true; }
 }
 // Would `bid`, put on `wk` for `user`, be projected WIN on the picture `snap`? true / false, or
 // null when it cannot tell (the caller sends nothing on null). Works on a COPY of the picture. A
@@ -5713,7 +6150,7 @@ function _lwReturns(prevSnap,newSnap,actor){
           for(const w of Object.keys(nu)){
             const q=nu[w];
             if(w===wk||q===undefined||q===null||q==="NP"||!isCurrentPhaseBid(user,w)) continue;
-            if((Array.isArray(q)?q:[q]).some(n=>nums.includes(n))&&_lwStuck(user,w)){ stuck=true; break; }
+            if((Array.isArray(q)?q:[q]).some(n=>nums.includes(n))&&_lwStuck(user,w,newSnap)){ stuck=true; break; } // [216 · §282] newSnap: Strict asks whether that bid is held now
           }
           if(stuck) continue;
         }
@@ -6568,7 +7005,7 @@ ${bullets([
   ...prioLockBullets(), // [build 139 · BL/COPY] Option A wording, allowance-derived
   `To exchange the bids on two of your weeks, use ✎ Edit, then ⇄ Swap bids — both change together.`, // [199 · §257] word for word as on the page
   `A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.`, // [196 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
-  `On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.`,
+  ((typeof _ruleNoWeakenText==='function')?_ruleNoWeakenText():`On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.`), // [216 · §282] follows the rule set; under Standard these very words (the fallback is for test sandboxes)
   ...bfRulesBullets(),
   ...((typeof blindOn==='function'&&blindOn())?[`Bidder names are hidden for this auction. You see your own bids as usual; every other bid shows without initials.`]:[]), // [204 · §261] only while the Blinded bidding switch is on; word for word as on the page
   `Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
@@ -6705,6 +7142,24 @@ document.addEventListener("keydown",e=>{
      the auction (three phases early), and it interrupted to announce a state the board was
      already showing — every week locked, greyed, cursor:not-allowed, badged 🔒 LOCKED. The
      statement now lives in #phaseClosedBanner at the top of the board. -->
+<!-- [216 · §282] THE MOVE BOX (Strict only). removeSelection opens it in place of the Remove box when the bid is WINNING on a competition
+     week (held - plan §3 rule 1). Filled by _mvPaint: the heading, the bid, W1 (somewhere to move: one button per week, then W1's
+     middle line when they have a bid on the week picked, and W1's last line) or W2 (nowhere: one button, Close). Never shown under Standard. -->
+<div id="moveModal" class="modal">
+  <div class="modal-content" style="max-width:420px;padding:22px 22px 18px">
+    <div id="moveHead" style="font-size:.95rem;font-weight:600;color:#132f49"></div>
+    <div id="moveCur" style="margin-top:8px;font-size:.85rem;color:#2c4257"></div>
+    <div id="moveLead" style="margin-top:12px;font-size:.88rem;color:#132f49;line-height:1.5"></div>
+    <div id="moveRows" class="swap-rows" role="group" aria-label="Week to move to" style="display:none;margin-top:10px"></div>
+    <div id="moveFreed" style="display:none;margin-top:2px;font-size:.85rem;color:#4a3000;line-height:1.45"></div>
+    <div id="moveWarn" style="display:none;margin-top:10px;padding:10px 12px;background:rgba(251,191,36,.18);border:1.5px solid rgba(217,119,6,.6);border-radius:8px;font-size:.85rem;color:#4a3000;line-height:1.5"></div>
+    <div id="moveLowering" style="display:none;margin-top:10px;background:rgba(234,88,12,.08);border:1px solid rgba(234,88,12,.35);border-radius:8px;padding:10px 12px;font-size:.82rem;color:#7c2d12;font-weight:600"></div>
+    <div class="modal-buttons" style="margin-top:14px">
+      <button class="btn-secondary" id="moveCancel" onclick="closeMoveBox()">Cancel</button>
+      <button class="btn-primary" id="moveGo" onclick="confirmMove()" disabled style="display:none">Move bid</button>
+    </div>
+  </div>
+</div>
 <div id="confirmModal" class="modal">
   <div class="modal-content" style="max-width:340px;text-align:center;padding:24px">
     <p id="confirmMsg" style="color:#132f49;font-size:.95rem;margin-bottom:18px"></p>
