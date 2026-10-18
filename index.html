@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 217;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 218;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -941,6 +941,21 @@ function _saveRefusal(){
 function _strictOn(){ try{ return !!(_boardLoaded&&_boardLoaded.settings===true&&adminSettings&&adminSettings.bidRuleSet==='strict'); }catch(_){ return false; } }
 // "this phase" reads "this round" in Phase 4 (plan §5b).
 function _strictWord(){ try{ return Number((phasesData&&phasesData.currentPhase)||1)===4?'round':'phase'; }catch(_){ return 'phase'; } }
+// ── [218 · §286, owner 17 Oct 2026] THE STRICT LEVEL: "Strict applies to" (adminSettings.strictThreshold) ─────────────────────────
+// Under Strict a winning bid on a competition week is held only when it is n OR STRONGER in the strength order of all 15 (score <= n + 1,
+// so 4/5 = 4.5 is held at n = 5); a winning bid weaker than n is removed by the ordinary Remove box, as under Standard. The stored value
+// counts only as an INTEGER 1-9; never saved, 10 and anything else = every numbered bid (null) - Strict exactly as 217 (junk errs strict).
+// Read from adminSettings, so inside _withPic it is the SERVER copy's value. Asked only behind _strictOn(). The next two lines are the
+// admin page's twin, byte for byte.
+function _strictNNorm(v){ return (typeof v==='number'&&Number.isInteger(v)&&v>=1&&v<=9)?v:null; }
+function _strictN(){ try{ return _strictNNorm((typeof adminSettings!=='undefined'&&adminSettings)?adminSettings.strictThreshold:undefined); }catch(_){ return null; } }
+// Is the bid p of the level Strict holds? Always true with no level set (every numbered bid). A bid whose score is not a number is held
+// (errs strict). NP is never asked: the callers have already let it go.
+function _strictNHolds(p){
+  const n=_strictN(); if(n===null) return true;
+  let s; try{ s=priorityScore(p); }catch(_){ return true; }
+  return !(typeof s==='number'&&isFinite(s))||s<=n+1;
+}
 // The owner's approved words (plan §5b W1-W6; DECISIONS §282, 16 Oct 2026 6:00 AM "w2-w6 good", 6:04 AM "w1 approved"), word for word.
 const STRICT_HELD_TEXT="Your bid is winning on this competition week, so it can't be removed.";
 const STRICT_W1_LEAD="Your bid is winning on this competition week, so it can't be removed. You can move it instead, to a week where another bid knocked you out of winning and where this bid would win:";
@@ -948,13 +963,15 @@ function _strictW1Freed(bid,weekNum){ return "Your bid of "+bidLbl(bid)+" on Wee
 function _strictW1Last(){ return "Once moved, it can't be lowered on its new week for the rest of this "+_strictWord()+". You can still raise it, or move it again under the same rule."; }
 const STRICT_W2="Your bid is winning on this competition week, so it can't be removed. A winning bid on a competition week can only be moved, to a week where another bid knocked you out of winning and where it would win. None of your weeks is like that right now.";
 const STRICT_W3="This is a competition week. While your bid is winning here, it can't be removed — only moved to a week where another bid knocked you out of winning.";
-function _strictW4(){ return "On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen a bid. A winning bid on a competition week can't be removed — it can only be moved, to a week where another bid knocked you out of winning and where it would win, and once moved it can't be lowered there for the rest of the "+_strictWord()+". A tied, under-review or losing bid, and an NP, can be removed at any time. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it."; }
+function _strictW3Text(){ const n=(typeof _strictN==='function')?_strictN():null; return n===null?STRICT_W3:STRICT_W3+" A winning bid weaker than "+n+" can be removed."; } // [218 · §286] W7 with a level set; none set: STRICT_W3 exactly
+function _strictW4(){ const n=(typeof _strictN==='function')?_strictN():null; if(n!==null) return "On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen a bid. A winning bid of "+n+" or stronger on a competition week can't be removed — it can only be moved, to a week where another bid knocked you out of winning and where it would win, and once moved it can't be lowered there for the rest of the "+_strictWord()+". A winning bid weaker than "+n+", a tied, under-review or losing bid, and an NP, can be removed at any time. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it."; return "On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen a bid. A winning bid on a competition week can't be removed — it can only be moved, to a week where another bid knocked you out of winning and where it would win, and once moved it can't be lowered there for the rest of the "+_strictWord()+". A tied, under-review or losing bid, and an NP, can be removed at any time. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it."; } // [218 · §286] W8 with a level set (twin: admin _ruleNoWeakenText); none set: the 217 words exactly
 const STRICT_W5="Your bid will make this a competition week. To bid here now, your bid must be at least as strong as the weakest bid there that is winning or under review. After that, you can only weaken your bid if it would still win, and while it is winning it can't be removed — only moved to a week where another bid knocked you out of winning.";
+function _strictW5Text(){ const n=(typeof _strictN==='function')?_strictN():null; if(n===null) return STRICT_W5; return "Your bid will make this a competition week. To bid here now, your bid must be at least as strong as the weakest bid there that is winning or under review. After that, you can only weaken your bid if it would still win, and while a bid of "+n+" or stronger is winning here it can't be removed — only moved to a week where another bid knocked you out of winning."; } // [218 · §286] W9 with a level set; none set: STRICT_W5 exactly
 function _strictW6(){ return "This bid was moved here, so it can't be lowered on this week for the rest of this "+_strictWord()+". You can raise it."; }
 // Standard's competition-week rule line, as the Rules list (#ruleNoWeaken) and the welcome e-mail have carried it since 198 - these very words.
 const RULE_NOWEAKEN_STD='On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.';
 function _ruleNoWeakenText(){ return (typeof _strictOn==='function'&&_strictOn())?_strictW4():RULE_NOWEAKEN_STD; }
-function _compTipText(){ return (typeof _strictOn==='function'&&_strictOn())?STRICT_W5:COMP_TIP_TEXT; }
+function _compTipText(){ return (typeof _strictOn==='function'&&_strictOn())?((typeof _strictW5Text==='function')?_strictW5Text():STRICT_W5):COMP_TIP_TEXT; } // [218 · §286] W9 follows the level
 // The Rules & Reminders line follows the set. It writes only when what shows has to change - under Standard it never does.
 function _ruleSetSync(){ try{ const el=document.getElementById('ruleNoWeaken'); if(!el) return; const t=_ruleNoWeakenText(); if(el.textContent!==t) el.textContent=t; }catch(_){} if(typeof _comboRuleSync==='function') _comboRuleSync(); } // [217 · §285] and the combination bids' line (W9): asked by the settings listener and every render, as this one
 // [217 · §285] W9: the one Rules & Reminders line on the allowed combinations, straight after "A combined bid like 1/2/3 …" (which stays word
@@ -4302,8 +4319,9 @@ window.reviewBid=function(){
   // Submit that while it is winning it can't be removed. Written only to show the note, or to hide it if it is showing: under Standard,
   // nothing here is ever written.
   if(typeof _strictOn==='function'){ try{ const _cs=document.getElementById("confirmStrict");
-    const _on=_strictOn()&&val!=="NP"&&((typeof _wwLabelOn==='function'&&_wwLabelOn(pendingWeek)===true)||(typeof _wwWouldTip==='function'&&_wwWouldTip(user,pendingWeek)===true));
-    if(_cs&&(_on||(_cs.style.display&&_cs.style.display!=='none'))){ _cs.textContent=_on?STRICT_W3:''; _cs.style.display=_on?'block':'none'; } }catch(_){} }
+    const _on=_strictOn()&&val!=="NP"&&((typeof _wwLabelOn==='function'&&_wwLabelOn(pendingWeek)===true)||(typeof _wwWouldTip==='function'&&_wwWouldTip(user,pendingWeek)===true))
+      &&(typeof _strictNHolds!=='function'||_strictNHolds(_bfParse(val))); // [218 · §286] Q11: with a level set, only for a bid of that level or stronger (none set: every numbered bid, as 217)
+    if(_cs&&(_on||(_cs.style.display&&_cs.style.display!=='none'))){ _cs.textContent=_on?((typeof _strictW3Text==='function')?_strictW3Text():STRICT_W3):''; _cs.style.display=_on?'block':'none'; } }catch(_){} } // [218 · §286] W7
   document.getElementById("prioStep1").style.display="none";
   document.getElementById("prioStep2").style.display="block";
 };
@@ -4909,6 +4927,7 @@ function _strictHeld(user,wk){
     if((typeof _boardReady==='function'&&!_boardReady())||!_lwLoaded.best||_live!==true) return 'wait';
     if(!isVisibleBid(user,wk)) return false;
     const p=data[user][wk]; if(p===undefined||p===null||p==='NP') return false;
+    if(typeof _strictNHolds==='function'&&!_strictNHolds(p)) return false; // [218 · §286] weaker than the Strict level: not held (twin: _lwHeld)
     if(_wwContested(wk)!==true) return false;
     return getOutcome(wk,user,computeApprovals(data))==='win';
   }catch(_){ return 'wait'; }
@@ -6254,6 +6273,7 @@ function _lwHeld(user,w,snap){
     const s=(snap&&typeof snap==='object')?snap:data;
     const p=(s[user]&&typeof s[user]==='object')?s[user][w]:undefined;
     if(p===undefined||p===null||p==='NP'||!isCurrentPhaseBid(user,w)) return false;
+    if(typeof _strictNHolds==='function'&&!_strictNHolds(p)) return false; // [218 · §286] weaker than the Strict level: not held (twin: _strictHeld)
     if(_wwContested(w,s)!==true) return false;
     let ap=_lwApCache.get(s); if(!ap){ ap=computeApprovals(s); _lwApCache.set(s,ap); }
     return getOutcome(w,user,ap)==='win';

@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 381;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 382;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1211,6 +1211,17 @@ thead th{color:var(--t2)}
             <div id="ruleSetState" class="trow-desc" style="margin-top:4px;font-weight:700"></div>
           </div>
           <div class="tog" id="ruleSetTog" onclick="toggleRuleSet()"></div>
+        </div>
+        <!-- THE STRICT LEVEL [382 · §286] — one stored value, adminSettings.strictThreshold: an integer 1-9 = Strict holds a winning bid of that
+             number or stronger; "Every numbered bid" stores 10; 10, absent or anything else = every numbered bid (Strict exactly as 381). A FROZEN
+             key, like the rule set (FROZEN_CONFIG_KEYS + firestore.rules frozenConfigKeys()). Always shown (Q9). Filled by renderStrictLevel. -->
+        <div class="trow">
+          <div>
+            <div class="trow-label">Strict applies to</div>
+            <div class="trow-desc">Only used under Strict. A winning bid of this number or stronger on a competition week is held by Strict (it can only be moved). A winning bid weaker than it can be removed, as under Standard. Combination bids follow the strength order — 4/5 is stronger than 5. <strong>Locked while a phase is running; editable before Phase 1 and between phases (once results are sent); the setting survives reset.</strong></div>
+            <div id="strictLvlState" class="trow-desc" style="margin-top:4px;font-weight:700"></div>
+          </div>
+          <select class="sel" id="strictLvlSel" aria-label="Strict applies to" style="flex-shrink:0;max-width:150px" onchange="setStrictLevel(this.value)"><option value="10">Every numbered bid</option><option value="9">9 or stronger</option><option value="8">8 or stronger</option><option value="7">7 or stronger</option><option value="6">6 or stronger</option><option value="5">5 or stronger</option><option value="4">4 or stronger</option><option value="3">3 or stronger</option><option value="2">2 or stronger</option><option value="1">1 or stronger</option></select>
         </div>
       </div>
       <!-- COMBINATION BIDS [381 · §285] — one stored value, adminSettings.comboBids: the combinations bidders may use, written in strength order
@@ -2898,7 +2909,7 @@ function _acCheckRemote(settings){
 // stay IDENTICAL to frozenConfigKeys() in firestore.rules — a pin test compares the two
 // files and goes red if they ever drift. 'bidLowerings' is forward-declared for the
 // feature that ships it (frozen from day one, no second rules publish).
-const FROZEN_CONFIG_KEYS=['auctionConfig','bidFloors','npAllowedPhases','maxBidsPerPhase','maxBidsCumulative','reviewThreshold','bidLowerings','bidRuleSet','comboBids']; // [381 · §285] the combination bids are frozen like the rule set (his Q3) · [380 · §282] the rule set (Standard / Strict) is frozen like the others (his q8) - IDENTICAL to frozenConfigKeys() in firestore.rules
+const FROZEN_CONFIG_KEYS=['auctionConfig','bidFloors','npAllowedPhases','maxBidsPerPhase','maxBidsCumulative','reviewThreshold','bidLowerings','bidRuleSet','comboBids','strictThreshold']; // [382 · §286] the Strict level is frozen like the rule set (his Q8) · [381 · §285] the combination bids are frozen like the rule set (his Q3) · [380 · §282] the rule set (Standard / Strict) is frozen like the others (his q8) - IDENTICAL to frozenConfigKeys() in firestore.rules
 // Stable stringify (sorted keys, recursive) so two configs compare by CONTENT — Firestore
 // gives no key-order guarantee, and a false "different" would wrongly abort a restore.
 function _cfgCanon(v){
@@ -5464,6 +5475,7 @@ function syncControls(){
   if(rss) rss.textContent='Now: '+(adminSettings.bidRuleSet==='strict'?'Strict':'Standard')+((typeof cfgUnlockedNow==='function'&&!cfgUnlockedNow())?' — locked while a phase is running':'');
   if(typeof renderComboToggles==='function') renderComboToggles(); // [381 · §285] the Combination bids card
   if(typeof renderAddPriorityOpts==='function') renderAddPriorityOpts(); // [381 · §285] the Add box offers the allowed combinations
+  if(typeof renderStrictLevel==='function') renderStrictLevel(); // [382 · §286] the Strict level row: its drop-down and Now line (W2)
   const ecd=document.getElementById("emailCycleDayInp");
   if(ecd&&document.activeElement!==ecd){ const d=parseInt(adminSettings?.emailCycleResetDay,10); ecd.value=(!isNaN(d)&&d>=1&&d<=28)?d:22; }
   if(typeof renderMailMeter==='function') renderMailMeter(); // keep "resets the Nth" in sync
@@ -6680,8 +6692,9 @@ window.toggleRuleSet=function(){
   if(!cfgUnlockedNow()){ toast('🔒 The bid rule set is locked while a phase is running — editable between phases, once results are sent.','err'); syncControls(); return; }
   const next=(adminSettings&&adminSettings.bidRuleSet==='strict')?'standard':'strict';
   const confirmAgain=o=>{ openConfirm(o); try{ const b=document.getElementById('cmOk'); if(b){ b.disabled=true; setTimeout(()=>{ b.disabled=false; },1000); } }catch(_){} };
+  const _n=(typeof _strictN==='function')?_strictN():null; // [382 · §286] W12: with a Strict level set the body names it; none set: the 381 words exactly
   const body=next==='strict'
-    ?`<div>Use <strong>Strict</strong>? On a competition week a winning numbered bid can then only be <strong>moved</strong>, in one step, to a week where another bid knocked its owner out of winning and where it would win; a moved bid can't be lowered on its new week for the rest of the phase (Phase 4: the round). Tied, Under Review and losing bids, and NP bids, can still be removed.</div><div class="cmodal-info" style="margin-top:8px">The Rules &amp; Reminders line and the welcome e-mail change with it. You can still remove any bid from Edit Selections.</div>`
+    ?`<div>Use <strong>Strict</strong>? On a competition week ${(_n===null)?'a winning numbered bid':'a winning bid of '+_n+' or stronger'} can then only be <strong>moved</strong>, in one step, to a week where another bid knocked its owner out of winning and where it would win; a moved bid can't be lowered on its new week for the rest of the phase (Phase 4: the round). ${(_n===null)?'Tied, Under Review and losing bids, and NP bids, can still be removed.':'A winning bid weaker than '+_n+', tied, Under Review and losing bids, and NP bids, can still be removed.'}</div><div class="cmodal-info" style="margin-top:8px">The Rules &amp; Reminders line and the welcome e-mail change with it. You can still remove any bid from Edit Selections.</div>`
     :`<div>Use <strong>Standard</strong>? Every bid rule goes back to exactly what it was before the rule sets existed: any bid can be removed at any time.</div>`;
   openConfirm({ title:next==='strict'?'Use the Strict rule set?':'Use the Standard rule set?', body, okText:next==='strict'?'Use Strict':'Use Standard',
     onConfirm:()=>{
@@ -6692,6 +6705,62 @@ window.toggleRuleSet=function(){
     },
     onCancel:()=>syncControls() });
 };
+// ── [382 · §286, owner 17 Oct 2026] THE STRICT LEVEL: "Strict applies to" ─────────────────────────────────────────────────────────
+// One stored value, adminSettings.strictThreshold: under Strict a winning bid on a competition week is held only when it is n OR STRONGER
+// (score <= n + 1; 4/5 is stronger than 5). The choices are "Every numbered bid" (stored as 10) and 9 ... 1. Only an INTEGER 1-9 counts;
+// never saved, 10 and anything else = every numbered bid (Strict exactly as 381). FROZEN like the bid rule set: editable before Phase 1 and
+// in the gaps between phases and Phase 4 rounds once results are sent; survives Reset Auction. The rule set's pattern exactly: feeds check,
+// lock, one confirmation, a second in red once the auction is under way, the value re-read at the moment of the write, a merge write, one
+// system Change Log entry; the server refuses it mid-phase whatever this page believes. The next two lines are the staff page's twin.
+function _strictNNorm(v){ return (typeof v==='number'&&Number.isInteger(v)&&v>=1&&v<=9)?v:null; }
+function _strictN(){ try{ return _strictNNorm((typeof adminSettings!=='undefined'&&adminSettings)?adminSettings.strictThreshold:undefined); }catch(_){ return null; } }
+const STRICT_LVL_LOCKED_TEXT='🔒 The Strict level is locked while a phase is running — editable between phases, once results are sent.';
+const STRICT_LVL_CHOICES=['10','9','8','7','6','5','4','3','2','1']; // the drop-down's values, in its order ("10" = Every numbered bid)
+function _strictLvlName(n){ return n===null?'every numbered bid':'bids of '+n+' or stronger'; }
+// The row: the drop-down shows the saved level (normalised), the Now line says it (W2).
+function renderStrictLevel(){
+  const n=_strictN();
+  const sel=document.getElementById('strictLvlSel');
+  if(sel){ const v=(n===null)?'10':String(n); if(sel.value!==v) sel.value=v; }
+  const st=document.getElementById('strictLvlState');
+  if(st) st.textContent='Now: '+((n===null)?'every numbered bid':'bids of '+n+' or stronger — a winning bid weaker than '+n+' can be removed')
+    +((typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.bidRuleSet==='strict')?'':' — used only under Strict')
+    +((typeof cfgUnlockedNow==='function'&&!cfgUnlockedNow())?' — locked while a phase is running':'');
+}
+async function _strictLvlWrite(v){
+  if(!_feedsHealthyOrExplain('Changing the Strict level')){ syncControls(); return; } // asked again at the moment of action: a dialog can sit open while a feed dies
+  if(!cfgUnlockedNow()){ toast(STRICT_LVL_LOCKED_TEXT,'err'); syncControls(); return; }
+  const want=_strictNNorm(v), store=(want===null)?10:want;
+  if(want===_strictN()){ toast('Strict already applies to '+_strictLvlName(want)+' — nothing changed.','warn'); syncControls(); return; } // re-read now (217's F6): another admin or tab may have changed it since the click
+  try{ await setDoc(adminRef,{strictThreshold:store},{merge:true}); }
+  catch(e){ toast(_cfgDeniedMsg(e,'the Strict level')?STRICT_LVL_LOCKED_TEXT:('⚠️ Strict level NOT saved — nothing changed ('+(e?.message||e)+'). Try again.'),'err'); syncControls(); return; } // a server refusal = the approved lock words (217's F3)
+  try{ await adminLog('ALL','ALL','admin-strict-level',undefined,{choice:String(store)}); }catch(_){}
+  toast('Strict now applies to '+_strictLvlName(want)+' — the staff site follows within a moment','ok');
+}
+// The drop-down's change. The box goes straight back to the saved level: it shows a new one only once it is saved.
+function setStrictLevel(raw){
+  const k=String(raw);
+  renderStrictLevel();
+  if(!_feedsHealthyOrExplain('Changing the Strict level')){ syncControls(); return; } // never from a page whose data has not all arrived, or whose live feeds are down
+  if(!cfgUnlockedNow()){ toast(STRICT_LVL_LOCKED_TEXT,'err'); syncControls(); return; }
+  if(STRICT_LVL_CHOICES.indexOf(k)<0){ syncControls(); return; }
+  const v=Number(k), want=_strictNNorm(v);
+  if(want===_strictN()){ toast('Strict already applies to '+_strictLvlName(want)+' — nothing changed.','warn'); syncControls(); return; }
+  const lbl=(want===null)?'every numbered bid':want+' or stronger';
+  const confirmAgain=o=>{ openConfirm(o); try{ const b=document.getElementById('cmOk'); if(b){ b.disabled=true; setTimeout(()=>{ b.disabled=false; },1000); } }catch(_){} };
+  const body=(want===null)
+    ?`<div>Under Strict, every winning numbered bid on a competition week can then only be moved, never removed — Strict as it was first built.</div>`
+    :`<div>Under Strict, a winning bid of <strong>${want} or stronger</strong> on a competition week can then only be moved, never removed. A winning bid weaker than ${want} can be removed, as under Standard.</div><div class="cmodal-info" style="margin-top:8px">The Rules &amp; Reminders line and the welcome e-mail change with it.</div>`;
+  openConfirm({ title:(want===null)?'Strict for every numbered bid?':'Strict for bids of '+want+' or stronger?', body, okText:'Use '+lbl,
+    onConfirm:()=>{
+      if(!phase1Started()) return _strictLvlWrite(v);
+      confirmAgain({ title:'⚠️ Confirm again — the auction is under way',
+        body:`<div style="color:var(--red);font-weight:700;font-size:15px">This changes the bid rules of a LIVE auction, from its next ${(Number(phasesData.currentPhase||1)===4)?'round':'phase'} on.</div><div class="cmodal-danger" style="margin-top:8px">Every staff page follows it within a moment.</div>`,
+        okText:'Yes, use '+lbl, danger:true, onConfirm:()=>_strictLvlWrite(v), onCancel:()=>syncControls() });
+    },
+    onCancel:()=>syncControls() });
+}
+window.setStrictLevel=setStrictLevel;
 // ── [381 · §285, owner 16 Oct 2026] COMBINATION BIDS: which ones bidders may use ─────────────────────────────────────────────────
 // One stored value, adminSettings.comboBids (read by comboSet). FROZEN like the bid rule set: editable before Phase 1 and in the gaps between
 // phases and Phase 4 rounds once results are sent; survives Reset Auction. One switch per combination, strongest first; one confirmation;
@@ -8234,6 +8303,8 @@ function _ruleNoWeakenText(){
   const strict=!!(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.bidRuleSet==='strict');
   if(!strict) return RULE_NOWEAKEN_STD;
   const w=(Number((typeof phasesData!=='undefined'&&phasesData&&phasesData.currentPhase)||1)===4)?'round':'phase';
+  const n=(typeof _strictN==='function')?_strictN():null; // [382 · §286] W8 with a Strict level set (twin: staff _strictW4); none set: the 381 words below
+  if(n!==null) return "On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen a bid. A winning bid of "+n+" or stronger on a competition week can't be removed — it can only be moved, to a week where another bid knocked you out of winning and where it would win, and once moved it can't be lowered there for the rest of the "+w+". A winning bid weaker than "+n+", a tied, under-review or losing bid, and an NP, can be removed at any time. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.";
   return "On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen a bid. A winning bid on a competition week can't be removed — it can only be moved, to a week where another bid knocked you out of winning and where it would win, and once moved it can't be lowered there for the rest of the "+w+". A tied, under-review or losing bid, and an NP, can be removed at any time. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.";
 }
 function buildWelcomeEmailBody(user){
@@ -12413,6 +12484,7 @@ function systemActionText(e){
   if(t==='admin-blind-off') return 'Admin turned <strong>Blinded bidding</strong> OFF — bidder names shown on the staff site'; // [365 · §261]
   if(t==='admin-ruleset-strict') return 'Bid rule set changed to <strong>Strict</strong>'; // [380 · §282]
   if(t==='admin-ruleset-standard') return 'Bid rule set changed to <strong>Standard</strong>'; // [380 · §282]
+  if(t==='admin-strict-level'){ const c=(typeof e.choice==='string')?e.choice:''; if(c==='10') return 'Strict now applies to <strong>every numbered bid</strong>'; if(['1','2','3','4','5','6','7','8','9'].indexOf(c)>=0) return 'Strict now applies to <strong>bids of '+c+' or stronger</strong>'; return 'Strict level changed'; } // [382 · §286] W4
   if(t==='admin-combobids'){ const L=(typeof e.choice==='string')?e.choice.split('|').filter(x=>x).map(x=>String(x).split(',').join('/')):null; return L?('Combination bids changed to: <strong>'+esc(L.length?L.join(' · '):'none')+'</strong>'):'Combination bids changed'; } // [381 · §285]
   if(t==='admin-fte-bulk') return 'Admin bulk-set an FTE value';
   if(t==='admin-hold') return 'Admin <strong>withheld</strong> bid number <strong>'+esc(String(e.bidValue??''))+'</strong> from <strong>'+who+'</strong>'+(e.reason?' — '+esc(e.reason):''); // [327 · §180]
@@ -15455,7 +15527,8 @@ async function _doFullRestore(f){
     const _live=adminSettings||{}, _bk=(d.adminSettings&&typeof d.adminSettings==='object')?d.adminSettings:{};
     const _rsC=v=>(v===undefined||v==='standard')?'standard':_cfgCanon(v); // [380 · §282] F2: the rule set ABSENT is "standard" (a backup from before the key existed)
     const _cbC=v=>(typeof comboNormalize==='function')?_cfgCanon(comboNormalize(v)||['1,2,3','1,2']):((v===undefined)?_cfgCanon(['1,2,3','1,2']):_cfgCanon(v)); // [FIX1 · F2] compared as the pages read them (normalised: absent, junk and today's set in any order are all today's set) · [381 · §285]
-    const _cfgDiff=FROZEN_CONFIG_KEYS.filter(k=>(k==='bidRuleSet')?(_rsC(_bk[k])!==_rsC(_live[k])):(k==='comboBids')?(_cbC(_bk[k])!==_cbC(_live[k])):(_cfgCanon(_bk[k])!==_cfgCanon(_live[k]))); // [380 · §282] every other key exactly as before
+    const _slC=v=>(typeof v==='number'&&Number.isInteger(v)&&v>=1&&v<=9)?String(v):'every'; // [382 · §286] the Strict level compared as the pages read it: absent, 10 and junk are all "every numbered bid"
+    const _cfgDiff=FROZEN_CONFIG_KEYS.filter(k=>(k==='bidRuleSet')?(_rsC(_bk[k])!==_rsC(_live[k])):(k==='comboBids')?(_cbC(_bk[k])!==_cbC(_live[k])):(k==='strictThreshold')?(_slC(_bk[k])!==_slC(_live[k])):(_cfgCanon(_bk[k])!==_cfgCanon(_live[k]))); // [380 · §282] every other key exactly as before · [382 · §286] strictThreshold normalised
     if(_cfgDiff.length){
       toast('🛟 Restore ABORTED — this backup was made under a different auction setup ('
         +_cfgDiff.join(', ')+') and the auction is already underway. Restoring it would mix two '
@@ -15516,6 +15589,7 @@ async function _doFullRestore(f){
       if(k==='adminSettings'&&v&&v.simulatorEnabled===true){ v={...v,simulatorEnabled:false}; }
       if(k==='adminSettings'&&v&&typeof v==='object'){ const _lv=((typeof adminSettings!=='undefined'&&adminSettings)||{}).bidRuleSet, _bv=v.bidRuleSet, _std=x=>x===undefined||x==='standard'; if(_lv!==_bv&&_std(_lv)&&_std(_bv)){ v={...v}; if(_lv===undefined) delete v.bidRuleSet; else v.bidRuleSet=_lv; } } // [380 · §282] F2: absent and "standard" are the same rule set - the live value is written, so the frozen key is not touched (a backup that equals live is written unchanged)
       if(k==='adminSettings'&&v&&typeof v==='object'){ const _lc=((typeof adminSettings!=='undefined'&&adminSettings)||{}).comboBids, _bc=v.comboBids, _cn=x=>(typeof comboNormalize==='function')?_cfgCanon(comboNormalize(x)||['1,2,3','1,2']):((x===undefined)?_cfgCanon(['1,2,3','1,2']):_cfgCanon(x)); if(_cfgCanon(_lc)!==_cfgCanon(_bc)&&_cn(_lc)===_cn(_bc)){ /* [FIX1 · F2] equal once normalised: the LIVE value is written */ v={...v}; if(_lc===undefined) delete v.comboBids; else v.comboBids=_lc; } } // [381 · §285] as 380's F2: absent and today's set are the same setting - the live value is written, so the frozen key is not touched (a backup that equals live is written unchanged)
+      if(k==='adminSettings'&&v&&typeof v==='object'){ const _ls=((typeof adminSettings!=='undefined'&&adminSettings)||{}).strictThreshold, _bs=v.strictThreshold, _sn=x=>(typeof x==='number'&&Number.isInteger(x)&&x>=1&&x<=9)?String(x):'every'; if(_ls!==_bs&&_sn(_ls)===_sn(_bs)){ v={...v}; if(_ls===undefined) delete v.strictThreshold; else v.strictThreshold=_ls; } } // [382 · §286] as 381's F2: equal once normalised (absent, 10, junk) - the LIVE value is written, so the frozen key is not touched (a backup that equals live is written unchanged)
       if(k==='timer'&&v&&v.enabled&&typeof v.lastChange==='number'){
         const resumed=Date.now()-(f.ts-v.lastChange);
         // If the backup's countdown had already run out, don't resurrect it as a live
