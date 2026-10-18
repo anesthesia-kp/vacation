@@ -280,11 +280,77 @@ service cloud.firestore {
                         ? resource.data.get('auctionConfig', {}).get('year', -2)
                         : 2027)));
     }
+    // ── [383 · §287, owner 17 Oct 2026] AUCTION SETUP — settings locked for the WHOLE auction ──
+    // adminSettings.setupLock: ON only when exactly true, read AS STORED (resource), so one write
+    // can never switch it off and change a setting at once. It may change only before the auction
+    // has begun (auctionUnderway, rehearsals count). With it ON and begun, the keys of setOnceKeys()
+    // change only through a ONE-setting unlock, adminSettings.setupUnlock {key, at, by}, written
+    // with at == request.time, younger than setupUnlockMinutes(), in a write that touches no other
+    // locked key and REMOVES the unlock (it re-locks by itself). Rehearsal Mode may always go OFF,
+    // never ON unless unlocked the same way. Removing setupUnlock is always allowed. AND-ed with the
+    // freeze above, which is unchanged. IDENTICAL to the admin's SET_ONCE_KEYS / SETUP_UNLOCK_MS (pin).
+    // Cost: no new document; the phases lookup happens only when the switch, or (with the lock ON) a
+    // locked key, is touched - the same document the freeze already reads.
+    function setOnceKeys() {
+      return ['auctionConfig', 'bidFloors', 'bidRuleSet', 'strictThreshold', 'comboBids',
+              'priorityLockEnabled', 'blindedBidding'];
+    }
+    function setupUnlockMinutes() { return 10; }
+    function touchesKeys(keys) {
+      return request.method == 'delete'
+        ? (resource != null && resource.data.keys().hasAny(keys))
+        : (resource == null
+            ? request.resource.data.keys().hasAny(keys)
+            : request.resource.data.diff(resource.data).affectedKeys().hasAny(keys));
+    }
+    function setupLockOn() {
+      return resource != null && resource.data.get('setupLock', false) == true;
+    }
+    function rehearsalOnWrite() {
+      return request.method != 'delete' && touchesKeys(['simulatorEnabled'])
+        && request.resource.data.get('simulatorEnabled', false) == true;
+    }
+    function setupUnlockKey() {
+      return resource.data.get('setupUnlock', {}).get('key', '');
+    }
+    // A locked-key write while locked: only through a live STORED unlock, for that key alone, removing it.
+    function setupUnlockedWriteOk() {
+      return request.method != 'delete'
+        && resource.data.get('setupUnlock', null) is map
+        && resource.data.get('setupUnlock', {}).get('at', null) is timestamp
+        && request.time < resource.data.get('setupUnlock', {}).get('at', null)
+                          + duration.value(setupUnlockMinutes(), 'm')
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .intersection(setOnceKeys().toSet()).hasOnly([setupUnlockKey()])
+        && (!rehearsalOnWrite() || setupUnlockKey() == 'simulatorEnabled')
+        && !request.resource.data.keys().hasAny(['setupUnlock']);
+    }
+    // Writing (not removing) an unlock: stamped by the server clock, naming one locked row, lock ON.
+    function setupUnlockWriteOk() {
+      return setupLockOn()
+        && request.resource.data.get('setupUnlock', null) is map
+        && request.resource.data.get('setupUnlock', {}).get('at', null) == request.time
+        && request.resource.data.get('setupUnlock', {}).get('key', '')
+             in setOnceKeys().concat(['simulatorEnabled']);
+    }
+    function setupGateOk() {
+      return (!touchesKeys(['setupLock']) || !auctionUnderway())
+        && (!setupLockOn()
+            || !(touchesKeys(setOnceKeys()) || rehearsalOnWrite())
+            || !auctionUnderway()
+            || setupUnlockedWriteOk())
+        && (request.method == 'delete'
+            || !touchesKeys(['setupUnlock'])
+            || !request.resource.data.keys().hasAny(['setupUnlock'])
+            || setupUnlockWriteOk());
+    }
     // Cheap tests first: the phases lookup only happens when a frozen key is actually
     // touched, so ordinary settings toggles cost zero extra document-access calls.
     function configWriteAllowed(docId) {
-      return docId != 'adminSettings' || !touchesFrozenConfig() || !auctionUnderway()
-        || (inPhaseGap() && gapCalendarOk()); // [build 268 · GAP]
+      return docId != 'adminSettings'
+        || ((!touchesFrozenConfig() || !auctionUnderway()
+             || (inPhaseGap() && gapCalendarOk())) // [build 268 · GAP] - unchanged
+            && setupGateOk()); // [383 · §287] the setup lock, AND-ed
     }
 
     // ── Bid documents: per-user confinement + server-clock expiry [H-3 / H-13] ─
