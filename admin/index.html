@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 383;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 384;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1177,7 +1177,8 @@ thead th{color:var(--t2)}
         <div class="trow">
           <div>
             <div class="trow-label">Projection-change alert e-mails</div>
-            <div class="trow-desc">When ON, users get an e-mail whenever their projected outcome for a week changes (from a real user's bid, an admin bid change, or the simulator). When OFF, no projection-change alerts are sent from anywhere. Turn OFF during testing to avoid barraging users and burning EmailJS quota.</div>
+            <div class="trow-desc">When ON, users get an e-mail whenever their projected outcome for a week changes (from a real user's bid, an admin bid change, or the simulator) — except for people who turned them off under 🔔 E-mail alerts. When OFF, no projection-change or get-in alerts are sent from anywhere. Turn OFF during testing to avoid barraging users and burning EmailJS quota.</div>
+            <div class="trow-desc" id="alOptOut" style="display:none;margin-top:6px"></div><!-- [384 · §288 · plan §3f] the one line of people's own choices: painted by _alOptOutPaint -->
           </div>
           <div class="tog" id="emailNotifsToggle" onclick="toggleEmailNotifs()"></div>
         </div>
@@ -1663,6 +1664,9 @@ const phaseStagingRef = doc(db,"vacations","phaseStaging"); // {pendingPhaseSnap
 // tracker panel. WHITELIST_SENDER is the address users must whitelist — ASSUMED to be the Gmail
 // EmailJS sends through; change this one string (and the staff twin) if the sending address differs.
 const whitelistConfirmRef = doc(db,"vacations","whitelistConfirm");
+// [384 · §288 · plan §3e] Each person's e-mail alert choices, set in the staff page's 🔔 E-mail alerts box: {INITIALS:{proj, chance, watch}}. READ here
+// (this page's own alerts honour switch 1; the one-line view on E-mail Sending Controls); never written here. Not backed up, kept through Reset Auction.
+const alertPrefsRef = doc(db,"vacations","alertPrefs");
 const WHITELIST_SENDER = "dr.vacation.goddess@gmail.com";
 // The staff auction site users sign into (used in the whitelist ask e-mail — it's the first e-mail
 // users get from us, so it links them straight to the site to confirm).
@@ -2130,6 +2134,7 @@ onSnapshot(metaRef,     snap=>{ const d=snap.exists()?snap.data():{};  metaData=
 onSnapshot(changesRef,  snap=>{
   changesLog=snap.exists()?(snap.data().log||[]):[];
   changesResetAt=snap.exists()?(snap.data().resetAt||0):0;
+  if(typeof _alOptOutPaint==='function') _alOptOutPaint(); // [384 · §288] the count of get-in alerts in force follows the phase's record stamp
   const p=document.getElementById("panel-changelog");
   if(p&&p.classList.contains("on")) renderChangelog();
   if(typeof renderInsights==='function') renderInsights(); // keep Popcornometer in sync
@@ -2540,6 +2545,9 @@ onSnapshot(passwordsRef,snap=>{ passwordsData=snap.exists()?snap.data():{}; cons
 // [WHITELIST TRACKER 2026-07-26] Confirmation flags for the tracker panel. Re-render when visible.
 let whitelistConfirmData={};
 onSnapshot(whitelistConfirmRef, snap=>{ whitelistConfirmData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-whitelist'); if(p&&p.classList.contains('on')&&typeof renderWhitelistTracker==='function') renderWhitelistTracker(); if(typeof renderNextStep==='function') renderNextStep(); });
+// [384 · §288 · plan §3e] The alert choices, alongside the other vacations listeners. Until they arrive every switch reads ON.
+let alertPrefsData={}, _alLoaded=false;
+onSnapshot(alertPrefsRef, snap=>{ alertPrefsData=snap.exists()?(snap.data()||{}):{}; _alLoaded=true; if(typeof _alOptOutPaint==='function') _alOptOutPaint(); });
 onSnapshot(bidLoweringsRef, snap=>{ bidLoweringsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-lowerings'); if(p&&p.classList.contains('on')&&typeof renderBidLowerings==='function') renderBidLowerings(); }); // [build 268 · BL]
 onSnapshot(bidHoldsRef, snap=>{ bidHoldsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-userbids'); if(p&&p.classList.contains('on')&&typeof renderUserBids==='function') renderUserBids(); }); // [327 · §180]
 // [330 · §189] The two activity logs — admin-read docs, painted only while User Activity is open.
@@ -2552,7 +2560,7 @@ onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; cons
 onSnapshot(approvalsRef, snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()?snap.data():{}); _approvalsReady=true; refreshAll(); });
 // (Removed a duplicate emails listener here — emailsDataAdmin is now kept in sync
 // inside the single emails listener above, mirroring the loginEmails pattern.)
-onSnapshot(phasesRef,   snap=>{ _phasesReady=true; phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{},phaseHistory:{}}; _publishedCompletedPhases=phasesData.completedPhases||{}; _mergeCompletedPhasesView(); _publishedP4Rounds=phasesData.p4Rounds||{}; _mergeP4RoundsView(); refreshAll(); }); // [H6] keep the staged+published merged view · [build 258 · LIVE BUG] _publishedP4Rounds was NEVER assigned — only declared {} — so every phaseStaging snapshot rebuilt the merged view as {}∪staged, silently forgetting every PUBLISHED round archive (server data was fine; the page's memory wasn't). Announced round wins then re-counted as PENDING (blocking Complete Round / re-routing to Approvals-Denials), win-locks dropped, and a send during the wiped window could even publish an EMPTY round archive. Mirror the completedPhases pattern on this same line: refresh the published slot from every phases snapshot, then re-merge.
+onSnapshot(phasesRef,   snap=>{ _phasesReady=true; phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{},phaseHistory:{}}; _publishedCompletedPhases=phasesData.completedPhases||{}; _mergeCompletedPhasesView(); _publishedP4Rounds=phasesData.p4Rounds||{}; _mergeP4RoundsView(); if(typeof _alOptOutPaint==='function') _alOptOutPaint(); /* [384 · §288] a new round lapses get-in alerts */ refreshAll(); }); // [H6] keep the staged+published merged view · [build 258 · LIVE BUG] _publishedP4Rounds was NEVER assigned — only declared {} — so every phaseStaging snapshot rebuilt the merged view as {}∪staged, silently forgetting every PUBLISHED round archive (server data was fine; the page's memory wasn't). Announced round wins then re-counted as PENDING (blocking Complete Round / re-routing to Approvals-Denials), win-locks dropped, and a send during the wiped window could even publish an EMPTY round archive. Mirror the completedPhases pattern on this same line: refresh the published slot from every phases snapshot, then re-merge.
 onSnapshot(deniedRef,   snap=>{ deniedData=normalizeWkArrayMap(snap.exists()?snap.data():{}); _deniedReady=true; refreshAll(); });
 onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); refreshAll(); }); // L-1: bid-phase tag changes must refresh dependent views (pending counts, projections, complete-phase gate)
 onSnapshot(slotsRef,    snap=>{ slotsData=snap.exists()?snap.data():{}; _slotsReady=true; refreshAll(); });
@@ -2733,6 +2741,7 @@ function _mqEligible(e,now,minAgeMs){
   // the 30s that lets a real bidder's own browser send its alert inline first.
   const minA=(e&&e.origin==='admin')?3000:minAgeMs;
   if(e&&typeof e==='object'&&(e.fails||0)>=MQ_MAX_FAILS) return false; // [build 265 · B2] parked — admin must Retry/Delete
+  if(e&&typeof e==='object'&&typeof e.holdUntil==='number'&&isFinite(e.holdUntil)) return false; // [384 · §291, 22 Oct 2026] a HELD alert (a cancel's) is never sent from this page — Send Pending included: a staff page sends it, re-checking every line first (it alone can judge them all)
   return e&&typeof e==='object'&&(now-(e.ts||0))>=minA&&(!e.claimedAt||(now-e.claimedAt)>90000);
 }
 function scheduleMailQueueSweep(){
@@ -3955,6 +3964,59 @@ function getOutcome(wk,u,ap){
   return 'lose';
 }
 
+// ── [384 · §288 · plan §3e, §3f] E-MAIL ALERT CHOICES, as the admin page reads them ─────────────────────────────────────────────────────────
+// vacations/alertPrefs: {INITIALS:{proj:false, chance:false, watch:{<week>:{bid,ph,rd,since}}}} — each person's own choices, set in the staff
+// page's 🔔 E-mail alerts box (a missing entry or field = ON / none). This page READS them only: its own alerts (queueProjectionAlerts) honour
+// switch 1, and the E-mail Sending Controls card shows one line of who turned what off. No admin control over anyone's choices (plan §3f).
+// The four helpers below are TWINS of the staff page's (byte-identical).
+
+// TWIN (byte-identical on the staff page): the stamp a get-in alert carries, from the phases document and the change log's reset stamp —
+// the window _wwSince reads: the change log's last reset; in Phase 4 the open round's own stamp when it has one.
+function _alStampOf(ph,resetAt){
+  const p=(ph&&typeof ph==='object')?ph:{};
+  const cur=Number(p.currentPhase||1), rd=(cur===4)?Number(p.p4Round||1):0;
+  let since=Number(resetAt)||0;
+  if(cur===4){ const rb=Number((p.p4RoundBeganAt||{})[rd]); if(rb>0) since=Math.max(since,rb); }
+  return {ph:cur,rd:rd,since:since};
+}
+// TWIN: is the get-in alert `w` still in force at the stamp `st`? The same phase, round and record stamp, and a bid the bid box can offer.
+function _alLive(w,st){
+  return !!(w&&typeof w==='object'&&st&&w.ph===st.ph&&w.rd===st.rd&&w.since===st.since&&_alBidOk(w.bid));
+}
+// TWIN: a bid a get-in alert may carry: a number 1-10, NP, or one of the five combinations (as the page writes them, strongest first).
+// Anything else (an entry hand-edited from developer tools) is ignored.
+function _alBidOk(b){
+  if(b==='NP') return true;
+  if(typeof b==='number') return Number.isInteger(b)&&b>=1&&b<=10;
+  if(Array.isArray(b)) return ['1,2,3','1,2','2,3','3,4','4,5'].indexOf(b.join(','))>=0;
+  return false;
+}
+// TWIN: is switch `key` ('proj' = switch 1, 'chance' = switch 2) on for `user`? Only an explicit false, in a document that has arrived, turns
+// it off: before the document arrives every switch reads ON (a missed alert costs more than an extra one, plan §3e).
+function _alOn(user,key){
+  try{ if(!_alLoaded) return true; const e=alertPrefsData&&alertPrefsData[user]; return !(e&&typeof e==='object'&&e[key]===false); }catch(_){ return true; }
+}
+// The one line under the projection switch (plan §3f, switch 2's name of §10a): who turned which switch off, and how many get-in alerts are in
+// force now (a lapsed one — an earlier phase or round, or before a reset — is not counted). '' until the choices have arrived.
+function _alOptOutLine(){
+  try{
+    if(!_alLoaded) return '';
+    const st=_alStampOf(phasesData,changesResetAt), off={proj:[],chance:[]}; let n=0;
+    const roster=(typeof names!=='undefined'&&Array.isArray(names))?names:[], weeks=(typeof _wkNumByISO==='object'&&_wkNumByISO)?_wkNumByISO:{}; // [fix round, review lane 1 L5]
+    for(const u of Object.keys(alertPrefsData||{}).sort()){
+      const e=alertPrefsData[u]; if(!e||typeof e!=='object') continue;
+      if(e.proj===false) off.proj.push(u);
+      if(e.chance===false) off.chance.push(u);
+      if(e.watch&&typeof e.watch==='object'&&roster.includes(u)) for(const wk of Object.keys(e.watch)) if(Object.prototype.hasOwnProperty.call(weeks,wk)&&_alLive(e.watch[wk],st)) n++; // [fix round, review lane 1 L5] only live alerts on a week of the auction, of people on the roster
+    }
+    const who=a=>a.length?a.map(esc).join(', '):'none';
+    return '<strong>Turned off by people (their own choice):</strong> Changes to my projections — '+who(off.proj)+' · My withdrawn bid would win again — '+who(off.chance)+' · Get-in alerts set now: '+n;
+  }catch(_){ return ''; }
+}
+function _alOptOutPaint(){
+  try{ const el=document.getElementById('alOptOut'); if(!el) return; const h=_alOptOutLine(); el.innerHTML=h; el.style.display=h?'':'none'; }catch(_){}
+}
+
 // ── Outbid alerts for ADMIN-side bid changes ────────────────────────────────
 // Real users' browsers generate outbid alerts when THEY bid (the user site's
 // persistScheduleChange → sendEmailNotifications). Bids written from THIS page
@@ -3965,6 +4027,8 @@ function getOutcome(wk,u,ap){
 // user into the shared mailQueue outbox — the existing sweep on any open page
 // (admin or user) delivers them, so quota tracking and claim protocol all apply.
 function snapshotSchedule(){ try{ return JSON.parse(JSON.stringify(scheduleData||{})); }catch(_){ return {}; } }
+// [384 · §291, 22 Oct 2026] (the held-e-mails-go-first block is gone: the hold made simple — this page never sends a held e-mail, _mqEligible)
+
 async function queueProjectionAlerts(prevSched, excludeUser, newSchedOverride){
   try{
     // Respect the admin "Outbid alert e-mails" switch — off means generate none.
@@ -4011,7 +4075,7 @@ async function queueProjectionAlerts(prevSched, excludeUser, newSchedOverride){
         // dissolving is not a change, so it sends nothing. Matches the staff site exactly.
         const po=uiOutcome(getOutcome(wk,user,prevAp)), no=uiOutcome(getOutcome(wk,user,newAp));
         const _w=x=>x==='review'?'UNDER REVIEW':String(x).toUpperCase();
-        if(po!==no) (notif[user]=notif[user]||[]).push(`Your projection for ${wLabel(wkDate(wk))} changed from ${_w(po)} to ${_w(no)}`);
+        if(po!==no&&((typeof _alOn!=='function')||_alOn(user,'proj'))) (notif[user]=notif[user]||[]).push(`Your projection for ${wLabel(wkDate(wk))} changed from ${_w(po)} to ${_w(no)}`); // [384 · §288 · plan §10a] switch 1 OFF: no projection line (the "was removed" line above is always sent) · [384 · §291] the rest of this function is 383's again: nothing waits for held e-mails
       }
     }
     let queued=0;
@@ -7061,9 +7125,11 @@ function npAllowedForPhase(ph){
 }
 window.npAllowedForPhase=npAllowedForPhase;
 // Exact NP availability from the admin's settings — shared wording with the user site.
+// Is a running cap set in any phase? (npPhasesDescription's last clause names it.) [fix round, review lane 3 L1]
+function _anyCumCap(){ return [1,2,3,4].some(p=>_cumCap(p)!==null); }
 function npPhasesDescription(){
   const on=[1,2,3,4].filter(p=>npAllowedForPhase(p));
-  const tail=' — and there is no limit on how many NP bids you can place, beyond the running cap above';
+  const tail=' — and there is no limit on how many NP bids you can place'+((typeof _anyCumCap!=='function'||_anyCumCap())?', beyond the running cap above':''); // [220 · 384 · fix round, review lane 3 L1] no cap in any phase: no "running cap above" (its line is hidden, plan §11e)
   if(on.length===4) return 'NP bids can be used during any phase'+tail;
   if(!on.length) return 'NP bids are not allowed in any phase';
   return 'NP bids can be used during phase'+(on.length!==1?'s':'')+' '+(on.length===1?String(on[0]):on.slice(0,-1).join(', ')+' and '+on[on.length-1])+' only'+tail;
@@ -8063,6 +8129,9 @@ async function _commitBeginPhase(next){
     : '🚨 Phase '+next+' begun, but the TIMER did NOT verifiably arm — users may see the auction as CLOSED and CANNOT BID. Open the Timer card and reset the countdown NOW.',
     _t.ok?'ok':'err');
   try{ if(typeof _setupBeginNote==='function') _setupBeginNote('p'+next); }catch(_){} // [383 · §287] the begin's Change Log row: reviewed (when, by whom) or without the review
+  // [384 · §288 · plan §10e] Phase 1 has begun: welcome the roster. Not awaited — the begin is done; the loop starts after the begin's toast has had
+  // its 3 seconds (the loop's progress replaces it). typeof = sandbox convention (a suite that lifts this function alone runs it as 383).
+  if(next===1&&typeof _welcomeAtBegin==='function') setTimeout(()=>{ _welcomeAtBegin().catch(()=>{}); },3500);
   return true;
 }
 // [build 227] Arm the phase countdown and VERIFY it landed. Write and read-back are both
@@ -8124,7 +8193,8 @@ function _beginPhase1Confirm(){
         +(_hdN===0?_zeroWarn
          :`<div class="cmodal-warn" style="margin-top:10px"><strong>Phase 1 covers ONLY the ${_hdN} high-demand week${_hdN!==1?'s':''}.</strong> All ${_stdN} other weeks will be LOCKED — users can bid only on:</div>
           <ul style="margin:8px 0 8px 18px;font-size:12px;color:var(--t2);line-height:1.7">${HD_WEEK_LABELS.map(w=>`<li>${w}</li>`).join('')}</ul>
-          <div class="cmodal-info">The remaining weeks open starting in Phase 2 (Smart Lock &amp; Unlock runs at each later phase start as usual).</div>`),
+          <div class="cmodal-info">The remaining weeks open starting in Phase 2 (Smart Lock &amp; Unlock runs at each later phase start as usual).</div>`)
+        +((typeof _welcomeBeginLine==='function')?_welcomeBeginLine():''), // [384 · §288 · plan §10e] the welcome e-mails this Begin sends: the count, or switched off
     okText:_hdN===0?'⚠️ Begin EMPTY Phase 1':'🔒 Lock standard weeks & Begin Phase 1',
     danger:_hdN===0,
     onConfirm:()=>_beginPhaseLockDecision(1)
@@ -8295,7 +8365,8 @@ const mailStatsRef = doc(db,"vacations","mailStats");
 // stored). One tag per kind of line, in a fixed order; `maybe` = it went out under the "may be a repeat" line.
 // A line no pattern knows adds nothing - the row still reads "projection alert". It can never throw: whatever goes wrong, it
 // answers with no tags. Must match the twin on the other page.
-const MAIL_TAG_ORDER=['to WIN','to UNDER REVIEW','to LOSE','could lower','still WIN, could lower','withdrawn bid would win','bid removed by admin','repeat'];
+// [384 · §288 · plan §3h, §10d] two more tags: a get-in alert's line ("can get in") and the confirmation e-mail ("alert settings"). Must match the twin.
+const MAIL_TAG_ORDER=['to WIN','to UNDER REVIEW','to LOSE','could lower','still WIN, could lower','withdrawn bid would win','can get in','bid removed by admin','alert settings','repeat'];
 function _mailTags(body,maybe){
   const got=[];
   try{
@@ -8306,7 +8377,9 @@ function _mailTags(body,maybe){
       if(m){ add('to '+m[1]); if(ln.indexOf('the lowest bid of yours that would also win')>=0) add('could lower'); continue; }
       if(ln.indexOf('You are still projected to WIN')>=0){ add('still WIN, could lower'); continue; }
       if(ln.indexOf('your withdrawn bid of')>=0){ add('withdrawn bid would win'); continue; }
+      if(ln.indexOf(' (your alert): Another bid on this week was ')>=0){ add('can get in'); continue; }
       if(ln.indexOf('was removed — you no longer have a bid on this week')>=0){ add('bid removed by admin'); continue; }
+      if(ln.indexOf('Your e-mail alert choices have been saved.')>=0){ add('alert settings'); continue; }
     }
     if(maybe===true) add('repeat');
     return got.sort((x,y)=>{ const i=MAIL_TAG_ORDER.indexOf(x), j=MAIL_TAG_ORDER.indexOf(y); return (i<0?99:i)-(j<0?99:j); });
@@ -8316,6 +8389,7 @@ function _mailLogNote(user,to,kind,ok,err,tags){
   try{ _mqSendNote(ok,err); }catch(_){} // [353 · §236] every send's outcome also tells this page whether it can reach the mail service
   try{
     if(!user) return;
+    if(kind==='projection alert'&&Array.isArray(tags)&&tags.indexOf('alert settings')>=0) kind='alert settings'; // [220 · 384 · §288 · plan §10d] a confirmation e-mail sent on by a relay (which knows only "welcome" or "projection alert") is logged as what it is
     const rec={at:Date.now(),to:String(to||''),kind:String(kind||'mail'),ok:!!ok};
     if(!ok){ const e=err||{}; rec.err=_mqNoAnswer(err)?'no answer':String(e.text||e.message||e.status||e||'failed').slice(0,120); } // [353 · §236] status 0 used to print "[object Object]"
     const p=setDoc(mailLogRef,{[user]:rec},{merge:true});
@@ -8751,7 +8825,7 @@ function _cumCap(phase){
 // Simple-language description of the cumulative bid caps for the welcome e-mail.
 function cumulativeCapEmailText(){
   const caps=[1,2,3,4].map(_cumCap);
-  if(caps.every(c=>c===null)) return 'No cap on how many weeks you can bid on — you are limited only by the bid numbers you have available';
+  if(caps.every(c=>c===null)) return ''; // [384 · §288 · plan §11e] no cap in any phase: no bullet in the welcome e-mail (twin of the staff page's cumulativeCapDescription)
   // [build 268 · COPY] Grouped collapse — as short as the settings allow, never shorter
   // than the truth: equal-cap runs merge into their LAST clause (for a CUMULATIVE cap the
   // later checkpoint implies the earlier ones), a trailing uncapped stretch reads as one
@@ -8766,22 +8840,24 @@ function cumulativeCapEmailText(){
   }
   return 'Running cap on total weeks you can win across the auction (only weeks you win count) — '+parts.join(' · ');
 }
-// [380 · §282] The competition-week rule line of the welcome e-mail follows the rule set - word for word the staff page's (its RULE_NOWEAKEN_STD /
-// _strictW4; tests/test-216-380-texts.mjs compares the two pages' outputs). Under Standard these very words, as before.
-const RULE_NOWEAKEN_STD='On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.';
-function _ruleNoWeakenText(){
-  const strict=!!(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.bidRuleSet==='strict');
-  if(!strict) return RULE_NOWEAKEN_STD;
-  const w=(Number((typeof phasesData!=='undefined'&&phasesData&&phasesData.currentPhase)||1)===4)?'round':'phase';
-  const n=(typeof _strictN==='function')?_strictN():null; // [382 · §286] W8 with a Strict level set (twin: staff _strictW4); none set: the 381 words below
-  if(n!==null) return "On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen a bid. A winning bid of "+n+" or stronger on a competition week can't be removed — it can only be moved, to a week where another bid knocked you out of winning and where it would win, and once moved it can't be lowered there for the rest of the "+w+". A winning bid weaker than "+n+", a tied, under-review or losing bid, and an NP, can be removed at any time. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.";
-  return "On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen a bid. A winning bid on a competition week can't be removed — it can only be moved, to a week where another bid knocked you out of winning and where it would win, and once moved it can't be lowered there for the rest of the "+w+". A tied, under-review or losing bid, and an NP, can be removed at any time. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.";
+// [384 · §288 · plan §11f item 2 / §11g] The competition-week rule line of the welcome e-mail: the words both rule sets share, word for word the
+// staff page's RULE_NOWEAKEN (twin); under Strict the welcome e-mail adds the Strict line straight below it (_ruleCompSetText), as the staff page does.
+const RULE_NOWEAKEN='On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.';
+function _ruleNoWeakenText(){ return RULE_NOWEAKEN; }
+// [384 · §288 · plan §11g] The line straight below the competition-week rule: Strict only, no rule-set name shown (his words: "users don't need
+// that information… standard doesn't need any line at all"). n = the Strict level (adminSettings.strictThreshold), null = every numbered bid.
+// TWIN: byte-identical on both pages (staff _ruleCompSetText / admin _ruleCompSetText feed it).
+function _ruleCompSetLine(strict,n){
+  if(!strict) return '';
+  if(n===null||n===undefined) return "A winning bid on a competition week can't be removed — only moved, to a week where another bid knocked you out of winning, and once moved it can't be lowered there. Tied, under-review, losing and NP bids can be removed at any time.";
+  return "A winning bid of "+n+" or stronger on a competition week can't be removed — only moved, to a week where another bid knocked you out of winning, and once moved it can't be lowered there. Any other bid there can be removed at any time.";
 }
+function _ruleCompSetText(){ return _ruleCompSetLine(!!(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.bidRuleSet==='strict'),(typeof _strictN==='function')?_strictN():null); } // [384 · §288] the set in force, as this page knows it
 function buildWelcomeEmailBody(user){
   const _capTxt=cumulativeCapEmailText();
   const capBullets=_capTxt.startsWith('Running cap')
     ? [_capTxt.slice(0,_capTxt.indexOf(' — '))+':', _capTxt.slice(_capTxt.indexOf(' — ')+3)]
-    : [_capTxt];
+    : (_capTxt?[_capTxt]:[]); // [384 · §288] no cap in any phase: no bullet at all (plan §11e — an empty text would leave a bare "•")
   const B=_emBold;
   const bullets=arr=>arr.map(t=>'• '+t).join('\n');
   return `Hi ${user},
@@ -8790,18 +8866,20 @@ Welcome to the ${AC_YEAR} Anesthesia Vacation Auction!
 
 This confirms you are enrolled in e-mail alerts. You will receive an e-mail:
 ${bullets([
-  `When another person's bid activity changes your projected outcome for a week (projection-change alerts)`,
-  `When a bidding phase concludes and your results (approved/denied) are sent`,
-  `As an occasional reminder if you have not yet placed any bids in an open phase`
+  `When someone else's bid changes your projected outcome on a week you bid on`,
+  `When a bid you withdrew from a week would now win there`,
+  `When a week you added under 🔔 E-mail alerts could be won with the bid you chose`,
+  `When a phase or round ends and your results are sent`,
+  `As an occasional reminder if you have not yet bid in an open phase`,
+  `As a confirmation whenever you change your alert choices`
 ])}
+
+Choose which alerts you get under 🔔 E-mail alerts at the top of the site. Results, reminders and messages from the admin are always sent.
 
 ${B('RULES AND REMINDERS OF THE AUCTION')}
 ${bullets([
-  `Vacation selections are now called "bids" — the process works like an auction, where user bids compete for limited slots`,
-  `The auction has 4 phases — similar to the rounds in previous years`,
-  `Phase 1 includes only the high-demand weeks; all remaining weeks open starting in Phase 2`,
+  `The auction has 4 phases — Phase 1 includes only certain holiday weeks; all remaining weeks open starting in Phase 2`, // [384 · §288] the alert list, the sentence above and this list: plan §11a / §11c / §11e, word for word as on the page
   ...capBullets,
-  `Only bid for the number of weeks your accrued vacation and ATO will allow for`,
   `You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest`,
   `Each number can only be used once, numbers from weeks that were approved in earlier phases are unavailable to be used again`,
   `Bids that do not win are returned to you when the next phase begins.`,
@@ -8811,13 +8889,10 @@ ${bullets([
   ...prioLockBullets(), // [build 268 · BL/COPY] Option A wording, allowance-derived
   `To exchange the bids on two of your weeks, use ✎ Edit, then ⇄ Swap bids — both change together.`, // [361 · §257] word for word as on the staff page
   `A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.`, // [358 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
-  ((typeof _ruleNoWeakenText==='function')?_ruleNoWeakenText():`On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. You can always strengthen or remove a bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.`), // [380 · §282] follows the rule set; under Standard these very words (the fallback is for test sandboxes)
+  ((typeof _ruleNoWeakenText==='function')?_ruleNoWeakenText():`On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.`), // [380 · §282] · [384 · §288] the words both rule sets share (plan §11f item 2; the fallback is for test sandboxes)
+  ...((typeof _ruleCompSetText==='function')?[_ruleCompSetText()].filter(Boolean):[]), // [384 · §288] straight below it: the Strict line, Strict only — under Standard no line at all (plan §11g); word for word as on the page
   ...bfRulesBullets(),
   ...((typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.blindedBidding===true)?[`Bidder names are hidden for this auction. You see your own bids as usual; every other bid shows without initials.`]:[]), // [365 · §261] only while the Blinded bidding switch is on; word for word as on the staff page
-  `Consider starting with lower bids and increasing as necessary to prevent "overpaying" for a week`,
-  `Enter your bids early, it benefits everyone`,
-  `Sniping is not possible, do not try it`,
-  `Bailing — leaving a competition week from a winning position when that bid number is not needed on another week — and repeated last-minute bid activity are tracked by admin. Please play fairly.` // [366 · §263] word for word as on the staff page
 ])}
 
 ${B('TIMER RULES')}
@@ -8828,6 +8903,8 @@ ${bullets([
   `Winning (W): your bid is projected to be approved for this week`,
   `Under Review (R): your bid is over the FTE cap for this week and the projection is uncertain`,
   `Losing (L): your bid is projected not to be approved for this week`,
+  `E-mail alerts tell you when someone else's bid changes your projection on a week you bid on, and when a bid you withdrew would now win. Turn either off under 🔔 E-mail alerts.`, // [384 · §288] the two alert rules, in the same place as on the page (plan §11b line 1, §11k item 4)
+  `Want to know when you could get into a week? Add it under 🔔 E-mail alerts with the bid you'd be willing to place, and you'll be e-mailed when that bid would win or be under review there. It lasts until the phase ends.`,
   `If you are Under Review for a week and do not win after it is resolved, you will get the bid back for the next phase`,
   `Under Review includes times when your combined bid with other users exceeds the FTE cap.`,
   `These are projections, not final results — outcomes can shift as others place bids or as unexpected staffing needs change`
@@ -8865,6 +8942,38 @@ async function welcomeOnce(user,email){
   await sendWelcomeEmail(user,email,key).catch(()=>{});
 }
 window._welcomeOnce=welcomeOnce; // exposed for testing
+// ── [384 · §288 · plan §10e, his ruling 18 Oct 2026] THE WELCOME AT ▶ BEGIN PHASE 1 ─────────────────────────────────────────────────────
+// The welcome e-mail goes to everyone when Phase 1 begins, instead of at each person's first sign-in. Once Begin Phase 1 has committed, this page
+// goes through the roster and calls welcomeOnce (unchanged) for each person's Google address, then their KP address, ONE AFTER ANOTHER, as the
+// results sender does. welcomeOnce honours the "Welcome e-mails" switch, reads welcomeLog first so nobody is welcomed twice, and queues each
+// e-mail before sending it (a failed send is retried by the relay). If this page closes before the loop ends, the rest are welcomed at their
+// first sign-in (the staff page sends from Phase 1 on), so nobody is missed. Before Phase 1, the staff page and the KP save here send none.
+// The addresses not yet welcomed, as this page knows them now: each roster member's Google address, then their KP address (recipientsFor).
+function _welcomeBeginList(){
+  const out=[], seen=new Set();
+  for(const u of (Array.isArray(names)?names:[])){ for(const e of recipientsFor(u)){ const k=_wlKey(e); if(!k||seen.has(k)||_welcomed(k)) continue; seen.add(k); out.push({u,e}); } }
+  return out;
+}
+// The Begin Phase 1 dialog's line: the count, or that the switch is off. Whatever goes wrong in counting, the dialog still opens (no line).
+function _welcomeBeginLine(){
+  try{
+    if(adminSettings.welcomeEmailsEnabled===false) return '<div class="cmodal-info" style="margin-top:8px">Welcome e-mails are switched off.</div>';
+    const n=_welcomeBeginList().length;
+    return '<div class="cmodal-info" style="margin-top:8px">Welcome e-mails will go to everyone not yet welcomed ('+n+' address'+(n!==1?'es':'')+').'+(n?' Keep this page open until the welcome e-mails finish.':'')+'</div>';
+  }catch(_){ return ''; }
+}
+// The loop. Sequential: one welcomeOnce finishes before the next starts. Progress stays on screen (a sticky toast) until the last one.
+async function _welcomeAtBegin(){
+  if(adminSettings.welcomeEmailsEnabled===false) return;
+  let list=[]; try{ list=_welcomeBeginList(); }catch(_){ return; } // the roster unreadable: nobody is missed — each is welcomed at their first sign-in
+  if(!list.length) return;
+  const n=list.length, word=n+' address'+(n!==1?'es':'');
+  for(let i=0;i<n;i++){
+    toast('✉️ Welcome e-mails: '+(i+1)+' of '+n+' — keep this page open until they finish.','warn',true);
+    try{ await welcomeOnce(list[i].u,list[i].e); }catch(_){}
+  }
+  toast('✉️ Welcome e-mails finished ('+word+').','ok');
+}
 let mailStatsData={};
 onSnapshot(mailStatsRef, snap=>{ mailStatsData=snap.exists()?snap.data():{}; renderMailMeter(); });
 const MAIL_QUOTA=2000; // EmailJS paid tier — resets on the 22nd
@@ -12591,7 +12700,7 @@ window.adminSaveEmail=async function(u){
     title:'✉️ Save KP E-mail',
     body:`<div>Set <strong>${esc(u)}</strong>'s KP e-mail to <strong style="font-family:var(--mono)">${esc(val)}</strong>?</div>
           <div style="margin-top:6px;color:var(--t2);font-size:12.5px">Current: <strong style="font-family:var(--mono)">${esc(_prevDisp)}</strong></div>
-          <div class="cmodal-warn" style="margin-top:8px">Alerts CC this address, and if ${esc(u)} has already logged in, a one-time welcome e-mail goes to the new address right away — check for typos first.</div>`,
+          <div class="cmodal-warn" style="margin-top:8px">${(typeof phase1Started!=='function'||phase1Started())?`Alerts CC this address, and if ${esc(u)} has already logged in, a one-time welcome e-mail goes to the new address right away — check for typos first.`:`Alerts CC this address, and the welcome e-mail goes to it when you begin Phase 1 — check for typos first.`}</div>`,
     okText:'✉️ Save KP e-mail',
     onConfirm:async()=>{
       await setDoc(emailsRef,{[u]:val},{merge:true}); toast(`✉️ Saved for ${u}`,"ok");
@@ -12600,7 +12709,7 @@ window.adminSaveEmail=async function(u){
       // user's first login: if they haven't logged in yet, the KP welcome goes out then.
       const gk=_wlKey(loginEmailsData?.[u]||'');
       const loggedIn=!!(gk && welcomeLogData.sent && welcomeLogData.sent[gk]);
-      if(loggedIn) welcomeOnce(u,val);
+      if(loggedIn&&(typeof phase1Started!=='function'||phase1Started())) welcomeOnce(u,val); // [384 · §288 · plan §10e] …and only once Phase 1 has begun: before that, ▶ Begin Phase 1 welcomes this address with the rest
     }
   });
 };
@@ -14083,6 +14192,7 @@ onSnapshot(userListRef, snap=>{
     userListData.forEach(n=>names.push(n));
     names.sort();
     refreshAll();
+    if(typeof _alOptOutPaint==='function') _alOptOutPaint(); // [384 · §288 · fix round, lane 1 L5] the count of get-in alerts follows the roster
   }
   renderUserPanel();
 });
@@ -14166,9 +14276,10 @@ function prioLockBullets(){
   const base="Bid priorities can only stay the same or get stronger — bid a 5 on a week, and any re-bid there must be 5 or better.";
   const a=[1,2,3,4].map(p=>blAllowance(p));
   if(a.every(x=>x===0)) return [base];
-  // [build 274 · V1] Unlimited in EVERY phase collapses the whole rule to the owner's
-  // wording (18 Aug, verbatim) — no counting language, no floor mechanics.
-  if(a.every(x=>x===Infinity)) return ["Ideally, bid priorities would not be decreased once they are set. However, it is okay to reduce bid priorities as needed."];
+  // [build 274 · V1] Unlimited in EVERY phase: no counting language, no floor mechanics — and [220 · 384 · §288, plan §11e] no rule
+  // line at all (his order, 18 Oct 2026: the "Ideally, bid priorities…" sentence is removed). The staff page then hides its line, the welcome
+  // e-mail has none, and the admin's preview says so. With a limit in any phase, the wording is exactly as before.
+  if(a.every(x=>x===Infinity)) return [];
   const seg=(label,x)=>x===Infinity?('freely '+label):(x===0?('not at all '+label):('up to '+(x===1?'1 time ':x+' times ')+label));
   if(a.every(x=>x===a[0])){
     return [base+(a[0]===Infinity
@@ -14212,7 +14323,7 @@ function renderBidLowerings(){
     +`<button class="btn btn-primary" style="flex:unset" id="blSaveBtn" onclick="saveBidLowerings()"${locked?' disabled':''}>💾 Save</button>`;
   const sb=document.getElementById('blSaveBtn'); if(sb) sb.title=locked?'Locked while a phase is running — editable between phases, once results are sent.':'';
   const ln=document.getElementById('blLockNote'); if(ln) ln.style.display=locked?'block':'none';
-  const rp=document.getElementById('blRulePreview'); if(rp) rp.textContent='Rule shown to users: '+prioLockBullets().join(' ');
+  const rp=document.getElementById('blRulePreview'); if(rp){ const _r=prioLockBullets().join(' '); rp.textContent=_r?('Rule shown to users: '+_r):'Rule shown to users: none — bid lowerings are unlimited in every phase.'; } // [384 · §288 · plan §11e]
   const head=document.getElementById('blUsageHead'), body=document.getElementById('blUsageBody');
   if(!head||!body) return;
   const arch=bidLoweringsArchiveData||{};
@@ -16316,6 +16427,8 @@ function _backupThen(label,fn){
 // rebuilt by re-completing a phase; restore clears it) and whitelistConfirm (isolated from
 // the auction lifecycle by design — per the admin's decision [28 Jul 2026] it is neither
 // backed up, restored, nor cleared by Reset Auction; confirmations simply persist).
+// [384 · §288 · plan §3e] alertPrefs (each person's e-mail alert choices) is outside too, for the same reason: neither backed up, restored,
+// nor cleared by Reset Auction. A get-in alert lapses by itself at a phase close, a round start and a reset (it carries their stamp).
 function _backupDocMap(){
   return {bidHolds:bidHoldsRef, /* [327 · §180] */ schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesDecisions:changesDecisionsRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,welcomeLog:welcomeLogRef,mailQueue:mailQueueRef,mailStats:mailStatsRef,slcMap:slcRef,adminAccess:adminAccessRef,passcodes:doc(db,'vacations','passcodes'),signInMisses:signInMissesRef,slots:doc(db,'vacations','slots'),bidLowerings:bidLoweringsRef,bidLoweringsArchive:bidLoweringsArchiveRef}; // [build 268 · BL] usage + history ARE auction state
 }

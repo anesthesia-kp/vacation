@@ -397,6 +397,24 @@ service cloud.firestore {
         || !(request.resource.data.get(myInitials()[0], {}) is map)
         || request.resource.data.get(myInitials()[0], {}).keys().size() <= 60;
     }
+    // [384 · §288 · plan §3e, 21 Oct 2026] THE SHAPE OF ONE'S OWN ALERT ENTRY (vacations/alertPrefs). ownMapBounded bounds only the entry's
+    // top-level keys, so the get-in list nested inside it (`watch`) was unbounded. The entry may hold only `proj`, `chance` and `watch`;
+    // `proj` and `chance` are true or false when present; `watch` is a map of at most 53 weeks — key counts only: what each week's value holds is
+    // not bounded (a recorded residual, as the bid maps'; fix round, review lane 3 M1). An entry removed whole is allowed (whose entry
+    // may be touched is writesOnlyOwnKeys' business). No extra document access: myInitials() is the lookup writesOnlyOwnKeys already made.
+    function alertEntryOk() {
+      return !exists(/databases/$(database)/documents/vacations/emailToUser)
+        || myInitials().size() == 0
+        || !(myInitials()[0] in request.resource.data)
+        || alertEntryShapeOk(request.resource.data[myInitials()[0]]);
+    }
+    function alertEntryShapeOk(e) {
+      return e is map
+        && e.keys().hasOnly(['proj', 'chance', 'watch'])
+        && (!('proj' in e) || e.proj is bool)
+        && (!('chance' in e) || e.chance is bool)
+        && (!('watch' in e) || (e.watch is map && e.watch.keys().size() <= 53));
+    }
     function timerNotExpired() {
       // Uses request.time (Google's clock), never the client's. Timer off, not yet
       // started, or the doc not existing at all means no restriction — the exists()
@@ -469,7 +487,7 @@ service cloud.firestore {
       allow read: if isAdminReadDoc(docId) ? isAdmin()
                    : (isRelayDoc(docId) ? (isRegisteredUser() || isAdmin())
                    : (isPeopleDoc(docId) ? (isRegisteredUser() || isAdmin() || isSchedAdmin()) // [379 · §275]
-                   : ((isSensitiveDoc(docId) || isBidDataDoc(docId)) ? (isRegisteredUser() || isAdmin()) : true))); // [379 · §275] was isVerifiedAccount()
+                   : ((isSensitiveDoc(docId) || isBidDataDoc(docId) || docId == 'alertPrefs') ? (isRegisteredUser() || isAdmin()) : true))); // [379 · §275] was isVerifiedAccount() · [384 · §288] alertPrefs: a colleague or an admin
       // welcomeLog records WHICH ADDRESSES have already been welcomed, keyed by the
       // address itself — so it is PII, and its READ is gated by isSensitiveDoc above
       // [RA-3, 20 Aug 2026; an earlier version of this comment claimed "no PII" and was
@@ -603,10 +621,20 @@ service cloud.firestore {
                              && (resource == null
                                   ? request.resource.data.keys().size() <= 1
                                   : request.resource.data.diff(resource.data).affectedKeys().size() <= 1))))
+                   // [384 · §288, 21 Oct 2026] E-mail alert choices: {INITIALS:{…}} — each person's own alert switches and get-in alerts.
+                   // A colleague may write only their OWN entry (writesOnlyOwnKeys — the guard of the emails / whitelistConfirm /
+                   // loginLog documents), its KEY COUNTS bounded (ownMapBounded: the entry's own keys; alertEntryOk: its shape and at most 53
+                   // weeks — no extra document access: emailToUser is already fetched by the own-key check). What a week's value holds is NOT
+                   // bounded (rules cannot look inside every value of a map): a recorded residual, the same as the bid maps'. The admin is
+                   // free. Read: a colleague or an admin (above). Without this
+                   // clause the document would fall to the catch-all below: readable without signing in, and any colleague could
+                   // rewrite anyone's choices.
+                   || (docId == 'alertPrefs' && (isAdmin() || (isRegisteredUser() && writesOnlyOwnKeys() && ownMapBounded() && alertEntryOk()))) // [384 · §288 · part 2] and the entry's shape (alertEntryOk)
                    || (!isAdminOnlyDoc(docId) && !isBidDoc(docId) && !isRelayDoc(docId)
                         && docId != 'timer' && docId != 'signInMisses' && docId != 'emails'
                         && docId != 'changes' && docId != 'whitelistConfirm' && docId != 'welcomeLog'
                         && docId != 'mailStats' && docId != 'loginLog' && docId != 'mailLog'
+                        && docId != 'alertPrefs' // [384 · §288]
                         && (isRegisteredUser() || isAdmin()));
     }
 
