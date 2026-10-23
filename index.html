@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 220;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 221;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -636,7 +636,7 @@ body{zoom:1.15}
     <div class="al-gi-h">Tell me when I can get in</div>
     <div id="alGiList" onclick="_alListClick(event)"></div>
     <button type="button" class="al-add" id="alAdd" onclick="_alAddWeek()">+ Add a week</button>
-    <div class="al-foot">Always sent: the welcome e-mail, your results, messages and reminders from the admin, and a note if the admin removes one of your bids.</div>
+    <div class="al-foot">Always sent: Phase results, messages from admin, and occasional reminders.</div><!-- [221 · §292] as ruled (9:54 AM): the same sentence as the confirmation e-mail -->
     <div class="modal-buttons"><button type="button" class="btn-primary" onclick="_alDone()">Done</button></div>
   </div>
 </div>
@@ -838,7 +838,7 @@ body{zoom:1.15}
         <li>Bids that do not win are returned to you when the next phase begins.</li>
         <li>A combined bid like 1/2/3 uses bids 1, 2, and 3 at once</li>
         <li id="ruleNpPhases">NP bids may only be used during the phases for which admin has turned them on</li>
-        <li id="rulePrioLock">Bid priorities can only stay the same or get stronger — bid a 5 on a week, and any re-bid there must be 5 or better.</li>
+        <li id="rulePrioLock" style="display:none">Bid priorities can only stay the same or get stronger — bid a 5 on a week, and any re-bid there must be 5 or better.</li>
         <li id="ruleSwap">To exchange the bids on two of your weeks, use ✎ Edit, then ⇄ Swap bids — both change together.</li><!-- [199 · §257] -->
         <li id="ruleCompWeek">A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.</li><!-- [196 · §251] his wording -->
         <li id="ruleNoWeaken">On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.</li><!-- [194 · §248 · 196 · §251 · 197 · §254 · 198 · §255] · [220 · §288] the words both rule sets share (plan §11f item 2) -->
@@ -862,7 +862,7 @@ body{zoom:1.15}
       </div>
       <ul class="rules-list" style="margin-top:10px">
         <li>E-mail alerts tell you when someone else's bid changes your projection on a week you bid on, and when a bid you withdrew would now win. Turn either off under 🔔 E-mail alerts.</li><!-- [220 · §288] the two alert rules (plan §11b line 1; line 2 = §11k item 4) -->
-        <li>Want to know when you could get into a week? Add it under 🔔 E-mail alerts with the bid you'd be willing to place, and you'll be e-mailed when that bid would win or be under review there. It lasts until the phase ends.</li>
+        <li>Week out of reach? Add it under 🔔 E-mail alerts with the bid you'd be willing to place. If that bid could later win or be under review there, you'll be e-mailed and the countdown restarts so you have time to bid. Lasts until the phase ends.</li><!-- [221 · §292] the get-in rule line, as ruled (10:26 AM) -->
         <li>If you are Under Review for a week and do not win after it is resolved, you will get the bid back for the next phase</li>
         <li>Under Review includes times when your combined bid with other users exceeds the FTE cap.</li>
         <li style="margin-top:8px"><strong style="color:#2c4257">These are projections, not final results — outcomes can shift as others place bids or as unexpected staffing needs change</strong></li>
@@ -1018,7 +1018,7 @@ let changesData={log:[]}, unsubSchedule=null;
 // admin setting loads (prevents the spurious password box when passwords are off).
 let emailsData={}, bestBidsData={}, fteData={}, adminSettings={emailNotifsEnabled:true,passcodesEnabled:false}, bidTimesData={}, approvalsData={}, usernamesData={};
 let bidLoweringsData={}; // [build 139 · BL]
-let alertPrefsData={}, _alLoaded=false; // [220 · §288 · plan §3e] set by the alertPrefs listener (_subscribeSensitiveOnce), cleared at teardown; until it arrives every switch reads ON and no get-in line is added
+let alertPrefsData={}, _alLoaded=false; // [220 · §288 · plan §3e] set by the alertPrefs listener (the signed-in sensitive reads), cleared at teardown; until it arrives every switch reads ON and no get-in line is added [221 · §292 PART 2 FIX: the listener named in words, so the test harness's extraction of this line stays 220's]
 let _lwLoaded={best:false,low:false,holds:false}; // [182 · §221] set by three snapshots; cleared at teardown — an unloaded doc looks like an empty one, so a check that reads one refuses to run until it has arrived · [220 · §288] since the "lower and still win" check went (plan §10c), `low` is set but no longer read
 // [190 · §241] THE BOARD WAITS FOR ITS DATA (owner-found, 5 Oct 2026). Every document the board is
 // drawn from, and every one the projection engine reads, has a flag here, set by that document's
@@ -1593,12 +1593,13 @@ function bfRulesBullets(){
 // ── [build 139 · BL] Bid Lowerings — sanctioned per-phase bid decreases ────────────
 // The priority lock stays the rule; the admin may grant N sanctioned DECREASES per phase
 // (each Phase-4 round gets the same fresh allowance). A spent lowering moves the stored
-// floor DOWN to the new bid (owner ruling 15 Aug). Default 0 ≡ the classic absolute rule.
+// floor DOWN to the new bid (owner ruling 15 Aug). [221 · §292, plan §11] A phase never saved = UNLIMITED (it was 0 ≡ the classic
+// absolute rule); a stored value - 0 to 9 or 'unlimited' - rules exactly as before. The admin sets it under Auction Setup → Archived settings.
 // TWIN NOTE: blAllowance is byte-identical on the admin site (twin-compare pinned).
 function blAllowance(ph){
   const m=(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.bidLowerings)||{};
   const raw=m[ph]!==undefined?m[ph]:m[String(ph)];
-  if(raw==='unlimited') return Infinity;
+  if(raw==='unlimited'||raw===undefined) return Infinity; // [221 / 385 · §292] never saved = unlimited (was 0); a stored value rules as before
   const n=parseInt(raw,10);
   return (isNaN(n)||n<0)?0:Math.min(9,n);
 }
@@ -1655,14 +1656,31 @@ function prioLockBullets(){
   const body=simple?('up to '+join(parts.map(p=>times(p.v)+' '+p.label))):join(parts.map(p=>seg(p.label,p.v)));
   return [base+' To fix a mistake, you may lower a bid '+body+'.'];
 }
+// ── [221 · §292, owner 22 Oct 2026 10:46 AM "1-yes"; plan §11] ARCHIVED SETTINGS — NO third switch. Every lock / lowering text a bidder can
+// see shows ONLY while lowerings are limited in some phase (any of the four not unlimited) or the Priority Lock is OFF: the three
+// "⚠️ This LOWERS your bid" notes (bid box, Swap, Move), the Remove box's lock note and the "not counted against your allowance" alert ask
+// this; #rulePrioLock and the welcome e-mail's line (prioLockBullets: [] when unlimited in every phase), "X of Y bid lowerings left" and
+// the refusals (only with a finite allowance) were already hidden at the defaults and are left as they were. At the defaults (lock ON,
+// unlimited everywhere - never saved included) nothing shows; with any other stored setting every text is exactly 220's. The callers ask
+// it typeof-guarded, and an error here answers true: a check that cannot be made never hides a rule that may be in force.
+function _blTextsOn(){
+  try{
+    if(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.priorityLockEnabled===false) return true;
+    return [1,2,3,4].some(p=>blAllowance(p)!==Infinity);
+  }catch(_){ return true; }
+}
 // ── [build 274 · V3] Timer reset MODE ────────────────────────────────────────
 // The admin-selected rule for WHICH bid activity restarts the countdown.
 //   1 — classic (default): any substantive placed/changed/canceled bid resets.
 //   2 — affects-others only: resets ONLY when the action changes another user's
 //       projected outcome — the exact event that sends an outbid alert. A first
 //       bid on an empty week deliberately does NOT reset here (owner, 18 Aug:
-//       "why should first bids be different?" — wanting them to reset IS mode 3).
-//   3 — new bids always reset; changes and cancels only when they affect someone.
+//       "why should first bids be different?"). [221 · §292, owner 22 Oct 2026; plan §4]
+//       It ALSO resets when a competition week's "Minimum new bid" gets weaker or goes
+//       away (_minDropped, the 18 Oct trigger, §289), and when the change opens a week to
+//       someone with a "tell me when I can get in" alert, on any week (_giAny, 10:26 AM).
+//   [221 · §292, owner 22 Oct 2026 10:19 / 10:29 AM] Mode 3 ("new bids always") is REMOVED:
+//       a stored 3 reads as mode 1, the fallback every reader already had.
 // Unset/unknown is mode 1 — behaviour never changes until the admin deliberately
 // picks a mode (confirmed + audited on the admin site). Stage lengths, the opening
 // window, the same-value no-op, the extend-only server rule, and the expired-timer
@@ -1670,7 +1688,7 @@ function prioLockBullets(){
 function _timerResetMode(){
   const raw=(typeof adminSettings!=='undefined'&&adminSettings)?adminSettings.timerResetMode:undefined;
   const n=parseInt(raw,10);
-  return (n===2||n===3)?n:1;
+  return (n===2)?2:1;
 }
 // Does this change alter any OTHER user's projected outcome? This is the outbid
 // predicate — the same comparison sendEmailNotifications makes — factored so the
@@ -1692,11 +1710,65 @@ function _changeAffectsOthers(prevSnap,afterSnap,actor){
 }
 // The mode gate. Missing snapshots fail OPEN to the classic reset — the timer must
 // never silently starve because a caller had no before-picture to judge by.
+// [221 · §292; plan §4, §5] Mode 2 = the projection clause (unchanged, and it still fails OPEN) OR a competition week's minimum new bid
+// got weaker or went away (_minDropped) OR the change opens a week to someone with a get-in alert (_giAny) - asked in that order, each
+// only when the one before said no. Every guard above the gate (timer on, not expired, not the opening window, not a same-value save,
+// extend-only) stays at the three callers, as before. Any mode but 2 is the classic reset: mode 3 is gone, so isNewBid is no longer
+// read here (the callers keep their shape; persistScheduleChange still uses its flag for the 60-second hold). The two new clauses are
+// asked typeof-guarded (extracted-code test sandboxes only); a clause that cannot answer adds no restart.
 function _timerModeAllowsReset(mode,isNewBid,prevSnap,afterSnap,actor){
-  if(mode===1) return true;
-  if(mode===3&&isNewBid) return true;
+  if(mode!==2) return true;
   if(!prevSnap||!afterSnap) return true;
-  return _changeAffectsOthers(prevSnap,afterSnap,actor);
+  if(_changeAffectsOthers(prevSnap,afterSnap,actor)) return true;
+  if(typeof _minDropped==='function'&&_minDropped(prevSnap,afterSnap,actor)===true) return true;
+  return typeof _giAny==='function'&&_giAny(prevSnap,afterSnap,actor)===true;
+}
+// [221 · §292, the 18 Oct trigger (§289) as planned 22 Oct, plan §4] Did a competition week's "Minimum new bid" (the week card's own number,
+// _wwMinBid) get WEAKER, or go away, between the two pictures? Every week with a bid on either picture is asked: the number on the picture
+// before, and on the picture after. _wwMinBid reads the board from the global `data`, so `data` is each picture in turn for these
+// synchronous questions and is put back in the finally (the device of _giOwnRefuses); the approvals are worked out once per picture. On
+// the picture after, a week the actor has just left is asked with the bid that left (`just`): its change-log entry does not exist yet,
+// and with nobody left there the remembered level IS that bid (_weLeftLevel's own rule). A week that was not a competition week before
+// (no number) never counts; anything unknown (the change log or the floors not yet arrived) gives no number on either picture, so no
+// restart. Read-only: nothing here writes, waits or sends. Anything thrown = false.
+// [221 · §292 FIX ROUND, verifier V1] Is the actor's latest change-log entry on week w already the removal of that very bid, stamped this phase /
+// round? Then the real row is there (the listener echoed the save) and no copy may be lent: a second removal reads as an unrecorded return.
+function _lentHas(log,u,w,b){ for(let i=log.length-1;i>=0;i--){ const e=log[i]; if(e&&e.user===u&&e.weekKey===w) return e.action==='removed'&&JSON.stringify(e.bidValue)===JSON.stringify(b)&&!(typeof e.ts==='number'&&e.ts<_wwSince()); } return false; }
+// [221 · §292 FIX ROUND, review lane 1 H1] The picture after is asked as it will stand once the change has LANDED: the actor's "removed" row for
+// each week they left is in the change log meanwhile (the competition test reads the log, not only the remembered level), taken out in the finally.
+function _minDropped(prevSnap,afterSnap,actor){
+  let was, swapped=false, rows=null;
+  try{
+    if(!prevSnap||!afterSnap) return false;
+    const pa=(prevSnap[actor]&&typeof prevSnap[actor]==='object')?prevSnap[actor]:{};
+    const na=(afterSnap[actor]&&typeof afterSnap[actor]==='object')?afterSnap[actor]:{};
+    const wks=new Set();
+    for(const s of [prevSnap,afterSnap]) for(const u of Object.keys(s)){ const m=s[u]; if(m&&typeof m==='object') for(const w of Object.keys(m)) wks.add(w); }
+    was=data; swapped=true;
+    data=prevSnap;
+    const apB=computeApprovals(prevSnap), before={};
+    for(const w of wks) before[w]=_wwMinBid(w,apB);
+    for(const w of wks){ if((na[w]===undefined||na[w]===null)&&pa[w]!==undefined&&pa[w]!==null&&changesData&&Array.isArray(changesData.log)&&!_lentHas(changesData.log,actor,w,pa[w])){ const e={user:actor,weekKey:w,action:'removed',actor:'user',ts:Date.now(),bidValue:JSON.parse(JSON.stringify(pa[w]))}; changesData.log.push(e); (rows=rows||[]).push(e); } }
+    data=afterSnap;
+    const apA=computeApprovals(afterSnap);
+    for(const w of wks){
+      const b=before[w]; if(b===null||b===undefined) continue;
+      const just=(na[w]===undefined||na[w]===null)?pa[w]:undefined;
+      const a=_wwMinBid(w,apA,just);
+      if(a===null||a===undefined||priorityScore(a)>priorityScore(b)) return true;
+    }
+    return false;
+  }catch(_){ return false; }
+  finally{ if(swapped) data=was; if(rows){ for(const e of rows){ const i=changesData.log.lastIndexOf(e); if(i>=0) changesData.log.splice(i,1); } } }
+}
+// [221 · §292, owner 22 Oct 2026 10:26 AM "2-yes"; plan §4] Would this change send a "tell me when I can get in" alert to anyone - on ANY week?
+// _giOpenings' own test (every filter it applies: the alert in force, no bid there, not locked, not an earlier winner, no Phase 4 denial,
+// never the actor, refused or losing before and allowed and WIN / UNDER REVIEW after), asked with ONLY the admin's e-mail switch set
+// aside (the countdown restarts whether or not alert e-mails are on). It sends nothing. Before the alert choices, the floors, the holds or
+// the change log have arrived it answers false (the first seconds after a page opens: no restart from this clause - plan §4 edge (i)).
+function _giAny(prevSnap,afterSnap,actor){
+  try{ const r=_giOpenings(prevSnap,afterSnap,actor,true); return !!r&&typeof r==='object'&&Object.keys(r).length>0; }
+  catch(_){ return false; }
 }
 // [162 · RA-4/H-2] A DEADLINE ON EVERY WRITE THE BID DIALOG WAITS FOR.
 // Measured, not assumed: with no network, writeBatch().commit() in this SDK neither
@@ -2111,9 +2183,8 @@ function _timerResetLine(){
   const pushed=!!r.quietEnabled&&stageH<=(r.quietWhenHoursLE||6)&&_quietAdjustExpiry(plainEnd,r)!==plainEnd;
   const to=pushed?('to end at '+fmtHour12(r.quietEnd)):('to '+stageH+'h');
   const raw=(typeof adminSettings!=='undefined'&&adminSettings)?adminSettings.timerResetMode:undefined;
-  const mi=parseInt(raw,10); const mode=(mi===2||mi===3)?mi:1;
-  if(mode===2) return 'Bids, changes and cancels reset the timer '+to+" only if they change another user's outcome.";
-  if(mode===3) return 'New bids reset the timer '+to+"; changes and cancels, only if they change another user's outcome.";
+  const mi=parseInt(raw,10); const mode=(mi===2)?2:1; // [221 / 385 · §292] timer mode 3 removed: a stored 3 reads as mode 1
+  if(mode===2) return 'Bids, changes and cancels reset the timer '+to+" only if they change another user's outcome or open a week to someone (see Timer Rules).";
   return 'Any bid change resets the timer '+to+'.';
 }
 function fmtElapsed(ms){ if(!(ms>0)) ms=0; const tm=Math.floor(ms/60000); const d=Math.floor(tm/1440), h=Math.floor((tm%1440)/60), mi=tm%60; return d+'d '+h+'h '+mi+'m'; }
@@ -2147,8 +2218,7 @@ function renderTimerRulesInfo(){
   // always see the rule actually in force. Mode 1 keeps the classic wording exactly.
   const resetSentence=(function(){
     const m=_timerResetMode();
-    if(m===2) return 'The countdown resets when a bid, change, or cancel changes the projected outcome for another user — moves that affect only your own bids do not reset it';
-    if(m===3) return 'Every NEW bid resets the countdown; changes and cancels reset it only when they change the projected outcome for another user';
+    if(m===2) return 'The countdown resets when a bid, change, or cancel changes the projected outcome for another user — moves that affect only your own bids do not reset it. It also resets when a competition week\'s minimum new bid gets weaker, or when a change opens a week to someone with a "tell me when I can get in" alert'; // [221 · §292] W1; mode 3's sentence gone
     return 'Every time anyone places or changes a bid, the countdown resets';
   })();
   const endLine=`<p style="margin:0 0 6px"><strong>Each phase ends when the countdown timer gets to 0.</strong></p>`;
@@ -3167,7 +3237,7 @@ async function _txAfter(user,info,what){
   if(bkFail) showCenterAlert(what==='swap'
     ?"Your swap IS saved. Some bookkeeping (bid floor or timestamp) didn't record — it will self-correct on your next change; no action needed."
     :"Your bid IS saved. Some bookkeeping (bid floor or timestamp) didn't record — it will self-correct on your next change; no action needed.");
-  if(uncounted) showCenterAlert(what==='swap'
+  if(uncounted&&(typeof _blTextsOn!=='function'||_blTextsOn())) showCenterAlert(what==='swap' // [221 · §292] no allowance to count against at the defaults
     ?"Your swap IS saved and the lower bid stands. One thing did NOT record: a lowering was not counted against your allowance, and it will not correct itself. Please tell your admin so the count can be put right."
     :"Your bid IS saved and the lower bid stands. One thing did NOT record: this lowering was not counted against your allowance, and it will not correct itself. Please tell your admin so the count can be put right.");
 }
@@ -3721,7 +3791,7 @@ const COMP_LABEL_HTML='<span class="comp-tag" style="color:#b45309;font-weight:7
 // everyone looking (a newcomer's view). `ap` = the approvals of the live board when the caller has them (renderCalendar's own).
 // Returns the bid, or null: not a competition week, data not yet arrived, nothing known, NP (no minimum to show), anything thrown.
 // Paint only: nothing here decides, waits, writes or touches the page.
-function _wwMinBid(wk,ap){
+function _wwMinBid(wk,ap,just){ // [221 · §292] just (optional): the bid of someone leaving the week whose change-log entry does not exist yet (_minDropped's picture after); without it, exactly as 220
   try{
     if(!(_boardLoaded&&_boardLoaded.changes===true)||!_lwLoaded.best||!weekMeta[wk]) return null;
     if(_wwContested(wk)!==true) return null;
@@ -3737,7 +3807,7 @@ function _wwMinBid(wk,ap){
       if((a.winners.has(u)||a.draws.has(u)||a.reviews.has(u))&&sc>upSc){ upSc=sc; up=p; }
       if(stSc<0||sc<stSc){ stSc=sc; st=p; }
     }
-    const lv=n?((upSc>=0)?up:st):_weLeftLevel(wk);
+    const lv=n?((upSc>=0)?up:st):_weLeftLevel(wk,just);
     if(lv===undefined||lv===null||lv==='NP') return null;
     const ls=priorityScore(lv);
     if(typeof ls!=='number'||!isFinite(ls)||ls>=99) return null;
@@ -4442,7 +4512,7 @@ window.reviewBid=function(){
       if(priorityScore(_parsed)>priorityScore(_floor)){
         const _rem=blRemaining(user);
         if(!(_rem>0)){ showError(blExhaustedMsg(_floor)); return; }
-        _blNote=(blAllowance(Number(phasesData.currentPhase||1))===Infinity)
+        if(typeof _blTextsOn!=='function'||_blTextsOn()) _blNote=(blAllowance(Number(phasesData.currentPhase||1))===Infinity) // [221 · §292] at the defaults: no note (plan §7 Q3)
           ?('⚠️ This LOWERS your bid on this week from '+blFmtBid(_floor)+' to '+blFmtBid(_parsed)+'.')
           :('⚠️ This LOWERS your bid on this week from '+blFmtBid(_floor)+' to '+blFmtBid(_parsed)+'. It will use 1 of your '+_rem+' remaining bid lowering'+(_rem!==1?'s':'')+' for '+_blWindowLabel()+'.');
       }
@@ -4732,7 +4802,7 @@ window.reviewSwap=function(){
   if(sum) sum.innerHTML='<div style="font-weight:700;color:#132f49;margin-bottom:8px">You are swapping two of your bids.</div>'+row(wkA,c.a,c.b)+row(wkB,c.b,c.a)+'<div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(34,197,94,.25);font-size:.8rem;color:#3b566d;line-height:1.45">Both change together; colleagues get one alert e-mail, and only if their projection changes.</div>';
   const lows=[wkA,wkB].filter(w=>c.low[w]);
   let note='';
-  if(lows.length){
+  if(lows.length&&(typeof _blTextsOn!=='function'||_blTextsOn())){ // [221 · §292] at the defaults: no note (plan §7 Q3)
     note=lows.map(w=>'⚠️ This LOWERS your bid on '+_swapWeekName(w)+' from '+blFmtBid((bestBidsData[user]||{})[w])+' to '+blFmtBid(c.inc[w])+'.').join(' ');
     if(blAllowance(Number(phasesData.currentPhase||1))!==Infinity) note+=' It will use '+lows.length+' of your '+c.rem+' remaining bid lowering'+(c.rem!==1?'s':'')+' for '+_blWindowLabel()+'.';
   }
@@ -4956,7 +5026,7 @@ async function removeSelection(wk){
       });
     }catch(_){ return true; }
   })();
-  if(!willHaveCap){
+  if(!willHaveCap||(typeof _blTextsOn==='function'&&!_blTextsOn())){ // [221 · §292] at the defaults: the plain line, no lock note (the competition notes below still win)
     lockMsg=`<div style="${_boxBlue}">A bid may be placed again for this week.</div>`;
   } else if(!_canLower){
     lockMsg=`<div style="${_boxAmber}"><strong>⚠️ Priority lock note:</strong> A bid may be placed again for this week, but it must be <strong>equal to or better than your previous bid</strong> (${_floorLbl}) — nothing weaker can be placed on this week.</div>`;
@@ -5235,7 +5305,7 @@ async function persistMove(user,src,dst,bid,prevSnapshot,expDst){
 let _mvState=null;
 function _mvEl(id){ return document.getElementById(id); }
 function _mvLowNote(user,src,dst,bid){ // the lowering the destination would cost, in reviewBid's own words; '' when none
-  try{ const g=_mvGate(user,src,dst,_mvVal(bid)); if(!g||g.ok!==true||!g.blSpend) return ''; const _floor=g.blSpend.from, _rem=blRemaining(user);
+  try{ const g=_mvGate(user,src,dst,_mvVal(bid)); if(!g||g.ok!==true||!g.blSpend) return ''; if(typeof _blTextsOn==='function'&&!_blTextsOn()) return ''; const _floor=g.blSpend.from, _rem=blRemaining(user); // [221 · §292] at the defaults: no note (plan §7 Q3)
     return (blAllowance(Number(phasesData.currentPhase||1))===Infinity)
       ?('⚠️ This LOWERS your bid on this week from '+blFmtBid(_floor)+' to '+blFmtBid(bid)+'.')
       :('⚠️ This LOWERS your bid on this week from '+blFmtBid(_floor)+' to '+blFmtBid(bid)+'. It will use 1 of your '+_rem+' remaining bid lowering'+(_rem!==1?'s':'')+' for '+_blWindowLabel()+'.');
@@ -6563,11 +6633,17 @@ function _giLine(wk,how,bid,out){ return formatShort(wk)+' (your alert): Another
 // allowed AND projected WIN or UNDER REVIEW. It is sent again each time the week opens again (nothing is marked "sent": no page can write
 // another person's entry). Nothing before the alert choices, the floors, the holds and the change log have arrived; nothing with the admin's
 // master switch off. Anything unknown → left out. Worked out before the first await, as _lwReturns (see the bidPhase note at the call site).
-function _giOpenings(prevSnap,newSnap,actor){
+// [221 · §292; plan §4] evenIfOff (optional): true sets aside ONLY the admin's e-mail switch - the countdown's question (_giAny); every other
+// filter stands. The e-mails call it without, as before.
+// [221 · §292 FIX ROUND, M1 = A, owner 22 Oct 2026 3:39 PM] The picture AFTER is judged as it will stand once the change has landed: while it is
+// asked, the actor's "removed" row for every week they left is in the change log (the competition test reads the log - without the row a week
+// the leaving bid alone made a competition week looked open), taken out again in a finally. So a get-in line, and the countdown's get-in clause,
+// never name a bid the bid box would refuse once the change is in.
+function _giOpenings(prevSnap,newSnap,actor,evenIfOff){
   const res={};
   try{
     if(!_alLoaded||!_lwLoaded.best||!_lwLoaded.holds||!(_boardLoaded&&_boardLoaded.changes===true)) return res;
-    if(adminSettings.emailNotifsEnabled===false||locksData.globalLock) return res;
+    if((adminSettings.emailNotifsEnabled===false&&evenIfOff!==true)||locksData.globalLock) return res;
     const pa=(prevSnap&&prevSnap[actor]&&typeof prevSnap[actor]==='object')?prevSnap[actor]:{};
     const na=(newSnap&&newSnap[actor]&&typeof newSnap[actor]==='object')?newSnap[actor]:{};
     for(const {wk,how} of _lwActorWeakened(prevSnap,newSnap,actor)){
@@ -6581,8 +6657,13 @@ function _giOpenings(prevSnap,newSnap,actor){
         if((pu[wk]!==undefined&&pu[wk]!==null)||(nu[wk]!==undefined&&nu[wk]!==null)) continue; // a bid there: the projection lines speak for it
         if(getPriorPhaseWinners(wk).has(user)) continue;
         { const _ad=p4AnnouncedDecision(user,wk); if(_ad&&_ad.status==='D') continue; } // a Phase 4 denial: no bid there until the next round (the bid box's own refusal)
-        const before=_giJudge(prevSnap,user,wk,w.bid), after=_giJudge(newSnap,user,wk,w.bid,just);
+        const before=_giJudge(prevSnap,user,wk,w.bid);
         if(before!=='refused'&&before!=='lose') continue;
+        const _lg=(changesData&&Array.isArray(changesData.log))?changesData.log:null, _rows=[]; let after;
+        try{
+          if(_lg) for(const x of Object.keys(pa)){ if(pa[x]!==undefined&&pa[x]!==null&&(na[x]===undefined||na[x]===null)&&!_lentHas(_lg,actor,x,pa[x])){ const e={user:actor,weekKey:x,action:'removed',actor:'user',ts:Date.now(),bidValue:JSON.parse(JSON.stringify(pa[x]))}; _lg.push(e); _rows.push(e); } }
+          after=_giJudge(newSnap,user,wk,w.bid,just);
+        } finally { for(const e of _rows){ const i=_lg.lastIndexOf(e); if(i>=0) _lg.splice(i,1); } }
         if(after!=='win'&&after!=='review') continue;
         (res[user]=res[user]||{})[wk]={how:how,bid:w.bid,out:after,line:_giLine(wk,how,w.bid,after)};
       }
@@ -6595,7 +6676,7 @@ function _giOpenings(prevSnap,newSnap,actor){
 const AL_SW1='Changes to my projections';
 const AL_SW2='My withdrawn bid would win again';
 const AL_GI='Tell me when I can get in';
-const AL_ALWAYS='Always sent: the welcome e-mail, your results, messages and reminders from the admin, and a note if the admin removes one of your bids.';
+const AL_ALWAYS='Always sent: Phase results, messages from admin, and occasional reminders.'; // [221 · §292] as ruled (9:50 AM); the 🔔 box's footer says the same (9:54 AM)
 const AL_EMPTY="None set. Tap + Add a week to choose a week and the bid you'd be willing to place.";
 const AL_SAVED='Saved.';
 const AL_NOSAVE='Could not save — try again in a moment.';
@@ -6776,7 +6857,7 @@ function _alDone(){
   try{ const b=document.getElementById('alertsBtn'); if(b) b.focus({preventScroll:true}); }catch(_){} // [fix round, review lane 3 L5] back to the button that opened it
   if(v&&v.pend.length){ _alToast(AL_LATE); Promise.all(v.pend).then(()=>{ if(_alVisitDue(v)) _alConfSend(v.user).catch(()=>{}); }); return; }
   if(_alVisitDue(v)){ _alConfSend(v.user).catch(()=>{}); _alToast('Done — a confirmation e-mail is on its way.'); }
-  else _alToast('Done — nothing changed, no e-mail.');
+  else _alToast('Done — no changes.'); // [221 · §292] as ruled (9:54 AM)
 }
 window._alDone=_alDone;
 // [fix round, review lane 1 L3] Signing out with the box open after a change: the visit's confirmation e-mail is sent FIRST, while the page
@@ -8048,10 +8129,8 @@ function timerRulesEmailText(){
   // on-site explainer (build 274 V3) whose wording this e-mail promises to match.
   // Mode 1 keeps the classic wording byte-for-byte.
   const _m=_timerResetMode();
-  const resetSentence=_m===2
-    ?'The countdown resets when a bid, change, or cancel changes the projected outcome for another user — moves that affect only your own bids do not reset it'
-    :_m===3
-    ?'Every NEW bid resets the countdown; changes and cancels reset it only when they change the projected outcome for another user'
+  const resetSentence=_m===2 // [221 · §292] W1; mode 3's sentence gone
+    ?'The countdown resets when a bid, change, or cancel changes the projected outcome for another user — moves that affect only your own bids do not reset it. It also resets when a competition week\'s minimum new bid gets weaker, or when a change opens a week to someone with a "tell me when I can get in" alert'
     :'Every time anyone places or changes a bid, the countdown resets';
   if(st.length<=1){ return endLine+(_m===1
     ?`Every time anyone places or changes a bid, the countdown resets to ${(st[0]||{}).hours||48} hours.${noReset}${quiet}${owTxt}`
@@ -8113,7 +8192,7 @@ ${bullets([
   `Under Review (R): your bid is over the FTE cap for this week and the projection is uncertain`,
   `Losing (L): your bid is projected not to be approved for this week`,
   `E-mail alerts tell you when someone else's bid changes your projection on a week you bid on, and when a bid you withdrew would now win. Turn either off under 🔔 E-mail alerts.`, // [220 · §288] the two alert rules, in the same place as on the page (plan §11b line 1, §11k item 4)
-  `Want to know when you could get into a week? Add it under 🔔 E-mail alerts with the bid you'd be willing to place, and you'll be e-mailed when that bid would win or be under review there. It lasts until the phase ends.`,
+  `Week out of reach? Add it under 🔔 E-mail alerts with the bid you'd be willing to place. If that bid could later win or be under review there, you'll be e-mailed and the countdown restarts so you have time to bid. Lasts until the phase ends.`, // [221 / 385 · §292] the get-in rule line, as ruled (10:26 AM)
   `If you are Under Review for a week and do not win after it is resolved, you will get the bid back for the next phase`,
   `Under Review includes times when your combined bid with other users exceeds the FTE cap.`,
   `These are projections, not final results — outcomes can shift as others place bids or as unexpected staffing needs change`
