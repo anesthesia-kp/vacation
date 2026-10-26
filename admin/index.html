@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 388;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 389;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -6908,18 +6908,19 @@ function _srFteMore(btn){ const t=document.getElementById('srFteTbl'), r=documen
 window._srFteMore=_srFteMore;
 // The month picker's step 2 (owner 10:22 / 10:56 PM): the weeks the ticked months WILL open - byMonth[m].availWeeks, the set its OK unlocks -
 // each with the FTE available, ⚠ weeks first; ⚠ and the stored number only where stored and different (Round r-1's fteHead; Round 1: Phase 3's).
-function _rmFteHtml(byMonth,picked,rN){
+// [389 · §295] off: the weeks unticked in this step - each row has a tick box (ticked = opens), unticked stays locked this round.
+function _rmFteHtml(byMonth,picked,rN,off){
   const set=new Set(); (picked||[]).forEach(m=>((byMonth[m]&&byMonth[m].availWeeks)||[]).forEach(wk=>set.add(wk)));
   if(!set.size) return '';
   const prev=_setupPrevCaps(rN>1?'p4r'+rN:'p4');
   const rows=[...set].sort().map(wk=>{ const now=getSlots(wk), c=prev&&prev.caps[wk], pc=(c&&typeof c.cap==='number')?c.cap:null; return {wk,now,pc,ch:pc!==null&&Math.round(pc*10)!==Math.round(now*10)}; });
   const ch=rows.filter(r=>r.ch), ord=ch.concat(rows.filter(r=>!r.ch));
   const TH='padding:4px 8px;border-bottom:2px solid var(--b1);color:var(--t2);font-weight:700;font-size:12px', TD='padding:5px 8px;border-bottom:1px solid var(--b1)';
-  return '<div style="font-size:14px;color:var(--t1)">'+rows.length+' week'+(rows.length!==1?'s':'')+' will open'
+  return '<div style="font-size:14px;color:var(--t1)">'+rows.length+' week'+(rows.length!==1?'s':'')+' can open — untick any to keep it locked this round'
       +(ch.length?' · <b style="color:#4a4f5a">'+ch.length+' changed since '+esc(prev.label)+'</b>':'')+'</div>'
     +'<button type="button" class="btn btn-ghost" style="margin-top:8px" onclick="_rmFteOpen()">Open FTE Availability</button>'
     +'<table id="rmFteTbl" style="width:100%;min-width:0;border-collapse:collapse;font-size:14px;line-height:1.3;color:var(--t1);margin-top:10px"><thead><tr><th style="text-align:left;'+TH+'">Week</th><th style="text-align:right;white-space:nowrap;'+TH+'">FTE available</th></tr></thead><tbody>'
-      +ord.map(r=>'<tr data-wk="'+r.wk+'"'+(r.ch?' style="background:rgba(111,106,96,.28)"':'')+'><td style="white-space:nowrap;'+TD+(r.ch?';box-shadow:inset 4px 0 #6f6a60':'')+'">Wk '+esc(_wkNumByISO[r.wk]||'?')+' · '+esc(_srWkShort(r.wk))+'</td>'
+      +ord.map(r=>'<tr data-wk="'+r.wk+'"'+(r.ch?' style="background:rgba(111,106,96,.28)"':'')+'><td style="white-space:nowrap;'+TD+(r.ch?';box-shadow:inset 4px 0 #6f6a60':'')+'"><label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" name="rmwk" value="'+r.wk+'"'+((off&&off.has(r.wk))?'':' checked')+' style="width:16px;height:16px;margin:0;flex:none">Wk '+esc(_wkNumByISO[r.wk]||'?')+' · '+esc(_srWkShort(r.wk))+'</label></td>'
         +'<td style="text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;'+TD+'"><b>'+(r.ch?'<svg class="lic" viewBox="0 0 24 24" aria-hidden="true" style="width:1.1em;height:1.1em;vertical-align:-.17em;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none;color:#8A6414"><path d="M12 3.5 2.5 20h19L12 3.5z"/><path d="M12 10v4.5M12 17.4v.1"/></svg> ':'')+esc(r.now)+'</b>'+(r.ch?' <span style="color:var(--t2)">was '+esc(r.pc)+'</span>':'')+'</td></tr>').join('')+'</tbody></table>';
 }
 // Step 2's "📆 Open FTE Availability" leaves "↩ Back to Round N" at the top of that page (owner 11:20 PM): it reopens the picker straight at
@@ -6928,12 +6929,14 @@ function _rmFteHtml(byMonth,picked,rN){
 // What "moved on" compares (_rmState): phase, round, archived, Phase 4 complete, the timer's closed flag and last change - not the week locks
 // and not the FTE, which the FTE Availability page may change.
 function _rmState(rN){ try{ return JSON.stringify([Number(phasesData.currentPhase||1),Number(phasesData.p4Round||1),!!(phasesData.p4Rounds||{})[rN],!!(phasesData.completedPhases||{})[4],(typeof timerData!=='undefined'&&timerData&&timerData.biddingClosed===true),(typeof timerData!=='undefined'&&timerData&&timerData.lastChange)||null]); }catch(_){ return ''; } }
-function _rmBackSet(rN,picked,begin){ _rmBack={rN:rN,picked:picked.slice(),at:_rmState(rN),begin:begin===true}; }
-function _rmFteOpen(){ const B=_rmBack; try{ closeConfirm(); }catch(_){} gotoSlotsPanel(); if(B) _srBackPlace('slots',null,'Back to Round '+B.rN,_rmBackGo,'picker'); }
+function _rmBackSet(rN,picked,begin,off){ _rmBack={rN:rN,picked:picked.slice(),at:_rmState(rN),begin:begin===true,off:off?[...off]:[]}; } // [389 · §295] and the unticked weeks
+// [389 · §295] The weeks unticked in step 2, read from the dialog as it stands (before it closes or anything awaits).
+function _rmOffRead(){ return [...document.querySelectorAll('#cmBody input[name=rmwk]')].filter(c=>!c.checked).map(c=>c.value); }
+function _rmFteOpen(){ const B=_rmBack; try{ if(B) B.off=_rmOffRead(); }catch(_){} try{ closeConfirm(); }catch(_){} gotoSlotsPanel(); if(B) _srBackPlace('slots',null,'Back to Round '+B.rN,_rmBackGo,'picker'); }
 function _rmBackGo(){
   const B=_rmBack; _srBackRemove('picker'); _rmBack=null; if(!B) return;
   if(_rmState(B.rN)!==B.at){ toast('Phase 4: Round '+B.rN+' has moved on since — nothing to go back to.','warn'); return; }
-  window._reopenRoundMonths(B.picked,B.begin);
+  window._reopenRoundMonths(B.picked,B.begin,B.off); // [389 · §295] with the unticked weeks
 }
 window._rmFteOpen=_rmFteOpen; window._rmBackGo=_rmBackGo;
 // Each setting IN FULL as it is set (owner 8:04 PM), read the way the pages read it. Lines joined by <br>, each escaped.
@@ -7149,6 +7152,11 @@ function npPhasesDescription(){
   return 'NP bids can be used during phase'+(on.length!==1?'s':'')+' '+(on.length===1?String(on[0]):on.slice(0,-1).join(', ')+' and '+on[on.length-1])+' only'+tail;
 }
 window.npPhasesDescription=npPhasesDescription;
+// [225 · §295] NP off in EVERY phase: no NP rules line, no "plus NP", no NP chip, on the page and in the welcome e-mail
+// (owner, 19 Oct 2026; ruled 26 Oct 2026, Q1 / Q2 yes). NP on in any phase: everything word for word as before.
+function _npAnyPhase(){ return [1,2,3,4].some(p=>npAllowedForPhase(p)); }
+function bidNumbersLine(){ return _npAnyPhase()?'You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest':'You hold bid numbers 1 to 10 — 1 is the strongest bid'; }
+window._npAnyPhase=_npAnyPhase; window.bidNumbersLine=bidNumbersLine;
 function renderNpToggles(){
   const el=document.getElementById('npPhaseToggles'); if(!el) return;
   el.innerHTML=[1,2,3,4].map(p=>`<div style="display:flex;align-items:center;gap:8px">
@@ -8891,12 +8899,12 @@ ${B('RULES AND REMINDERS OF THE AUCTION')}
 ${bullets([
   `The auction has 4 phases — Phase 1 includes only certain holiday weeks; all remaining weeks open starting in Phase 2`, // [384 · §288] the alert list, the sentence above and this list: plan §11a / §11c / §11e, word for word as on the page
   ...capBullets,
-  `You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest`,
+  ((typeof bidNumbersLine==='function')?bidNumbersLine():`You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest`), // [225 · §295] word for word as on the staff page (the fallback is for test sandboxes)
   `Each number can only be used once, numbers from weeks that were approved in earlier phases are unavailable to be used again`,
   `Bids that do not win are returned to you when the next phase begins.`,
   `A combined bid like 1/2/3 uses bids 1, 2, and 3 at once`,
   ...((typeof comboRulesBullets==='function')?comboRulesBullets():[]), // [381 · §285] W9: one line, only when the allowed set is not today's; word for word as on the staff page
-  npPhasesDescription(),
+  ...((typeof _npAnyPhase!=='function'||_npAnyPhase())?[npPhasesDescription()]:[]), // [225 · §295] no NP line when NP is off in every phase (typeof = sandbox convention)
   ...prioLockBullets(), // [build 268 · BL/COPY] Option A wording, allowance-derived
   `To exchange the bids on two of your weeks, use ✎ Edit, then ⇄ Swap bids — both change together.`, // [361 · §257] word for word as on the staff page
   `A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.`, // [358 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
@@ -13781,7 +13789,9 @@ window._reopenCommit=async function(){
 // the per-week Smart Lock Control, exactly the rule Smart Lock uses). A full or already-won week is
 // never opened (guards NE-2 auto over-cap / NE-3 reopened winner). Empty weeks (no decisions yet)
 // count as fully available. Then bidding reopens via the same _reopenCommit the other paths use.
-window._reopenRoundMonths=function(_rmMonths,_rmBeginAgain){ // [383 · §287] _rmMonths: only from "↩ Back to Round N" (owner 11:20 PM) - the months to show at step 2 again
+window._reopenRoundMonths=function(_rmMonths,_rmBeginAgain,_rmOffIn){ // [383 · §287] _rmMonths: only from "↩ Back to Round N" (owner 11:20 PM) - the months to show at step 2 again
+  let _rmOff=new Set(Array.isArray(_rmOffIn)?_rmOffIn:[]); // [389 · §295] the weeks unticked in step 2 - kept across ← Back and the FTE page round trip
+  const _rmOffNow=()=>(typeof _rmOffRead==='function')?_rmOffRead():[]; // [389 · §295] typeof = sandbox convention (suites extract this function alone)
   const _rN=Number(phasesData.p4Round||1);
   const _rmBegin=_rmBeginAgain===true||window._rmFromBegin===true; window._rmFromBegin=false; // [383 · §287] reached from Begin Phase 4 / Start Round (not a mid-round reopen)
   const ap=computeApprovals();
@@ -13822,21 +13832,23 @@ window._reopenRoundMonths=function(_rmMonths,_rmBeginAgain){ // [383 · §287] _
     }
   });
   };
-  const _rmStep2=picked=>{ try{ if(typeof _rmBackSet==='function') _rmBackSet(_rN,picked,_rmBegin); }catch(_){} return openConfirm({
+  const _rmStep2=picked=>{ try{ if(typeof _rmBackSet==='function') _rmBackSet(_rN,picked,_rmBegin,_rmOff); }catch(_){} return openConfirm({
     title:'Open Phase 4: Round '+_rN+' — check FTE',
-    body:(typeof _rmFteHtml==='function')?_rmFteHtml(byMonth,picked,_rN):'',
+    body:(typeof _rmFteHtml==='function')?_rmFteHtml(byMonth,picked,_rN,_rmOff):'',
     okText:_rmBegin?'▶ Begin Phase 4: Round '+_rN:'Reopen bidding', // [lanes 2 + 3] "Begin" only when reached from Begin Phase 4 / Start Round
-    alt:{text:'← Back',onClick:()=>_rmStep1(picked)},
+    alt:{text:'← Back',onClick:()=>{ _rmOff=new Set(_rmOffNow()); _rmStep1(picked); }}, // [389 · §295] the ticks are kept
     onConfirm:async()=>{
-      const unlock=new Set();
-      picked.forEach(m=>byMonth[m].availWeeks.forEach(wk=>unlock.add(wk)));
+      _rmOff=new Set(_rmOffNow()); // [389 · §295] read before anything awaits: an unticked week stays locked this round
+      const _rmAll=new Set(); picked.forEach(m=>byMonth[m].availWeeks.forEach(wk=>_rmAll.add(wk)));
+      const unlock=new Set([..._rmAll].filter(wk=>!_rmOff.has(wk)));
+      if(!unlock.size){ toast('Tick at least one week to open.','warn'); _rmStep2(picked); return; } // [389 · §295] nothing written; step 2 again, as it was
       // [261 · audit] Opening a round's months means bidding is on; clear any MANUAL global freeze too,
       // else globalLock would silently keep every week frozen while the board reads "open".
       const dotted={globalLock:false};
       mondays.forEach(d=>{ const wk=dateKey(d); dotted['weeks.'+wk]=!unlock.has(wk); });
       try{ await mergeFields(locksRef,_withCloseLayout(dotted)); }
       catch(e){ toast('Could not set the week locks — '+(e&&e.message||e)+'. Bidding was NOT reopened.','err'); return; }
-      toast('Opened '+unlock.size+' week'+(unlock.size!==1?'s':'')+' in '+picked.length+' month'+(picked.length!==1?'s':'')+'; all others locked.','ok');
+      toast('Opened '+unlock.size+' week'+(unlock.size!==1?'s':'')+' in '+picked.length+' month'+(picked.length!==1?'s':'')+'; all others locked'+(_rmAll.size>unlock.size?' ('+(_rmAll.size-unlock.size)+' unticked)':'')+'.','ok'); // [389 · §295]
       await window._reopenCommit();
     }
   }); };

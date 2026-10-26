@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 224;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 225;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -156,6 +156,9 @@ select:focus{outline:none;border-color:#1f2329}
    backdrop-filter, which creates stacking contexts that otherwise cover the
    dropdown. Raise whichever container currently holds an open popover. */
 #pcWidget:has(.notif-popover.open),.selections-bar:has(.notif-popover.open){position:relative;z-index:500}
+/* [225 · §295] The Popcornometer box shows only while the timer box shows (owner, 26 Oct 2026: "when the timer is off, the popcornometer
+   should disappear") - before Phase 1, in every gap, after the end, and with the timer switched off. !important: the box sets display inline. */
+#timerRow:not(:has(#countdownBanner.visible)) #pcWidget{display:none!important}
 /* [180 · §219 · owner-found] On narrow screens the Popcornometer box drops BELOW the timer, which puts the
    "changes in last 12h" button at the screen's LEFT edge; the list (pinned to the button's right edge,
    opening leftward) then ran 110–165px off-screen. Here the list lines up with the right edge of the
@@ -772,13 +775,7 @@ body{zoom:1.15}
   </div>
   <!-- [220 · §288 · plan §3d, §11j item 3] 🔔 E-mail alerts: its own line directly under the Sign out row, on a phone and on a computer; the admin-only shortcut comes after it -->
   <div id="alertsRow" style="display:flex;justify-content:flex-end;margin:-4px 0 10px"><button type="button" id="alertsBtn" class="al-btn" onclick="openAlertsBox()">E-mail alerts</button></div>
-  <!-- Admin-only shortcut, directly under the Sign out button on the right. Hidden for
-       non-admins (see _refreshOtherSystems). ?portal=1 marks this as an admin portal jump
-       so the Vacation Admin page can skip its login screen for an already-signed-in admin
-       (see the portal-bypass logic); a plain bookmark without it still shows the login. -->
-  <div id="otherSystems" style="display:none;text-align:right;margin:0 0 10px">
-    <a href="https://anesthesia-kp.github.io/vacation/admin/?portal=1" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;font-size:.78rem;font-weight:700;color:#1f2329;text-decoration:none;border:1px solid #cbc4b5;border-radius:9px;padding:4px 11px;background:#ffffff">Vacation Admin →</a>
-  </div>
+  <!-- [225 · §295] The admin-only "Vacation Admin →" shortcut is removed (owner, 26 Oct 2026). _refreshOtherSystems finds no box and returns before any read. -->
   <!-- [WHITELIST TRACKER 2026-07-26] One-time prompt asking the signed-in user to add the auction
        sender to their contacts and confirm. Filled by renderWhitelistBanner(); hidden once confirmed.
        Reads/writes only the whitelistConfirm doc — nothing here touches bidding. -->
@@ -816,7 +813,7 @@ body{zoom:1.15}
       <div style="margin-top:6px"><span id="notifAll"></span></div>
     </div>
   </div>
-  <div class="toolbar">
+  <div class="toolbar" style="display:none"><!-- [225 · §295] "Signed in as" removed from view (owner, 26 Oct 2026: the top bar shows the name); kept in the page for #personSelect / #personLabel, which the code still uses -->
     <div class="person-selector">
       <label for="personSelect">Signed in as:</label>
       <select id="personSelect"></select>
@@ -834,7 +831,7 @@ body{zoom:1.15}
         <!-- [172 · §193] Grouped: what this is → how many weeks → your bid numbers → changing a bid → strategy and conduct. Moves only, plus the one numbers sentence. -->
         <li>The auction has 4 phases — Phase 1 includes only certain holiday weeks; all remaining weeks open starting in Phase 2</li><!-- [220 · §288] his merged line (plan §11a); the "bids" naming line and the accrued-vacation line are gone (§11a, §11e) -->
         <li id="ruleMaxBids">Running cap on total weeks you can win across the auction — only weeks you win count</li><!-- [220 · §288] hidden by updateBidLimitRule when no phase has a cap (plan §11e) -->
-        <li>You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest</li>
+        <li id="ruleBidNums">You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest</li><!-- [225 · §295] "plus NP" only while some phase allows NP (bidNumbersLine) -->
         <li>Each number can only be used once, numbers from weeks that were approved in earlier phases are unavailable to be used again</li>
         <li>Bids that do not win are returned to you when the next phase begins.</li>
         <li>A combined bid like 1/2/3 uses bids 1, 2, and 3 at once</li>
@@ -2395,10 +2392,15 @@ function npPhasesDescription(){
   if(!on.length) return 'NP bids are not allowed in any phase';
   return 'NP bids can be used during phase'+(on.length!==1?'s':'')+' '+(on.length===1?String(on[0]):on.slice(0,-1).join(', ')+' and '+on[on.length-1])+' only'+tail;
 }
+// [225 · §295] NP off in EVERY phase: no NP rules line, no "plus NP", no NP chip, on the page and in the welcome e-mail
+// (owner, 19 Oct 2026; ruled 26 Oct 2026, Q1 / Q2 yes). NP on in any phase: everything word for word as before.
+function _npAnyPhase(){ return [1,2,3,4].some(p=>npAllowedForPhase(p)); }
+function bidNumbersLine(){ return _npAnyPhase()?'You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest':'You hold bid numbers 1 to 10 — 1 is the strongest bid'; }
 function updateBidLimitRule(){
   const el=document.getElementById('ruleMaxBids'); if(!el) return;
   { const _cap=cumulativeCapDescription(); el.textContent=_cap; el.style.display=_cap?'':'none'; } // [220 · §288 · plan §11e] no cap in any phase: the line is hidden
-  const np=document.getElementById('ruleNpPhases'); if(np) np.textContent=npPhasesDescription();
+  const np=document.getElementById('ruleNpPhases'); if(np){ np.textContent=npPhasesDescription(); const _npd=_npAnyPhase()?'':'none'; if(np.style.display!==_npd) np.style.display=_npd; } // [225 · §295] NP off in every phase: hidden, kept in place (_comboRuleSync anchors on it)
+  const bn=document.getElementById('ruleBidNums'); if(bn){ const _bnt=bidNumbersLine(); if(bn.textContent!==_bnt) bn.textContent=_bnt; } // [225 · §295]
   const bf=document.getElementById('ruleBidFloors'); if(bf){ const _bfb=bfRulesBullets(); bf.textContent=_bfb.join(' · '); bf.style.display=_bfb.length?'':'none'; } // [build 137 · BF] · [COPY-3] no floors set = no bullet at all
   const pl=document.getElementById('rulePrioLock'); if(pl){ const _pl=prioLockBullets().join(' '); pl.textContent=_pl; pl.style.display=_pl?'':'none'; } // [build 139 · BL/COPY] · [220 · §288 · plan §11e] unlimited in every phase: the line is hidden
   if(typeof renderBidPool==='function'){ const u=getCurrentUser?.(); if(u) renderBidPool(u); }
@@ -2464,7 +2466,7 @@ function renderBidPool(user){
   // [155 · AUD-H4] The NP chip follows the LIVE policy: green only when an NP bid could
   // actually be placed right now; otherwise a muted chip with the reason, so the pool
   // never contradicts the bid dialog (which already disables NP correctly).
-  const _npChip=npAllowedNow()
+  const _npChip=!_npAnyPhase()?'':npAllowedNow() // [225 · §295] NP off in every phase: no NP chip at all
     ?chip('NP','rem')
     :`<span title="NP bids are not allowed in the current phase" style="display:inline-block;font-weight:700;font-size:.78rem;padding:2px 9px;border-radius:7px;margin:2px;background:rgba(74,80,90,.10);color:#4a505a;border:1px solid rgba(74,80,90,.25)">NP</span>`;
   const remHtml=(pool.remaining.length?pool.remaining.map(n=>chip(n,'rem')).join(''):'<span style="color:#4a505a;font-size:.8rem">None</span>')+_npChip;
@@ -2818,6 +2820,7 @@ function _setPhaseClosedBanner(on){
   // Never before sign-in: the timer listener is live from page load, well before the board
   // exists, and the login screen must not carry a board banner.
   if(on && (!mainContainer || mainContainer.style.display==="none")){ b.style.display="none"; return; }
+  if(on && _gapInfo()) on=false; // [225 · §295] in a gap (results sent, the next not begun) the header pill says it - no banner (owner, 26 Oct 2026: "remove in all gaps")
   const t=document.getElementById("pcbText");
   const _g=on?_gapInfo():null; // [212 · §273]
   if(t){ const ph=Number(phasesData.currentPhase||0);
@@ -5972,7 +5975,7 @@ function renderSelections(user,ap){
     // "Click a week below" is only honest while bidding is actually open.
     const _canBid=biddingOpen()&&!isAuctionClosed()&&!_announced; // isAuctionClosed = server flag OR expired timer
     const _g=_canBid?null:_gapInfo(); // [212 · §273]
-    selectionsEl.innerHTML='<div class="empty-msg">No selections yet'+(_canBid?' — click a week below.':(_g?' — '+_gapSlate(_g):' — bidding hasn\'t '+(_announced||!biddingOpen()?'begun':'reopened')+' yet.'))+'</div>';
+    selectionsEl.innerHTML='<div class="empty-msg">No selections yet'+(_canBid?' — click a week below.':(_g?'.' /* [225 · §295] in a gap: "No selections yet." - the header pill says the rest */:' — bidding hasn\'t '+(_announced||!biddingOpen()?'begun':'reopened')+' yet.'))+'</div>';
     return;
   }
   const locked=wk=>locksData.globalLock||locksData.weeks?.[wk];
@@ -8169,12 +8172,12 @@ ${B('RULES AND REMINDERS OF THE AUCTION')}
 ${bullets([
   `The auction has 4 phases — Phase 1 includes only certain holiday weeks; all remaining weeks open starting in Phase 2`, // [220 · §288] the alert list, the sentence above and this list: plan §11a / §11c / §11e, word for word as on the page
   ...capBullets,
-  `You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest`,
+  ((typeof bidNumbersLine==='function')?bidNumbersLine():`You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest`), // [225 · §295] word for word as on the page (the fallback is for test sandboxes)
   `Each number can only be used once, numbers from weeks that were approved in earlier phases are unavailable to be used again`,
   `Bids that do not win are returned to you when the next phase begins.`,
   `A combined bid like 1/2/3 uses bids 1, 2, and 3 at once`,
   ...((typeof comboRulesBullets==='function')?comboRulesBullets():[]), // [217 · §285] W9: one line, only when the allowed set is not today's; word for word as on the page
-  npPhasesDescription(),
+  ...((typeof _npAnyPhase!=='function'||_npAnyPhase())?[npPhasesDescription()]:[]), // [225 · §295] no NP line when NP is off in every phase (typeof = sandbox convention)
   ...prioLockBullets(), // [build 139 · BL/COPY] Option A wording, allowance-derived
   `To exchange the bids on two of your weeks, use ✎ Edit, then ⇄ Swap bids — both change together.`, // [199 · §257] word for word as on the page
   `A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.`, // [196 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
