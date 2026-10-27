@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 225;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 226;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -1513,6 +1513,7 @@ function _bfEngineFilter(u,wk,p){
   if(!bfAllows(p,bfFloorFor(wk))) return false;
   if(p==="NP"&&!npAllowedForPhase(getUserBidPhase(u,wk))) return false;
   if(Array.isArray(p)&&typeof comboAllowed==='function'&&!comboAllowed(p)&&(typeof comboJudgedNow!=='function'||comboJudgedNow())) return false; // [FIX1 · F1] not in a decided phase's gap · [217 · §285] a combination the admin does not allow is not a competitor (as a below-floor bid). typeof = sandbox convention
+  if(typeof p==='number'&&typeof topBidAllowed==='function'&&!topBidAllowed(p)&&(typeof comboJudgedNow!=='function'||comboJudgedNow())) return false; // [226 · §295] a bid number above the admin's highest is not a competitor (as a below-floor bid); a decided phase's gap judges it as it was
   return true;
 }
 // ── [217 · §285, owner 16 Oct 2026] COMBINATION BIDS — which ones the admin allows (twin: admin 381, the same lines) ────────────────
@@ -1522,7 +1523,7 @@ function _bfEngineFilter(u,wk,p){
 // The order of all 15, strongest first (his ruling "2/3 stronger than 2"): 1/2/3 › 1/2 › 1 › 2/3 › 2 › 3/4 › 3 › 4/5 › 4 › 5 … 10 › NP.
 const COMBO_ALL=['1,2,3','1,2','2,3','3,4','4,5'];   // the five, strongest first
 const COMBO_STD=['1,2,3','1,2'];                     // today's set: the setting never saved
-const COMBO_ORDER=['1,2,3','1,2','1','2,3','2','3,4','3','4,5','4','5','6','7','8','9','10']; // every bid but NP, strongest first
+const COMBO_ORDER=['1,2,3','1,2','1','2,3','2','3,4','3','4,5','4','5','6','7','8','9','10','11','12','13','14','15','16']; // every bid but NP, strongest first · [226 · §295] 11-16 stay in the ladder only up to topBid() (comboLadderVals)
 function comboNormalize(raw){
   if(!Array.isArray(raw)) return null;
   const seen=[];
@@ -1539,8 +1540,17 @@ function comboAllowed(p){
 }
 // The allowed ladder, strongest first: as list values ('1,2,3' … '10', then 'NP') and as bids ([1,2,3] … 10, no NP).
 // Never saved: exactly the ladders the pages wrote out by hand before 217.
-function comboLadderVals(){ const c=comboSet(); return COMBO_ORDER.filter(v=>v.indexOf(',')<0||c.indexOf(v)>=0).concat(['NP']); }
+// [226 · §295] A single number stays while topBidAllowed says so (1-10 always, 11-16 up to topBid()): at 10, exactly the ladder of 217.
+function comboLadderVals(){ const c=comboSet(); return COMBO_ORDER.filter(v=>v.indexOf(',')<0?topBidAllowed(Number(v)):c.indexOf(v)>=0).concat(['NP']); }
 function comboLadder(){ return comboLadderVals().filter(v=>v!=='NP').map(v=>v.indexOf(',')>=0?v.split(',').map(Number):Number(v)); }
+// ── [226 · §295, owner 26 Oct 2026] BID NUMBERS — the highest bid number the admin allows (twin: admin 390, the same lines) ──────────
+// One setting, adminSettings.topBid: a whole number 10 to 16 (12 = bid numbers 1 to 12). Never saved, or anything else = 10. Read LIVE.
+// Only a whole number above 10 is this test's business; every other bid (1-10, NP, a combination) passes here.
+const TOP_BID_STD=10, TOP_BID_MAX=16;
+function topBidNormalize(raw){ return (typeof raw==='number'&&Number.isInteger(raw)&&raw>=TOP_BID_STD&&raw<=TOP_BID_MAX)?raw:null; }
+function topBid(){ try{ const v=topBidNormalize((typeof adminSettings!=='undefined'&&adminSettings)?adminSettings.topBid:null); return v===null?TOP_BID_STD:v; }catch(_){ return TOP_BID_STD; } }
+function topBidAllowed(p){ return !(typeof p==='number'&&Number.isInteger(p)&&p>TOP_BID_STD)||p<=topBid(); }
+function bidNumList(){ const a=[]; for(let i=1;i<=topBid();i++) a.push(i); return a; }
 // [FIX1 · F1] A phase, or a Phase 4 round, whose results are SENT is decided: in that gap (the only time the setting can change) its
 // combinations are judged as they were, so switching one off never turns a finished phase's WIN into LOSE. The same test as the pages'
 // own gap (admin _phaseGapNow, staff _gapInfo, firestore.rules inPhaseGap): completed AND results sent, or the Phase 4 round's results
@@ -1561,7 +1571,7 @@ function comboRulesBullets(){
     if(c.join('|')===COMBO_STD.join('|')) return [];
     const L=c.map(comboLbl), v=comboLadderVals();
     const list=!L.length?'none':(L.length===1?L[0]:L.slice(0,-1).join(', ')+' and '+L[L.length-1]);
-    return ['Combination bids allowed: '+list+'. Strength order, strongest first: '+v.slice(0,v.indexOf('5')+1).map(comboLbl).join(' › ')+' … 10 › NP.'];
+    return ['Combination bids allowed: '+list+'. Strength order, strongest first: '+v.slice(0,v.indexOf('5')+1).map(comboLbl).join(' › ')+' … '+v.slice(v.indexOf('10')).map(comboLbl).join(' › ')+'.']; // [226 · §295] W2: the tail runs from 10 to NP through the allowed numbers (at 10: " … 10 › NP.")
   }catch(_){ return []; }
 }
 // Rules/welcome-e-mail wording, driven by the live floors.
@@ -2003,7 +2013,7 @@ function computeApprovals(src){
   const _cur=Number(phasesData.currentPhase||1);
   const _i2Disq=new Set();
   { const _numWeeks={};
-    const _scor=p=>(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10));
+    const _scor=p=>(Number.isInteger(p)&&p>=1&&p<=16)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10));
     for(const u in src){ for(const wk in (src[u]||{})){
       const p=src[u][wk];
       if(p===undefined||p==="NP"||!_scor(p)) continue;
@@ -2035,7 +2045,8 @@ function computeApprovals(src){
       // [AUDIT 2026-07-26 H7] Only "NP", an integer 1-10, or a 2-3 element array of
       // integers 1-10 may compete — a devtools-forged bid value (0, -1, "1", …) is
       // ignored as if never placed. PORTED LOGIC: same filter as the admin twin.
-      if(!(p==="NP"||(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10)))) continue;
+      // [226 · §295] a single bid is 1-16 here (the shape only); whether 11-16 is switched on is _bfEngineFilter's test.
+      if(!(p==="NP"||(Number.isInteger(p)&&p>=1&&p<=16)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10)))) continue;
       if(_i2Disq.has(u+'|'+wk)) continue; // [I2] cross-week number reuse → treat as no-bid
       // Prior-phase bids never compete now: winners are locked in above and
       // non-winning prior bids are dead. Without this filter, a phase-1 losing
@@ -2395,7 +2406,8 @@ function npPhasesDescription(){
 // [225 · §295] NP off in EVERY phase: no NP rules line, no "plus NP", no NP chip, on the page and in the welcome e-mail
 // (owner, 19 Oct 2026; ruled 26 Oct 2026, Q1 / Q2 yes). NP on in any phase: everything word for word as before.
 function _npAnyPhase(){ return [1,2,3,4].some(p=>npAllowedForPhase(p)); }
-function bidNumbersLine(){ return _npAnyPhase()?'You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest':'You hold bid numbers 1 to 10 — 1 is the strongest bid'; }
+// [226 · §295] W1: the highest number follows topBid() (typeof = sandbox convention: suites extract this function with _npAnyPhase alone).
+function bidNumbersLine(){ const _n=(typeof topBid==='function')?topBid():10; return _npAnyPhase()?'You hold bid numbers 1 to '+_n+', plus NP — 1 is the strongest bid and NP the weakest':'You hold bid numbers 1 to '+_n+' — 1 is the strongest bid'; }
 function updateBidLimitRule(){
   const el=document.getElementById('ruleMaxBids'); if(!el) return;
   { const _cap=cumulativeCapDescription(); el.textContent=_cap; el.style.display=_cap?'':'none'; } // [220 · §288 · plan §11e] no cap in any phase: the line is hidden
@@ -2438,7 +2450,7 @@ function bidPoolInfo(user){
     else if(p!==undefined) usedNums.add(Number(p));
   }
   getPriorPhaseUsedPriorities(user).forEach(n=>{ if(n!=="NP") usedNums.add(Number(n)); });
-  const all=[1,2,3,4,5,6,7,8,9,10];
+  const all=((typeof bidNumList==='function')?bidNumList():[1,2,3,4,5,6,7,8,9,10]); // [226 · §295] 1 to topBid() (typeof = sandbox convention)
   const remaining=all.filter(n=>!usedNums.has(n));
   return {used:[...usedNums].sort((a,b)=>a-b), remaining, npCount};
 }
@@ -4557,6 +4569,8 @@ function _bidCheck(user,wk,val){
   if(val==="NP"&&!npAllowedNow()) return no('center',"NP bids are not enabled for Phase "+Number(phasesData.currentPhase||1)+" — the admin controls which phases allow them.",true);
   // [217 · §285] W6: a combination the admin does not allow is refused (a stale page, a hand-edited list) - on the page's copy and on the server's.
   if(val!=="NP"&&typeof comboAllowed==='function'&&!comboAllowed(String(val).split(',').map(p=>parseInt(p.trim())).filter(p=>!isNaN(p)))) return no('center',"That combination bid is not available in this auction.",true);
+  // [226 · §295] W4: a single bid number above the admin's highest is refused (a stale page, a hand-edited list) - on the page's copy and on the server's, as W6.
+  if(val!=="NP"&&!String(val).includes(',')&&typeof topBidAllowed==='function'&&!topBidAllowed(parseInt(String(val).trim()))) return no('center',"Bid number "+parseInt(String(val).trim())+" is not available in this auction.",true);
   // L-3: re-validate the prior-phase-won guard, high-demand restriction, and priority-lock
   // FLOOR at confirm time — not just via disabled dropdown options set at modal-open. A
   // two-tab race (or an option list built from stale state) could otherwise submit a
@@ -4723,7 +4737,7 @@ function _swapCheck(user,wkA,wkB){
     for(const w of myCountedWeeks(user)){ if(w===wkA||w===wkB) continue; const p=data[user][w]; if(p===undefined||p===null||p==="NP") continue; Array.isArray(p)?elsewhere.push(...p):elsewhere.push(p); }
     for(const w of [wkA,wkB]){
       const p=inc[w];
-      if(!(p==="NP"||(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10)))) return no("That swap is not available.");
+      if(!(p==="NP"||(Number.isInteger(p)&&p>=1&&p<=16)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10)))) return no("That swap is not available.");
       if(p==="NP"){ if(!npAllowedNow()) return no("NP bids are not enabled for Phase "+Number(phasesData.currentPhase||1)+" — the admin controls which phases allow them."); }
       else{
         const nums=Array.isArray(p)?p:[p];
@@ -5021,7 +5035,7 @@ async function removeSelection(wk){
   const _canLower=(function(){
     try{
       const _fl=bfFloorFor(wk), _ls=priorityScore(_lockVal);
-      return ['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3'].some(function(v){
+      return ((typeof comboLadderVals==='function')?comboLadderVals():['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3']).some(function(v){ // [226 · §295] the allowed ladder (11-16 when on); typeof = sandbox convention
         const p=v==='NP'?'NP':(v.includes(',')?v.split(',').map(Number):Number(v));
         if(priorityScore(p)<=_ls) return false;
         if(!bfAllows(p,_fl)) return false;
@@ -5082,7 +5096,7 @@ function _koOutcomes(wkMap,cap,priorSet){
     if(priorSet.has(u)) continue;
     const p=wkMap[u]; if(p===undefined||p===null) continue;
     out[u]='lose';
-    if(!(p==="NP"||(Number.isInteger(p)&&p>=1&&p<=10)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10)))) continue;
+    if(!(p==="NP"||(Number.isInteger(p)&&p>=1&&p<=16)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10)))) continue;
     reqs.push({user:u,score:priorityScore(p),fte:getUserFTE(u)});
   }
   reqs.sort((a,b)=>a.score-b.score);
@@ -5439,7 +5453,7 @@ function myCountedWeeks(user){
 // not there. Permanent until the admin releases it; no notice on this page (owner ruling).
 function heldBidNums(user){
   const h=(typeof bidHoldsData!=='undefined'&&bidHoldsData&&bidHoldsData[user])||{}; // typeof: extracted-code sandboxes (build 266 convention)
-  return Object.keys(h).map(Number).filter(n=>Number.isInteger(n)&&n>=1&&n<=10);
+  return Object.keys(h).map(Number).filter(n=>Number.isInteger(n)&&n>=1&&n<=16); // [226 · §295] 1-16: a hold on 11-16 is seen (admin twin _adminHeldNums)
 }
 function getPriorPhaseUsedPriorities(user){
   const out=[...heldBidNums(user)]; // [169 · §180]
@@ -6515,11 +6529,11 @@ function _alStampOf(ph,resetAt){
 function _alLive(w,st){
   return !!(w&&typeof w==='object'&&st&&w.ph===st.ph&&w.rd===st.rd&&w.since===st.since&&_alBidOk(w.bid));
 }
-// TWIN: a bid a get-in alert may carry: a number 1-10, NP, or one of the five combinations (as the page writes them, strongest first).
+// TWIN: a bid a get-in alert may carry: a number 1-16 ([226 · §295] the shape only), NP, or one of the five combinations (as the page writes them, strongest first).
 // Anything else (an entry hand-edited from developer tools) is ignored.
 function _alBidOk(b){
   if(b==='NP') return true;
-  if(typeof b==='number') return Number.isInteger(b)&&b>=1&&b<=10;
+  if(typeof b==='number') return Number.isInteger(b)&&b>=1&&b<=16;
   if(Array.isArray(b)) return ['1,2,3','1,2','2,3','3,4','4,5'].indexOf(b.join(','))>=0;
   return false;
 }
@@ -6565,6 +6579,7 @@ function _giJudge(snap,user,wk,bid,just){
     if(!bfAllows(bid,bfFloorFor(wk))) return 'refused';
     if(bid==='NP'&&!npAllowedNow()) return 'refused';
     if(Array.isArray(bid)&&!comboAllowed(bid)) return 'refused';
+    if(typeof bid==='number'&&typeof topBidAllowed==='function'&&!topBidAllowed(bid)) return 'refused'; // [226 · §295] a bid number above the admin's highest, as a switched-off combination
     const b=_weBlocks(snap,user,wk,bid,just);
     if(b===true) return 'refused';
     if(b===null||b===undefined) return null;
