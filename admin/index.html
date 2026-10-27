@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 390;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 391;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -840,7 +840,7 @@ thead th{color:var(--t2)}
     <!-- MESSAGES [377 · §276] — one-time e-mails from the admin to everyone or to the people picked. Writes ONLY
          vacations/adminMessages (admin-only, read on demand — no listener); sends through adminSendEmail like every admin e-mail. -->
     <div class="panel" id="panel-messages">
-      <div class="page-head"><div class="page-title">Messages</div><div class="page-sub">Write a one-time e-mail to everyone or to the people you pick. Each person gets their own copy at every address on file (Google and KP), under the site's usual subject line, starting "Hello" and their initials — the site link and the sign-off are added at the bottom, as on every site e-mail. Drafts are kept here, and so is every message sent.</div></div>
+      <div class="page-head"><div class="page-title">Messages</div><div class="page-sub">Write a one-time e-mail to everyone or to the people you pick. Each person gets their own copy at every address on file (Google and KP), under the site's usual subject line, starting "Hello" and their full name — the site link and the sign-off are added at the bottom, as on every site e-mail. Drafts are kept here, and so is every message sent.</div></div>
       <div class="card"><div class="card-title">Write</div><div id="msgCompose"></div></div>
       <div class="card"><div class="card-title">Drafts</div><div id="msgDrafts"></div></div>
       <div class="card"><div class="card-title">Sent</div><div id="msgSent"></div></div>
@@ -2275,7 +2275,7 @@ async function _resultsLeaseRelease(key,sendId){
 }
 // [379 · §275 B] One place builds a doctor's results e-mail - the senders and the per-doctor "send again" use the same
 // words. key: a phase number (1-4) or 'p4r'+N for a Phase 4 round. entry: {approved:[wk], denied:[wk]}.
-function _resultsBodyFor(key,u,entry,schedSrc){
+function _resultsBodyFor(key,u,entry,schedSrc){ // [391 · §296] greets by the full name (usernamesData, initials when none is on file)
   entry=entry||{}; schedSrc=schedSrc||{};
   if(/^p4r\d+$/.test(String(key))){
     const N=Number(String(key).slice(3));
@@ -2283,7 +2283,7 @@ function _resultsBodyFor(key,u,entry,schedSrc){
     approved.sort(); denied.sort();
     const appLines=approved.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
     const denLines=denied.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
-    return `Hello ${u},
+    return `Hello ${String((typeof usernamesData!=='undefined'&&usernamesData&&usernamesData[u])||'').trim()||u},
 
 Phase 4: Round ${N} of the Vacation Auction is complete.
 
@@ -2296,7 +2296,7 @@ ${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.
   approved.sort(); denied.sort();
   const appLines=approved.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
   const denLines=denied.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
-  return `Hello ${u},
+  return `Hello ${String((typeof usernamesData!=='undefined'&&usernamesData&&usernamesData[u])||'').trim()||u},
 
 Phase ${cur} of the Vacation Auction is complete.
 
@@ -4120,7 +4120,7 @@ async function queueProjectionAlerts(prevSched, excludeUser, newSchedOverride){
       // queuing them just inflates the "queued" count with entries that get discarded
       // unsent. Matches the user site, which also skips address-less users before queuing.
       if(!recipientsFor(user).length) continue;
-      const body=`Hi ${user},\n\nThere was activity on weeks you've bid on:\n\n`+changes.join('\n');
+      const body=`Hi ${String((typeof usernamesData!=='undefined'&&usernamesData&&usernamesData[user])||'').trim()||user},\n\nThere was activity on weeks you've bid on:\n\n`+changes.join('\n'); // [391 · §296] the full name (usernamesData, initials when none is on file)
       const qid=`${Date.now()}_${user}_${Math.floor(Math.random()*1e6)}`;
       try{ await setDoc(mailQueueRef,{[qid]:{user,body,ts:Date.now(),origin:'admin'}},{merge:true}); queued++; }catch(_){}
     }
@@ -8572,7 +8572,7 @@ async function adminSendEmail(user,subject,body,skip,hooks){
 
 // ── [377 · §276] MESSAGES — one-time e-mails from the admin ─────────────────────────────────
 // His rulings (14 Oct 2026): one-time only; each person at EVERY address on file (recipientsFor:
-// Google + KP); drafts saved; every sent message stored; "Hello <initials>," added here — the
+// Google + KP); drafts saved; every sent message stored; "Hello <full name>," added here ([391 · §296], initials when none is on file) — the
 // site link and the sign-off are added by the e-mail template itself, as on every site e-mail;
 // one confirm with the counts, a second red one for "Everyone". ONE admin-only document
 // (vacations/adminMessages), read when the panel opens and after each write — NO listener, so the
@@ -8594,7 +8594,7 @@ function _msgIdOk(id){ return typeof id==='string' && /^m[a-z0-9]{6,24}$/.test(i
 function _msgObj(o){ return (o&&typeof o==='object'&&!Array.isArray(o))?o:{}; }
 function _msgTargets(all,pick){ const ros=names.slice(); if(all) return ros; const s=new Set(Array.isArray(pick)?pick:[]); return ros.filter(u=>s.has(u)); }
 function _msgCounts(users){ let people=0, mails=0; const none=[]; for(const u of users){ const r=recipientsFor(u); if(r.length){ people++; mails+=r.length; } else none.push(u); } return {people,mails,none}; }
-function _msgText(u,body){ return 'Hello '+u+',\n\n'+String(body||'').trim(); }
+function _msgText(u,body){ return 'Hello '+(String((typeof usernamesData!=='undefined'&&usernamesData&&usernamesData[u])||'').trim()||u)+',\n\n'+String(body||'').trim(); } // [391 · §296] the full name (usernamesData, initials when none is on file)
 function _msgOwed(to){ const out=[]; const seen=new Set(); for(const u of (Array.isArray(to)?to:[])){ for(const a of recipientsFor(u)){ if(!seen.has(a)){ seen.add(a); out.push(a); } } } return out; }
 function _msgProgressOf(r){ const owed=_msgOwed(r&&r.to); const done=new Set(Array.isArray(r&&r.done)?r.done:[]); const tr=new Set(Array.isArray(r&&r.trying)?r.trying:[]);
   const unsure=owed.filter(a=>!done.has(a)&&tr.has(a)).length; return {owed:owed.length, done:owed.filter(a=>done.has(a)).length, unsure, left:owed.length-owed.filter(a=>done.has(a)).length-unsure}; }
@@ -8965,14 +8965,14 @@ function _ruleCompSetLine(strict,n){
   return "A winning bid of "+n+" or stronger on a competition week can't be removed — only moved, to a week where another bid knocked you out of winning, and once moved it can't be lowered there. Any other bid there can be removed at any time.";
 }
 function _ruleCompSetText(){ return _ruleCompSetLine(!!(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.bidRuleSet==='strict'),(typeof _strictN==='function')?_strictN():null); } // [384 · §288] the set in force, as this page knows it
-function buildWelcomeEmailBody(user){
+function buildWelcomeEmailBody(user){ // [391 · §296] greets by the full name (usernamesData, initials when none is on file)
   const _capTxt=cumulativeCapEmailText();
   const capBullets=_capTxt.startsWith('Running cap')
     ? [_capTxt.slice(0,_capTxt.indexOf(' — '))+':', _capTxt.slice(_capTxt.indexOf(' — ')+3)]
     : (_capTxt?[_capTxt]:[]); // [384 · §288] no cap in any phase: no bullet at all (plan §11e — an empty text would leave a bare "•")
   const B=_emBold;
   const bullets=arr=>arr.map(t=>'• '+t).join('\n');
-  return `Hi ${user},
+  return `Hi ${String((typeof usernamesData!=='undefined'&&usernamesData&&usernamesData[user])||'').trim()||user},
 
 Welcome to the ${AC_YEAR} Anesthesia Vacation Auction!
 
@@ -9145,8 +9145,8 @@ window.sendReminderEmails=function(){
       let ok=0, fail=0, skipped=0;
       for(const u of noBidders){
         if(!recipientsFor(u).length){ skipped++; continue; }
-        const r=await adminSendEmail(u,'Vacation Bidding Reminder — '+_phaseWindowLabel(),
-          `Hello ${u},
+        const r=await adminSendEmail(u,'Vacation Bidding Reminder — '+_phaseWindowLabel(), // [391 · §296] greets by the full name (usernamesData, initials when none is on file)
+          `Hello ${String((typeof usernamesData!=='undefined'&&usernamesData&&usernamesData[u])||'').trim()||u},
 
 You have not yet placed any bids in ${_phaseWindowLabel()} of the vacation auction. Please place your bids as soon as possible.
 
@@ -12857,9 +12857,9 @@ window.adminClearEmail=function(u){
 // failure can never leave the address subscribed. No address on file → "none" is set and nothing
 // is sent (nowhere to send it). Already "none" → nothing to do. Admin-initiated, like results
 // mail: it does not consult the outbid-alert or welcome switches. Recorded in mailLog either way.
-function _unsubscribeNoteBody(user,oldKp,google){
+function _unsubscribeNoteBody(user,oldKp,google){ // [391 · §296] greets by the full name (usernamesData, initials when none is on file)
   const g=String(google||'').trim();
-  return `Hi ${user},
+  return `Hi ${String((typeof usernamesData!=='undefined'&&usernamesData&&usernamesData[user])||'').trim()||user},
 
 This address (${oldKp}) has been unsubscribed from Vacation Auction e-mail alerts.
 
@@ -14845,8 +14845,8 @@ window.renderWhitelistTracker=renderWhitelistTracker;
 
 // The friendly ask e-mail body (plain text; delivered via the existing template's {{changes}} param,
 // so it shares that template's subject line — see the note in the deploy summary). Personalized per user.
-function _whitelistEmailBody(user){
-  return `Hi ${user},
+function _whitelistEmailBody(user){ // [391 · §296] greets by the full name (usernamesData, initials when none is on file)
+  return `Hi ${String((typeof usernamesData!=='undefined'&&usernamesData&&usernamesData[user])||'').trim()||user},
 
 During the Department of Anesthesia vacation auction, you will receive time sensitive e-mail notifications from ${WHITELIST_SENDER}
 

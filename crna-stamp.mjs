@@ -134,8 +134,7 @@ for (const [lit, ns, na, to] of KEYS) {
 // ── 3 · Labels — the owner's exact spec ──
 // [build 274 · C7] The MD pages now carry their own labels (owner's deferred "MD site
 // label"), so these rules SWAP MD → CRNA instead of inserting from unlabeled pages.
-rep('staff', '<p class="header-sub" style="margin:2px 0 0">MD</p>',
-             '<p class="header-sub" style="margin:2px 0 0">CRNA</p>', 1);
+// [227 · §296] The staff page carries no MD label line (owner, 26 Oct 2026), so there is no header-sub line to swap here.
 rep('staff', '<title>MD Vacation Auction — Department of Anesthesia</title>',
              '<title>CRNA Vacation Auction — Department of Anesthesia</title>', 1);
 rep('admin', '<div class="page-title" style="margin:0">Dashboard MD Vacation Auction — <span id="acYearHdr">2027</span></div>',
