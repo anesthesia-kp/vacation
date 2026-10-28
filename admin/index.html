@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 391;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 392;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -3022,8 +3022,7 @@ function _rbShowGate(target){
   const d=document.createElement('div'); d.id='rbGateOverlay';
   d.style.cssText='position:fixed;inset:0;z-index:2147483647;background:rgba(22,24,28,.94);display:flex;align-items:center;justify-content:center;text-align:center;color:#ffffff';
   d.innerHTML='<div><div style="font-size:42px"><svg class="lic" viewBox="0 0 24 24" aria-hidden="true" style="width:1.1em;height:1.1em;vertical-align:-.17em;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9z"/><path d="m3 7.5 9 4.5 9-4.5M12 12v9"/></svg></div>'
-    +'<div style="font-size:18px;font-weight:700;margin-top:8px">A new version of this page has been published</div>'
-    +'<div style="font-size:14px;margin-top:6px;opacity:.85">Reloading in <span id="rbGateN">5</span>…</div></div>';
+    +'<div style="font-size:18px;font-weight:700;margin-top:8px">Updating the page — reloading in <span id="rbGateN">5</span>…</div></div>'; // [228 / 392 · §297]
   document.body.appendChild(d);
   let n=5; const t=setInterval(()=>{ n--; const el=document.getElementById('rbGateN'); if(el) el.textContent=String(n);
     if(n<=0){ clearInterval(t); location.replace(location.pathname+'?v='+target); } },1000);
@@ -3131,9 +3130,9 @@ function comboRulesBullets(){
   try{
     const c=comboSet();
     if(c.join('|')===COMBO_STD.join('|')) return [];
-    const L=c.map(comboLbl), v=comboLadderVals();
+    const L=c.map(comboLbl), v=comboLadderVals().filter(x=>x!=='NP'||typeof _npAnyPhase!=='function'||_npAnyPhase()); // [228 / 392 · §297] §B item 2: NP off in every phase - the order ends at the highest number, no "› NP"
     const list=!L.length?'none':(L.length===1?L[0]:L.slice(0,-1).join(', ')+' and '+L[L.length-1]);
-    return ['Combination bids allowed: '+list+'. Strength order, strongest first: '+v.slice(0,v.indexOf('5')+1).map(comboLbl).join(' › ')+' … '+v.slice(v.indexOf('10')).map(comboLbl).join(' › ')+'.']; // [226 · §295] W2: the tail runs from 10 to NP through the allowed numbers (at 10: " … 10 › NP.")
+    return ['Combination bids allowed: '+list+'. Strength order, strongest first: '+v.slice(0,v.indexOf('5')+1).map(comboLbl).join(' › ')+' … '+v.slice(v.indexOf('10')).map(comboLbl).join(' › ')+'.']; // [226 · §295] W2: the tail runs from 10 to NP through the allowed numbers (at 10: " … 10 › NP.") · [228 / 392 · §297] fix round: with NP off in every phase it ends at the highest number
   }catch(_){ return []; }
 }
 // [381 · §285] Admin only. The admin's bid lists (Edit Selections' row drop-down, the ✏️ Edit Bid dialog, the Add box, the simulator):
@@ -4367,7 +4366,7 @@ function renderNoBidders(){
   const pl=document.getElementById('noBidsPlural'); if(pl) pl.textContent=noBidders.length===1?'':'s';
   const vb=document.getElementById('noBidsViewBtn'); if(vb) vb.style.display=noBidders.length?'':'none';
   el.innerHTML=noBidders.length
-    ? noBidders.map(u=>`<span class="pill p-yellow" style="font-size:12px">${u}</span>`).join('')
+    ? noBidders.map(u=>`<span class="pill p-yellow" style="font-size:12px">${esc(u)}</span>`).join('') // [392 · §297] initials as plain text
     : '<span style="color:var(--green);font-weight:700;font-size:13px">✓ Everyone has placed at least one bid</span>';
   const btn=document.getElementById('noBidsRemindBtn'); if(btn) btn.disabled=!noBidders.length;
 }
@@ -5419,12 +5418,12 @@ function renderOverview(){
     <span><span class="wtag lose">LOSE</span> Not approved</span>
   </div>`;
 
-  // Per-user cards — group weeks by outcome
+  // Per-user cards — group weeks by outcome · [392 · §297] the initials (n) as plain text (esc), in both card shapes
   g.innerHTML=names.map(n=>{
     const fte=getUserFTE(n);
     const allWeeks=Object.entries(scheduleData[n]||{}).sort((a,b)=>a[0].localeCompare(b[0]));
     const weeks=allWeeks.filter(([wk])=>bidMatchesPhaseFilter(n,wk,phaseFilter));
-    if(!weeks.length) return `<div class="ovcard"><div class="ovcard-name">${n} <span style="color:var(--t2);font-size:10px;font-weight:400">${fte} FTE</span></div><div style="color:var(--t3);font-size:10px">No bids${phaseFilter!=='all'?((Number(phasesData.currentPhase||1)===4&&!/^ph\d+$/.test(phaseFilter))?' in this round':' in this phase'):''}</div></div>`;
+    if(!weeks.length) return `<div class="ovcard"><div class="ovcard-name">${esc(n)} <span style="color:var(--t2);font-size:10px;font-weight:400">${fte} FTE</span></div><div style="color:var(--t3);font-size:10px">No bids${phaseFilter!=='all'?((Number(phasesData.currentPhase||1)===4&&!/^ph\d+$/.test(phaseFilter))?' in this round':' in this phase'):''}</div></div>`;
     const grouped={win:[],review:[],lose:[]}; // [§147] draw folds into review
     weeks.forEach(([wk])=>{
       // In 'all phases' or a specific past-phase filter, use that phase's snapshot outcome for historical accuracy
@@ -5465,7 +5464,7 @@ function renderOverview(){
     if(grouped.review.length) lines.push(`<div style="font-size:10px;margin-bottom:2px"><span style="color:#8a6414;font-weight:600">Under review:</span></div>${renderVertical(grouped.review)}`);
     if(grouped.lose.length) lines.push(`<div style="font-size:10px;margin-bottom:2px"><span style="color:var(--red);font-weight:600">Lose:</span></div>${renderVertical(grouped.lose)}`);
     return `<div class="ovcard">
-      <div class="ovcard-name">${n} <span style="color:var(--t2);font-size:10px;font-weight:400">${fte} FTE</span></div>
+      <div class="ovcard-name">${esc(n)} <span style="color:var(--t2);font-size:10px;font-weight:400">${fte} FTE</span></div>
       <div style="font-size:10px;line-height:1.5">${lines.join('')}</div>
     </div>`;
   }).join('');
@@ -5563,12 +5562,12 @@ function renderOverview(){
     let tag='';
     if(specLabels[wk]) tag=specLabels[wk]+((isSummer&&!HIGH_DEMAND_WEEKS.has(wk))?' · Summer':'');
     else if(isSummer) tag='Summer';
-    const wStr=[...(a.winners||new Set())].join(' ')||'';
+    const wStr=[...(a.winners||new Set())].map(esc).join(' ')||''; // [392 · §297] fix round (review M2): initials as plain text, as in the cards above
     // [§147] ONE Under Review column. The tied names carry a (tied) marker so the admin can
     // still see at a glance which weeks a wheel spin could settle; the internal sets are untouched.
-    const _tied=[...(a.draws||new Set())], _single=[...(a.reviews||new Set())];
+    const _tied=[...(a.draws||new Set())].map(esc), _single=[...(a.reviews||new Set())].map(esc); // [392 · §297] fix round (M2)
     const urStr=[_tied.length?_tied.join(' ')+' (tied)':'',_single.join(' ')].filter(Boolean).join(' · ');
-    const lStr=[...loserSet].join(' ')||'';
+    const lStr=[...loserSet].map(esc).join(' ')||''; // [392 · §297] fix round (M2)
     const label=`Wk ${wNum(d)} · ${MS[d.getMonth()]} ${d.getDate()}`;
     const hasBids=bidders.length>0;
     const rowStyle=hasBids?'':'opacity:.45';
@@ -7173,10 +7172,10 @@ window.npAllowedForPhase=npAllowedForPhase;
 function _anyCumCap(){ return [1,2,3,4].some(p=>_cumCap(p)!==null); }
 function npPhasesDescription(){
   const on=[1,2,3,4].filter(p=>npAllowedForPhase(p));
-  const tail=' — and there is no limit on how many NP bids you can place'+((typeof _anyCumCap!=='function'||_anyCumCap())?', beyond the running cap above':''); // [220 · 384 · fix round, review lane 3 L1] no cap in any phase: no "running cap above" (its line is hidden, plan §11e)
-  if(on.length===4) return 'NP bids can be used during any phase'+tail;
+  const tail=', as many as you like'+((typeof _anyCumCap!=='function'||_anyCumCap())?' within your weeks cap':'')+'.'; // [220 · 384 · fix round, review lane 3 L1] no cap in any phase: no cap clause (its line is hidden, plan §11e) · [228 / 392 · §297] item 195, his option C (fix round, review M1)
+  if(on.length===4) return 'NP bids: any phase'+tail;
   if(!on.length) return 'NP bids are not allowed in any phase';
-  return 'NP bids can be used during phase'+(on.length!==1?'s':'')+' '+(on.length===1?String(on[0]):on.slice(0,-1).join(', ')+' and '+on[on.length-1])+' only'+tail;
+  return 'NP bids: Phase'+(on.length!==1?'s':'')+' '+(on.length===1?String(on[0]):on.slice(0,-1).join(', ')+' and '+on[on.length-1])+' only'+tail;
 }
 window.npPhasesDescription=npPhasesDescription;
 // [225 · §295] NP off in EVERY phase: no NP rules line, no "plus NP", no NP chip, on the page and in the welcome e-mail
@@ -8903,23 +8902,23 @@ function timerRulesEmailText(){
   // "Timer is OFF" wording only applies mid-auction. Before Phase 1 begins the timer
   // is merely dormant (Begin Phase 1 arms it), so describe the configured rules.
   if(typeof timerData!=='undefined'&&timerData&&timerData.enabled!==true&&phase1Started()){
-    return 'The bidding countdown timer is currently OFF — there is no countdown, and bidding stays open until the admin closes the phase.';
+    return 'The countdown is OFF: bidding stays open until the admin closes the phase.'; // [228 / 392 · §297] item 204 (OFF in capitals: the page's bold)
   }
   const r=getTimerRules(), st=r.stages;
   const lines=st.map((s,i)=> i===0 ? `At the start of the round: resets to ${s.hours} hours` : `After ${s.days} days: resets to ${s.hours} hours`);
   let quiet='';
   if(r.quietEnabled){ quiet=`\n\nOnce the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between ${fmtHour12(r.quietStart)} and ${fmtHour12(r.quietEnd)} Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.`; }
   let owTxt='';
-  if(r.openingWindow){ owTxt=`\n\nEach phase opens with a ${r.openingWindow.days}-day window: the timer counts down continuously (bids do NOT reset it) until ${(st[0]||{}).hours||48} hours remain — then the reset rules above take over.`; }
+  if(r.openingWindow){ owTxt=`\n\nEach phase or round opens with a ${r.openingWindow.days}-day window: bids don't reset the timer until ${(st[0]||{}).hours||48} hours remain.`; } // [228 / 392 · §297] item 205, as on the page
   const endLine='Each phase ends when the countdown timer gets to 0. ';
-  const noReset='\n\nNo reset until less than the admin-selected reset time remains.'; // [181/344 · §225]
+  const noReset='\n\nA bid resets the countdown only when less than the reset time remains.'; // [181/344 · §225] · [228 / 392 · §297] item 208
   // [293 · RA-M2 twin] The reset sentence follows the admin-selected mode, matching the
   // staff twin (157) and the on-site explainer (build 274 V3). Mode 1 keeps the classic
   // wording byte-for-byte.
   const _mRaw=parseInt(adminSettings?.timerResetMode,10);
   const _m=(_mRaw===2)?2:1; // [385 · §292] timer mode 3 removed: a stored 3 reads as mode 1
   const resetSentence=_m===2 // [385 · §292] W1; mode 3's sentence gone
-    ?'The countdown resets when a bid, change, or cancel changes the projected outcome for another user — moves that affect only your own bids do not reset it. It also resets when a competition week\'s minimum new bid gets weaker, or when a change opens a week to someone with a "tell me when I can get in" alert'
+    ?'The countdown resets only when a bid change alters someone else\'s projected outcome, weakens a competition week\'s minimum new bid, or opens a week to someone with a “tell me when I can get in” alert' // [228 / 392 · §297] item 207
     :'Every time anyone places or changes a bid, the countdown resets';
   if(st.length<=1){ return endLine+(_m===1
     ?`Every time anyone places or changes a bid, the countdown resets to ${(st[0]||{}).hours||48} hours.${noReset}${quiet}${owTxt}`
@@ -8942,7 +8941,7 @@ function cumulativeCapEmailText(){
   // than the truth: equal-cap runs merge into their LAST clause (for a CUMULATIVE cap the
   // later checkpoint implies the earlier ones), a trailing uncapped stretch reads as one
   // "no limit after that", and four equal caps become a single clause.
-  if(caps.every(c=>c===caps[0])) return 'Running cap on total weeks you can win across the auction (only weeks you win count) — up to '+caps[0]+' across all phases';
+  if(caps.every(c=>c===caps[0])) return 'Most weeks you can win in total (only wins count): up to '+caps[0]; // [228 / 392 · §297] item 189
   const parts=[];
   for(let p=1;p<=4;p++){
     const c=caps[p-1];
@@ -8950,25 +8949,26 @@ function cumulativeCapEmailText(){
     if(c===null&&p===4){ parts.push(parts.length?'no limit after that':'no limit through Phase 4'); continue; }
     parts.push((p===1?'Phase 1':'Through Phase '+p)+': '+(c===null?'no limit':c));
   }
-  return 'Running cap on total weeks you can win across the auction (only weeks you win count) — '+parts.join(' · ');
+  return 'Most weeks you can win in total (only wins count): '+parts.join(' · '); // [228 / 392 · §297] item 189
 }
 // [384 · §288 · plan §11f item 2 / §11g] The competition-week rule line of the welcome e-mail: the words both rule sets share, word for word the
 // staff page's RULE_NOWEAKEN (twin); under Strict the welcome e-mail adds the Strict line straight below it (_ruleCompSetText), as the staff page does.
-const RULE_NOWEAKEN='On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.';
+const RULE_NOWEAKEN='On a competition week, a new bid must match or beat the weakest winning or under-review bid, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. If everyone leaves, a new bid must match or beat the last bid that was there.'; // [228 / 392 · §297] item 199
 function _ruleNoWeakenText(){ return RULE_NOWEAKEN; }
 // [384 · §288 · plan §11g] The line straight below the competition-week rule: Strict only, no rule-set name shown (his words: "users don't need
 // that information… standard doesn't need any line at all"). n = the Strict level (adminSettings.strictThreshold), null = every numbered bid.
 // TWIN: byte-identical on both pages (staff _ruleCompSetText / admin _ruleCompSetText feed it).
 function _ruleCompSetLine(strict,n){
   if(!strict) return '';
-  if(n===null||n===undefined) return "A winning bid on a competition week can't be removed — only moved, to a week where another bid knocked you out of winning, and once moved it can't be lowered there. Tied, under-review, losing and NP bids can be removed at any time.";
+  // [228 / 392 · §297] §B item 3: with NP off in every phase the line names no NP bids; NP on in any phase: as before (typeof = sandbox convention).
+  if(n===null||n===undefined) return "A winning bid on a competition week can't be removed — only moved, to a week where another bid knocked you out of winning, and once moved it can't be lowered there. "+((typeof _npAnyPhase!=='function'||_npAnyPhase())?"Tied, under-review, losing and NP bids":"Tied, under-review and losing bids")+" can be removed at any time.";
   return "A winning bid of "+n+" or stronger on a competition week can't be removed — only moved, to a week where another bid knocked you out of winning, and once moved it can't be lowered there. Any other bid there can be removed at any time.";
 }
 function _ruleCompSetText(){ return _ruleCompSetLine(!!(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.bidRuleSet==='strict'),(typeof _strictN==='function')?_strictN():null); } // [384 · §288] the set in force, as this page knows it
 function buildWelcomeEmailBody(user){ // [391 · §296] greets by the full name (usernamesData, initials when none is on file)
   const _capTxt=cumulativeCapEmailText();
-  const capBullets=_capTxt.startsWith('Running cap')
-    ? [_capTxt.slice(0,_capTxt.indexOf(' — '))+':', _capTxt.slice(_capTxt.indexOf(' — ')+3)]
+  const capBullets=_capTxt.startsWith('Most weeks you can win') // [228 / 392 · §297] item 189: the lead, then what follows its first ": "
+    ? [_capTxt.slice(0,_capTxt.indexOf(': '))+':', _capTxt.slice(_capTxt.indexOf(': ')+2)]
     : (_capTxt?[_capTxt]:[]); // [384 · §288] no cap in any phase: no bullet at all (plan §11e — an empty text would leave a bare "•")
   const B=_emBold;
   const bullets=arr=>arr.map(t=>'• '+t).join('\n');
@@ -8990,21 +8990,21 @@ Choose which alerts you get under E-mail alerts at the top of the site. Results,
 
 ${B('RULES AND REMINDERS OF THE AUCTION')}
 ${bullets([
-  `The auction has 4 phases — Phase 1 includes only certain holiday weeks; all remaining weeks open starting in Phase 2`, // [384 · §288] the alert list, the sentence above and this list: plan §11a / §11c / §11e, word for word as on the page
+  `4 phases: Phase 1 is certain holiday weeks only; all other weeks open from Phase 2.`, // [384 · §288] the alert list, the sentence above and this list: plan §11a / §11c / §11e, word for word as on the page · [392 · §297] the rule lines of Build C
   ...capBullets,
   ((typeof bidNumbersLine==='function')?bidNumbersLine():`You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest`), // [225 · §295] word for word as on the staff page (the fallback is for test sandboxes)
-  `Each number can only be used once, numbers from weeks that were approved in earlier phases are unavailable to be used again`,
+  `Each number can be used once; numbers on weeks you won earlier can't be used again.`,
   `Bids that do not win are returned to you when the next phase begins.`,
   `A combined bid like 1/2/3 uses bids 1, 2, and 3 at once`,
   ...((typeof comboRulesBullets==='function')?comboRulesBullets():[]), // [381 · §285] W9: one line, only when the allowed set is not today's; word for word as on the staff page
   ...((typeof _npAnyPhase!=='function'||_npAnyPhase())?[npPhasesDescription()]:[]), // [225 · §295] no NP line when NP is off in every phase (typeof = sandbox convention)
   ...prioLockBullets(), // [build 268 · BL/COPY] Option A wording, allowance-derived
-  `To exchange the bids on two of your weeks, use ✎ Edit, then ⇄ Swap bids — both change together.`, // [361 · §257] word for word as on the staff page
-  `A week has a bidding competition — and is labelled "Competition week" — once the people with a bid on it at the same time have added up to more than it has available, at any point this phase. It remains a competition week for the duration of the phase.`, // [358 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
-  ((typeof _ruleNoWeakenText==='function')?_ruleNoWeakenText():`On a competition week, a new bid must be at least as strong as the weakest bid there that is winning or under review, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. If everyone leaves the week, a new bid must be at least as strong as the last bid that was on it.`), // [380 · §282] · [384 · §288] the words both rule sets share (plan §11f item 2; the fallback is for test sandboxes)
+  `To swap bids between two of your weeks, use ✎ Edit, then ⇄ Swap bids.`, // [361 · §257] word for word as on the staff page
+  `A week becomes a “Competition week” once the people bidding on it at the same time need more than it has available. It stays one for the rest of the phase.`, // [358 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
+  ((typeof _ruleNoWeakenText==='function')?_ruleNoWeakenText():`On a competition week, a new bid must match or beat the weakest winning or under-review bid, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. If everyone leaves, a new bid must match or beat the last bid that was there.`), // [380 · §282] · [384 · §288] the words both rule sets share (plan §11f item 2; the fallback is for test sandboxes)
   ...((typeof _ruleCompSetText==='function')?[_ruleCompSetText()].filter(Boolean):[]), // [384 · §288] straight below it: the Strict line, Strict only — under Standard no line at all (plan §11g); word for word as on the page
   ...bfRulesBullets(),
-  ...((typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.blindedBidding===true)?[`Bidder names are hidden for this auction. You see your own bids as usual; every other bid shows without initials.`]:[]), // [365 · §261] only while the Blinded bidding switch is on; word for word as on the staff page
+  ...((typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.blindedBidding===true)?[`Bidder names are hidden: only your own bids show initials.`]:[]), // [365 · §261] only while the Blinded bidding switch is on; word for word as on the staff page
 ])}
 
 ${B('TIMER RULES')}
@@ -9012,14 +9012,12 @@ ${timerRulesEmailText()}
 
 ${B('UNDERSTANDING OUTCOMES')}
 ${bullets([
-  `Winning (W): your bid is projected to be approved for this week`,
-  `Under Review (R): your bid is over the FTE cap for this week and the projection is uncertain`,
-  `Losing (L): your bid is projected not to be approved for this week`,
+  `Winning (W): Projected to be approved`, // [392 · §297] items 210, 212-215, word for word as on the page; 211 kept word for word (his ruling, 5:33 PM)
+  `Under Review (R): Over the FTE cap, alone or together with other bids; outcome uncertain`,
+  `Losing (L): Projected not to be approved`,
   `E-mail alerts tell you when someone else's bid changes your projection on a week you bid on, and when a bid you withdrew would now win. Turn either off under E-mail alerts.`, // [384 · §288] the two alert rules, in the same place as on the page (plan §11b line 1, §11k item 4)
-  `Week out of reach? Add it under E-mail alerts with the bid you'd be willing to place. If that bid could later win or be under review there, you'll be e-mailed and the countdown restarts so you have time to bid. Lasts until the phase ends.`, // [221 / 385 · §292] the get-in rule line, as ruled (10:26 AM)
-  `If you are Under Review for a week and do not win after it is resolved, you will get the bid back for the next phase`,
-  `Under Review includes times when your combined bid with other users exceeds the FTE cap.`,
-  `These are projections, not final results — outcomes can shift as others place bids or as unexpected staffing needs change`
+  `Week out of reach? Add it under E-mail alerts with the bid you'd place. If that bid could later win or be under review, you'll be e-mailed and the countdown restarts. Lasts until the phase ends.`, // [221 / 385 · §292] the get-in rule line, as ruled (10:26 AM)
+  `Projections are not final — they can change as others bid or staffing needs change.`
 ])}
 
 Happy bidding!`;
@@ -13480,7 +13478,7 @@ function _timerResetLine(){
   const to=pushed?('to end at '+fmtHour12(r.quietEnd)):('to '+stageH+'h');
   const raw=(typeof adminSettings!=='undefined'&&adminSettings)?adminSettings.timerResetMode:undefined;
   const mi=parseInt(raw,10); const mode=(mi===2)?2:1; // [221 / 385 · §292] timer mode 3 removed: a stored 3 reads as mode 1
-  if(mode===2) return 'Bids, changes and cancels reset the timer '+to+" only if they change another user's outcome or open a week to someone (see Timer Rules).";
+  if(mode===2) return 'Some bid changes reset the timer '+to+' (see Timer Rules).'; // [228 / 392 · §297] item 42, as ruled in the fix round (review L1)
   return 'Any bid change resets the timer '+to+'.';
 }
 function updatePhaseOpen(){
