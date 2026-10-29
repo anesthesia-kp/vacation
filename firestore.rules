@@ -211,7 +211,7 @@ service cloud.firestore {
     }
 
     // ── Config freeze once the auction is underway [build 268] ────────────────
-    // The eleven fairness-shaping keys of vacations/adminSettings are FROZEN from the
+    // The twelve fairness-shaping keys of vacations/adminSettings are FROZEN from the
     // moment Phase 1 begins (rehearsal included) until Reset Auction, server-side —
     // mirroring the admin page's client lock so the promise becomes a guarantee.
     // auctionUnderway() mirrors phase1Started() EXACTLY:
@@ -235,7 +235,7 @@ service cloud.firestore {
     function frozenConfigKeys() {
       return ['auctionConfig', 'bidFloors', 'npAllowedPhases',
               'maxBidsPerPhase', 'maxBidsCumulative', 'reviewThreshold', 'bidLowerings',
-              'bidRuleSet', 'comboBids', 'strictThreshold', 'topBid']; // [226 · §295, 26 Oct 2026] the bid numbers (adminSettings.topBid), frozen like the combination bids · [382 · §286, 17 Oct 2026] the Strict level, frozen like the rule set (his Q8) · [381 · §285, 16 Oct 2026] the combination bids, frozen like the rule set (his Q3) · [380 · §282, 16 Oct 2026] the rule set (Standard / Strict), frozen like the others (his q8) - IDENTICAL to the admin's FROZEN_CONFIG_KEYS
+              'bidRuleSet', 'comboBids', 'strictThreshold', 'topBid', 'phasePlan']; // [E2 · §298, 28 Oct 2026] the Phases card (adminSettings.phasePlan), frozen like the bid numbers · [226 · §295, 26 Oct 2026] the bid numbers (adminSettings.topBid), frozen like the combination bids · [382 · §286, 17 Oct 2026] the Strict level, frozen like the rule set (his Q8) · [381 · §285, 16 Oct 2026] the combination bids, frozen like the rule set (his Q3) · [380 · §282, 16 Oct 2026] the rule set (Standard / Strict), frozen like the others (his q8) - IDENTICAL to the admin's FROZEN_CONFIG_KEYS
     }
     function touchesFrozenConfig() {
       return request.method == 'delete'
@@ -290,7 +290,7 @@ service cloud.firestore {
     // locked key, is touched - the same document the freeze already reads.
     function setOnceKeys() {
       return ['auctionConfig', 'bidFloors', 'bidRuleSet', 'strictThreshold', 'comboBids',
-              'priorityLockEnabled', 'blindedBidding', 'topBid']; // [226 · §295, 26 Oct 2026] the bid numbers, locked by the setup lock like the combination bids
+              'priorityLockEnabled', 'blindedBidding', 'topBid', 'phasePlan']; // [E2 · §298, 28 Oct 2026] the Phases card, locked by the setup lock like the bid numbers · [226 · §295, 26 Oct 2026] the bid numbers, locked by the setup lock like the combination bids
     }
     function setupUnlockMinutes() { return 10; }
     function touchesKeys(keys) {
@@ -347,7 +347,8 @@ service cloud.firestore {
       return docId != 'adminSettings'
         || ((!touchesFrozenConfig() || !auctionUnderway()
              || (inPhaseGap() && gapCalendarOk())) // [build 268 · GAP] - unchanged
-            && setupGateOk()); // [383 · §287] the setup lock, AND-ed
+            && setupGateOk() // [383 · §287] the setup lock, AND-ed
+            && (!touchesKeys(['phasePlan']) || !auctionUnderway())); // [E2 · §298, 28 Oct 2026] the Phases setting is fixed once Phase 1 begins - in a gap and through a setup unlock too (it would renumber phases already run); the phases lookup only when the key is touched
     }
 
     // ── Bid documents: per-user confinement + server-clock expiry [H-3 / H-13] ─

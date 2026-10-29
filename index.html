@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 230;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 231;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -659,7 +659,7 @@ body{zoom:1.15}
     <div id="rulesScroll">
       <ul class="rules-list">
         <!-- [172 · §193] Grouped: what this is → how many weeks → your bid numbers → changing a bid → strategy and conduct. Moves only, plus the one numbers sentence. -->
-        <li>The auction has 4 phases. Phase 1 is for certain high-demand weeks only; all other weeks open in Phase 2.</li><!-- [220 · §288] his merged line (plan §11a); the "bids" naming line and the accrued-vacation line are gone (§11a, §11e) · [228 · §297] item 188 · [229 · §297] item 188 -->
+        <li id="ruleAuctionPhases">The auction has 4 phases. Phase 1 is for certain high-demand weeks only; all other weeks open in Phase 2.</li><!-- [231 · E2] refilled by updateBidLimitRule from phasesRuleLine() (phasePlan) · [220 · §288] his merged line (plan §11a); the "bids" naming line and the accrued-vacation line are gone (§11a, §11e) · [228 · §297] item 188 · [229 · §297] item 188 -->
         <li id="ruleRva">Phase 4 is the Rolling Vacation Auction that has rounds periodically throughout 2027. Each round functions as its own phase.</li><!-- [230 · E1] owner 28 Oct 2026 10:16 AM; refilled by updateBidLimitRule from rvaRuleLine() (Phase = fallPhases()+1, year = AC_YEAR) -->
         <li id="ruleMaxBids">Running cap on total weeks you can win across the auction — only weeks you win count</li><!-- [220 · §288] hidden by updateBidLimitRule when no phase has a cap (plan §11e) · [229 · §297] item 189: the 227 wording (filled by cumulativeCapDescription) -->
         <li id="ruleBidNums">You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest</li><!-- [225 · §295] "plus NP" only while some phase allows NP (bidNumbersLine) -->
@@ -1077,7 +1077,20 @@ function _strictOn(){ try{ return !!(_boardLoaded&&_boardLoaded.settings===true&
 // beyond the name. phaseName = the ONE name of a phase on this page; settingSlot = the key a per-phase setting is stored under
 // (an RVA Round reads the RVA's one slot, 4). Stored keys do not change.
 const RVA_MAX_ROUNDS=25;
-function fallPhases(){ return 3; }
+// ── [231 · E2, DECISIONS §298] THE PHASES SETTING — ONE stored key, adminSettings.phasePlan = {fall: 1|2|3, p1All: true|false} ──────
+// TWIN: this block is the same, character for character, on the admin page. Read LIVE from adminSettings (the topBid pattern): never
+// saved or anything else = 3 Fall phases with a high-demand-only Phase 1. N = F + 1 phases in all (the RVA is Phase F + 1).
+function phasePlanNormalize(raw){ return (Object.prototype.toString.call(raw)==='[object Object]'&&Number.isInteger(raw.fall)&&raw.fall>=1&&raw.fall<=3&&typeof raw.p1All==='boolean')?{fall:raw.fall,p1All:raw.p1All}:null; }
+function phasePlan(){ try{ const v=phasePlanNormalize((typeof adminSettings!=='undefined'&&adminSettings)?adminSettings.phasePlan:null); return v===null?{fall:3,p1All:false}:v; }catch(_){ return {fall:3,p1All:false}; } }
+function fallPhases(){ return phasePlan().fall; }
+function p1AllWeeks(){ return phasePlan().p1All; }
+function phasesRuleLine(){
+  const F=fallPhases(), N=F+1;
+  if(p1AllWeeks()) return 'The auction has '+N+' phases. All weeks are open from Phase 1.';
+  if(F>=2) return 'The auction has '+N+' phases. Phase 1 is for certain high-demand weeks only; all other weeks open in Phase 2.';
+  return 'The auction has '+N+' phases. Phase 1 is for certain high-demand weeks only; all other weeks open in the Rolling Vacation Auction.';
+}
+// ── end of the twin block ──
 function isRvaPhase(p){ return Number(p)>fallPhases(); }
 function rvaRound(p){ return Number(p)-fallPhases(); }
 function phaseName(p){ const n=Number(p), F=fallPhases(); return n>F?('Phase '+(F+1)+': Round '+(n-F)):('Phase '+n); }
@@ -1662,7 +1675,7 @@ function blExhaustedMsg(floor){
 // TWIN NOTE: byte-identical on both sites (twin-compare pinned).
 function prioLockBullets(){
   const base="Bid priorities can only stay the same or get stronger — bid a 5 on a week, and any re-bid there must be 5 or better.";
-  const a=[1,2,3,4].map(p=>blAllowance(p));
+  const a=[1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||p===4).map(p=>blAllowance(p)); // [231 · E2] Fall slots 1 … F, then the RVA's slot 4 (last)
   if(a.every(x=>x===0)) return [base];
   // [build 274 · V1] Unlimited in EVERY phase: no counting language, no floor mechanics — and [220 · 384 · §288, plan §11e] no rule
   // line at all (his order, 18 Oct 2026: the "Ideally, bid priorities…" sentence is removed). The staff page then hides its line, the welcome
@@ -1680,13 +1693,13 @@ function prioLockBullets(){
   // something untrue. Falls back to the per-clause wording whenever any phase is 0 or
   // unlimited, because "not at all" and "freely" cannot sit under a shared "up to".
   const groups=[];
-  for(let i=0;i<3;i++){
+  for(let i=0;i<a.length-1;i++){ // [231 · E2] the Fall phases (every entry but the RVA's, which is last)
     const last=groups[groups.length-1];
     if(last&&last.v===a[i]) last.ph.push(i+1); else groups.push({v:a[i],ph:[i+1]});
   }
   const phLabel=ph=>ph.length===1?('Phase '+ph[0]):('Phases '+ph.slice(0,-1).join(', ')+' and '+ph[ph.length-1]);
   const parts=groups.map(g=>({v:g.v,label:'in '+phLabel(g.ph)}));
-  parts.push({v:a[3],label:'in each round of Phase '+((typeof fallPhases==='function'?fallPhases():3)+1)}); // [230 · E1] the RVA's phase number
+  parts.push({v:a[a.length-1],label:'in each round of Phase '+((typeof fallPhases==='function'?fallPhases():3)+1)}); // [230 · E1] the RVA's phase number
   const times=x=>x===1?'1 time':x+' times';
   const join=list=>list.length<2?(list[0]||''):(list.slice(0,-1).join(', ')+', and '+list[list.length-1]);
   const simple=parts.every(p=>p.v!==0&&p.v!==Infinity);
@@ -1703,7 +1716,7 @@ function prioLockBullets(){
 function _blTextsOn(){
   try{
     if(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.priorityLockEnabled===false) return true;
-    return [1,2,3,4].some(p=>blAllowance(p)!==Infinity);
+    return [1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||p===4).some(p=>blAllowance(p)!==Infinity); // [231 · E2] only the slots that run
   }catch(_){ return true; }
 }
 // ── [build 274 · V3] Timer reset MODE ────────────────────────────────────────
@@ -2310,7 +2323,7 @@ function _rbGateCheck(){
 // during the anonymous bootstrap it was rejected permission-denied (a dead, error-logging
 // listener that never recovers). The signed-in path (_subscribeSensitiveOnce + a getDoc)
 // covers it after login; _emailsReady already initializes true so sign-in never waits on it.
-onSnapshot(adminRef,    snap=>{ _boardMark('settings',snap); adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _acCheckRemote(adminSettings); _rbGateCheck(); _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); if(typeof renderDestinationPill==='function') renderDestinationPill(); if(typeof renderSimModeBanner==='function') renderSimModeBanner(); if(typeof _blindSync==='function') _blindSync(); if(typeof _lipSync==='function') _lipSync(); if(typeof _ruleSetSync==='function') _ruleSetSync(); }); // [204 · §261] the blind follows this doc · [216 · §282] the competition-week rule line follows the rule set · [177 · §201] the test-mode banner follows this doc too // [build 136 · B5] config check first · [build 139 · GATE] · [174 · §196] the destination pill follows this doc
+onSnapshot(adminRef,    snap=>{ _boardMark('settings',snap); adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _acCheckRemote(adminSettings); _rbGateCheck(); _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); if(typeof renderDestinationPill==='function') renderDestinationPill(); if(typeof renderSimModeBanner==='function') renderSimModeBanner(); if(typeof _blindSync==='function') _blindSync(); if(typeof _lipSync==='function') _lipSync(); if(typeof _ruleSetSync==='function') _ruleSetSync(); if(typeof renderPhaseLabel==='function') renderPhaseLabel(); if(typeof updateSigninPhase==='function'&&_boardLoaded&&_boardLoaded.phases===true) updateSigninPhase(); }); // [231 · E2] the phase names follow phasePlan · fix round (review staff L3): the sign-in line only once the phases have arrived // [204 · §261] the blind follows this doc · [216 · §282] the competition-week rule line follows the rule set · [177 · §201] the test-mode banner follows this doc too // [build 136 · B5] config check first · [build 139 · GATE] · [174 · §196] the destination pill follows this doc
 
 // ── Maximum bids per phase (admin-set; 'none' = no limit) ──
 // NP bids allowed this phase? Admin toggles per phase (Controls → NP Bids by
@@ -2350,7 +2363,7 @@ function priorApprovedCount(user){
 }
 // Short description of the cumulative caps — shared wording with the welcome e-mail.
 function cumulativeCapDescription(){
-  const caps=[1,2,3,4].map(getCumulativeCap);
+  const _sl=[1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||p===4), caps=_sl.map(getCumulativeCap); // [231 · E2] Fall slots 1 … F, then the RVA's slot 4
   if(caps.every(c=>c===null)) return ''; // [220 · §288 · plan §11e] no cap in any phase: no rule line at all (the page hides its line, the e-mail has no bullet)
   // [build 268 · COPY] Grouped collapse — as short as the settings allow, never shorter
   // than the truth: equal-cap runs merge into their LAST clause (for a CUMULATIVE cap the
@@ -2358,9 +2371,9 @@ function cumulativeCapDescription(){
   // "no limit after that", and four equal caps become a single clause.
   if(caps.every(c=>c===caps[0])) return 'Running cap on total weeks you can win across the auction (only weeks you win count) — up to '+caps[0]+' across all phases'; // [229 / 393 · §297] item 189: the 227 wording
   const parts=[], _rva=(typeof fallPhases==='function'?fallPhases():3)+1; // [230 · E1] slot 4 is the RVA: named by its phase number
-  for(let p=1;p<=4;p++){
-    const c=caps[p-1];
-    if(p<4&&caps[p]===c) continue; // merged into the last clause of this equal run
+  for(let i=0;i<caps.length;i++){
+    const p=_sl[i], c=caps[i]; // [231 · E2] p = the stored slot (4 = the RVA)
+    if(i<caps.length-1&&caps[i+1]===c) continue; // merged into the last clause of this equal run
     if(c===null&&p===4){ parts.push(parts.length?'no limit after that':'no limit through Phase '+_rva); continue; }
     parts.push((p===1?'Phase 1':'Through Phase '+(p===4?_rva:p))+': '+(c===null?'no limit':c));
   }
@@ -2375,23 +2388,24 @@ function npAllowedForPhase(ph){
 }
 // Exact NP availability from the admin's settings — shared wording with the welcome e-mail.
 // Is a running cap set in any phase? (npPhasesDescription's last clause names it.) [fix round, review lane 3 L1]
-function _anyCumCap(){ return [1,2,3,4].some(p=>getCumulativeCap(p)!==null); }
+function _anyCumCap(){ return [1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||p===4).some(p=>getCumulativeCap(p)!==null); } // [231 · E2] only the slots that run
 function npPhasesDescription(){
-  const on=[1,2,3,4].filter(p=>npAllowedForPhase(p));
+  const _sl=[1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||p===4), on=_sl.filter(p=>npAllowedForPhase(p)); // [231 · E2] only the slots that run
   const tail=', with no limit on how many can be used'+((typeof _anyCumCap!=='function'||_anyCumCap())?' (the running cap still applies)':'')+'.'; // [220 · 384 · fix round, review lane 3 L1] no cap in any phase: no cap clause (its line is hidden, plan §11e) · [229 / 393 · §297] item 195 (owner, 7:58 PM)
-  if(on.length===4) return 'NP bids can be used in any phase'+tail;
+  if(on.length===_sl.length) return 'NP bids can be used in any phase'+tail;
   if(!on.length) return 'NP bids are not allowed in any phase';
   const _nm=on.map(p=>p===4?(typeof fallPhases==='function'?fallPhases():3)+1:p); // [230 · E1] slot 4 is the RVA: named by its phase number
   return 'NP bids can be used in Phase'+(_nm.length!==1?'s':'')+' '+(_nm.length===1?String(_nm[0]):_nm.slice(0,-1).join(', ')+' and '+_nm[_nm.length-1])+' only'+tail;
 }
 // [225 · §295] NP off in EVERY phase: no NP rules line, no "plus NP", no NP chip, on the page and in the welcome e-mail
 // (owner, 19 Oct 2026; ruled 26 Oct 2026, Q1 / Q2 yes). NP on in any phase: everything word for word as before.
-function _npAnyPhase(){ return [1,2,3,4].some(p=>npAllowedForPhase(p)); }
+function _npAnyPhase(){ return [1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||p===4).some(p=>npAllowedForPhase(p)); } // [231 · E2] only the slots that run
 // [226 · §295] W1: the highest number follows topBid() (typeof = sandbox convention: suites extract this function with _npAnyPhase alone).
 function bidNumbersLine(){ const _n=(typeof topBid==='function')?topBid():10; return _npAnyPhase()?'You hold bid numbers 1 to '+_n+', plus NP — 1 is the strongest bid and NP the weakest':'You hold bid numbers 1 to '+_n+' — 1 is the strongest bid'; }
 // [230 · E1] The Rules & Reminders line (and the welcome e-mail's) that names the Rolling Vacation Auction - owner, 28 Oct 2026 10:16 AM.
 function rvaRuleLine(){ return 'Phase '+((typeof fallPhases==='function'?fallPhases():3)+1)+' is the Rolling Vacation Auction that has rounds periodically throughout '+((typeof AC_YEAR!=='undefined')?AC_YEAR:2027)+'. Each round functions as its own phase.'; }
 function updateBidLimitRule(){
+  { const ap=document.getElementById('ruleAuctionPhases'); if(ap){ const _apt=phasesRuleLine(); if(ap.textContent!==_apt) ap.textContent=_apt; } } // [231 · E2]
   { const rv=document.getElementById('ruleRva'); if(rv){ const _rvt=rvaRuleLine(); if(rv.textContent!==_rvt) rv.textContent=_rvt; } } // [230 · E1]
   const el=document.getElementById('ruleMaxBids'); if(!el) return;
   { const _cap=cumulativeCapDescription(); el.textContent=_cap; el.style.display=_cap?'':'none'; } // [220 · §288 · plan §11e] no cap in any phase: the line is hidden
@@ -8076,7 +8090,7 @@ Choose which alerts you get under E-mail alerts at the top of the site. Results,
 
 ${B('RULES AND REMINDERS OF THE AUCTION')}
 ${bullets([
-  `The auction has 4 phases. Phase 1 is for certain high-demand weeks only; all other weeks open in Phase 2.`,
+  ((typeof phasesRuleLine==='function')?phasesRuleLine():`The auction has 4 phases. Phase 1 is for certain high-demand weeks only; all other weeks open in Phase 2.`), // [231 · E2] word for word as on the page (the fallback is for test sandboxes)
   ((typeof rvaRuleLine==='function')?rvaRuleLine():`Phase 4 is the Rolling Vacation Auction that has rounds periodically throughout 2027. Each round functions as its own phase.`), // [230 · E1] owner 28 Oct 2026 10:16 AM, word for word as on the page (the fallback is for test sandboxes)
   // [220 · §288] the alert list, the sentence above and this list: plan §11a / §11c / §11e, word for word as on the page · [228 · §297] the rule lines of Build C · [229 · §297] item 188
   ...capBullets,
