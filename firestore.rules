@@ -245,23 +245,20 @@ service cloud.firestore {
             : request.resource.data.diff(resource.data).affectedKeys().hasAny(frozenConfigKeys()));
     }
     // ── [build 268 · GAP] Between-phases unlock (owner ruling 15 Aug) ─────────
-    // The frozen dials re-open in the GAP after a phase's (or Phase-4 round's) results
-    // are SENT and before the next phase/round begins — decisions are done and PUBLISHED.
+    // The frozen dials re-open in the GAP after a phase's results are SENT and before the
+    // next phase begins — decisions are done and PUBLISHED. [E1 · §298] Every Rolling Vacation
+    // Auction Round is a phase of its own, so this one test covers every Round too.
     // Deliberately still locked: the window between Complete Phase and Send Results
     // (decisions exist but are private — the manipulation hole the freeze closes).
     // Mirrors the client's _phaseGapNow() exactly; the pin test binds the two.
     function inPhaseGap() {
       return exists(/databases/$(database)/documents/vacations/phases)
-        && ((get(/databases/$(database)/documents/vacations/phases).data
+        && get(/databases/$(database)/documents/vacations/phases).data
                .get('completedPhases', {})
                .get(string(get(/databases/$(database)/documents/vacations/phases).data.get('currentPhase', 1)), null) != null
-             && get(/databases/$(database)/documents/vacations/phases).data
+        && get(/databases/$(database)/documents/vacations/phases).data
                .get('resultsSent', {})
-               .get(string(get(/databases/$(database)/documents/vacations/phases).data.get('currentPhase', 1)), null) != null)
-            || (get(/databases/$(database)/documents/vacations/phases).data.get('currentPhase', 1) == 4
-                && get(/databases/$(database)/documents/vacations/phases).data
-                  .get('p4RoundResultsSent', {})
-                  .get(string(get(/databases/$(database)/documents/vacations/phases).data.get('p4Round', 1)), null) != null));
+               .get(string(get(/databases/$(database)/documents/vacations/phases).data.get('currentPhase', 1)), null) != null;
     }
     // Even in a gap the auction YEAR may never change: every bid is keyed to the year's
     // weeks, and a year change renames all 52 week keys under live bids (Reset only).

@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 229;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 230;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -660,6 +660,7 @@ body{zoom:1.15}
       <ul class="rules-list">
         <!-- [172 · §193] Grouped: what this is → how many weeks → your bid numbers → changing a bid → strategy and conduct. Moves only, plus the one numbers sentence. -->
         <li>The auction has 4 phases. Phase 1 is for certain high-demand weeks only; all other weeks open in Phase 2.</li><!-- [220 · §288] his merged line (plan §11a); the "bids" naming line and the accrued-vacation line are gone (§11a, §11e) · [228 · §297] item 188 · [229 · §297] item 188 -->
+        <li id="ruleRva">Phase 4 is the Rolling Vacation Auction that has rounds periodically throughout 2027. Each round functions as its own phase.</li><!-- [230 · E1] owner 28 Oct 2026 10:16 AM; refilled by updateBidLimitRule from rvaRuleLine() (Phase = fallPhases()+1, year = AC_YEAR) -->
         <li id="ruleMaxBids">Running cap on total weeks you can win across the auction — only weeks you win count</li><!-- [220 · §288] hidden by updateBidLimitRule when no phase has a cap (plan §11e) · [229 · §297] item 189: the 227 wording (filled by cumulativeCapDescription) -->
         <li id="ruleBidNums">You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest</li><!-- [225 · §295] "plus NP" only while some phase allows NP (bidNumbersLine) -->
         <li>Each number can be used once; numbers on weeks you won earlier can't be used again.</li><!-- [228 · §297] item 191 -->
@@ -1070,8 +1071,21 @@ function _saveRefusal(){
 // "standard", any other value, or not yet arrived = Standard: every rule is then the one staff 215 runs. Outside this block it is asked as
 // (typeof _strictOn==='function'&&_strictOn()) - the sandbox convention: a test that lifts one function out without this one judges Standard.
 function _strictOn(){ try{ return !!(_boardLoaded&&_boardLoaded.settings===true&&adminSettings&&adminSettings.bidRuleSet==='strict'); }catch(_){ return false; } }
-// "this phase" reads "this round" in Phase 4 (plan §5b).
-function _strictWord(){ try{ return Number((phasesData&&phasesData.currentPhase)||1)===4?'round':'phase'; }catch(_){ return 'phase'; } }
+// ── [230 · E1, DECISIONS §298] THE PHASE MODEL ─────────────────────────────────────────────────────────────────────────────────
+// Fall phases are 1 … F (fallPhases); Rolling Vacation Auction (RVA) Round r is phase F + r, r = 1 … RVA_MAX_ROUNDS. Every Round is a
+// phase of its own (its own completedPhases / resultsSent / phaseBeganAt entry, its own change log), so nothing here knows of rounds
+// beyond the name. phaseName = the ONE name of a phase on this page; settingSlot = the key a per-phase setting is stored under
+// (an RVA Round reads the RVA's one slot, 4). Stored keys do not change.
+const RVA_MAX_ROUNDS=25;
+function fallPhases(){ return 3; }
+function isRvaPhase(p){ return Number(p)>fallPhases(); }
+function rvaRound(p){ return Number(p)-fallPhases(); }
+function phaseName(p){ const n=Number(p), F=fallPhases(); return n>F?('Phase '+(F+1)+': Round '+(n-F)):('Phase '+n); }
+function settingSlot(p){ const n=Number(p); return n>fallPhases()?4:n; }
+// The phase NUMBER as the rule lines and refusals say it: an RVA Round is "Phase " + (F+1) there (owner, 28 Oct 2026 10:08 AM).
+function phaseShort(p){ const n=Number(p), F=fallPhases(); return 'Phase '+(n>F?F+1:n); }
+// "this phase" reads "this round" in an RVA Round (plan §5b).
+function _strictWord(){ try{ return isRvaPhase(Number((phasesData&&phasesData.currentPhase)||1))?'round':'phase'; }catch(_){ return 'phase'; } }
 // ── [218 · §286, owner 17 Oct 2026] THE STRICT LEVEL: "Strict applies to" (adminSettings.strictThreshold) ─────────────────────────
 // Under Strict a winning bid on a competition week is held only when it is n OR STRONGER in the strength order of all 15 (score <= n + 1,
 // so 4/5 = 4.5 is held at n = 5); a winning bid weaker than n is removed by the ordinary Remove box, as under Standard. The stored value
@@ -1570,14 +1584,13 @@ function topBidAllowed(p){ return !(typeof p==='number'&&Number.isInteger(p)&&p>
 function bidNumList(){ const a=[]; for(let i=1;i<=topBid();i++) a.push(i); return a; }
 // [FIX1 · F1] A phase, or a Phase 4 round, whose results are SENT is decided: in that gap (the only time the setting can change) its
 // combinations are judged as they were, so switching one off never turns a finished phase's WIN into LOSE. The same test as the pages'
-// own gap (admin _phaseGapNow, staff _gapInfo, firestore.rules inPhaseGap): completed AND results sent, or the Phase 4 round's results
-// sent. true = the allowed-set test applies (a phase or round still open, before Phase 1, or phasesData unknown).
+// own gap (admin _phaseGapNow, staff _gapInfo, firestore.rules inPhaseGap): completed AND results sent (an RVA Round is a phase of
+// its own). true = the allowed-set test applies (a phase or round still open, before Phase 1, or phasesData unknown).
 function comboJudgedNow(){
   try{
     if(typeof phasesData==='undefined'||!phasesData) return true;
     const cur=Number(phasesData.currentPhase||1);
     if(phasesData.completedPhases?.[cur]&&phasesData.resultsSent?.[cur]) return false;
-    if(cur===4&&(phasesData.p4RoundResultsSent||{})[Number(phasesData.p4Round||1)]) return false;
     return true;
   }catch(_){ return true; }
 }
@@ -1623,17 +1636,16 @@ function bfRulesBullets(){
 // TWIN NOTE: blAllowance is byte-identical on the admin site (twin-compare pinned).
 function blAllowance(ph){
   const m=(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.bidLowerings)||{};
-  const raw=m[ph]!==undefined?m[ph]:m[String(ph)];
+  const s=settingSlot(ph), raw=m[s]!==undefined?m[s]:m[String(s)]; // [230 · E1] an RVA Round reads the RVA slot
   if(raw==='unlimited'||raw===undefined) return Infinity; // [221 / 385 · §292] never saved = unlimited (was 0); a stored value rules as before
   const n=parseInt(raw,10);
   return (isNaN(n)||n<0)?0:Math.min(9,n);
 }
 function blUsed(user){ const e=(typeof bidLoweringsData!=='undefined'&&bidLoweringsData)?bidLoweringsData[user]:null; return Math.max(0,Number(e&&e.used)||0); }
 function blRemaining(user){ const a=blAllowance(Number(phasesData.currentPhase||1)); return a===Infinity?Infinity:Math.max(0,a-blUsed(user)); }
-function _blWindowLabel(){ return Number(phasesData.currentPhase||1)===4?'this round':('Phase '+Number(phasesData.currentPhase||1)); }
-// [166] Twin of the admin's _phaseWindowLabel: the OPEN window is the round in Phase 4 — a bare "Phase 4" is always wrong (§152).
-function _phaseWindowLabel(){ const c=Number(phasesData.currentPhase||1);
-  return (c===4&&Number(phasesData.p4Round||0)>=1)?('Phase 4: Round '+Number(phasesData.p4Round)):('Phase '+c); }
+function _blWindowLabel(){ const c=Number(phasesData.currentPhase||1); return isRvaPhase(c)?'this round':phaseName(c); } // [230 · E1] base wording: "this round" in an RVA Round
+// [166] Twin of the admin's _phaseWindowLabel: the OPEN window's name ("Phase 2", "Phase 4: Round 3") - phaseName.
+function _phaseWindowLabel(){ return phaseName(Number(phasesData.currentPhase||1)); }
 function blFmtBid(b){ return b==="NP"?"NP":(Array.isArray(b)?b.join('/'):String(b)); }
 // The out-of-lowerings refusal. Allowance 0 keeps the classic absolute wording (no
 // mention of a feature that is off); otherwise the count is stated plainly. DELIBERATELY
@@ -1659,8 +1671,8 @@ function prioLockBullets(){
   const seg=(label,x)=>x===Infinity?('freely '+label):(x===0?('not at all '+label):('up to '+(x===1?'1 time ':x+' times ')+label));
   if(a.every(x=>x===a[0])){
     return [base+(a[0]===Infinity
-      ?' To fix a mistake, you may lower a bid freely in any phase (and any round of Phase 4).'
-      :' To fix a mistake, you may lower a bid '+seg('per phase (and per round of Phase 4)',a[0]).replace(/ $/,'')+'.')];
+      ?' To fix a mistake, you may lower a bid freely in any phase (and any round of Phase '+((typeof fallPhases==='function'?fallPhases():3)+1)+').'
+      :' To fix a mistake, you may lower a bid '+seg('per phase (and per round of Phase '+((typeof fallPhases==='function'?fallPhases():3)+1)+')',a[0]).replace(/ $/,'')+'.')]; // [230 · E1] the RVA's phase number
   }
   // [COPY-1 · owner, 19 Aug 2026] Adjacent phases that share an allowance merge into one
   // clause, and "up to" is said once instead of once per clause. Phase 4 always stays its
@@ -1674,7 +1686,7 @@ function prioLockBullets(){
   }
   const phLabel=ph=>ph.length===1?('Phase '+ph[0]):('Phases '+ph.slice(0,-1).join(', ')+' and '+ph[ph.length-1]);
   const parts=groups.map(g=>({v:g.v,label:'in '+phLabel(g.ph)}));
-  parts.push({v:a[3],label:'in each round of Phase 4'});
+  parts.push({v:a[3],label:'in each round of Phase '+((typeof fallPhases==='function'?fallPhases():3)+1)}); // [230 · E1] the RVA's phase number
   const times=x=>x===1?'1 time':x+' times';
   const join=list=>list.length<2?(list[0]||''):(list.slice(0,-1).join(', ')+', and '+list[list.length-1]);
   const simple=parts.every(p=>p.v!==0&&p.v!==Infinity);
@@ -1945,53 +1957,11 @@ function escH(v){ return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;'
 function bidLbl(p){ return p==="NP"?"NP":""+(Array.isArray(p)?p.join('/'):p); }
 
 // ── Approvals (single implementation) ──
-// [build 131 · ROLLING PHASE 4 = ROUNDS AS MINI-PHASES] Phase 4 runs in rounds all year:
-// close → decide → ✓ Complete Round N → 📮 Send Round N Results → ▶ Start Round N+1 (or
-// ✓ Complete Phase 4 at the true end). Completing a round works EXACTLY like a phase
-// boundary: the admin site archives that round's {approvals, denials, schedule} into the
-// world-readable `phases` doc under p4Rounds[N], removes the DENIED bids from the live
-// schedule (numbers returned, weeks re-biddable with any value — phase parity), and clears
-// the live decision docs. This site needs only ONE change: announced round APPROVALS are
-// locked-in winners, folded in via getPriorPhaseWinners below. Approved bids stay in the
-// live schedule (consuming their numbers and cap slot, exactly like a mid-phase win), and
-// denied bids simply no longer exist — the same absence a new phase would give them.
-function p4RoundWinnersOn(wk){
-  if(Number(phasesData.currentPhase||1)!==4) return [];
-  const out=[];
-  const rounds=phasesData.p4Rounds||{};
-  for(const r of Object.keys(rounds)){
-    const arr=rounds[r]?.approvals?.[wk];
-    if(Array.isArray(arr)) out.push(...arr);
-  }
-  return out;
-}
 // Returns the set of users who have a locked-in prior-phase win on `wk`.
 // A prior-phase win = approved in any phase < currentPhase. Once approved, that
 // user permanently owns that week — they cannot re-bid it and no later bid can
-// displace them, regardless of priority.
-// [build 133 · lead admin] The ANNOUNCED round decision (if any) that currently binds this
-// user+week. A round win binds for the rest of the year. Reads only the PUBLISHED archives
-// (world-readable phases doc), so nothing unannounced ever leaks through this path.
-// [168 · §174] A round DENIAL binds only while THAT round is still the current one. Start Round
-// deletes every denied bid before it advances p4Round (one atomic batch, admin), so any bid on
-// this user+week in a later round is new by construction — whatever its value. The old test
-// compared VALUES (a live bid carries no round stamp), which made a same-value re-bid in a later
-// round look like the retired denial: frozen, invisible, un-decidable — and the owner's case,
-// "lower demand or more capacity in a later round", was refused at the door. The last round is
-// never followed by Start Round, so its denials keep binding through Complete Phase 4.
-function p4AnnouncedDecision(user,wk){
-  if(Number(phasesData.currentPhase||1)!==4) return null;
-  const rounds=phasesData.p4Rounds||{};
-  const curR=Number(phasesData.p4Round||1);
-  for(const r of Object.keys(rounds)){
-    const a=rounds[r]||{};
-    if(Array.isArray(a.approvals?.[wk])&&a.approvals[wk].includes(user)) return {round:r,status:'A'};
-    if(Number(r)===curR&&Array.isArray(a.denials?.[wk])&&a.denials[wk].includes(user)){
-      if(data[user]?.[wk]!==undefined) return {round:r,status:'D'};
-    }
-  }
-  return null;
-}
+// displace them, regardless of priority. [230 · E1] An RVA Round is a phase of its own, so an
+// earlier Round's wins are completedPhases entries below the current phase like any other.
 function getPriorPhaseWinners(wk){
   const cur=Number(phasesData.currentPhase||1);
   const out=new Set();
@@ -2002,8 +1972,6 @@ function getPriorPhaseWinners(wk){
     const arr=Array.isArray(phAp[wk])?phAp[wk]:[];
     arr.forEach(u=>out.add(u));
   }
-  // [build 131] Announced Phase 4 round wins are locked in exactly like prior-phase wins.
-  for(const u of p4RoundWinnersOn(wk)) out.add(u);
   return out;
 }
 
@@ -2180,15 +2148,10 @@ function _laWallToMs(y,mo,d,h,mi){ const guess=Date.UTC(y,mo-1,d,h,mi); const p=
 function _inQuiet(h,qs,qe){ return (qs<qe)?(h>=qs&&h<qe):(h>=qs||h<qe); }
 function _quietAdjustExpiry(expiryMs,r){ if(!r.quietEnabled) return expiryMs; const p=_laParts(expiryMs); if(!_inQuiet(p.hour,r.quietStart,r.quietEnd)) return expiryMs; let y=p.year,mo=p.month,d=p.day; if(p.hour>=r.quietEnd){ const np=_laParts(_laWallToMs(p.year,p.month,p.day,12,0)+86400000); y=np.year;mo=np.month;d=np.day; } return _laWallToMs(y,mo,d,r.quietEnd,0); }
 function timerResetHours(phaseStartMs,nowMs){ const r=getTimerRules(); const st=r.stages; const elapsedDays=(nowMs-(phaseStartMs||nowMs))/86400000; let base=st.length?st[0].hours:48; for(const s of st){ if(elapsedDays>=(s.days||0)) base=s.hours; } let hours=base; if(r.quietEnabled && base<=(r.quietWhenHoursLE||6)){ const adj=_quietAdjustExpiry(nowMs+base*3600000,r); hours=(adj-nowMs)/3600000; } return Math.max(0.05, Math.round(hours*100)/100); }
-// [322 · P-2] ★ BOTH pages (twin). When did the OPEN window begin? Phases 1–3: phaseBeganAt[N]. Phase 4: the
-// round's own stamp (p4RoundBeganAt[p4Round], written by Begin Phase 4 for round 1 and by ▶ Start Round for
-// every later round), falling back to phaseBeganAt[4] for a round begun before this build or restored from an
-// older backup — no stamp → exactly the 321/166 answer. Every reader of a window's age asks this, never the map.
+// [322 · P-2] ★ BOTH pages (twin). When did the OPEN window begin? phaseBeganAt[N] of the current phase - an RVA Round is a
+// phase of its own, with its own stamp ([230 · E1]). Every reader of a window's age asks this, never the map.
 function _windowStartMs(){
-  const cur=Number(phasesData.currentPhase||1); const pb=(phasesData.phaseBeganAt||{})[cur]||null;
-  if(cur!==4) return pb;
-  const rb=(phasesData.p4RoundBeganAt||{})[Number(phasesData.p4Round||1)];
-  return (typeof rb==='number'&&rb>0)?rb:pb;
+  const cur=Number(phasesData.currentPhase||1); return (phasesData.phaseBeganAt||{})[cur]||null;
 }
 function timerPhaseStartMs(){ try{ const b=(typeof phasesData!=='undefined')?_windowStartMs():null; return b||(timerData&&timerData.lastChange)||Date.now(); }catch(e){ return Date.now(); } } // [322 · P-2] asks _windowStartMs (round-aware); until 321/166 it read the phase stamp alone
 // Current BASE reset length (one of 48/24/12/6/3) for right now, from the stages + elapsed.
@@ -2214,7 +2177,7 @@ function _timerResetLine(){
   return 'Any bid change resets the timer '+to+'.';
 }
 function fmtElapsed(ms){ if(!(ms>0)) ms=0; const tm=Math.floor(ms/60000); const d=Math.floor(tm/1440), h=Math.floor((tm%1440)/60), mi=tm%60; return d+'d '+h+'h '+mi+'m'; }
-function updatePhaseOpen(){ const el=document.getElementById('phaseOpenFor'); if(!el) return; const cur=Number((phasesData&&phasesData.currentPhase)||1); const began=phasesData?_windowStartMs():null; const completed=!!(phasesData&&phasesData.completedPhases&&phasesData.completedPhases[cur])||(cur===4&&!!(phasesData.p4Rounds||{})[Number(phasesData.p4Round||1)]); const expired=(typeof isAuctionClosed==='function')&&isAuctionClosed(); const open=began&&(phasesData&&(phasesData.phase1Started||cur>1))&&!completed&&!expired; el.textContent=open?(_phaseWindowLabel()+' has been open for '+fmtElapsed(Date.now()-began)):''; } // [322 · P-2] the open ROUND's start in Phase 4; a completed round is not open either (was [166] label only)
+function updatePhaseOpen(){ const el=document.getElementById('phaseOpenFor'); if(!el) return; const cur=Number((phasesData&&phasesData.currentPhase)||1); const began=phasesData?_windowStartMs():null; const completed=!!(phasesData&&phasesData.completedPhases&&phasesData.completedPhases[cur]); const expired=(typeof isAuctionClosed==='function')&&isAuctionClosed(); const open=began&&(phasesData&&(phasesData.phase1Started||cur>1))&&!completed&&!expired; el.textContent=open?(_phaseWindowLabel()+' has been open for '+fmtElapsed(Date.now()-began)):''; } // [322 · P-2] the open phase's start; a completed phase is not open · [230 · E1] an RVA Round is a phase of its own
 try{ setInterval(function(){ try{ updatePhaseOpen(); }catch(e){} }, 20000); }catch(e){}
 // Periodic outbid-alert relay: freshly-queued alerts are too young to sweep at
 // queue-write time, so without a periodic re-check they would sit until the next
@@ -2353,7 +2316,7 @@ onSnapshot(adminRef,    snap=>{ _boardMark('settings',snap); adminSettings=snap.
 // NP bids allowed this phase? Admin toggles per phase (Controls → NP Bids by
 // Phase). Initial policy: OFF for phases 1-2, ON for phases 3-4.
 function npAllowedNow(){
-  const ph=Number(phasesData.currentPhase||1);
+  const ph=settingSlot(Number(phasesData.currentPhase||1)); // [230 · E1] an RVA Round reads the RVA slot
   const m=adminSettings?.npAllowedPhases||{};
   const v=m[ph];
   return v===undefined?(ph>=3):v!==false;
@@ -2366,7 +2329,7 @@ function npAllowedNow(){
 function getCumulativeCap(phase){
   const m=adminSettings?.maxBidsCumulative;
   if(!m||typeof m!=='object') return null;
-  const raw=m[phase]!==undefined?m[phase]:m[String(phase)];
+  const s=settingSlot(phase), raw=m[s]!==undefined?m[s]:m[String(s)]; // [230 · E1] an RVA Round reads the RVA slot
   if(raw===undefined||raw===null||raw===''||raw==='none') return null;
   const n=parseInt(raw,10);
   if(isNaN(n)||n<1) return null;
@@ -2394,17 +2357,18 @@ function cumulativeCapDescription(){
   // later checkpoint implies the earlier ones), a trailing uncapped stretch reads as one
   // "no limit after that", and four equal caps become a single clause.
   if(caps.every(c=>c===caps[0])) return 'Running cap on total weeks you can win across the auction (only weeks you win count) — up to '+caps[0]+' across all phases'; // [229 / 393 · §297] item 189: the 227 wording
-  const parts=[];
+  const parts=[], _rva=(typeof fallPhases==='function'?fallPhases():3)+1; // [230 · E1] slot 4 is the RVA: named by its phase number
   for(let p=1;p<=4;p++){
     const c=caps[p-1];
     if(p<4&&caps[p]===c) continue; // merged into the last clause of this equal run
-    if(c===null&&p===4){ parts.push(parts.length?'no limit after that':'no limit through Phase 4'); continue; }
-    parts.push((p===1?'Phase 1':'Through Phase '+p)+': '+(c===null?'no limit':c));
+    if(c===null&&p===4){ parts.push(parts.length?'no limit after that':'no limit through Phase '+_rva); continue; }
+    parts.push((p===1?'Phase 1':'Through Phase '+(p===4?_rva:p))+': '+(c===null?'no limit':c));
   }
   return 'Running cap on total weeks you can win across the auction (only weeks you win count) — '+parts.join(' · '); // [229 / 393 · §297] item 189: the 227 wording
 }
 // NP allowed for a specific phase — same defaults/overrides as npAllowedNow.
 function npAllowedForPhase(ph){
+  ph=settingSlot(ph); // [230 · E1] an RVA Round reads the RVA slot
   const m=adminSettings?.npAllowedPhases||{};
   const v=m[ph];
   return v===undefined?(Number(ph)>=3):v!==false;
@@ -2417,14 +2381,18 @@ function npPhasesDescription(){
   const tail=', with no limit on how many can be used'+((typeof _anyCumCap!=='function'||_anyCumCap())?' (the running cap still applies)':'')+'.'; // [220 · 384 · fix round, review lane 3 L1] no cap in any phase: no cap clause (its line is hidden, plan §11e) · [229 / 393 · §297] item 195 (owner, 7:58 PM)
   if(on.length===4) return 'NP bids can be used in any phase'+tail;
   if(!on.length) return 'NP bids are not allowed in any phase';
-  return 'NP bids can be used in Phase'+(on.length!==1?'s':'')+' '+(on.length===1?String(on[0]):on.slice(0,-1).join(', ')+' and '+on[on.length-1])+' only'+tail;
+  const _nm=on.map(p=>p===4?(typeof fallPhases==='function'?fallPhases():3)+1:p); // [230 · E1] slot 4 is the RVA: named by its phase number
+  return 'NP bids can be used in Phase'+(_nm.length!==1?'s':'')+' '+(_nm.length===1?String(_nm[0]):_nm.slice(0,-1).join(', ')+' and '+_nm[_nm.length-1])+' only'+tail;
 }
 // [225 · §295] NP off in EVERY phase: no NP rules line, no "plus NP", no NP chip, on the page and in the welcome e-mail
 // (owner, 19 Oct 2026; ruled 26 Oct 2026, Q1 / Q2 yes). NP on in any phase: everything word for word as before.
 function _npAnyPhase(){ return [1,2,3,4].some(p=>npAllowedForPhase(p)); }
 // [226 · §295] W1: the highest number follows topBid() (typeof = sandbox convention: suites extract this function with _npAnyPhase alone).
 function bidNumbersLine(){ const _n=(typeof topBid==='function')?topBid():10; return _npAnyPhase()?'You hold bid numbers 1 to '+_n+', plus NP — 1 is the strongest bid and NP the weakest':'You hold bid numbers 1 to '+_n+' — 1 is the strongest bid'; }
+// [230 · E1] The Rules & Reminders line (and the welcome e-mail's) that names the Rolling Vacation Auction - owner, 28 Oct 2026 10:16 AM.
+function rvaRuleLine(){ return 'Phase '+((typeof fallPhases==='function'?fallPhases():3)+1)+' is the Rolling Vacation Auction that has rounds periodically throughout '+((typeof AC_YEAR!=='undefined')?AC_YEAR:2027)+'. Each round functions as its own phase.'; }
 function updateBidLimitRule(){
+  { const rv=document.getElementById('ruleRva'); if(rv){ const _rvt=rvaRuleLine(); if(rv.textContent!==_rvt) rv.textContent=_rvt; } } // [230 · E1]
   const el=document.getElementById('ruleMaxBids'); if(!el) return;
   { const _cap=cumulativeCapDescription(); el.textContent=_cap; el.style.display=_cap?'':'none'; } // [220 · §288 · plan §11e] no cap in any phase: the line is hidden
   const np=document.getElementById('ruleNpPhases'); if(np){ np.textContent=npPhasesDescription(); const _npd=_npAnyPhase()?'':'none'; if(np.style.display!==_npd) np.style.display=_npd; } // [225 · §295] NP off in every phase: hidden, kept in place (_comboRuleSync anchors on it)
@@ -2449,7 +2417,7 @@ function showBidLimitModal(){
   const cur=Number(phasesData.currentPhase||1);
   const u=getCurrentUser?.(); const st=u?bidLimitStatus(u):{lim:getMaxBidsPerPhase(),prior:0};
   const msg=document.getElementById('bidLimitModalMsg');
-  if(msg) msg.innerHTML='<strong style="color:#6f6a60">You\'ve reached your cap of '+st.lim+' week'+(st.lim!==1?'s':'')+' through Phase '+cur+' ('+st.prior+' won + your current bids).</strong>'; // [228 · §297]
+  if(msg) msg.innerHTML='<strong style="color:#6f6a60">You\'ve reached your cap of '+st.lim+' week'+(st.lim!==1?'s':'')+' through '+phaseShort(cur)+' ('+st.prior+' won + your current bids).</strong>'; // [228 · §297]
   document.getElementById('bidLimitModal').classList.add('show');
 }
 // ── Bid-number pool ──
@@ -2473,8 +2441,8 @@ function bidPoolInfo(user){
 function renderBidPool(user){
   const box=document.getElementById('bidPoolBox'); if(!box||!user) return;
   // [156 · W-1, owner spec 20 Aug] Unobtrusive lowerings tracker so users stop asking the
-  // admin: "X of Y bid lowerings left" (Phase 4 shows the current round's numbers, since
-  // both the allowance and the usage doc are per-round there). Hidden entirely when the
+  // admin: "X of Y bid lowerings left" (an RVA Round shows its own numbers: it is a phase of
+  // its own, and the RVA's allowance applies afresh in each Round). Hidden entirely when the
   // phase allows unlimited lowerings.
   try{
     const _el=document.getElementById('blLeftLine');
@@ -2907,7 +2875,7 @@ function renderCountdown(){
     return;
   }
   // [212 · §273] Once this phase's (or round's) results are sent the timer box is hidden, as before Phase 1, and the banner
-  // says what is complete and what is next. Begin Phase / Start Round end this state (the phases listener re-runs this).
+  // says what is complete and what is next. Begin Phase (or Begin Round) ends this state (the phases listener re-runs this).
   if(_gapInfo()){
     banner.classList.remove("visible","urgent","warning");
     _setCountdownEnds('');
@@ -3201,12 +3169,11 @@ function _txWriteSwap(tx,pic,user,wkA,wkB,c,facts,split){
 // the save (_txBidTimes: the source cleared, the destination set). `v` = _moveCheck's answer on the server copy; `facts` = {src:{…},dst:{…}}.
 function _txWriteMove(tx,pic,user,src,dst,bid,v,facts,split){
   const ph=_picPhase(pic), spend=v.blSpend?1:0;
-  const rnd=(ph===4)?Number((pic.phasesData&&pic.phasesData.p4Round)||1):0;
   const outE=_logEntry(user,src,'removed',bid,(facts&&facts[src])||null,{mv:'out',mvTo:dst});
   const inE=_logEntry(user,dst,v.blSpend?'lowered':(_picVal(pic,user,dst)===undefined?'added':'edited'),bid,(facts&&facts[dst])||null,{mv:'in',mvFrom:src});
   if(!(inE.ts>outE.ts)) inE.ts=outE.ts+1; // the arrival strictly after the removal
   outE.mvId=outE.id; inE.mvId=outE.id;
-  const mark={ph:ph,r:rnd,id:inE.id,from:src,ts:inE.ts};
+  const mark={ph:ph,r:0,id:inE.id,from:src,ts:inE.ts}; // [230 · E1] r stays in the stored shape, always 0: an RVA Round is its own phase (ph)
   tx.update(scheduleRef,{[`${user}.${src}`]:deleteField(),[`${user}.${dst}`]:bid});
   if(pic.bidPhaseHas){
     const bp={[`${user}.${src}`]:deleteField(),[`${user}.${dst}`]:ph,[`${user}.mv.${dst}`]:mark};
@@ -3697,7 +3664,7 @@ function flash(el,msg,dur){
 // plan §10c.) The admin page's own bid entry is not bound by it.
 function _wwMsg(){ if(_wwRefuses.why==='moved'&&typeof _strictW6==='function') return _strictW6(); return (_wwRefuses.why==='left')?"Competition week: a new bid must match or beat the last bid that was on it.":(_wwRefuses.why==='in')?"Competition week: a new bid must match or beat the weakest winning or under-review bid.":"Competition week: you can only weaken a bid if it would still win and is no lower than the lowest other winning bid."; } // [195 · §249] coming in, or coming down · [216 · §282] 'moved' is set only under Strict · [228 · §297] items 85-87
 // [196 · §251, owner 7 Oct 2026: "I need at the same time and previous phases don't matter"] A bidding
-// competition has happened on a week when, at ONE MOMENT in this phase (in Phase 4, this round), the
+// competition has happened on a week when, at ONE MOMENT in this phase (an RVA Round is a phase of its own), the
 // people with a bid on it together came to more than it has available: their FTE plus the FTE of
 // whoever holds the week from an earlier phase, against the week's capacity. People who came and went
 // without ever being there together do NOT make one (193-195 added up everyone who had ever bid).
@@ -3709,7 +3676,7 @@ function _wwMsg(){ if(_wwRefuses.why==='moved'&&typeof _strictW6==='function') r
 // page ignores a failed log write): someone whose first entry in the window is not an "added" was
 // there before it, so they count from the window's start; so does anyone on the board now with no
 // entry at all, and anyone with a floor on the week (195's own record - kept when a bid is removed,
-// cleared at a phase's close and at Start Round) but no entry; someone on the board now whose last
+// cleared at a phase's close) but no entry; someone on the board now whose last
 // entry is a removal came back unrecorded, so they count from that removal on; so does anyone whose
 // removal, edit or lowering finds them OFF the week by the record (they came back unrecorded after
 // their previous entry, and count from it); anyone with an entry that carries no usable time (or one
@@ -3922,13 +3889,10 @@ function _wwBelow(ap,s,user,wk,bid){
 // [196 · §251, owner 7 Oct 2026 evening] NO EXCEPTION FOR A RETURNING WINNER: 195 let someone whose bid was winning when
 // they removed it put the same bid back below the level; he withdrew that the same day ("Dr. A must come back with the
 // same rules as anyone else"). Whoever has no bid on the week now is a newcomer, whatever they held there before.
-// EACH PHASE-4 ROUND FOLLOWS THE SAME RULES (owner, 7 Oct 2026): the competition record begins at the
-// change log's last reset and, in Phase 4, at the open ROUND's own stamp (Start Round already clears
-// the floors and the lowerings; the log is only reset at a phase's close).
+// EACH ROUND FOLLOWS THE SAME RULES (owner, 7 Oct 2026): the competition record begins at the change log's last
+// reset - every phase's close resets it, and every RVA Round is a phase of its own ([230 · E1]).
 function _wwSince(){
-  let since=Number(changesData&&changesData.resetAt)||0;
-  try{ if(Number(phasesData.currentPhase||1)===4){ const rb=Number((phasesData.p4RoundBeganAt||{})[Number(phasesData.p4Round||1)]); if(rb>0) since=Math.max(since,rb); } }catch(_){}
-  return since;
+  return Number(changesData&&changesData.resetAt)||0;
 }
 // ── [198 · §254 · §255, owner 8 Oct 2026] THE REMEMBERED LEVEL OF AN EMPTIED COMPETITION WEEK ──────────────
 // "once a week is a competition week, it remains that way forever" · "A remembered level for the week (stronger)". Until 198
@@ -4376,8 +4340,6 @@ function openPriorityModal(wk){
     showError("You already won this week.");
     return;
   }
-  { const _ad=p4AnnouncedDecision(user,wk); // [133] announced denial = frozen until it retires
-    if(_ad&&_ad.status==='D'){ showError("This bid was denied in Round "+_ad.round+". You can bid here again when the next round opens."); return; } } // [228 · §297]
   const existingPrio=isVisibleBid(user,wk)?data[user]?.[wk]:undefined;
   const isRebid=existingPrio!==undefined;
   // Alert as soon as the user tries to add a NEW bid beyond the per-phase limit —
@@ -4585,7 +4547,7 @@ function _bidCheck(user,wk,val){
   if(isAuctionClosed()) return no('error',"Bidding is closed.",true);
   if(locksData.globalLock||locksData.weeks?.[wk]) return no('error',"This week is locked.",true);
   if(!isVisibleBid(user,wk)&&bidLimitStatus(user).atLimit) return no('limit','',true);
-  if(val==="NP"&&!npAllowedNow()) return no('center',"NP bids aren't allowed in Phase "+Number(phasesData.currentPhase||1)+".",true);
+  if(val==="NP"&&!npAllowedNow()) return no('center',"NP bids aren't allowed in "+phaseShort(Number(phasesData.currentPhase||1))+".",true);
   // [217 · §285] W6: a combination the admin does not allow is refused (a stale page, a hand-edited list) - on the page's copy and on the server's.
   if(val!=="NP"&&typeof comboAllowed==='function'&&!comboAllowed(String(val).split(',').map(p=>parseInt(p.trim())).filter(p=>!isNaN(p)))) return no('center',"That combination bid is not available in this auction.",true);
   // [226 · §295] W4: a single bid number above the admin's highest is refused (a stale page, a hand-edited list) - on the page's copy and on the server's, as W6.
@@ -4595,11 +4557,6 @@ function _bidCheck(user,wk,val){
   // two-tab race (or an option list built from stale state) could otherwise submit a
   // below-floor or disallowed bid. All checks run BEFORE any write (gates-first contract).
   if(getPriorPhaseWinners(wk).has(user)) return no('center',"You already won this week.",true);
-  { const _ad=p4AnnouncedDecision(user,wk); // [133] announced denial = frozen until it retires at the next round
-    if(_ad&&_ad.status==='D') return no('center',"This bid was denied in Round "+_ad.round+". You can bid here again when the next round opens.",true); } // [228 · §297]
-  // [168 · §174] The "same bid, same answer" guard that stood here (131/134) is GONE: it existed only
-  // because p4AnnouncedDecision recognised a retired denial by VALUE. Now a denial binds only while its
-  // round is current, so a later-round re-bid — same value or not — is a fresh, live bid.
   // [build 137 · BF] Week-category floor re-check at confirm time (L-3 pattern) — the floor
   // comes from admin settings; NP is the weakest bid so any numeric floor blocks it here too.
   { const _bfF=bfFloorFor(wk);
@@ -4747,8 +4704,6 @@ function _swapCheck(user,wkA,wkB){
     if(a===undefined||a===null||b===undefined||b===null||JSON.stringify(a)===JSON.stringify(b)) return no("That swap is not available — both weeks need a bid of yours from this phase.");
     for(const w of [wkA,wkB]){
       if(getPriorPhaseWinners(w).has(user)) return no("You already won "+_swapWeekName(w)+"."); // [228 · §297] item 140
-      const _ad=p4AnnouncedDecision(user,w);
-      if(_ad) return no("Your bid on "+_swapWeekName(w)+" was decided in Round "+_ad.round+" and can't be changed."); // [228 · §297] item 141
     }
     const inc={}; inc[wkA]=b; inc[wkB]=a;
     const gone=getPriorPhaseUsedPriorities(user);
@@ -4757,7 +4712,7 @@ function _swapCheck(user,wkA,wkB){
     for(const w of [wkA,wkB]){
       const p=inc[w];
       if(!(p==="NP"||(Number.isInteger(p)&&p>=1&&p<=16)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10)))) return no("That swap is not available.");
-      if(p==="NP"){ if(!npAllowedNow()) return no("NP bids aren't allowed in Phase "+Number(phasesData.currentPhase||1)+"."); }
+      if(p==="NP"){ if(!npAllowedNow()) return no("NP bids aren't allowed in "+phaseShort(Number(phasesData.currentPhase||1))+"."); }
       else{
         const nums=Array.isArray(p)?p:[p];
         const held=nums.filter(n=>gone.includes(n));
@@ -4991,10 +4946,6 @@ function _removeCheck(user,wk,expect,mode){ // [216 · §282] mode (Strict only)
   // this, cancelling deleted the winning bid's data: the win survived via the archive,
   // but the bid's numbers wrongly returned to the user's pool.
   if(getPriorPhaseWinners(wk).has(user)) return {ok:false,kind:'center',msg:"You won this week — it can't be changed."}; // [228 · §297]
-  // [build 133] An announced round DENIAL is frozen history too — the bid clears by itself
-  // when the next round opens, and the week is then re-biddable fresh.
-  { const _ad=p4AnnouncedDecision(user,wk);
-    if(_ad&&_ad.status==='D') return {ok:false,kind:'center',msg:"This bid was denied in Round "+_ad.round+". You can bid here again when the next round opens."}; } // [228 · §297]
   // [215 · §282] At the moment of saving: the bid is still the one the box showed, and still a live bid of this phase. If not, the
   // approved sentence alone is shown ("The board changed — nothing was saved." - _txSaveEnd). [228 · §297]
   if(expect!==undefined&&!(JSON.stringify(data[user][wk])===JSON.stringify(expect)&&isVisibleBid(user,wk))) return {ok:false,kind:'center',msg:''};
@@ -5207,9 +5158,9 @@ function _strictHeld(user,wk){
 }
 
 // ── [216 · §282] THE MOVED MARK (plan §3 rule 3) - Strict only. Kept with the bid's own record: vacations/bidPhase, USER.mv.WEEK =
-// {ph, r, id, from, ts} (the phase, the Phase 4 round or 0, the id of the move's arrival row, the week it came from, its time). Written in the
+// {ph, r, id, from, ts} (the phase, 0 (kept in the shape), the id of the move's arrival row, the week it came from, its time). Written in the
 // move's own transaction (_txWriteMove), so a lost log row cannot free the bid. It holds while: the person still has a bid of this phase on the
-// week; the mark is of THIS phase (and, in Phase 4, this round) - by number, no clocks; and, when the move's own row is in the log, no later row
+// week; the mark is of THIS phase (an RVA Round is a phase of its own) - by number, no clocks; and, when the move's own row is in the log, no later row
 // (in the log's own order) removes that bid or deletes the person (the admin's removal, or "delete user / all users"). The person's own
 // removal and their next move take the mark off in the same write. Unreadable = held (errs strict: the bid stays as it is).
 function _mvMark(user,wk){ try{ const m=bidPhaseData?bidPhaseData[user]:undefined; const mv=(m&&typeof m==='object'&&m.mv&&typeof m.mv==='object')?m.mv:null; const x=mv?mv[wk]:null; return (x&&typeof x==='object')?x:null; }catch(_){ return null; } }
@@ -5220,7 +5171,6 @@ function _mvOn(user,wk){
     const m=_mvMark(user,wk); if(!m) return false;
     const cur=Number(phasesData.currentPhase||1);
     if(Number(m.ph)!==cur) return false;
-    if(cur===4&&Number(m.r)!==Number(phasesData.p4Round||1)) return false;
     const log=(changesData&&Array.isArray(changesData.log))?changesData.log:[];
     let at=-1; if(typeof m.id==='string'&&m.id){ for(let i=log.length-1;i>=0;i--){ if(log[i]&&log[i].id===m.id){ at=i; break; } } }
     if(at>=0){ for(let i=at+1;i<log.length;i++){ const e=log[i]; if(!e) continue; const rk=_koResetKind(e);
@@ -5245,7 +5195,7 @@ function _mvGate(user,src,dst,val){
     return _bidCheck(user,dst,val);
   } finally { data=keep; }
 }
-// The destinations, sorted: (a) knocked out there by someone else's change this phase (Phase 4: this round) and still standing - the port above,
+// The destinations, sorted: (a) knocked out there by someone else's change this phase and still standing - the port above,
 // over the change log since _wwSince(), roster-filtered (rule 8); (b) not winning there now; (c) the bid WOULD WIN there; and every plain-bid gate.
 // Weeks where they no longer have a bid are destinations too (owner 6:04 AM). THROWS if the knock-out code throws: removeSelection then opens the
 // plain Remove box and the removal is marked koUnknown (rule 5) - the one place Strict fails open.
@@ -5477,9 +5427,8 @@ function myActiveWeeks(user){ return Object.keys(data[user]||{}).filter(wk=>isVi
 // Current-phase bids INCLUDING admin-denied ones. A denied bid was still PLACED —
 // it counts against the per-phase limit and its number stays consumed until the
 // phase closes (denials only return bid numbers for the NEXT phase).
-// [build 131 · rolling Phase 4] Round-denied bids need no special case here: Complete Round
-// REMOVES them from the live schedule (after archiving), so their numbers and cap slots free
-// by absence — the same mechanism a new phase gives prior denials.
+// [230 · E1] An RVA Round is a phase of its own: its bids carry its phase number, so an earlier Round's
+// bids are not counted here, exactly as an earlier phase's are not.
 function myCountedWeeks(user){
   return Object.keys(data[user]||{}).filter(wk=>data[user]?.[wk]!==undefined && isCurrentPhaseBid(user,wk));
 }
@@ -5535,17 +5484,16 @@ function currentPhaseAnnounced(){
 // ("same was between 1-2 and 2-3"); after Phase 4, "Auction Complete". Starts when results are SENT - before that the phase's
 // record is admin-only and this page cannot see it. Display only: what stops bidding is still the closed flag and the locks.
 // null = not in that state. {kind:'phase'|'fall'|'round'|'end', done, next}
+// [230 · E1] An RVA Round is a phase of its own: its gap is the phase gap. Finished (finishedAt) or the last Round sent = the end.
 function _gapInfo(){
   if(!phasesData) return null;
-  const cur=Number(phasesData.currentPhase||1);
+  const cur=Number(phasesData.currentPhase||1), F=fallPhases();
+  if(phasesData.finishedAt) return {kind:'end'};
   if(currentPhaseAnnounced()){
-    if(cur>=4) return {kind:'end'};
-    if(cur===3) return {kind:'fall'};
+    if(cur>=F+RVA_MAX_ROUNDS) return {kind:'end'};
+    if(cur===F) return {kind:'fall'};
+    if(isRvaPhase(cur)) return {kind:'round',done:rvaRound(cur),next:rvaRound(cur)+1};
     return {kind:'phase',done:cur,next:cur+1};
-  }
-  if(cur===4){
-    const r=Number(phasesData.p4Round||1);
-    if((phasesData.p4RoundResultsSent||{})[r]) return {kind:'round',done:r,next:r+1};
   }
   return null;
 }
@@ -5553,8 +5501,7 @@ function _gapInfo(){
 function _gapLabel(g){
   if(g.kind==='end') return 'Auction Complete';
   if(g.kind==='fall') return 'Fall Vacation Auction Complete';
-  const w=g.kind==='round'?'Round ':'Phase ';
-  return w+g.done+' complete · '+w+g.next+' is next';
+  return (g.kind==='round'?'Round ':'Phase ')+g.done+' complete'; // [230 · E1] owner 28 Oct 2026 10:29 / 10:44 AM: no "is next" after a Round or a Fall phase
 }
 // [228 · §297] item 34: the gap banner's words (never shown: the closed banner is off in every gap) and the empty-list gap ending (never called) are deleted.
 function renderPhaseLabel(){
@@ -5562,7 +5509,7 @@ function renderPhaseLabel(){
   // (and pre-start) = "Fall Vacation Auction"; the rolling Phase 4 = "Rolling Vacation
   // Auction". Runs on every phases snapshot, so it flips the moment Phase 4 begins.
   { const _ht=document.getElementById('headerTitle');
-    if(_ht) _ht.textContent=(Number(phasesData.currentPhase||1)===4?'Rolling Vacation Auction':'Fall Vacation Auction'); }
+    if(_ht) _ht.textContent=(isRvaPhase(Number(phasesData.currentPhase||1))?'Rolling Vacation Auction':'Fall Vacation Auction'); } // [230 · E1]
   const lbl=document.getElementById('phaseLabel');
   if(!lbl) return;
   const cur=Number(phasesData.currentPhase||1);
@@ -5570,52 +5517,23 @@ function renderPhaseLabel(){
   // phase is still running (it sat next to "View Previous Phases" listing the SAME phase).
   // It advances to the completion state — not to "Phase N+1" outright, which would imply
   // the next phase's bidding is open before it has begun.
-  if(currentPhaseAnnounced()){
-    // [build 135 · lead admin] No opens-timing promise anywhere — the admin opens the
-    // next phase/round on their own schedule (possibly weeks out); the header must not
-    // promise timing it cannot know. Completion alone is the whole truth here.
-    lbl.textContent=_gapLabel(_gapInfo()); // [212 · §273]
-    return;
-  }
-  // [build 133 · lead admin] Same rule at ROUND boundaries: once the current round's results
-  // are announced (and until the next round opens), the header says so — it must never claim
-  // Round N is live while Prior Phase Results, right next to it, lists Round N as complete.
-  if(cur===4){
-    const _rN=Number(phasesData.p4Round||1);
-    if((phasesData.p4RoundResultsSent||{})[_rN]){
-      lbl.textContent=_gapLabel(_gapInfo()); // [135] no timing promise · [212 · §273] his words
-      return;
-    }
-  }
-  // [build 131] Rolling Phase 4 shows its round: "Phase 4: Round N".
-  lbl.textContent='Phase '+cur+((cur===4&&Number(phasesData.p4Round||0)>=1)?': Round '+Number(phasesData.p4Round):'');
+  // [build 135 · lead admin] No opens-timing promise anywhere — the admin opens the
+  // next phase/round on their own schedule (possibly weeks out); the header must not
+  // promise timing it cannot know. Completion alone is the whole truth here.
+  const _g=_gapInfo();
+  if(_g){ lbl.textContent=_gapLabel(_g); return; } // [212 · §273] · [230 · E1] the gap of a phase or an RVA Round, or the end
+  lbl.textContent=phaseName(cur); // [230 · E1] "Phase 2", "Phase 4: Round 3"
 }
 
 window.openPhaseHistory=function(){
   const user=getCurrentUser(); if(!user) return;
-  // [build 131 · rolling Phase 4] Completed ROUNDS join the history exactly like phases.
-  // Each announced round archive is inserted under a fractional sort key between Phase 3
-  // and Phase 4 (3.01, 3.02, …) so every Number()-ordered comparison in this function —
-  // visibility, sorting, bid attribution — works unchanged. A round becomes visible the
-  // moment its results are SENT (announced results are public by definition). Once rounds
-  // exist, the merged completedPhases[4] entry (written at Complete Phase 4) is skipped
-  // here — the rounds already tell Phase 4's whole story bid by bid.
-  const _rounds=phasesData.p4Rounds||{};
-  const _roundSent=phasesData.p4RoundResultsSent||{};
-  const _histLabels={};
+  // [230 · E1] Every RVA Round is a phase of its own, so the completed phases ARE the history, each under its phaseName.
   const completed={...(phasesData.completedPhases||{})};
-  if(Object.keys(_rounds).length&&completed['4']!==undefined) delete completed['4'];
-  for(const r of Object.keys(_rounds)){
-    if(!_roundSent[r]) continue;
-    const k=(3+Number(r)/100).toFixed(2);
-    completed[k]=_rounds[r];
-    _histLabels[k]='Phase 4: Round '+r;
-  }
   // PRIVACY RULE: a phase that is completed but whose successor has NOT begun
   // is still hidden — results only become visible once the next phase starts.
-  // [AUDIT 2026-07-26 H3] …OR once its results e-mails have been SENT. Phase 4 has no
-  // successor (currentPhase stays 4 forever), so `< curPh` alone hid the final — and most
-  // contested — allocation from every user for good; resultsSent[4] is the release stamp.
+  // [AUDIT 2026-07-26 H3] …OR once its results e-mails have been SENT. The last phase that ran has no
+  // successor, so `< curPh` alone would hide its allocation from every user for good; resultsSent[N]
+  // is the release stamp.
   // (Announced results are public by definition: the e-mail already delivered them.)
   const curPh=Number(phasesData.currentPhase||1);
   const keys=Object.keys(completed).filter(k=>Number(k)<curPh||!!phasesData.resultsSent?.[k]).sort((a,b)=>Number(a)-Number(b));
@@ -5658,11 +5576,11 @@ window.openPhaseHistory=function(){
       if(!inEarlierHist(user,wk,allBids[wk],ph)) userBids[wk]=allBids[wk];
     }
     if(!Object.keys(userBids).length){
-      html+=`<div style="margin-bottom:16px"><div style="font-weight:700;color:#1f2329;margin-bottom:6px">${_histLabels[ph]||('Phase '+ph)}</div><div style="color:#4a505a;font-size:.8rem">No bids placed in this ${_histLabels[ph]?'round':'phase'}.</div></div>`;
+      html+=`<div style="margin-bottom:16px"><div style="font-weight:700;color:#1f2329;margin-bottom:6px">${phaseName(ph)}</div><div style="color:#4a505a;font-size:.8rem">No bids placed in this ${isRvaPhase(ph)?'round':'phase'}.</div></div>`;
       return;
     }
     html+=`<div style="margin-bottom:18px;padding:14px;background:rgba(255,255,255,.85);border:1px solid #e2ddd1;border-radius:10px">
-      <div style="font-weight:700;color:#1f2329;margin-bottom:10px;font-size:.95rem">${_histLabels[ph]||('Phase '+ph)}</div>`;
+      <div style="font-weight:700;color:#1f2329;margin-bottom:10px;font-size:.95rem">${phaseName(ph)}</div>`;
     Object.entries(userBids).sort(([a],[b])=>a.localeCompare(b)).forEach(([wk,prio])=>{
       const meta=weekMeta[wk];
       const approvedHere=Array.isArray(phApprovals[wk])?phApprovals[wk]:[];
@@ -5927,9 +5845,8 @@ function _blindSync(){
 function renderNotifications(user,ap){
   const cut48=Date.now()-48*3600000;
   const log48=(changesData.log||[]).filter(e=>e.ts>=cut48&&!isDecisionEntry(e)&&!isSystemEntry(e));
-  // [209 · §268] A week already decided in an announced Phase 4 round (a round win stays on the board all year) is not one of
-  // "your weeks" for this chip - the same rule as the My Bids list beside it (renderSelections). p4AnnouncedDecision is null outside Phase 4.
-  const myWeeks=new Set(myActiveWeeks(user).filter(wk=>!p4AnnouncedDecision(user,wk)));
+  // [230 · E1] "your weeks" for this chip: this phase's own bids (an earlier phase's or RVA Round's are not) - as the My Bids list.
+  const myWeeks=new Set(myActiveWeeks(user));
   const userBidTimes=bidTimesData[user]||{};
 
   function icon(e){ const a=e.action||e.type||''; return a.includes('add')?'<svg class="lic" viewBox="0 0 24 24" aria-hidden="true" style="width:1.1em;height:1.1em;vertical-align:-.17em;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none"><path d="M12 5v14M5 12h14"/></svg>':a.includes('remove')?'<svg class="lic" viewBox="0 0 24 24" aria-hidden="true" style="width:1.1em;height:1.1em;vertical-align:-.17em;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none"><path d="M5 12h14"/></svg>':'<svg class="lic" viewBox="0 0 24 24" aria-hidden="true" style="width:1.1em;height:1.1em;vertical-align:-.17em;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="m13.5 6.5 4 4"/></svg>'; }
@@ -6007,10 +5924,6 @@ function renderSelections(user,ap){
   // (The bids themselves stay in the data — wins lock in, and the next phase retires the
   // rest — this is display truth, not a data change.)
   const _announced=currentPhaseAnnounced();
-  // [build 133 · lead admin] A bid decided in an ANNOUNCED round is a RESULT, not a
-  // projection — it lives in Prior Phase Results now. Drop it from this list the moment
-  // the round's e-mails go out (wins stay visible as locked weeks on the board itself).
-  for(const wk of Object.keys(uw)){ if(p4AnnouncedDecision(user,wk)) delete uw[wk]; }
   const _card=document.getElementById('myBidsCard'); // [227 · §296]
   if(_announced||!Object.keys(uw).length){
     // [227 · §296] An EMPTY card shows only while the person can bid right now ("click a week below" is true then); otherwise it is hidden.
@@ -6057,17 +5970,17 @@ window.scrollToWeek=function(wk){
 // ── [206 · §266, owner 12 Oct 2026] Locked weeks on the bidding board ───────────────────────────────────────────
 // WHERE: adminSettings.lockedInPlace = {1..4: true|false}, set by the admin's Controls switch - true = a locked week stays in its
 // own month; false = locked weeks gather in the Locked Weeks section at the bottom. Absent or not a boolean = the owner's defaults:
-// Phase 1 at the bottom, Phases 2, 3 and 4 in place (ONE value for every Phase 4 round - each round is its own phase, all alike).
+// Phase 1 at the bottom, Phases 2, 3 and 4 in place (ONE value, slot 4, for every RVA Round - settingSlot).
 // Whenever EVERY week was already locked while bidding was open, they stay in place whatever the switch says.
 // [208 · §267, owner 12 Oct 2026] WHEN BIDDING CLOSES NOTHING MOVES: from the moment the timer reaches zero (or the admin closes
 // bidding, or the Freeze is on) every week is drawn with the locked card, and the layout is the one the board had while bidding was
 // open - worked out from the weeks that were locked BEFORE the close: the lock record as it stands until an admin page locks every
 // week, then the list that admin page saved in the same write (locks.closeLayout, admin 371), used only while every week is locked
-// and only when it belongs to THIS phase (and THIS Phase 4 round). With or without an admin page open the board looks the same.
+// and only when it belongs to THIS phase (an RVA Round is a phase of its own). With or without an admin page open the board looks the same.
 // HOW: grey, never red, in both places; only the signed-in person's OWN bid is shown (never another person's); a week they won is
 // the green card. DISPLAY ONLY: nothing here is read by the bid path, the projection engine or any e-mail.
 const LIP_DEFAULT={1:false,2:true,3:true,4:true};
-function _lipFor(ph){ const p=Math.min(4,Math.max(1,Math.round(Number(ph))||1)); let v; try{ v=adminSettings&&adminSettings.lockedInPlace?adminSettings.lockedInPlace[p]:undefined; }catch(_){ v=undefined; } return (v===true||v===false)?v:LIP_DEFAULT[p]; }
+function _lipFor(ph){ const p=settingSlot(Math.max(1,Math.round(Number(ph))||1)); let v; try{ v=adminSettings&&adminSettings.lockedInPlace?adminSettings.lockedInPlace[p]:undefined; }catch(_){ v=undefined; } return (v===true||v===false)?v:LIP_DEFAULT[p]; }
 // monthEntries = the board's own weeks (groupByMonth); every one of them locked = in place.
 // [208 · §267] The saved layout of THIS close (admin 371 writes it when it locks every week), or null when there is none, it is
 // malformed, or it belongs to another phase / Phase 4 round (an old list is never used).
@@ -6077,7 +5990,6 @@ function _closeLayoutSet(){
     if(!cl||typeof cl!=='object'||!Array.isArray(cl.weeks)) return null;
     const cur=Number(phasesData.currentPhase||1);
     if(Number(cl.phase)!==cur) return null;
-    if(Number(cl.round||0)!==(cur===4?Number(phasesData.p4Round||0):0)) return null;
     return new Set(cl.weeks.map(String));
   }catch(_){ return null; }
 }
@@ -6104,19 +6016,17 @@ function _lockedInPlace(monthEntries){ return _boardLocks(monthEntries).inPlace;
 // Repaints the board when the stored value changes (it is read only while drawing).
 let _lipShown=null;
 function _lipSync(){ let k='null'; try{ k=JSON.stringify((adminSettings&&adminSettings.lockedInPlace)||null); }catch(_){} if(k!==_lipShown){ _lipShown=k; if(typeof scheduleRender==='function') scheduleRender(); } }
-// The phase (or Phase 4 round) the person WON this week in, or null. An earlier phase or round (getPriorPhaseWinners, untouched -
-// the projection engine reads it), or THIS phase once its results are sent (§266: a win turns green when results are sent; a
-// Phase 4 round's wins are stored only when its results are sent, so they are already counted there).
+// The NAME (phaseName) of the phase the person WON this week in, or null. An earlier phase (getPriorPhaseWinners - the projection
+// engine reads it), or THIS phase once its results are sent (§266: a win turns green when results are sent). An RVA Round is a
+// phase of its own ([230 · E1]).
 function _boardWonIn(user,wk){
   const cur=Number(phasesData.currentPhase||1), cp=phasesData.completedPhases||{};
   const inPh=ph=>{ const arr=cp[ph]?.approvals?.[wk]; return Array.isArray(arr)&&arr.includes(user); };
   if(getPriorPhaseWinners(wk).has(user)){
-    for(const ph of Object.keys(cp)){ if(Number(ph)<cur&&inPh(ph)) return String(ph); }
-    const rw=phasesData.p4Rounds||{};
-    for(const r of Object.keys(rw)){ const arr=rw[r]?.approvals?.[wk]; if(Array.isArray(arr)&&arr.includes(user)) return '4: Round '+r; }
-    return '?';
+    for(const ph of Object.keys(cp)){ if(Number(ph)<cur&&inPh(ph)) return phaseName(ph); }
+    return 'Phase ?';
   }
-  if(currentPhaseAnnounced()&&inPh(cur)) return String(cur);
+  if(currentPhaseAnnounced()&&inPh(cur)) return phaseName(cur);
   return null;
 }
 // One locked week's card - the same card in its month and in the bottom section. No click handler: a tap does nothing.
@@ -6126,8 +6036,7 @@ function _lockedCard(user,wk,ap){
   // [207 · §266 (12), owner 12 Oct 2026 3:40 PM] Until this phase's results are sent, the person's OWN bid on a locked week keeps its
   // projection's colour, as during bidding (green Winning, purple Under Review, red Losing). Once they are sent: won = the green
   // card above, not won = grey. Weeks without their bid stay grey. Only their own projection is read (getOutcome for `user`).
-  // A Phase 4 round's ANNOUNCED decision on this week (a denial, between Send Round Results and Start Round) ends the projection too.
-  const proj=(!wonIn&&isVisibleBid(user,wk)&&!currentPhaseAnnounced()&&!p4AnnouncedDecision(user,wk))?uiOutcome(getOutcome(wk,user,ap)):null;
+  const proj=(!wonIn&&isVisibleBid(user,wk)&&!currentPhaseAnnounced())?uiOutcome(getOutcome(wk,user,ap)):null;
   const div=document.createElement("div"); div.className="week "+(wonIn?"outcome-win lk-won":(proj?"outcome-"+proj+" lk-proj":"lk-grey"));
   div.dataset.wk=wk; // anchor for scroll-to-week from My Bids & Projections
   const wn=document.createElement("div");
@@ -6144,7 +6053,7 @@ function _lockedCard(user,wk,ap){
   if(wonIn){
     const pb=document.createElement("div");
     pb.style.cssText="background:rgba(54,105,74,.2);color:#36694a;padding:3px 8px;border-radius:4px;font-size:.68rem;font-weight:700;margin-top:4px;text-align:center";
-    pb.textContent=`Won in Phase ${wonIn}`; // [228 · §297]
+    pb.textContent=`Won in ${wonIn}`; // [228 · §297] · [230 · E1] wonIn is the phase's name
     div.appendChild(pb);
     return div;
   }
@@ -6256,24 +6165,16 @@ function renderCalendar(user,ap){
       // Prior-phase win badge — shown when user won this week in a previous phase
       if(!isLocked&&priorWon){
         // Find which phase
-        let wonInPhase='?';
+        let wonInPhase='Phase ?';
         const cp=phasesData.completedPhases||{};
         for(const phNum of Object.keys(cp)){
           const phAp=cp[phNum]?.approvals||{};
           const arr=Array.isArray(phAp[wk])?phAp[wk]:[];
-          if(arr.includes(user)){ wonInPhase=phNum; break; }
-        }
-        // [build 132 · lead admin] A Phase 4 ROUND win names its round — never "Phase ?".
-        if(wonInPhase==='?'){
-          const _rw=phasesData.p4Rounds||{};
-          for(const r of Object.keys(_rw)){
-            const arr=_rw[r]?.approvals?.[wk];
-            if(Array.isArray(arr)&&arr.includes(user)){ wonInPhase='4: Round '+r; break; }
-          }
+          if(arr.includes(user)){ wonInPhase=phaseName(phNum); break; } // [230 · E1] "Phase 2", "Phase 4: Round 1"
         }
         const pb=document.createElement("div");
         pb.style.cssText="background:rgba(54,105,74,.2);color:#36694a;padding:3px 8px;border-radius:4px;font-size:.68rem;font-weight:700;margin-top:4px;text-align:center";
-        pb.innerHTML=`Won in Phase ${wonInPhase}`; // [228 · §297]
+        pb.innerHTML=`Won in ${wonInPhase}`; // [228 · §297] · [230 · E1] the phase's name
         div.appendChild(pb);
       }
       // Combined bids list — user's own bid in bold, others plain, sorted by score (best first)
@@ -6298,7 +6199,7 @@ function renderCalendar(user,ap){
             row.innerHTML=`<span style="font-weight:${nameWeight};color:${nameColor}">${(typeof whoHtml==='function')?whoHtml(b.user,user):escH(b.user)}</span>
               <span style="color:#4a505a">${escH(bidLbl(b.priority))}</span>
               <span style="font-weight:700;color:${outcomeColorUI(o)}">${outcomeShort(o)}</span>`;
-            if(b.isMe&&!isF&&!closed&&!priorWon&&!p4AnnouncedDecision(user,wk)){ // [132/133] a won or announced-decided week's bid shows no ✎/✕ — it is a result, not a live bid
+            if(b.isMe&&!isF&&!closed&&!priorWon){ // [132/133] a won week's bid shows no ✎/✕ — it is a result, not a live bid
               row.classList.add("own-row"); // [204 · owner-found 10 Oct 2026] ✎ and ✕ stay on the bid's own line, on a phone too (the .own-row rules)
               const eb=document.createElement("button"); eb.className="edit-btn"; eb.textContent="✎";
               eb.title="Edit bid";
@@ -6385,16 +6286,15 @@ function _lwActorWeakened(prevSnap,newSnap,actor){
 // or lowering there means that same bid would now be projected WIN, where just before it would not.
 // WIN only — Under Review does not count. Only the withdrawn bid is tested, never another one.
 // PHASES STAY INDEPENDENT (owner, 5 Oct 2026: "it's critical that this doesn't carry over"): the
-// bid is read from the priority-lock store, which the admin page empties at every phase close and
-// round start, AND the CURRENT change log (emptied at phase close by a separate write) must show that
-// user PLACING this very bid on that week and then REMOVING it, inside the open phase (in Phase 4, the
-// open round). The placing entry matters: a removal confirmed from a box left open across a phase
+// bid is read from the priority-lock store, which the admin page empties at every phase close
+// (an RVA Round is a phase of its own), AND the CURRENT change log (emptied at phase close by a separate write) must show that
+// user PLACING this very bid on that week and then REMOVING it, inside the open phase. The placing entry matters: a removal confirmed from a box left open across a phase
 // close stamps a fresh floor and a fresh "removed" entry for a bid that belonged to the phase before.
 // Any one missing → nothing is sent.
-// Can this user NOT take their bid off week `w` — it is locked, they already won it, or it was decided
-// in this Phase-4 round? A number sitting on such a week cannot be moved to another week.
+// Can this user NOT take their bid off week `w` — it is locked or they already won it (Strict: or it is held)?
+// A number sitting on such a week cannot be moved to another week.
 function _lwStuck(user,w,snap){ // [216 · §282] snap (optional): the picture the caller judges on
-  return !!(locksData.weeks?.[w]||getPriorPhaseWinners(w).has(user)||p4AnnouncedDecision(user,w)||(typeof _strictOn==='function'&&_strictOn()&&_lwHeld(user,w,snap))); // [216 · §282] Strict only: a WINNING numbered bid on a competition week cannot be taken off (only moved, and only to a week where its owner was knocked out of winning)
+  return !!(locksData.weeks?.[w]||getPriorPhaseWinners(w).has(user)||(typeof _strictOn==='function'&&_strictOn()&&_lwHeld(user,w,snap))); // [216 · §282] Strict only: a WINNING numbered bid on a competition week cannot be taken off (only moved, and only to a week where its owner was knocked out of winning)
 }
 // [216 · §282] Strict only (the alerts' mirror of the held rule): is `user`'s bid on `w` held on the picture `snap` (the board when none)? Unknown =
 // held: the alert then says less, never more. The engine's answer is kept per picture for the one synchronous run of the alerts.
@@ -6453,14 +6353,8 @@ function _lwReturns(prevSnap,newSnap,actor){
     if(!_lwLoaded.best||!_lwLoaded.holds) return res;
     if(locksData.globalLock) return res;
     const log=(changesData&&Array.isArray(changesData.log))?changesData.log:[];
-    // the current change log begins at its last reset; in Phase 4 the open ROUND is the window, so it
-    // begins at that round's own stamp — and with no stamp nothing is sent
+    // the current change log begins at its last reset (every phase's close resets it; an RVA Round is a phase of its own)
     let since=Number(changesData&&changesData.resetAt)||0;
-    if(Number(phasesData.currentPhase||1)===4){
-      const rb=Number((phasesData.p4RoundBeganAt||{})[Number(phasesData.p4Round||1)]);
-      if(!(rb>0)) return res;
-      since=Math.max(since,rb);
-    }
     for(const {wk,how} of _lwActorWeakened(prevSnap,newSnap,actor)){
       if(!weekMeta[wk]||locksData.weeks?.[wk]) continue;
       for(const user of Object.keys(bestBidsData||{})){
@@ -6482,7 +6376,6 @@ function _lwReturns(prevSnap,newSnap,actor){
         for(const e of log){ if(e&&e.user===user&&e.weekKey===wk&&e.actor==='user'&&(e.action==='added'||e.action==='edited'||e.action==='lowered')&&typeof e.ts==='number'&&e.ts>=since&&e.ts<=last.ts&&(!placed||e.ts>=placed.ts)) placed=e; }
         if(!placed||JSON.stringify(placed.bidValue)!==JSON.stringify(bid)) continue;
         if(getPriorPhaseWinners(wk).has(user)) continue;
-        if(p4AnnouncedDecision(user,wk)) continue;
         if(bid!=="NP"){
           const nums=Array.isArray(bid)?bid:[bid];
           const gone=getPriorPhaseUsedPriorities(user); if(nums.some(n=>gone.includes(n))) continue;
@@ -6510,18 +6403,17 @@ function _lwReturns(prevSnap,newSnap,actor){
 // (switch 1) and "My withdrawn bid would win again" (switch 2) — and a list of get-in alerts ("tell me when I can get in"): a week and the
 // bid they would be willing to place there. Stored in vacations/alertPrefs, one entry per person, written only by its owner (firestore.rules):
 //   { AB: { proj:false, chance:false, watch:{ '2027-06-13':{ bid:5, ph:2, rd:0, since:<the phase's record stamp> } } } }
-// A missing entry or field = ON / none, so with nothing stored every e-mail is exactly as before. A get-in alert carries the phase, the round
-// and the phase's record stamp (the change log's reset stamp; in Phase 4 the round's own stamp — the window _wwSince reads), so it lapses by
-// itself when the phase closes, a round starts or the auction is reset: a lapsed one is never shown and never sent, and it is cleared from
+// A missing entry or field = ON / none, so with nothing stored every e-mail is exactly as before. A get-in alert carries the phase, rd (always 0:
+// an RVA Round is a phase of its own) and the phase's record stamp (the change log's reset stamp — the window _wwSince reads), so it lapses by
+// itself when the phase closes or the auction is reset: a lapsed one is never shown and never sent, and it is cleared from
 // the person's own entry the next time they save. Not backed up, and kept through Reset Auction (personal choices, not auction data).
 
 // TWIN (byte-identical on the admin page): the stamp a get-in alert carries, from the phases document and the change log's reset stamp —
-// the window _wwSince reads: the change log's last reset; in Phase 4 the open round's own stamp when it has one.
+// the window _wwSince reads: the change log's last reset.
 function _alStampOf(ph,resetAt){
   const p=(ph&&typeof ph==='object')?ph:{};
-  const cur=Number(p.currentPhase||1), rd=(cur===4)?Number(p.p4Round||1):0;
+  const cur=Number(p.currentPhase||1), rd=0; // [230 · E1] rd stays in the stored shape, always 0: an RVA Round is its own phase (cur)
   let since=Number(resetAt)||0;
-  if(cur===4){ const rb=Number((p.p4RoundBeganAt||{})[rd]); if(rb>0) since=Math.max(since,rb); }
   return {ph:cur,rd:rd,since:since};
 }
 // TWIN: is the get-in alert `w` still in force at the stamp `st`? The same phase, round and record stamp, and a bid the bid box can offer.
@@ -6674,7 +6566,6 @@ function _giOpenings(prevSnap,newSnap,actor,evenIfOff){
         const nu=(newSnap&&newSnap[user]&&typeof newSnap[user]==='object')?newSnap[user]:{};
         if((pu[wk]!==undefined&&pu[wk]!==null)||(nu[wk]!==undefined&&nu[wk]!==null)) continue; // a bid there: the projection lines speak for it
         if(getPriorPhaseWinners(wk).has(user)) continue;
-        { const _ad=p4AnnouncedDecision(user,wk); if(_ad&&_ad.status==='D') continue; } // a Phase 4 denial: no bid there until the next round (the bid box's own refusal)
         const before=_giJudge(prevSnap,user,wk,w.bid);
         if(before!=='refused'&&before!=='lose') continue;
         const _lg=(changesData&&Array.isArray(changesData.log))?changesData.log:null, _rows=[]; let after;
@@ -7303,7 +7194,7 @@ function _hdStillTrue(e){
       const wk=String(l.wk), has=mine[wk]!==undefined&&mine[wk]!==null&&isCurrentPhaseBid(u,wk);
       let ok=false;
       if(l.k==='rt'||l.k==='gi'){
-        const ad=p4AnnouncedDecision(u,wk), open=!has&&!locksData.globalLock&&!(locksData.weeks&&locksData.weeks[wk])&&!getPriorPhaseWinners(wk).has(u)&&!(ad&&ad.status==='D');
+        const open=!has&&!locksData.globalLock&&!(locksData.weeks&&locksData.weeks[wk])&&!getPriorPhaseWinners(wk).has(u);
         if(l.k==='rt') ok=open&&_alOn(u,'chance')&&JSON.stringify(((bestBidsData||{})[u]||{})[wk])===JSON.stringify(l.bid)&&_lwBidWins(data,u,wk,l.bid)===true;
         else { const w=_alWatch(u,wk); ok=open&&!!w&&JSON.stringify(w.bid)===JSON.stringify(l.bid)&&_giJudge(data,u,wk,l.bid)===l.to; }
       }
@@ -7894,13 +7785,12 @@ window._refreshOtherSystems=_refreshOtherSystems; // exposed for testing
 // registered user to exactly that key). It runs AFTER the board is on screen, is never awaited
 // and never throws: a refused, slow or failed write changes nothing the user sees. The phase is
 // whatever the phases doc says right now — before Phase 1 has begun it records 0 ("before Phase
-// 1"), in Phase 4 it carries the round; not loaded yet → null, which the admin shows as "—".
+// 1"); an RVA Round has its own phase number; not loaded yet → null, which the admin shows as "—".
 function _loginRecord(phases,now){
   const cur=(phases&&phases.currentPhase!=null)?Number(phases.currentPhase):NaN;
   if(isNaN(cur)) return {at:now,phase:null,round:null};
   const pre=(cur===1&&!(phases&&phases.phase1Started));
-  const rd=(cur===4)?Number((phases&&phases.p4Round)||1):null;
-  return {at:now,phase:pre?0:cur,round:(rd!=null&&!isNaN(rd))?rd:null};
+  return {at:now,phase:pre?0:cur,round:null}; // [230 · E1] round stays in the stored shape, always null: an RVA Round is its own phase
 }
 function _recordLogin(user){
   try{
@@ -7916,7 +7806,7 @@ function _recordLogin(user){
 // back, the phone switched back to it) or is touched, at most ONE entry per VISIT_GAP_MS per browser, and that entry is marked
 // when the person tapped, clicked, typed or turned the wheel during it. Entries live INSIDE the user's own key of the same
 // document - {INITIALS:{v:{<key>:<code>}}}: the key is 'v' + the entry's start time in base 36, the code ONE short string, the
-// phase open then, '.round' in Phase 4, and a final 'u' once used ('3', '3u', '4.2u'; '' = phase not known). One value per entry,
+// phase open then (an RVA Round by its own phase number), and a final 'u' once used ('3', '3u', '5u'; '' = phase not known). One value per entry,
 // not a map: a document may hold only so many indexed fields, and the whole roster shares this one. So the rule that
 // confines a registered user to their own key confines these too, and the sign-in record beside them is never touched (a
 // merge write names only what it sets). Same contract as _recordLogin: never awaited, never throws; a refused, slow or failed
@@ -8027,8 +7917,7 @@ function _mailHistNote(user,rec){
     const ph=(typeof phasesData!=='undefined'&&phasesData)?phasesData:null;
     const cur=(ph&&ph.currentPhase!=null)?Number(ph.currentPhase):NaN;
     const pre=(cur===1&&!(ph&&ph.phase1Started));
-    const rd=(cur===4)?Number((ph&&ph.p4Round)||1):NaN;
-    const h=Object.assign({},rec,{u:String(user),by:'staff',phase:isNaN(cur)?null:(pre?0:cur),round:isNaN(rd)?null:rd});
+    const h=Object.assign({},rec,{u:String(user),by:'staff',phase:isNaN(cur)?null:(pre?0:cur),round:null}); // [230 · E1] round: always null (an RVA Round is its own phase)
     try{ const f=(typeof getCurrentUser==='function')?String(getCurrentUser()||''):''; if(/^[A-Za-z0-9._-]{1,8}$/.test(f)) h.from=f; }catch(_){} // [187 / 354 · §238] whose page made this attempt (the signed-in initials; the admin page has none and adds nothing) - inside the try, so it can never delay or fail a send
     const key='h'+Number(rec.at).toString(36)+Math.random().toString(36).slice(2,8).padEnd(6,'0');
     const p=setDoc(mailLogRef,{[key]:h},{merge:true});
@@ -8187,7 +8076,9 @@ Choose which alerts you get under E-mail alerts at the top of the site. Results,
 
 ${B('RULES AND REMINDERS OF THE AUCTION')}
 ${bullets([
-  `The auction has 4 phases. Phase 1 is for certain high-demand weeks only; all other weeks open in Phase 2.`, // [220 · §288] the alert list, the sentence above and this list: plan §11a / §11c / §11e, word for word as on the page · [228 · §297] the rule lines of Build C · [229 · §297] item 188
+  `The auction has 4 phases. Phase 1 is for certain high-demand weeks only; all other weeks open in Phase 2.`,
+  ((typeof rvaRuleLine==='function')?rvaRuleLine():`Phase 4 is the Rolling Vacation Auction that has rounds periodically throughout 2027. Each round functions as its own phase.`), // [230 · E1] owner 28 Oct 2026 10:16 AM, word for word as on the page (the fallback is for test sandboxes)
+  // [220 · §288] the alert list, the sentence above and this list: plan §11a / §11c / §11e, word for word as on the page · [228 · §297] the rule lines of Build C · [229 · §297] item 188
   ...capBullets,
   ((typeof bidNumbersLine==='function')?bidNumbersLine():`You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest`), // [225 · §295] word for word as on the page (the fallback is for test sandboxes)
   `Each number can be used once; numbers on weeks you won earlier can't be used again.`,
