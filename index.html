@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 232;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 233;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -659,7 +659,7 @@ body{zoom:1.15}
     <div id="rulesScroll">
       <ul class="rules-list">
         <!-- [172 · §193] Grouped: what this is → how many weeks → your bid numbers → changing a bid → strategy and conduct. Moves only, plus the one numbers sentence. -->
-        <li id="ruleAuctionPhases">The auction has 4 phases. Phase 1 is for certain high-demand weeks only; all other weeks open in Phase 2.</li><!-- [231 · E2] refilled by updateBidLimitRule from phasesRuleLine() (phasePlan) · [220 · §288] his merged line (plan §11a); the "bids" naming line and the accrued-vacation line are gone (§11a, §11e) · [228 · §297] item 188 · [229 · §297] item 188 -->
+        <li id="ruleAuctionPhases">The auction has 4 phases. Phase 1 is for the high-demand weeks only: Ski Week (Feb 14), Spring Break (Mar 28, Apr 4), Thanksgiving (Nov 21), Christmas (Dec 19) and New Year's (Dec 26). All other weeks open in Phase 2.</li><!-- [398 · §302] W39 at the default calendar · [231 · E2] refilled by updateBidLimitRule from phasesRuleLine() (phasePlan) · [220 · §288] his merged line (plan §11a); the "bids" naming line and the accrued-vacation line are gone (§11a, §11e) · [228 · §297] item 188 · [229 · §297] item 188 -->
         <li id="ruleRva">Phase 4 is the Rolling Vacation Auction that has rounds periodically throughout 2027. Each round functions as its own phase.</li><!-- [230 · E1] owner 28 Oct 2026 10:16 AM; refilled by updateBidLimitRule from rvaRuleLine() (Phase = fallPhases()+1, year = AC_YEAR) -->
         <li id="ruleMaxBids">Running cap on total weeks you can win across the auction — only weeks you win count</li><!-- [220 · §288] hidden by updateBidLimitRule when no phase has a cap (plan §11e) · [229 · §297] item 189: the 227 wording (filled by cumulativeCapDescription) -->
         <li id="ruleBidNums">You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest</li><!-- [225 · §295] "plus NP" only while some phase allows NP (bidNumbersLine) -->
@@ -1089,8 +1089,19 @@ function p1AllWeeks(){ return phasePlan().p1All; }
 function phasesRuleLine(){
   const F=fallPhases(), N=F+1;
   if(p1AllWeeks()) return 'The auction has '+N+' phases. All weeks are open from Phase 1.';
-  if(F>=2) return 'The auction has '+N+' phases. Phase 1 is for certain high-demand weeks only; all other weeks open in Phase 2.';
-  return 'The auction has '+N+' phases. Phase 1 is for certain high-demand weeks only; all other weeks open in the Rolling Vacation Auction.';
+  const L=(typeof hdWeeksText==='function')?hdWeeksText():'', next=(F>=2)?'Phase 2.':'the Rolling Vacation Auction.'; // [398 · §302] W39–W41 (typeof = sandbox convention)
+  if(!L) return 'The auction has '+N+' phases. Phase 1 is for high-demand weeks only, and none are set. All weeks open in '+next;
+  return 'The auction has '+N+' phases. Phase 1 is for the high-demand weeks only: '+L+'. All other weeks open in '+next;
+}
+// [398 · §302] The high-demand weeks by name, each name once in date order with its weeks' Sunday dates ("Mar 21"), the last joined
+// by "and": the ticked holiday weeks under their names, the summer weeks ticked high-demand as "Summer". Empty when there are none.
+function hdWeeksText(){
+  const MO=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const wks=AC.holidays.filter(h=>h.highDemand).map(h=>[h.wk,h.label]).concat(_acSummerHdList().map(wk=>[wk,'Summer'])).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);
+  const byName=new Map();
+  wks.forEach(([wk,name])=>{ const d=new Date(wk+'T00:00:00'); if(!byName.has(name)) byName.set(name,[]); byName.get(name).push(MO[d.getMonth()]+' '+d.getDate()); });
+  const parts=[...byName].map(([name,days])=>name+' ('+days.join(', ')+')');
+  return parts.length<2?(parts[0]||''):parts.slice(0,-1).join(', ')+' and '+parts[parts.length-1];
 }
 // ── end of the twin block ──
 function isRvaPhase(p){ return Number(p)>fallPhases(); }
@@ -1462,12 +1473,21 @@ function _acNormalize(raw){
       if(typeof h.note==='string'&&h.note.trim()) _e.note=h.note.trim().slice(0,60); // [267/138] informational dual label (e.g. Presidents' Day on Ski Week)
       holidays.push(_e);
     }
-    return {year:y,summerStartWk:raw.summerStartWk,summerEndWk:raw.summerEndWk,holidays};
+    const out={year:y,summerStartWk:raw.summerStartWk,summerEndWk:raw.summerEndWk,holidays};
+    // [398 · §302] summerHd = the summer weeks ticked high-demand: real dates only, no duplicates, sorted. The key is added ONLY when
+    // the list is not empty, so every calendar saved without it normalizes exactly as it always has.
+    const _day=w=>{ if(typeof w!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(w)) return false; const t=Date.parse(w+'T00:00:00Z'); return !isNaN(t)&&new Date(t).toISOString().slice(0,10)===w; };
+    const shd=Array.isArray(raw.summerHd)?[...new Set(raw.summerHd.filter(_day))].sort():[];
+    if(shd.length) out.summerHd=shd;
+    return out;
   }catch(_){ return null; }
 }
 let AC=AC_DEFAULTS, AC_SOURCE='defaults';
 try{ const _c=_acNormalize(JSON.parse(localStorage.getItem('auctionConfigV1')||'null')); if(_c){ AC=_c; AC_SOURCE='cache'; } }catch(_){}
 const AC_YEAR=AC.year;
+// [398 · §302] TWIN (staff = admin, character for character): the summer weeks ticked high-demand — AC.summerHd inside the summer
+// range, less any ticked holiday week. They open in a high-demand-only Phase 1 but keep the summer floor and the name "Summer".
+function _acSummerHdList(){ const s=Array.isArray(AC.summerHd)?AC.summerHd:[], hol=new Set(AC.holidays.filter(h=>h.highDemand).map(h=>h.wk)); return s.filter(wk=>wk>=AC.summerStartWk&&wk<=AC.summerEndWk&&!hol.has(wk)); }
 function _acCheckRemote(settings){
   try{
     const remote=_acNormalize(settings?settings.auctionConfig:null);
@@ -1636,10 +1656,11 @@ function bfRulesBullets(){
   // [COPY-3 · owner ruling, 19 Aug 2026] A floor that is NOT set produces NO sentence —
   // the rule is eliminated, never announced as absent. With neither floor set the list comes
   // back EMPTY, so callers must cope with that.
-  if(f.highDemand!=='none'&&f.highDemand===f.summer){
+  // [398 · §302] No high-demand line either when no holiday week is ticked (W44); summer weeks ticked high-demand are never named here.
+  if(f.highDemand!=='none'&&f.highDemand===f.summer&&names){
     return [`On the highest demand weeks (${names}) and all summer weeks, your bid must be ${f.highDemand} or better`];
   }
-  if(f.highDemand!=='none') out.push(`On the highest demand weeks (${names}), your bid must be ${f.highDemand} or better`);
+  if(f.highDemand!=='none'&&names) out.push(`On the highest demand weeks (${names}), your bid must be ${f.highDemand} or better`);
   if(f.summer!=='none') out.push(`On summer weeks, your bid must be ${f.summer} or better`);
   return out;
 }
@@ -4384,7 +4405,7 @@ function openPriorityModal(wk){
   const winfo=document.getElementById("prioWeekInfo");
   if(winfo){
     let html=`<div style="font-weight:700;color:#1f2329;font-size:.95rem">${meta.range}</div>`;
-    if(meta.special) html+=`<div style="margin-top:4px;color:${meta.special.color};font-size:.72rem;font-weight:600">${String(meta.special.label).replace(/(?:\p{Extended_Pictographic}|\p{Regional_Indicator})[\uFE0E\uFE0F\u200D]*\s?/gu,'')}${summerAlso(meta)?' · Summer':''}${meta.highPriorityOnly?' · High demand':''}</div>`;
+    if(meta.special) html+=`<div style="margin-top:4px;color:${meta.special.color};font-size:.72rem;font-weight:600">${String(meta.special.label).replace(/(?:\p{Extended_Pictographic}|\p{Regional_Indicator})[\uFE0E\uFE0F\u200D]*\s?/gu,'')}${summerAlso(meta)?' · Summer':''}</div>`; // [398 · §302] W38: no "· High demand" tag
     if(typeof _wwLabelOn==='function'&&_wwLabelOn(wk)){ html+='<div style="margin-top:4px;font-size:.72rem">'+COMP_LABEL_HTML+'</div>'; const _mb=(typeof _wwMinBid==='function')?_wwMinBid(wk):null; if(_mb!==null) html+='<div id="wwMinLine" style="margin-top:2px;font-size:.72rem">'+_wwMinHtml(_mb)+'</div>'; } // [196 · §250] the same label as the week card; typeof = sandbox convention · [214 · §279] and the minimum bid
     if(typeof _wwWouldTip==='function'&&_wwWouldTip(user,wk)) html+='<div id="wwTipNote" style="margin-top:8px;padding:8px 10px;background:rgba(111,106,96,.18);border:1px solid rgba(74,79,90,.6);border-radius:8px;font-size:.8rem;color:#5e5c57;line-height:1.45">'+((typeof _compTipText==='function')?_compTipText():COMP_TIP_TEXT)+'</div>'; // [197 · §254] typeof = sandbox convention · [216 · §282] the words follow the rule set
     winfo.innerHTML=html;
@@ -6166,7 +6187,7 @@ function renderCalendar(user,ap){
       if(meta.special){
         const specRow=document.createElement("div"); specRow.style.cssText="margin-bottom:3px";
         let specHtml=`<span style="color:${meta.special.color};font-size:.65rem;font-weight:600">${String(meta.special.label).replace(/(?:\p{Extended_Pictographic}|\p{Regional_Indicator})[\uFE0E\uFE0F\u200D]*\s?/gu,'')}${summerAlso(meta)?' · Summer':''}</span>`;
-        if(meta.highPriorityOnly) specHtml+=` · <span style="color:#6f6a60;font-size:.65rem;font-weight:600">High demand</span>`;
+        // [398 · §302] W38: no "· High demand" tag on the open week card (holiday names and "· Summer" stay)
         specRow.innerHTML=specHtml; div.appendChild(specRow);
       }
       // Line 3: # FTE Available
@@ -6883,7 +6904,7 @@ function _alWeekState(user,wk){
 function _alWeekName(wk){ const m=weekMeta[wk]; return 'Week '+m.weekNum+' · '+m.range; }
 // Step 1's row: "Week 24 · Jun 13 – Jun 19" (plan §11l item 2, test page v5) — the short dates of the week's Sunday and Saturday. [fix round, review lane 3 L3]
 function _alWeekShort(wk){ const m=weekMeta[wk]; const s=new Date(m.date); s.setDate(s.getDate()+6); return 'Week '+m.weekNum+' · '+m.shortDate+' – '+s.toLocaleDateString('en-US',{month:'short',day:'numeric'}); }
-function _alWeekLabel(wk){ const m=weekMeta[wk]; return (m&&m.special)?(m.special.label+(summerAlso(m)?' · Summer':'')+(m.highPriorityOnly?' · High demand':'')):''; }
+function _alWeekLabel(wk){ const m=weekMeta[wk]; return (m&&m.special)?(m.special.label+(summerAlso(m)?' · Summer':'')):''; } // [398 · §302] W38: no "· High demand" tag
 // The week panel, as the bid box draws it: the week, its label, and "Competition week" with its "Minimum new bid" when it is one.
 function _alPanelHtml(wk){
   const m=weekMeta[wk]; let h='<div style="font-weight:700;color:#1f2329;font-size:.95rem">'+escH(_alWeekName(wk))+'</div>';
@@ -8111,7 +8132,7 @@ Choose which alerts you get under E-mail alerts at the top of the site. Results,
 
 ${B('RULES AND REMINDERS OF THE AUCTION')}
 ${bullets([
-  ((typeof phasesRuleLine==='function')?phasesRuleLine():`The auction has 4 phases. Phase 1 is for certain high-demand weeks only; all other weeks open in Phase 2.`), // [231 · E2] word for word as on the page (the fallback is for test sandboxes)
+  ((typeof phasesRuleLine==='function')?phasesRuleLine():`The auction has 4 phases. Phase 1 is for the high-demand weeks only: Ski Week (Feb 14), Spring Break (Mar 28, Apr 4), Thanksgiving (Nov 21), Christmas (Dec 19) and New Year's (Dec 26). All other weeks open in Phase 2.`), // [231 · E2] word for word as on the page (the fallback is for test sandboxes) · [398 · §302] W39 at the default calendar
   ((typeof rvaRuleLine==='function')?rvaRuleLine():`Phase 4 is the Rolling Vacation Auction that has rounds periodically throughout 2027. Each round functions as its own phase.`), // [230 · E1] owner 28 Oct 2026 10:16 AM, word for word as on the page (the fallback is for test sandboxes)
   // [220 · §288] the alert list, the sentence above and this list: plan §11a / §11c / §11e, word for word as on the page · [228 · §297] the rule lines of Build C · [229 · §297] item 188
   ...capBullets,

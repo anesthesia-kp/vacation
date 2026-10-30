@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 397;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 398;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -989,14 +989,17 @@ thead th{color:var(--t2)}
           <div class="tog" id="setupLockTog" onclick="toggleSetupLock()"></div>
         </div>
       </div>
-      <!-- AUCTION CALENDAR [build 265 · B5] — year, holiday weeks, summer range. Locked once
-           Phase 1 begins (rehearsal included); values survive Reset Auction (adminSettings merge). -->
+      <!-- CALENDAR AND PHASES [build 265 · B5 · 398 · §303 A2] — the year, the high-demand weeks and the summer range (adminSettings.auctionConfig),
+           and under them the Phases setting (adminSettings.phasePlan, its "Now:" line painted by renderPhasePlanCard into #phasePlanState). ONE Edit
+           opens the builder (openAuctionCalendarEditor), Phases at its top. The calendar is locked while a phase is running; the phases and the year
+           are fixed once Phase 1 begins; values survive Reset Auction (adminSettings merge). -->
       <div class="card">
-        <div class="card-title">Auction Calendar</div>
+        <div class="card-title">Calendar and Phases</div>
         <div class="trow" style="align-items:flex-start">
           <div style="flex:1">
-            <div class="trow-label">Year, holiday weeks &amp; summer range</div>
+            <div class="trow-label">Year, high-demand weeks &amp; summer range</div>
             <div class="trow-desc" id="acSummary">Loading…</div>
+            <div id="phasePlanState" class="trow-desc" style="margin-top:4px;font-weight:700"></div>
           </div>
           <button class="btn btn-primary" id="acEditBtn" style="flex:unset;white-space:nowrap" onclick="openAuctionCalendarEditor()">Edit</button>
         </div>
@@ -1022,7 +1025,7 @@ thead th{color:var(--t2)}
            (the rules as they have always been); ON = Strict (plan §3). A FROZEN key (FROZEN_CONFIG_KEYS + firestore.rules frozenConfigKeys()):
            editable before Phase 1 and in the gaps between phases and Phase 4 rounds once results are sent; survives Reset Auction (§283). -->
       <div class="card">
-        <div class="card-title">Bid rule set</div>
+        <div class="card-title">Competition weeks</div><!-- [398 · §303] A1 -->
         <div class="trow">
           <div>
             <div class="trow-label">Strict: a winning bid on a competition week can only be moved</div>
@@ -1057,20 +1060,7 @@ thead th{color:var(--t2)}
           <button class="btn btn-primary" id="topBidEditBtn" style="flex:unset;white-space:nowrap" onclick="openTopBidEditor()">Edit</button>
         </div>
       </div>
-      <!-- PHASES [395 · E2, DECISIONS §298] — one stored value, adminSettings.phasePlan {fall: 1|2|3, p1All: true|false} (phasePlan(); never saved or
-           anything else = {fall:3, p1All:false}). In FROZEN_CONFIG_KEYS + SET_ONCE_KEYS and firestore.rules frozenConfigKeys() / setOnceKeys(); fixed
-           once Phase 1 begins (stricter than the bid numbers: changing it mid-auction would renumber phases already run); survives Reset Auction.
-           The Now line is painted by renderPhasePlanCard; Edit opens the pop-up card (openPhasePlanEditor). -->
-      <div class="card">
-        <div class="card-title">Phases</div>
-        <div class="trow" style="align-items:flex-start">
-          <div style="flex:1">
-            <div class="trow-desc">How many Fall phases run before the Rolling Vacation Auction, and whether Phase 1 opens every week.</div>
-            <div id="phasePlanState" class="trow-desc" style="margin-top:4px;font-weight:700"></div>
-          </div>
-          <button class="btn btn-primary" id="phasePlanEditBtn" style="flex:unset;white-space:nowrap" onclick="openPhasePlanEditor()">Edit</button>
-        </div>
-      </div>
+      <!-- [398 · §303 A2] the Phases setting is on the Calendar and Phases card (its "Now:" line) and in section 1 of that card's builder -->
       <!-- COMBINATION BIDS [381 · §285] — one stored value, adminSettings.comboBids: the combinations bidders may use, written in strength order
            (e.g. ["1,2,3","1,2","2,3"]); never saved or malformed = today's set (1/2/3 and 1/2); [] = none. A FROZEN key (FROZEN_CONFIG_KEYS +
            firestore.rules frozenConfigKeys()), like the bid rule set: editable before Phase 1 and in the gaps between phases and Phase 4 rounds
@@ -2932,7 +2922,13 @@ function _acNormalize(raw){
       if(typeof h.note==='string'&&h.note.trim()) _e.note=h.note.trim().slice(0,60); // [267/138] informational dual label (e.g. Presidents' Day on Ski Week)
       holidays.push(_e);
     }
-    return {year:y,summerStartWk:raw.summerStartWk,summerEndWk:raw.summerEndWk,holidays};
+    const out={year:y,summerStartWk:raw.summerStartWk,summerEndWk:raw.summerEndWk,holidays};
+    // [398 · §302] summerHd = the summer weeks ticked high-demand: real dates only, no duplicates, sorted. The key is added ONLY when
+    // the list is not empty, so every calendar saved without it normalizes exactly as it always has.
+    const _day=w=>{ if(typeof w!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(w)) return false; const t=Date.parse(w+'T00:00:00Z'); return !isNaN(t)&&new Date(t).toISOString().slice(0,10)===w; };
+    const shd=Array.isArray(raw.summerHd)?[...new Set(raw.summerHd.filter(_day))].sort():[];
+    if(shd.length) out.summerHd=shd;
+    return out;
   }catch(_){ return null; }
 }
 let AC=AC_DEFAULTS, AC_SOURCE='defaults';
@@ -2941,6 +2937,9 @@ const AC_YEAR=AC.year;
 const AC_SUMMER_START=new Date(AC.summerStartWk+'T00:00:00');
 const AC_SUMMER_END  =new Date(AC.summerEndWk+'T00:00:00');
 function _acHDList(){ return AC.holidays.filter(h=>h.highDemand).map(h=>h.wk); }
+// [398 · §302] TWIN (staff = admin, character for character): the summer weeks ticked high-demand — AC.summerHd inside the summer
+// range, less any ticked holiday week. They open in a high-demand-only Phase 1 but keep the summer floor and the name "Summer".
+function _acSummerHdList(){ const s=Array.isArray(AC.summerHd)?AC.summerHd:[], hol=new Set(AC.holidays.filter(h=>h.highDemand).map(h=>h.wk)); return s.filter(wk=>wk>=AC.summerStartWk&&wk<=AC.summerEndWk&&!hol.has(wk)); }
 function _acTagMap(){ const m={}; AC.holidays.forEach(h=>{ m[h.wk]=h.short; }); return m; }
 function _acNameMap(){ const m={}; AC.holidays.forEach(h=>{ m[h.wk]=h.label; }); return m; }
 // Authoritative check: called from the adminSettings snapshot. A difference between the
@@ -3052,7 +3051,7 @@ function _bfNormalize(raw){
 }
 function bfFloors(){ return _bfNormalize(adminSettings?adminSettings.bidFloors:null)||BF_DEFAULTS; }
 function bfFloorFor(wk){
-  if(HIGH_DEMAND_WEEKS.has(wk)) return bfFloors().highDemand;
+  if(HIGH_DEMAND_WEEKS.has(wk)&&!(typeof SUMMER_HD_WEEKS!=='undefined'&&SUMMER_HD_WEEKS.has(wk))) return bfFloors().highDemand; // [398 · §302] a summer week ticked high-demand takes the summer floor below (typeof = sandbox convention)
   const d=new Date(wk+'T00:00:00');
   if(d>=AC_SUMMER_START&&d<=AC_SUMMER_END) return bfFloors().summer;
   return 'none';
@@ -3114,8 +3113,19 @@ function p1AllWeeks(){ return phasePlan().p1All; }
 function phasesRuleLine(){
   const F=fallPhases(), N=F+1;
   if(p1AllWeeks()) return 'The auction has '+N+' phases. All weeks are open from Phase 1.';
-  if(F>=2) return 'The auction has '+N+' phases. Phase 1 is for certain high-demand weeks only; all other weeks open in Phase 2.';
-  return 'The auction has '+N+' phases. Phase 1 is for certain high-demand weeks only; all other weeks open in the Rolling Vacation Auction.';
+  const L=(typeof hdWeeksText==='function')?hdWeeksText():'', next=(F>=2)?'Phase 2.':'the Rolling Vacation Auction.'; // [398 · §302] W39–W41 (typeof = sandbox convention)
+  if(!L) return 'The auction has '+N+' phases. Phase 1 is for high-demand weeks only, and none are set. All weeks open in '+next;
+  return 'The auction has '+N+' phases. Phase 1 is for the high-demand weeks only: '+L+'. All other weeks open in '+next;
+}
+// [398 · §302] The high-demand weeks by name, each name once in date order with its weeks' Sunday dates ("Mar 21"), the last joined
+// by "and": the ticked holiday weeks under their names, the summer weeks ticked high-demand as "Summer". Empty when there are none.
+function hdWeeksText(){
+  const MO=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const wks=AC.holidays.filter(h=>h.highDemand).map(h=>[h.wk,h.label]).concat(_acSummerHdList().map(wk=>[wk,'Summer'])).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);
+  const byName=new Map();
+  wks.forEach(([wk,name])=>{ const d=new Date(wk+'T00:00:00'); if(!byName.has(name)) byName.set(name,[]); byName.get(name).push(MO[d.getMonth()]+' '+d.getDate()); });
+  const parts=[...byName].map(([name,days])=>name+' ('+days.join(', ')+')');
+  return parts.length<2?(parts[0]||''):parts.slice(0,-1).join(', ')+' and '+parts[parts.length-1];
 }
 // ── end of the twin block ──
 function isRvaPhase(p){ return Number(p)>fallPhases(); }
@@ -3191,10 +3201,11 @@ function bfRulesBullets(){
   // [COPY-3 · owner ruling, 19 Aug 2026] A floor that is NOT set produces NO sentence —
   // the rule is eliminated, never announced as absent. With neither floor set the list comes
   // back EMPTY, so callers must cope with that.
-  if(f.highDemand!=='none'&&f.highDemand===f.summer){
+  // [398 · §302] No high-demand line either when no holiday week is ticked (W44); summer weeks ticked high-demand are never named here.
+  if(f.highDemand!=='none'&&f.highDemand===f.summer&&names){
     return [`On the highest demand weeks (${names}) and all summer weeks, your bid must be ${f.highDemand} or better`];
   }
-  if(f.highDemand!=='none') out.push(`On the highest demand weeks (${names}), your bid must be ${f.highDemand} or better`);
+  if(f.highDemand!=='none'&&names) out.push(`On the highest demand weeks (${names}), your bid must be ${f.highDemand} or better`);
   if(f.summer!=='none') out.push(`On summer weeks, your bid must be ${f.summer} or better`);
   return out;
 }
@@ -3208,32 +3219,27 @@ function _acFmtWkShort(wk){ const d=new Date(wk+'T00:00:00');
   return mo+' '+d.getDate(); }
 function renderAuctionConfigCard(){
   const el=document.getElementById('acSummary'); if(!el) return;
-  const hd=_acHDList().length, locked=!cfgUnlockedNow(); // [build 268 · GAP]
+  const locked=!cfgUnlockedNow(); // [build 268 · GAP]
   const _su=(typeof _setupLocks==='function')&&_setupLocks('auctionConfig'); // [383 · §287] the setup lock in force
   const sIdx=_wkNumByISO[AC.summerStartWk]||'?', eIdx=_wkNumByISO[AC.summerEndWk]||'?';
-  el.innerHTML=`<b>${AC_YEAR}</b> · ${mondays.length} weeks · ${AC.holidays.length} labeled holiday${AC.holidays.length!==1?'s':''} `+
-    `(${hd} high-demand) · Summer Wk ${sIdx}–${eIdx} (${_acFmtWkShort(AC.summerStartWk)} – ${_acFmtWkShort(AC.summerEndWk)})`+
+  const _sh=(typeof _acSummerHdList==='function')?_acSummerHdList().length:0, hd=_acHDList().length+_sh; // [398 · §302] W31: every high-demand week, and how many of them are summer weeks
+  el.innerHTML=`<b>${AC_YEAR}</b> · ${mondays.length} weeks · ${hd} high-demand week${hd!==1?'s':''}${_sh?` (${_sh} in summer)`:''} `+
+    `· Summer Wk ${sIdx}–${eIdx} (${_acFmtWkShort(AC.summerStartWk)} – ${_acFmtWkShort(AC.summerEndWk)})`+
     (AC_SOURCE==='defaults'?' · <i>built-in defaults (no saved config)</i>':'')+
     (_su?' <span style="color:var(--yellow)">· locked for this auction</span>':((locked?' <span style="color:var(--yellow)">· locked while a phase is running — editable between phases (once results are sent)</span>':'')+((phase1Started()&&!locked)?' <span style="color:var(--yellow)">· between-phases edit: the YEAR cannot change (Reset only)</span>':'')));
   const btn=document.getElementById('acEditBtn');
   if(btn){ btn.disabled=locked||_su; btn.title=_su?SETUP_LOCKED_TEXT:(locked?'Locked while a phase is running — editable between phases, once results are sent.':''); }
 }
 let _acDraft=null;
-// [build 267 · CAL2] The SIX high-demand weeks are FIXED IDENTITY — the same names, icons
-// and colors every year (owner ruling 13 Aug): Ski Week, two Spring Breaks, Thanksgiving,
-// Christmas, New Year's. They define Phase 1. Only their WEEK PLACEMENT is chosen per
-// year; they cannot be renamed, re-iconed, un-flagged, added to, or deleted.
-// Thanksgiving/Christmas/New Year's are computable (✨ button); Ski + the Spring Breaks
-// are school-calendar dates the admin must set explicitly — NO default, and they clear
-// when the year changes (school calendars do not carry across years).
-const AC_HD_FIXED=[
-  {key:'ski',    label:'Ski Week',     emoji:'⛷️', short:'Ski',    auto:false},
-  {key:'spring1',label:'Spring Break', emoji:'🌸', short:'Spring', auto:false},
-  {key:'spring2',label:'Spring Break', emoji:'🌸', short:'Spring', auto:false},
-  {key:'thanks', label:'Thanksgiving', emoji:'🦃', short:'Thanks', auto:true},
-  {key:'xmas',   label:'Christmas',    emoji:'🎄', short:'Xmas',   auto:true},
-  {key:'nye',    label:"New Year's",   emoji:'🎆', short:'NYE',    auto:true},
-];
+// [398 · §302] THE BUILDER - one pop-up, "Calendar and Phases", top to bottom: 1 Phases (until Phase 1 begins; then shown, fixed) · the year
+// (fixed once Phase 1 begins) · 2 Thanksgiving / Christmas / New Year's (each a week, filled in from the year, and a high-demand tick) ·
+// 3 Spring Break (0-3 weeks) · 4 Ski Week (0-1 week) - from the school calendars, each with a high-demand tick [398 · §304] · 5 Summer (first and last week, then a
+// tick for each summer week marked high-demand, saved as auctionConfig.summerHd; shown only while Phase 1 is high-demand weeks only).
+// ONE Save, ONE merge write: auctionConfig, plus phasePlan only when it changed (only possible before Phase 1).
+// The draft (_acDraft): year · phases (fall, p1All) · hol.thanks / hol.xmas / hol.nye (idx, on) · spring and ski (lists of idx) ·
+// springOn and skiOn (their high-demand ticks, in step with spring and ski; a missing one counts as ticked) [398 · §304] ·
+// summerStartIdx / summerEndIdx · summerHd (a Set of idx). idx = the week's number in the draft's year; 0 = not chosen yet.
+const AC_HOL3=[['thanks','Thanksgiving'],['xmas','Christmas'],['nye',"New Year's"]]; // [398 · §302] section 2's three holidays, in order: draft key, name
 // Auto-labeled (non-high-demand) federal holidays — computed entirely from the year, no
 // admin input, purely decorative: 🕊️ MLK · 🇺🇸 Memorial Day · 🎇 July 4th · 🛠️ Labor Day.
 function _acAutoHolidays(year){
@@ -3254,23 +3260,20 @@ function _acSuggestedHd(year){ const m={};
     else if(/Christmas/i.test(h.label)) m.xmas=h.idx;
     else m.nye=h.idx; });
   return m; }
-function _acDraftFromAC(){
+function _acDraftFromAC(){ // [398 · §302] the builder's draft, read from the saved calendar by name (a missing holiday: suggested and ticked)
   const idxOf=wk=>_wkNumByISO[wk]||0;
-  // [build 268 · HDCB] Search ALL holidays (not just highDemand) — an unchecked fixed
-  // week is stored with highDemand:false and must round-trip into the editor. The five
-  // auto federal labels never collide with the fixed-six labels, so label-match is safe.
-  const hds=AC.holidays.filter(h=>!AUTO_HOLIDAY_LABELS.has(String(h.label).toLowerCase())).slice();
-  const take=lbl=>{ const i=hds.findIndex(h=>h.label.toLowerCase()===String(lbl).toLowerCase()); return i>=0?hds.splice(i,1)[0]:null; };
-  const ski=take('Ski Week'), s1=take('Spring Break'), s2=take('Spring Break'),
-        th=take('Thanksgiving'), xm=take('Christmas'), ny=take("New Year's");
-  // hdOn: checked = high-demand (default TRUE — an entry is only "off" when it was
-  // explicitly saved with highDemand:false; a missing entry defaults to checked).
-  const on=e=>e?e.highDemand!==false:true;
-  return {year:AC_YEAR,
+  // [build 268 · HDCB] Search ALL holidays (not just highDemand) — an unticked week is stored with highDemand:false and must round-trip into
+  // the builder. The auto federal labels never collide with the builder's labels, so label-match is safe.
+  const hds=AC.holidays.filter(h=>!AUTO_HOLIDAY_LABELS.has(String(h.label).toLowerCase())).slice().sort((a,b)=>a.wk<b.wk?-1:(a.wk>b.wk?1:0));
+  const named=lbl=>hds.filter(h=>h.label.toLowerCase()===String(lbl).toLowerCase()).map(h=>({idx:idxOf(h.wk),on:h.highDemand!==false})).filter(h=>h.idx);
+  const sug=_acSuggestedHd(AC_YEAR), hol={};
+  for(const [k,l] of AC_HOL3){ const e=named(l)[0]; hol[k]=e?{idx:e.idx,on:e.on}:{idx:sug[k]||0,on:true}; }
+  const sh=(typeof _acSummerHdList==='function')?_acSummerHdList():[];
+  return {year:AC_YEAR, phases:phasePlan(), phases0:phasePlan(), hol, // [398 · review F4] phases0 = the phases as the pop-up opened
+    spring:named('Spring Break').slice(0,3).map(h=>h.idx), ski:named('Ski Week').slice(0,1).map(h=>h.idx),
+    springOn:named('Spring Break').slice(0,3).map(h=>h.on), skiOn:named('Ski Week').slice(0,1).map(h=>h.on), // [398 · §304] each week's stored tick
     summerStartIdx:idxOf(AC.summerStartWk)||1, summerEndIdx:idxOf(AC.summerEndWk)||1,
-    hd:{ski:ski?idxOf(ski.wk):0, spring1:s1?idxOf(s1.wk):0, spring2:s2?idxOf(s2.wk):0,
-        thanks:th?idxOf(th.wk):0, xmas:xm?idxOf(xm.wk):0, nye:ny?idxOf(ny.wk):0},
-    hdOn:{ski:on(ski), spring1:on(s1), spring2:on(s2), thanks:on(th), xmas:on(xm), nye:on(ny)}};
+    summerHd:new Set(sh.map(idxOf).filter(Boolean))};
 }
 // [build 268 · HDCB] The five auto federal labels, for the label-match exclusion above.
 const AUTO_HOLIDAY_LABELS=new Set(['mlk day','memorial day','july 4th','labor day',"presidents' day"]);
@@ -3306,82 +3309,107 @@ function _acWkSelect(id,sunds,sel,onch,allowUnset){
   for(let i=1;i<=sunds.length;i++) o+=_acWkOption(sunds,i,sel);
   return `<select class="inp" id="${id}" style="width:auto" ${onch?`onchange="${onch}"`:''}>${o}</select>`;
 }
-function _acEditorBody(){
-  const d=_acDraft, sunds=getSundays(d.year);
+// [398 · §302] The weeks sections 2-4 use, each with its name (a summer week among them shows that name instead of a tick); and the count line.
+function _acUsedAbove(d){ const m={};
+  for(const [k,l] of AC_HOL3) if(d.hol[k].idx) m[d.hol[k].idx]=l;
+  d.spring.forEach(i=>{ if(i) m[i]='Spring Break'; }); d.ski.forEach(i=>{ if(i) m[i]='Ski Week'; });
+  return m; }
+function _acHdCount(d){ const s=new Set(), u=_acUsedAbove(d);
+  for(const [k] of AC_HOL3) if(d.hol[k].on&&d.hol[k].idx) s.add(d.hol[k].idx);
+  for(const k of ['spring','ski']) d[k].forEach((i,j)=>{ if(i&&(d[k+'On']||[])[j]!==false) s.add(i); }); // [398 · §304] ticked ones only
+  if(!d.phases.p1All) d.summerHd.forEach(i=>{ if(i>=d.summerStartIdx&&i<=d.summerEndIdx&&!u[i]) s.add(i); });
+  return s.size; }
+function _acCountText(d){ const n=_acHdCount(d); return n+' high-demand week'+(n!==1?'s':'')+' in all.'; }
+function _acEditorBody(){ // [398 · §302] the builder's sections, in his order (the approved mock, review.html A)
+  const d=_acDraft, sunds=getSundays(d.year), n=sunds.length, begun=phase1Started();
   const yearNow=new Date().getFullYear();
   let years=[]; for(let y=yearNow;y<=yearNow+15;y++) years.push(y);
   if(!years.includes(d.year)) years.unshift(d.year);
-  // [build 267 · CAL2] Six FIXED rows — name/icon are plain text (not editable), no
-  // delete, no add. Only the week is chosen.
-  // [build 268 · HDCB] The High-demand CHECKBOX returns (owner ruling 15 Aug): checked =
-  // high-demand (defines Phase 1, HD floor applies) — the default; unchecked = a regular
-  // week that keeps its label as decoration. The week must be chosen either way.
-  const rows=AC_HD_FIXED.map(f=>`<div style="display:flex;gap:8px;align-items:center;margin:3px 0">
-      <span style="width:150px;font-weight:600">${f.label}</span>
-      ${_acWkSelect('acHd_'+f.key,sunds,d.hd[f.key],null,true)}
-      <label style="display:flex;gap:4px;align-items:center;font-size:11px;cursor:pointer"><input type="checkbox" id="acHdOn_${f.key}"${d.hdOn[f.key]?' checked':''}> High demand</label>
-      <span style="font-size:10.5px;color:var(--t2)">${f.auto?'auto-suggested':'from the school calendar'}</span>
-    </div>`).join('');
-  const autoH=_acAutoHolidays(d.year);
-  const _hdIdxs=new Set(Object.values(d.hd).filter(Boolean));
-  const autoLine=autoH.map(h=>`${h.label} (Wk ${h.idx}${_hdIdxs.has(h.idx)?' — shares a high-demand week':''})`).join(' · ');
-  const w53=sunds.length===53?`<div class="cmodal-info" style="margin-top:6px">${d.year} has 53 weeks; Week 53 is a standard week.</div>`:'';
-  return `<div style="font-size:13px;max-height:60vh;overflow:auto">
-    <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
-      <b>Auction year</b>
-      <select class="inp" id="acYearSel" style="width:auto" onchange="_acYearChanged()"${phase1Started()?' disabled title="Fixed mid-auction — Reset Auction to start a new year"':''}>${years.map(y=>`<option value="${y}"${y===d.year?' selected':''}>${y}</option>`).join('')}</select>${phase1Started()?'<span style="font-size:10.5px;color:var(--yellow)">year fixed mid-auction</span>':''}
-      <button class="btn" style="flex:unset" onclick="_acSuggest()">Suggest Thanksgiving / Christmas / New Year's</button>
-    </div>
-    <div style="font-size:11px;color:var(--t2);margin-bottom:4px"><b>CHECKED weeks are high-demand${p1AllWeeks()?'':' and define Phase 1'} (5 default slots); unchecked ones are regular weeks, label kept.</b> All six need a week; set Ski Week and both Spring Breaks from the school calendars.</div>
-    <div id="acHolRows">${rows}</div>
-    <div style="font-size:11px;color:var(--t2);margin:8px 0 2px">Auto-labeled holidays: ${autoLine||'<i>none in range</i>'}</div>
-    <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-      <b>Summer</b> ${_acWkSelect('acSummerS',sunds,d.summerStartIdx)} → ${_acWkSelect('acSummerE',sunds,d.summerEndIdx)}
-    </div>
-    <div style="font-size:11px;color:var(--t2);margin-top:3px">4 default slots per week</div>
-    ${w53}
-    <div class="cmodal-warn" style="margin-top:8px">Saving reloads both sites. Settings lock at Phase 1 and survive Reset Auction.</div>
-  </div>`;
-}
-function _acReadDraftFromDom(){
-  const d=_acDraft; if(!d) return;
-  const y=document.getElementById('acYearSel'); if(y) d.year=Number(y.value)||d.year;
-  for(const f of AC_HD_FIXED){
-    const el=document.getElementById('acHd_'+f.key);
-    if(el) d.hd[f.key]=Number(el.value)||0; // 0 = not chosen yet
-    const cb=document.getElementById('acHdOn_'+f.key);
-    if(cb) d.hdOn[f.key]=!!cb.checked; // [build 268 · HDCB]
+  const SEC=(first,t)=>'<div style="'+(first?'padding:0 0 4px':'border-top:1px solid var(--b1);padding:12px 0 4px')+'"><div style="font-size:12px;color:var(--t2);font-weight:700;margin-bottom:4px">'+t+'</div>';
+  const HELP=t=>'<div style="font-size:11px;color:var(--t2);margin:2px 0 6px">'+t+'</div>';
+  const ROW=(nm,inner)=>'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:5px 0">'+(nm?'<span style="min-width:96px;font-weight:600;color:var(--t1)">'+nm+'</span>':'')+inner+'</div>';
+  const TICK=(id,on,t)=>'<label style="display:flex;gap:6px;align-items:center;font-size:12px;cursor:pointer;color:var(--t1)"><input type="checkbox" id="'+id+'"'+(on?' checked':'')+' onchange="_acTick()" style="width:16px;height:16px;margin:0;flex:none"> '+t+'</label>';
+  const CNT=(id,max,v)=>{ let o=''; for(let i=0;i<=max;i++) o+='<option value="'+i+'"'+(i===v?' selected':'')+'>'+i+'</option>'; return '<select class="inp" id="'+id+'" style="width:auto" onchange="_acRedraw()">'+o+'</select>'; };
+  let h='<div id="acBld" style="font-size:13px">';
+  // 1 · Phases, then the year (every date below depends on it)
+  h+=SEC(true,'1 · Phases')+(begun
+    ?'<div style="font-size:13px;font-weight:700;color:var(--t1)">'+esc(phasePlanText(d.phases)+' — set for this auction')+'</div>'
+    :'<div onchange="_acRedraw()">'+_phasePlanEditorBody(d.phases)+'</div>');
+  h+='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 5px"><b style="color:var(--t1)">Auction year</b>'
+    +'<select class="inp" id="acYearSel" style="width:auto" onchange="_acYearChanged()"'+(begun?' disabled title="Fixed once Phase 1 begins."':'')+'>'+years.map(y=>'<option value="'+y+'"'+(y===d.year?' selected':'')+'>'+y+'</option>').join('')+'</select>'
+    +(begun?'<span style="font-size:10.5px;color:var(--yellow)">Fixed once Phase 1 begins.</span>':'')+'</div></div>';
+  // 2 · the three holidays: a week and a high-demand tick each
+  h+=SEC(false,'2 · Thanksgiving, Christmas, New Year\'s')+HELP('Ticked = high-demand. Unticked keeps its name as an ordinary week.');
+  for(const [k,l] of AC_HOL3) h+=ROW(esc(l),_acWkSelect('acHol_'+k,sunds,d.hol[k].idx,'_acRedraw()',!d.hol[k].idx)+TICK('acHolOn_'+k,d.hol[k].on,'High demand'));
+  h+='</div>';
+  // 3 · Spring Break (0-3) and 4 · Ski Week (0-1): a count, then that many weeks, each with a high-demand tick [398 · §304]
+  for(const [key,id,l,max,num] of [['spring','acSpring','Spring Break',3,3],['ski','acSki','Ski Week',1,4]]){
+    const arr=d[key];
+    h+=SEC(false,num+' · '+l)+HELP('From the school calendar. Ticked = high-demand.')+ROW('','<span>How many weeks?</span>'+CNT(id+'N',max,arr.length));
+    arr.forEach((v,i)=>{ h+=ROW(esc(l)+(arr.length>1?' '+(i+1):''),_acWkSelect(id+'_'+i,sunds,v,'_acRedraw()',true)+TICK(id+'On_'+i,(d[key+'On']||[])[i]!==false,'High demand')); }); // [398 · §304]
+    h+='</div>';
   }
-  const ss=document.getElementById('acSummerS'), se=document.getElementById('acSummerE');
-  if(ss) d.summerStartIdx=Number(ss.value)||d.summerStartIdx;
-  if(se) d.summerEndIdx=Number(se.value)||d.summerEndIdx;
+  // 5 · Summer: the range, then one tick per summer week (only while Phase 1 is high-demand weeks only)
+  h+=SEC(false,'5 · Summer')+ROW('First week',_acWkSelect('acSummerS',sunds,d.summerStartIdx,'_acRedraw()'))+ROW('Last week',_acWkSelect('acSummerE',sunds,d.summerEndIdx,'_acRedraw()'));
+  if(d.phases.p1All) h+='<div style="font-size:11px;color:var(--t2);margin-top:6px">Phase 1 opens every week, so no summer week needs marking.</div>';
+  else if(d.summerStartIdx<=d.summerEndIdx){
+    const u=_acUsedAbove(d), fed={};
+    _acAutoHolidays(d.year).forEach(x=>{ fed[x.idx]=(fed[x.idx]?fed[x.idx]+' · ':'')+x.label; });
+    let rows='';
+    for(let i=d.summerStartIdx;i<=d.summerEndIdx&&i<=n;i++){
+      const lbl='Wk '+i+' · '+_acFmtWkShort(dateKey(sunds[i-1]))+(fed[i]?' · '+fed[i]:'');
+      rows+=u[i]?'<div style="font-size:12px;color:var(--t2);padding:3px 0 3px 22px">'+esc(lbl+' — set above as '+u[i])+'</div>'
+        :'<div style="padding:3px 0">'+TICK('acSh_'+i,d.summerHd.has(i),esc(lbl))+'</div>';
+    }
+    h+='<div style="font-size:12px;color:var(--t2);font-weight:600;margin:8px 0 4px">Which summer weeks are high-demand? Each keeps the summer floor.</div>'
+      +'<div style="display:grid;grid-template-columns:1fr;gap:2px;max-height:260px;overflow:auto;border:1px solid var(--b1);border-radius:12px;padding:6px 10px;background:var(--s2)">'+rows+'</div>';
+  }
+  if(n===53) h+='<div class="cmodal-info" style="margin-top:6px">'+d.year+' has 53 weeks; Week 53 is a standard week.</div>';
+  h+='</div>';
+  h+='<div id="acHdCount" style="font-size:12px;font-weight:700;color:var(--t1);margin-top:8px">'+_acCountText(d)+'</div>';
+  h+='<div class="cmodal-warn" style="margin-top:8px">Saving reloads both sites. Phases and the year are fixed once Phase 1 begins; the rest can change between phases, once results are sent.</div>';
+  return h+'</div>';
 }
-function _acRefreshEditor(){ document.getElementById('cmBody').innerHTML=_acEditorBody(); }
+function _acReadDraftFromDom(){ // [398 · §302] every control the builder draws, into the draft (a control not drawn leaves its part as it is)
+  const d=_acDraft; if(!d) return;
+  const g=id=>document.getElementById(id), num=el=>Number(el.value)||0;
+  const y=g('acYearSel'); if(y) d.year=Number(y.value)||d.year;
+  let f=null, a=null;
+  for(const r of document.querySelectorAll('#cmBody input[name="ppFall"]')) if(r.checked) f=Number(r.value);
+  for(const r of document.querySelectorAll('#cmBody input[name="ppP1"]')) if(r.checked) a=r.value;
+  if(f!==null&&a!==null&&!phase1Started()) d.phases=phasePlanNormalize({fall:f,p1All:a==='all'})||d.phases;
+  for(const [k] of AC_HOL3){ const s=g('acHol_'+k), c=g('acHolOn_'+k); if(s) d.hol[k].idx=num(s)||d.hol[k].idx; if(c) d.hol[k].on=!!c.checked; }
+  for(const [key,id,max] of [['spring','acSpring',3],['ski','acSki',1]]){
+    const arr=d[key], on=d[key+'On']=Array.isArray(d[key+'On'])?d[key+'On']:[]; // [398 · §304] the ticks, in step with the weeks (none: ticked)
+    for(let i=0;i<arr.length;i++){ const s=g(id+'_'+i), t=g(id+'On_'+i); if(s) arr[i]=num(s); if(t) on[i]=!!t.checked; else if(typeof on[i]!=='boolean') on[i]=true; }
+    on.length=arr.length;
+    const c=g(id+'N'); if(c){ const want=Math.max(0,Math.min(max,num(c))); while(arr.length<want){ arr.push(0); on.push(true); } arr.length=want; on.length=want; }
+  }
+  for(let i=1;i<=53;i++){ const c=g('acSh_'+i); if(c){ if(c.checked) d.summerHd.add(i); else d.summerHd.delete(i); } }
+  const ss=g('acSummerS'), se=g('acSummerE');
+  if(ss) d.summerStartIdx=num(ss)||d.summerStartIdx;
+  if(se) d.summerEndIdx=num(se)||d.summerEndIdx;
+}
+function _acRefreshEditor(){ const b=document.getElementById('cmBody'); if(!b) return; const t=b.scrollTop; b.innerHTML=_acEditorBody(); b.scrollTop=t; } // [398 · §302] redrawn from the draft, the place in the pop-up kept
+window._acRedraw=function(){ _acReadDraftFromDom(); _acRefreshEditor(); }; // [398 · §302] a week, a count or a phase choice changed
+window._acTick=function(){ _acReadDraftFromDom(); const c=document.getElementById('acHdCount'); if(c&&_acDraft) c.textContent=_acCountText(_acDraft); }; // [398 · §302] a tick: only the count line changes
 window._acYearChanged=function(){ if(phase1Started()){ toast('The auction YEAR cannot change while an auction is underway — Reset Auction to start a new year','warn'); _acRefreshEditor(); return; } // [build 268 · GAP]
-  _acReadDraftFromDom(); const y=Number(document.getElementById('acYearSel').value)||_acDraft.year;
-  const wasSet={thanks:!!_acDraft.hd.thanks,xmas:!!_acDraft.hd.xmas,nye:!!_acDraft.hd.nye};
-  _acDraft.year=y; const n=getSundays(y).length;
-  // [build 267 · CAL2] School-calendar weeks do NOT carry across years — clear, no default.
-  _acDraft.hd.ski=0; _acDraft.hd.spring1=0; _acDraft.hd.spring2=0;
-  // Computable weeks track the year automatically (only if they were already set).
-  const sug=_acSuggestedHd(y);
-  _acDraft.hd.thanks=wasSet.thanks?(sug.thanks||0):0;
-  _acDraft.hd.xmas=wasSet.xmas?(sug.xmas||0):0;
-  _acDraft.hd.nye=wasSet.nye?(sug.nye||0):0;
-  if(_acDraft.summerStartIdx>n) _acDraft.summerStartIdx=n;
-  if(_acDraft.summerEndIdx>n) _acDraft.summerEndIdx=n;
+  _acReadDraftFromDom(); const d=_acDraft; if(!d) return;
+  const y=Number(document.getElementById('acYearSel').value)||d.year;
+  d.year=y; const n=getSundays(y).length;
+  // [398 · §302] The three holidays are suggested again for the new year (their ticks kept). School calendars do not carry across years: the
+  // Spring Break and Ski Week weeks go back to "choose week" (their counts and ticks kept [398 · §304]). The summer picks are cleared; the summer range is clamped.
+  const sug=_acSuggestedHd(y); for(const [k] of AC_HOL3) d.hol[k].idx=sug[k]||0;
+  d.spring=d.spring.map(()=>0); d.ski=d.ski.map(()=>0); d.summerHd=new Set();
+  if(d.summerStartIdx>n) d.summerStartIdx=n;
+  if(d.summerEndIdx>n) d.summerEndIdx=n;
   _acRefreshEditor();
-  toast('Year changed — set ski week and the spring breaks from the '+y+' school calendars','warn'); };
-window._acSuggest=function(){ _acReadDraftFromDom();
-  const sug=_acSuggestedHd(_acDraft.year);
-  _acDraft.hd.thanks=sug.thanks||0; _acDraft.hd.xmas=sug.xmas||0; _acDraft.hd.nye=sug.nye||0;
-  _acRefreshEditor();
-  toast('Thanksgiving, Christmas & New Year\'s filled in — now set ski week and the spring breaks','ok'); };
+  toast('Year changed — set Spring Break and Ski Week from the '+y+' school calendars','warn'); };
 window.openAuctionCalendarEditor=function(){
   if((typeof _setupLocks==='function')&&_setupLocks('auctionConfig')){ toast(SETUP_LOCKED_TEXT,'err'); return; } // [383 · §287]
   if(!cfgUnlockedNow()){ toast('The auction calendar is locked while a phase is running — editable between phases, once results are sent','warn'); return; } // [build 268 · GAP]
   _acDraft=_acDraftFromAC();
-  openConfirm({ title:'Auction Calendar', body:_acEditorBody(), okText:'Save',
+  openConfirm({ title:'Calendar and Phases', body:_acEditorBody(), okText:'Save', // [398 · §303 A2]
     onConfirm:saveAuctionCalendar, onCancel:()=>{ _acDraft=null; } });
 };
 let _acZeroHdOk=false; // [build 268 · HDCB] one-shot ack for the empty-Phase-1 warning
@@ -3389,54 +3417,60 @@ let _acGapImpactOk=false; // [build 268 · GAP] one-shot ack for the stranded-bi
 async function saveAuctionCalendar(){
   _acReadDraftFromDom();
   const d=_acDraft;
-  const reopen=msg=>{ toast(msg,'warn'); setTimeout(()=>{ openConfirm({title:'Auction Calendar',body:_acEditorBody(),okText:'Save',onConfirm:saveAuctionCalendar,onCancel:()=>{_acDraft=null;}}); },350); };
+  const reopen=msg=>{ toast(msg,'warn'); setTimeout(()=>{ openConfirm({title:'Calendar and Phases',body:_acEditorBody(),okText:'Save',onConfirm:saveAuctionCalendar,onCancel:()=>{_acDraft=null;}}); },350); };
   if((typeof _setupLocks==='function')&&_setupLocks('auctionConfig')){ toast(SETUP_LOCKED_TEXT,'err'); return; } // [383 · §287] asked again at the save
   if(!cfgUnlockedNow()){ toast('Locked while a phase is running — editable between phases, once results are sent','warn'); return; } // [build 268 · GAP]
   if(!d) return;
   // [build 268 · GAP] The YEAR may never change mid-auction — every bid is keyed to the
   // year's weeks; a year change renames all 52 week keys under live bids. Reset only.
   if(phase1Started()&&Number(d.year)!==Number(AC_YEAR)) return reopen('The auction YEAR cannot change while an auction is underway — Reset Auction to start a new year');
-  const sunds=getSundays(d.year), n=sunds.length;
-  // [build 267 · CAL2] EXACTLY the six fixed high-demand weeks — all must be chosen.
-  for(const f of AC_HD_FIXED){ const i=d.hd[f.key];
-    if(!(i>=1&&i<=n)) return reopen('Choose a week for '+f.label+' — all six high-demand weeks must be set'+(p1AllWeeks()?'':' (they define Phase 1)')); }
-  const idxs=AC_HD_FIXED.map(f=>d.hd[f.key]);
-  if(new Set(idxs).size!==AC_HD_FIXED.length) return reopen('Two of the six weeks are set to the same week — all six must be different weeks');
-  if(d.summerStartIdx>d.summerEndIdx) return reopen('Summer start week is after the end week');
-  // [build 268 · HDCB] Zero checked = an EMPTY Phase 1. Allowed (owner ruling 15 Aug) but
-  // never silently: a dedicated confirm spells out the consequence before the save.
-  const _hdOnCount=AC_HD_FIXED.filter(f=>d.hdOn[f.key]).length;
-  if(_hdOnCount===0&&!_acZeroHdOk&&!p1AllWeeks()){ // [395 · E2] Phase 1 on every week: no high-demand week does not empty it
+  // [398 · §302] The phases: written only when changed in this pop-up, before Phase 1; otherwise the stored ones (never written then).
+  // [398 · review F4] Changed = the draft's choice differs from the phases the pop-up opened with (phases0), not from the stored value: a
+  // pop-up opened before another tab changed the phases never writes its stale copy back.
+  const _ppNow=phasePlan(), _ppD=phasePlanNormalize(d.phases), _pp0=phasePlanNormalize(d.phases0)||_ppNow;
+  const _ppCh=!phase1Started()&&!!_ppD&&(_ppD.fall!==_pp0.fall||_ppD.p1All!==_pp0.p1All), _pp=_ppCh?_ppD:_ppNow;
+  const sunds=getSundays(d.year), n=sunds.length, inYear=i=>i>=1&&i<=n;
+  // [398 · §302] Every Spring Break / Ski Week week chosen; every week of sections 2-4 a different week; the summer range in order.
+  const secIdx=AC_HOL3.map(([k])=>d.hol[k].idx).concat(d.spring,d.ski);
+  if(!secIdx.every(inYear)) return reopen('Choose a week for each Spring Break and Ski Week.');
+  if(new Set(secIdx).size!==secIdx.length) return reopen('Two holidays are set to the same week — each must be a different week.');
+  if(d.summerStartIdx>d.summerEndIdx) return reopen('The first summer week is after the last.');
+  // [build 268 · HDCB] No high-demand week = an EMPTY Phase 1. Allowed (owner ruling 15 Aug) but never silently: a dedicated confirm spells
+  // out the consequence before the save. [398 · §302] Judged on the draft's Phase 1 choice (Phase 1 on every week is never empty).
+  if(_acHdCount(Object.assign({},d,{phases:_pp}))===0&&!_acZeroHdOk&&!_pp.p1All){
     openConfirm({ title:'No high-demand weeks',
-      body:'<div class="cmodal-warn"><strong>All six weeks unchecked:</strong> Phase 1 is EMPTY — no weeks open for bidding. You must still close, complete and send results for Phase 1 to reach Phase 2.</div><div style="margin-top:8px">Save anyway?</div>',
+      body:'<div class="cmodal-warn"><strong>No week is high-demand:</strong> Phase 1 is EMPTY — no weeks open for bidding. You must still close, complete and send results for Phase 1 to reach Phase 2.</div><div style="margin-top:8px">Save anyway?</div>',
       okText:'Save with empty Phase 1',
       onConfirm:()=>{ _acZeroHdOk=true; saveAuctionCalendar(); },
-      onCancel:()=>{ _acZeroHdOk=false; reopen('Not saved — check at least one high-demand week, or confirm the empty-Phase-1 warning'); } });
+      onCancel:()=>{ _acZeroHdOk=false; reopen('Not saved — tick at least one high-demand week, or confirm the empty-Phase-1 warning'); } });
     return;
   }
   _acZeroHdOk=false;
   const wkOf=i=>dateKey(sunds[i-1]);
-  // [build 268 · HDCB] Notes ride on ALL six placed weeks (checked or not) — a federal
-  // holiday landing on an unchecked Ski Week still shows the dual label, and the auto
-  // entry is still absorbed so no week ever carries two separate entries.
-  const fixedWkSet=new Set(idxs.map(wkOf));
-  // Decorative federal holidays, computed from the year. One landing ON one of the six
-  // chosen weeks becomes an informational NOTE on that week (dual label — e.g. "⛷️ Ski
-  // Week · 🏛️ Presidents' Day"); the highDemand flag alone drives every rule. Others get
-  // their own non-HD entry.
+  // [398 · §302] The weeks of sections 2-4, in the pop-up's order: the three holidays with their ticks; Spring Break and Ski Week with their
+  // ticks too [398 · §304] (the names, icons and colours of AC_DEFAULTS).
+  const sec=AC_HOL3.map(([k,l])=>({idx:d.hol[k].idx,label:l,on:!!d.hol[k].on}))
+    .concat(d.spring.map((i,j)=>({idx:i,label:'Spring Break',on:(d.springOn||[])[j]!==false})),d.ski.map((i,j)=>({idx:i,label:'Ski Week',on:(d.skiOn||[])[j]!==false}))); // [398 · §304]
+  const secWk=new Set(sec.map(s=>wkOf(s.idx)));
+  // Decorative federal holidays, computed from the year. One landing ON any week of sections 2-4 (ticked or not) becomes an informational
+  // NOTE on that week (dual label — e.g. "⛷️ Ski Week · 🏛️ Presidents' Day"), so no week ever carries two entries; the highDemand flag alone
+  // drives every rule. Others get their own non-HD entry.
   const autosAll=_acAutoHolidays(d.year);
   const notes={}; // wk -> 'emoji label · …'
   for(const h of autosAll){ const wk=wkOf(h.idx);
-    if(fixedWkSet.has(wk)) notes[wk]=(notes[wk]?notes[wk]+' · ':'')+((h.emoji?h.emoji+' ':'')+h.label); }
-  const autos=autosAll.filter(h=>!fixedWkSet.has(wkOf(h.idx)));
+    if(secWk.has(wk)) notes[wk]=(notes[wk]?notes[wk]+' · ':'')+((h.emoji?h.emoji+' ':'')+h.label); }
+  const autos=autosAll.filter(h=>!secWk.has(wkOf(h.idx)));
+  // [398 · §302] The summer weeks ticked high-demand (inside the range, not a week of sections 2-4); none while Phase 1 is every week.
+  const summerHd=_pp.p1All?[]:[...d.summerHd].filter(i=>i>=d.summerStartIdx&&i<=d.summerEndIdx&&inYear(i)&&!secWk.has(wkOf(i))).sort((a,b)=>a-b).map(wkOf);
   const cfg={year:d.year,summerStartWk:wkOf(d.summerStartIdx),summerEndWk:wkOf(d.summerEndIdx),
     holidays:[
-      ...AC_HD_FIXED.map(f=>{ const wk=wkOf(d.hd[f.key]);
-        const e={wk,label:f.label,emoji:f.emoji,short:f.short,highDemand:!!d.hdOn[f.key],color:_acColorFor(f.label)}; // [build 268 · HDCB] flag from the checkbox
+      ...sec.map(s=>{ const wk=wkOf(s.idx), df=AC_DEFAULTS.holidays.find(h=>h.label===s.label)||null;
+        const e={wk,label:s.label,emoji:df?df.emoji:'',short:df?df.short:s.label,highDemand:s.on,color:_acColorFor(s.label)};
         if(notes[wk]) e.note=notes[wk];
         return e; }),
       ...autos.map(h=>({wk:wkOf(h.idx),label:h.label,emoji:h.emoji,short:h.short,highDemand:false,color:null})),
     ].sort((a,b)=>a.wk<b.wk?-1:1)};
+  if(summerHd.length) cfg.summerHd=summerHd; // [398 · §302] only when there is one: a calendar without summer picks saves exactly as before
   if(!_acNormalize(cfg)){ return reopen('Config failed validation — nothing saved'); }
   // [build 268 · GAP] A between-phases reclassification can strand placed bids below the
   // (unchanged) floors — e.g. a week newly marked high-demand under an HD floor of 4.
@@ -3454,10 +3488,14 @@ async function saveAuctionCalendar(){
     }
   }
   _acGapImpactOk=false;
+  if(_ppCh&&!_feedsHealthyOrExplain('Changing the phases')) return; // [398 · §302] the phases change only from a page whose data has all arrived
+  // [398 · §302] A merge write keeps a stored field the new value leaves out, inside auctionConfig too: with no summer pick, the stored list is removed.
+  const _acW=summerHd.length?cfg:Object.assign({},cfg,{summerHd:deleteField()});
   try{
-    await setDoc(adminRef,{auctionConfig:cfg,...((typeof _setupSaveExtra==='function')?_setupSaveExtra('auctionConfig'):{})},{merge:true}); // [383 · §287] an unlocked save re-locks in the same write
+    await setDoc(adminRef,{auctionConfig:_acW,...(_ppCh?{phasePlan:{fall:_pp.fall,p1All:_pp.p1All}}:{}),...((typeof _setupSaveExtra==='function')?_setupSaveExtra('auctionConfig'):{})},{merge:true}); // [383 · §287] an unlocked save re-locks in the same write · [398 · §302] ONE write: the phases with it only when they changed
     _acDraft=null;
-    toast('Auction calendar saved — pages will reload with the new calendar','ok');
+    if(_ppCh){ try{ await adminLog('ALL','ALL','admin-phaseplan',undefined,{choice:_pp.fall+'|'+(_pp.p1All?'all':'hd')}); }catch(_){} } // [398 · §302] the Phases Change Log row
+    toast(_ppCh?'Auction calendar and phases saved — pages will reload with the new calendar':'Auction calendar saved — pages will reload with the new calendar','ok');
     // The reload itself happens through _acCheckRemote when our own snapshot echoes back —
     // one code path whether the change came from this tab, another admin, or a restore.
   }catch(err){ reopen(((typeof _setupDenied==='function')&&_setupDenied(err))||_cfgDeniedMsg(err,'the auction calendar')||('Save failed: '+(err?.message||err))); } // [build 268 · FRZ] plain-language server-denial
@@ -5242,29 +5280,14 @@ window.lockNoAvailabilityWeeks=function(){
   });
 };
 // Smart Lock and Unlock: lock all no-availability weeks AND unlock all with-availability weeks.
-window._slP1Ack=false;
+// [398 · §302 · 3a] In a high-demand-only Phase 1 it unlocks high-demand weeks only, and its box says so (no warning box); locking is unchanged.
 window.smartLockUnlock=function(){
-  // Phase 1 is high-demand only: warn (once per click-through) if this would unlock
-  // standard weeks that are supposed to stay locked until Phase 2. The action itself
-  // is unchanged — this is a notification gate, per the admin's spec.
-  const _p1Live=!p1AllWeeks()&&Number(phasesData.currentPhase||1)===1&&phase1Started()&&!phasesData.completedPhases?.[1]; // [395 · E2] the same test as p1HighDemandOnly
-  if(_p1Live&&!window._slP1Ack){
-    const stdUnlock=lockedWeeksWithAvailability().list.filter(w=>!HIGH_DEMAND_WEEKS.has(w.wk)).length;
-    if(stdUnlock>0){
-      openConfirm({
-        title:'Phase 1 is high-demand only',
-        body:`<div>Smart Lock &amp; Unlock would <strong>unlock ${stdUnlock} standard week${stdUnlock!==1?'s':''}</strong>. Phase 1 keeps standard weeks LOCKED until Phase 2.</div>
-              <div class="cmodal-danger">Continue only if you mean to open them in Phase 1.</div>`,
-        okText:'Continue anyway', danger:true,
-        onConfirm:()=>{ window._slP1Ack=true; try{ window.smartLockUnlock(); } finally { window._slP1Ack=false; } }
-      });
-      return;
-    }
-  }
+  const _p1=p1HighDemandOnly();
+  const _p1Line=_p1?'<div class="cmodal-info">Phase 1 is for high-demand weeks: only those are unlocked.</div>':'';
   const toLock=weeksNeedingLock(true).list;            // unlocked + no availability → lock
-  const toUnlock=lockedWeeksWithAvailability().list;   // locked + has availability → unlock
+  const toUnlock=lockedWeeksWithAvailability().list.filter(w=>!_p1||HIGH_DEMAND_WEEKS.has(w.wk));   // locked + has availability → unlock (high-demand weeks only in a high-demand-only Phase 1)
   if(!toLock.length&&!toUnlock.length){
-    openConfirm({title:'Smart Lock and Unlock',body:'<div class="cmodal-info">No weeks need locking or unlocking.</div>',okText:'OK',onConfirm:()=>{}});
+    openConfirm({title:'Smart Lock and Unlock',body:'<div class="cmodal-info">No weeks need locking or unlocking.</div>'+_p1Line,okText:'OK',onConfirm:()=>{}});
     return;
   }
   openConfirm({
@@ -5272,7 +5295,7 @@ window.smartLockUnlock=function(){
     body:`<ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:13px;line-height:1.8">
         <li><strong>Lock ${toLock.length}</strong> effectively full week${toLock.length!==1?'s':''} (below <strong>Smart Lock Control</strong>).</li>
         <li><strong>Unlock ${toUnlock.length}</strong> winnable week${toUnlock.length!==1?'s':''} (at or above it).</li>
-      </ul>${lockLiveWarnHtml()}`,
+      </ul>${_p1Line}${lockLiveWarnHtml()}`,
     okText:'Apply',
     onConfirm:async()=>{
       const dotted={};
@@ -5423,7 +5446,7 @@ function renderOverview(){
     // [303] Both markers: a holiday week inside the summer window is still a summer week, and the
     // dashboard grid should say so. High-demand weeks are exempt, matching bfFloorFor's precedence.
     let tag='';
-    if(specLabels[wk]) tag=specLabels[wk]+((isSummer&&!HIGH_DEMAND_WEEKS.has(wk))?' · Summer':'');
+    if(specLabels[wk]) tag=specLabels[wk]+((isSummer&&(!HIGH_DEMAND_WEEKS.has(wk)||(typeof SUMMER_HD_WEEKS!=='undefined'&&SUMMER_HD_WEEKS.has(wk))))?' · Summer':''); // [398 · §302] a summer week ticked high-demand keeps "· Summer" (it keeps the summer floor)
     else if(isSummer) tag='Summer';
     const wStr=[...(a.winners||new Set())].map(esc).join(' ')||''; // [392 · §297] fix round (review M2): initials as plain text, as in the cards above
     // [§147] ONE Under Review column. The tied names carry a (tied) marker so the admin can
@@ -6017,7 +6040,8 @@ window.unlockAllWeeks=function(){
 };
 
 // High-demand week keys (kept open when locking all except high demand)
-const HIGH_DEMAND_WEEKS=new Set(_acHDList()); // [build 265 · B5] derived from auctionConfig (defaults = the former literal)
+const HIGH_DEMAND_WEEKS=new Set([..._acHDList(),..._acSummerHdList()]); // [build 265 · B5] derived from auctionConfig (defaults = the former literal) · [398 · §302] + the summer weeks ticked high-demand
+const SUMMER_HD_WEEKS=new Set(_acSummerHdList()); // [398 · §302] the summer weeks ticked high-demand: in Phase 1 like any high-demand week, but the summer floor and the name "Summer" (this comment stays free of page identifiers: the suites' closure reads comments too)
 // [AUDIT 2026-07-25 #4] Phase 1 is high-demand-only, enforced purely by per-week
 // locks. smartLockUnlock had a Phase-1 warning but every OTHER unlock path did not,
 // and the dashboard's Lock Summary actively flagged the 46 correctly-locked standard
@@ -6042,12 +6066,13 @@ function guardP1Unlock(wks,proceed){
   });
 }
 window.p1HighDemandOnly=p1HighDemandOnly; window.guardP1Unlock=guardP1Unlock;
-// Display labels for the six high-demand weeks. Week keys are SUNDAYS (the old
+// Display labels for the high-demand weeks, in date order. Week keys are SUNDAYS (the old
 // Monday dates shown here previously were a leftover from before the timezone fix).
 // [build 265 · B5] Derived from auctionConfig. Cosmetic unification vs the former literal:
 // every entry now uses its SHORT label (the old list mixed short and long forms).
-const HD_WEEK_LABELS=_acHDList().map(wk=>{
-  const h=AC.holidays.find(x=>x.wk===wk&&x.highDemand);
+// [398 · §302] A summer week ticked high-demand has no holiday entry: it reads "(Summer)".
+const HD_WEEK_LABELS=[...HIGH_DEMAND_WEEKS].sort().map(wk=>{
+  const h=SUMMER_HD_WEEKS.has(wk)?{short:'Summer'}:AC.holidays.find(x=>x.wk===wk&&x.highDemand);
   const d=wkDate(wk);
   const wd=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()];
   const mo=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
@@ -6528,7 +6553,7 @@ const SETUP_LOCKED_TEXT='Locked for the whole auction (the setup lock is ON) —
 // and "Unlock to edit…" come from SETUP_ARCHIVED_ROWS below (owner 1:25 PM, answer 5).
 // The Setup page's 9 locked rows ([390 · §295] Bid numbers added; [395 · E2] Phases added, after it), in the review's order: key, name, sentence (the approved test page), the element its card holds (the lock
 // line goes after that element's row), the page; c = where the review's "Change it" goes when it is not that card.
-const SETUP_ROWS=[{k:'auctionConfig',n:'Auction calendar',d:'Sets the year’s weeks, which weeks are high demand and the summer range the floors use.',a:'acEditBtn',p:'setup'},{k:'bidRuleSet',n:'Bid rule set',d:'Strict: a winning bid on a competition week can only be moved, not removed. Loose: any bid can be removed.',a:'ruleSetTog',p:'setup'},{k:'strictThreshold',n:'Strict applies to',d:'Under Strict, a winning bid weaker than this can still be removed.',a:'strictLvlSel',p:'setup'},{k:'topBid',n:'Bid numbers',d:'How many bid numbers each person holds.',a:'topBidEditBtn',p:'setup'},{k:'phasePlan',n:'Phases',d:'How many Fall phases run before the Rolling Vacation Auction, and whether Phase 1 opens every week.',a:'phasePlanEditBtn',p:'setup'},{k:'comboBids',n:'Combination bids',d:'Which combination bids people may use.',a:'comboToggles',p:'setup'},{k:'bidFloors',n:'Bid floors',d:'The weakest bid allowed on each kind of week.',a:'bfHd',p:'setup'},{k:'blindedBidding',n:'Blinded bidding',d:'When on, people see bids without the bidders’ initials.',a:'blindTog',p:'setup'},{k:'simulatorEnabled',n:'Rehearsal Mode',d:'Unlocks the simulator and the skip buttons. Must be off for a real auction.',a:'setupRehearsalNow',p:'setup',c:['simulator','simulatorToggle']}]; // one line: the test harness reads top-level constants line by line · [385 · §292] the Priority Lock row left (Archived settings) · [390 · §295] the Bid numbers row, before Combination bids
+const SETUP_ROWS=[{k:'auctionConfig',n:'Auction calendar',d:'Sets the year’s weeks, which weeks are high demand and the summer range the floors use.',a:'acEditBtn',p:'setup'},{k:'bidRuleSet',n:'Competition weeks',d:'Strict: a winning bid on a competition week can only be moved, not removed. Loose: any bid can be removed.',a:'ruleSetTog',p:'setup'},{k:'strictThreshold',n:'Strict applies to',d:'Under Strict, a winning bid weaker than this can still be removed.',a:'strictLvlSel',p:'setup'},{k:'topBid',n:'Bid numbers',d:'How many bid numbers each person holds.',a:'topBidEditBtn',p:'setup'},{k:'phasePlan',n:'Phases',d:'How many Fall phases run before the Rolling Vacation Auction, and whether Phase 1 opens every week.',a:'acEditBtn',p:'setup'},{k:'comboBids',n:'Combination bids',d:'Which combination bids people may use.',a:'comboToggles',p:'setup'},{k:'bidFloors',n:'Bid floors',d:'The weakest bid allowed on each kind of week.',a:'bfHd',p:'setup'},{k:'blindedBidding',n:'Blinded bidding',d:'When on, people see bids without the bidders’ initials.',a:'blindTog',p:'setup'},{k:'simulatorEnabled',n:'Rehearsal Mode',d:'Unlocks the simulator and the skip buttons. Must be off for a real auction.',a:'setupRehearsalNow',p:'setup',c:['simulator','simulatorToggle']}]; // one line: the test harness reads top-level constants line by line · [385 · §292] the Priority Lock row left (Archived settings) · [390 · §295] the Bid numbers row, before Combination bids
 // The 6 between-phases rows (the approved test page), in order; c = where "Change it" goes. [385 · §292] "Bid lowerings allowed" left (Archived settings).
 const SETUP_PHASE_ROWS=[{n:'FTE overage',d:'How far over capacity a week can go before bids show as Under Review.',c:['setup','reviewThresholdSlider']},{n:'NP bids this phase',d:'Whether people may place NP bids in the phase about to begin.',c:['setup','npPhaseToggles']},{n:'Cumulative bid caps',d:'How many weeks a person may have won by the end of each phase.',c:['setup','cap1']},{n:'Timer rules',d:'How long the timer runs, how far each bid resets it, and the opening window when one is set.',c:['controls','timerRulesWrap']},{n:'Projection-change e-mails',d:'E-mails people when another bid changes whether they are winning.',c:['maillog','emailNotifsToggle']},{n:'Locked weeks on the staff board',d:'Where weeks that are not open appear on the staff board: in their month, or gathered at the bottom.',c:['controls','lipPhaseToggles']}]; // one line: the test harness reads top-level constants line by line · [385 · §292] the 'Bid lowerings allowed' row left (Archived settings)
 // [385 · §292, owner 1:25 PM answer 5] The archived locked rows: the lock line, "Unlock to edit…" and Begin Phase 1's count read these with SETUP_ROWS;
@@ -6561,7 +6586,7 @@ function _setupSaveExtra(key){ return (_setupLockedNow()&&_setupUnlockedFor(key)
 function _setupRow(key){ for(const r of SETUP_ROWS.concat((typeof SETUP_ARCHIVED_ROWS!=='undefined')?SETUP_ARCHIVED_ROWS:[])){ if(r.k===key) return r; } return null; } // [385 · §292] the archived rows too (answer 5)
 function _setupWho(){ try{ return ((typeof _adminInitials==='function')&&_adminInitials())||''; }catch(_){ return ''; } } // roster initials only, else '' - never any part of an address (lane 1 M1)
 // A setting today's per-phase freeze still holds (mid-phase): that control's own words; null when not frozen now.
-function _setupFrozenMsg(key){ try{ if(key==='phasePlan'&&phase1Started()) return PHASE_PLAN_FIXED_TEXT; /* [395 · E2] fixed for the whole auction, gaps included */ if(cfgUnlockedNow()) return null; const m={auctionConfig:'The auction calendar is locked while a phase is running — editable between phases, once results are sent',bidFloors:'Bid floors are locked while a phase is running — editable between phases, once results are sent.',bidRuleSet:'The bid rule set is locked while a phase is running — editable between phases, once results are sent.',strictThreshold:STRICT_LVL_LOCKED_TEXT,comboBids:COMBO_LOCKED_TEXT,topBid:'Bid numbers are locked while a phase is running — editable between phases, once results are sent.',phasePlan:PHASE_PLAN_FIXED_TEXT}; return m[key]||null; }catch(_){ return null; } }
+function _setupFrozenMsg(key){ try{ if(key==='phasePlan'&&phase1Started()) return PHASE_PLAN_FIXED_TEXT; /* [395 · E2] fixed for the whole auction, gaps included */ if(cfgUnlockedNow()) return null; const m={auctionConfig:'The auction calendar is locked while a phase is running — editable between phases, once results are sent',bidFloors:'Bid floors are locked while a phase is running — editable between phases, once results are sent.',bidRuleSet:'Competition weeks are locked while a phase is running — editable between phases, once results are sent.',strictThreshold:STRICT_LVL_LOCKED_TEXT,comboBids:COMBO_LOCKED_TEXT,topBid:'Bid numbers are locked while a phase is running — editable between phases, once results are sent.',phasePlan:PHASE_PLAN_FIXED_TEXT}; return m[key]||null; }catch(_){ return null; } }
 // A server refusal of a locked-key save while the setup lock holds (e.g. the unlock ran out): the lock's own words; null otherwise (lock OFF: 382's).
 function _setupDenied(e){ try{ return (_setupLockedNow()&&e&&(e.code==='permission-denied'||/permission|insufficient/i.test(e.message||'')))?SETUP_LOCKED_TEXT:null; }catch(_){ return null; } }
 function gotoSetupPanel(){ nav('setup',document.querySelector('.nav a[onclick="nav(\'setup\',this)"]')); }
@@ -6594,11 +6619,12 @@ function renderSetupPage(){
     if(nw) nw.textContent='Now: '+(begun?(on?'on — locked until Reset Auction':'off — can no longer be changed in this auction'):(on?'on':'off'));
     const rn=document.getElementById('setupRehearsalNow');
     if(rn) rn.textContent='Now: '+(adminSettings.simulatorEnabled===true?'On':'Off');
-    let soonest=null;
+    let soonest=null; const _suA=new Set(); // [398 · §303 A2] the Edit buttons that already carry a lock line
     for(const r of SETUP_ROWS.concat((typeof SETUP_ARCHIVED_ROWS!=='undefined')?SETUP_ARCHIVED_ROWS:[])){ // [385 · §292] the archived Priority Lock gets the same lock line (answer 5)
       const el=document.getElementById(r.a), card=el?el.closest('.card'):null; if(!card) continue;
       let ln=card.querySelector('.su-lock[data-k="'+r.k+'"]');
       if(!locked){ if(ln) ln.remove(); continue; }
+      if(_suA.has(r.a)){ if(ln) ln.remove(); continue; } _suA.add(r.a); // [398 · §303 A2] Phases shares the calendar's Edit: one lock line (fixed once Phase 1 begins, Phases never has an Unlock of its own)
       const un=_setupUnlockedFor(r.k);
       if(!ln){
         ln=document.createElement('div'); ln.className='su-lock'; ln.setAttribute('data-k',r.k);
@@ -6731,11 +6757,21 @@ function _setupBeginOpts(key,o){
     return Object.assign({},o,{body, okText:'Review settings', danger:false, onConfirm:()=>openSetupReview(key,resume), alt:{text:'Begin without review',danger:!!o.danger,onClick:()=>{ _setupReviewForget(); return o.onConfirm&&o.onConfirm(); }}}); // red when 382's Begin was red (an empty Phase 1)
   }catch(_){ return o; }
 }
-// The weeks the start is about to open, by the code that decides it (not changed): Phase 1 = the high-demand weeks; Phases 2-3 = the weeks
+// [398 · §302 · 3b] Phase 1 on the high-demand weeks only: a high-demand week opens only while its remaining FTE is at or above its Smart Lock
+// Control (the rule the RVA rounds use below, and Reopen / "Unlock these" use in that Phase 1). open = those weeks, shut = the high-demand weeks
+// below it; week order. Begin Phase 1 (its box and its locks) and the review's "opens" list all read this.
+function _p1HdSplit(){
+  const ap=computeApprovals(), open=[], shut=[];
+  mondays.forEach(d=>{ const wk=dateKey(d); if(!HIGH_DEMAND_WEEKS.has(wk)) return; (weekLedger(wk,ap).remainingApproved>=getSlc(wk)?open:shut).push(wk); });
+  return {open,shut};
+}
+// [398 · §302 · 3b] A high-demand week as the Begin Phase 1 box lists it: its HD_WEEK_LABELS line (e.g. "Wk 32 · Sun Aug 8 (Summer)"), found by its week number.
+function _p1WkLabel(wk){ const p='Wk '+(_wkNumByISO[wk]||'?')+' · '; return HD_WEEK_LABELS.find(s=>String(s).indexOf(p)===0)||(p+_acFmtWkShort(wk)); }
+// The weeks the start is about to open, by the code that decides it (not changed): Phase 1 = the high-demand weeks with room (_p1HdSplit); Phases 2-3 = the weeks
 // left unlocked after the begin's Smart Lock decision; every RVA Round = the weeks the month picker can open (its own rule).
 function _setupOpeningWeeks(key){
   const all=mondays.map(d=>dateKey(d));
-  if(key==='p1') return p1AllWeeks()?all:all.filter(wk=>HIGH_DEMAND_WEEKS.has(wk)); // [395 · E2] Phase 1 on every week: every week
+  if(key==='p1') return p1AllWeeks()?all:_p1HdSplit().open; // [395 · E2] Phase 1 on every week: every week · [398 · §302 · 3b] high-demand weeks only: those at or above their Smart Lock Control
   if(!isRvaPhase(Number(String(key).slice(1)))){
     const need=new Set(weeksNeedingLock(true).list.map(w=>w.wk)), wrong=new Set(lockedWeeksWithAvailability().list.map(w=>w.wk));
     return all.filter(wk=>wrong.has(wk)||(!(locksData&&locksData.weeks&&locksData.weeks[wk])&&!need.has(wk)));
@@ -6823,8 +6859,8 @@ window._rmFteOpen=_rmFteOpen; window._rmBackGo=_rmBackGo;
 function _srValue(name){
   const L=a=>a.map(x=>esc(x)).join('<br>'), yn=b=>b?'On':'Off', P4=[1,2,3,4].map(phaseShort);
   switch(name){
-    case 'auctionConfig':{ const d=_acDraftFromAC(), su=getSundays(AC_YEAR), w=i=>(i>=1&&i<=su.length)?('Wk '+i+' · '+_acFmtWkShort(dateKey(su[i-1]))):'not set';
-      return L([String(AC_YEAR)].concat(AC_HD_FIXED.map(f=>f.label+': '+w(d.hd[f.key])+' — '+(d.hdOn[f.key]?'high demand':'not high demand')),['Summer: '+w(d.summerStartIdx)+' to '+w(d.summerEndIdx)])); }
+    case 'auctionConfig':{ const d=_acDraftFromAC(), su=getSundays(AC_YEAR), w=i=>(i>=1&&i<=su.length)?('Wk '+i+' · '+_acFmtWkShort(dateKey(su[i-1]))):'not set', ws=a=>a.length?a.map(w).join(', '):'none', wsOn=(a,on)=>a.length?a.map((i,j)=>w(i)+((on||[])[j]===false?' — not high demand':'')).join(', '):'none'; // [398 · §302] W32: one line per section · [398 · §304] wsOn: an unticked Spring / Ski week marked
+      return L([String(AC_YEAR)].concat(AC_HOL3.map(([k,l])=>l+': '+w(d.hol[k].idx)+' — '+(d.hol[k].on?'high demand':'not high demand')),['Spring Break: '+wsOn(d.spring,d.springOn),'Ski Week: '+wsOn(d.ski,d.skiOn),'Summer: '+w(d.summerStartIdx)+' to '+w(d.summerEndIdx),'High-demand summer weeks: '+ws([...d.summerHd].sort((a,b)=>a-b))])); }
     case 'bidRuleSet': return esc(adminSettings.bidRuleSet==='strict'?'Strict':'Loose');
     case 'strictThreshold': return esc(_strictLvlName(_strictN()));
     case 'topBid': return esc('1 to '+topBid()); // [390 · §295]
@@ -7092,7 +7128,7 @@ window._bfChanged=function(){
   const show=v=>v==='none'?'no floor — every bid allowed':v+' or better';
   openConfirm({
     title:'Save bid floors?',
-    body:`<div>High-demand weeks: <strong>${show(cfg.highDemand)}</strong>.<br>Summer weeks: <strong>${show(cfg.summer)}</strong>.<br>Other weeks: no floor.</div><div class="cmodal-info" style="margin-top:8px">Applies to new bids and the decision engine; existing bids stay.</div>`+(phase1Started()?'<div class="cmodal-warn" style="margin-top:8px">LIVE auction: applies to the next phase as soon as you save.</div>':'')+``+(phase1Started()?_cfgStrandedWarn(_cfgStrandedBids(cfg,HIGH_DEMAND_WEEKS,null)):''),
+    body:`<div>High-demand weeks: <strong>${show(cfg.highDemand)}</strong>.<br>Summer weeks: <strong>${show(cfg.summer)}</strong>.<br>Other weeks: no floor.</div><div class="cmodal-info" style="margin-top:8px">Applies to new bids and the decision engine; existing bids stay.</div>`+(phase1Started()?'<div class="cmodal-warn" style="margin-top:8px">LIVE auction: applies to the next phase as soon as you save.</div>':'')+``+(phase1Started()?_cfgStrandedWarn(_cfgStrandedBids(cfg,new Set([...HIGH_DEMAND_WEEKS].filter(wk=>!(typeof SUMMER_HD_WEEKS!=='undefined'&&SUMMER_HD_WEEKS.has(wk)))),null)):''),
     okText:'Save floors',
     onConfirm:async()=>{
       if((typeof _setupLocks==='function')&&_setupLocks('bidFloors')){ toast(SETUP_LOCKED_TEXT,'err'); renderBidFloorsCard(); return; } // [383 · §287] asked again at the write
@@ -7108,21 +7144,21 @@ window._bfChanged=function(){
 // and in the gaps between phases and Phase 4 rounds once results are sent (his q8 "yes"); survives Reset Auction (§283). One confirmation;
 // once the auction is under way a second, in red (the blinded-bidding pattern). The write checks the lock and the stored value again at the
 // moment of action, writes by merge, and logs one system entry; the server refuses it mid-phase whatever this page believes.
-async function _ruleSetWrite(next){
-  if(!_feedsHealthyOrExplain('Changing the bid rule set')){ syncControls(); return; } // [380 · §282] asked again at the moment of action: a dialog can sit open while a feed dies
+async function _ruleSetWrite(next){ // [398 · §303] A1: the admin sees the setting as "Competition weeks"
+  if(!_feedsHealthyOrExplain('Changing Competition weeks')){ syncControls(); return; } // [380 · §282] asked again at the moment of action: a dialog can sit open while a feed dies
   if((typeof _setupLocks==='function')&&_setupLocks('bidRuleSet')){ toast(SETUP_LOCKED_TEXT,'err'); syncControls(); return; } // [383 · §287] asked again at the write
-  if(!cfgUnlockedNow()){ toast('The bid rule set is locked while a phase is running — editable between phases, once results are sent.','err'); syncControls(); return; }
+  if(!cfgUnlockedNow()){ toast('Competition weeks are locked while a phase is running — editable between phases, once results are sent.','err'); syncControls(); return; }
   const now=(adminSettings&&adminSettings.bidRuleSet==='strict')?'strict':'standard';
-  if(now===next){ toast('The bid rule set is already '+(next==='strict'?'Strict':'Loose')+' — nothing changed.','warn'); syncControls(); return; }
+  if(now===next){ toast('Competition weeks are already '+(next==='strict'?'Strict':'Loose')+' — nothing changed.','warn'); syncControls(); return; }
   try{ await setDoc(adminRef,{bidRuleSet:next,...((typeof _setupSaveExtra==='function')?_setupSaveExtra('bidRuleSet'):{})},{merge:true}); } // [383 · §287]
-  catch(e){ toast(((typeof _setupDenied==='function')&&_setupDenied(e))||_cfgDeniedMsg(e,'the bid rule set')||('Rule set NOT saved — nothing changed ('+(e?.message||e)+'). Try again.'),'err'); syncControls(); return; }
+  catch(e){ toast(((typeof _setupDenied==='function')&&_setupDenied(e))||_cfgDeniedMsg(e,'the Competition weeks setting')||('Competition weeks NOT saved — nothing changed ('+(e?.message||e)+'). Try again.'),'err'); syncControls(); return; }
   try{ await adminLog('ALL','ALL',next==='strict'?'admin-ruleset-strict':'admin-ruleset-standard'); }catch(_){}
-  toast(next==='strict'?'Bid rule set: STRICT — the staff site follows within a moment':'Bid rule set: LOOSE — the staff site follows within a moment', next==='strict'?'warn':'ok');
+  toast(next==='strict'?'Competition weeks: STRICT — the staff site follows within a moment':'Competition weeks: LOOSE — the staff site follows within a moment', next==='strict'?'warn':'ok');
 }
-window.toggleRuleSet=function(){
-  if(!_feedsHealthyOrExplain('Changing the bid rule set')){ syncControls(); return; } // [380 · §282] never from a page whose data has not all arrived, or whose live feeds are down (the guard of every dangerous admin action)
+window.toggleRuleSet=function(){ // [398 · §303] A1: "Competition weeks"
+  if(!_feedsHealthyOrExplain('Changing Competition weeks')){ syncControls(); return; } // [380 · §282] never from a page whose data has not all arrived, or whose live feeds are down (the guard of every dangerous admin action)
   if((typeof _setupLocks==='function')&&_setupLocks('bidRuleSet')){ toast(SETUP_LOCKED_TEXT,'err'); syncControls(); return; } // [383 · §287]
-  if(!cfgUnlockedNow()){ toast('The bid rule set is locked while a phase is running — editable between phases, once results are sent.','err'); syncControls(); return; }
+  if(!cfgUnlockedNow()){ toast('Competition weeks are locked while a phase is running — editable between phases, once results are sent.','err'); syncControls(); return; }
   const next=(adminSettings&&adminSettings.bidRuleSet==='strict')?'standard':'strict';
   const confirmAgain=o=>{ openConfirm(o); try{ const b=document.getElementById('cmOk'); if(b){ b.disabled=true; setTimeout(()=>{ b.disabled=false; },1000); } }catch(_){} };
   const _n=(typeof _strictN==='function')?_strictN():null; // [382 · §286] W12: with a Strict level set the body names it; none set: the 381 words exactly
@@ -7299,11 +7335,11 @@ window.openTopBidEditor=function(){
   openConfirm({ title:'Bid numbers', body:_topBidEditorBody(topBid()), okText:'Save', onConfirm:_topBidSave, onCancel:()=>syncControls() });
 };
 // ── [395 · E2, DECISIONS §298] PHASES: how many Fall phases run before the Rolling Vacation Auction, and whether Phase 1 opens every week ──
-// One stored value, adminSettings.phasePlan (read by phasePlan, the twin block): {fall: 1|2|3, p1All: true|false}; never saved or anything else =
-// 3 Fall phases, Phase 1 on the high-demand weeks only. The Bid numbers card's shape: "Now: …" and an Edit button opening a pop-up card on
-// openConfirm. FIXED once Phase 1 begins (stricter than the bid numbers, on purpose: changing it mid-auction would renumber phases already run):
-// open, save and the write each refuse with PHASE_PLAN_FIXED_TEXT, and there is no way past it. The setup lock checks stay as the bid numbers have
-// them. A re-read at the write; one merge write; one Change Log row.
+// One stored value, adminSettings.phasePlan (read by phasePlan, the twin block): fall 1|2|3 and p1All true|false; never saved or anything else =
+// 3 Fall phases, Phase 1 on the high-demand weeks only. [398 · §303 A2] Shown on the Calendar and Phases card (its "Now:" line, renderPhasePlanCard)
+// and set in section 1 of that card's builder (the radios of _phasePlanEditorBody), saved in the calendar's one merge write (saveAuctionCalendar,
+// with the admin-phaseplan Change Log row). FIXED once Phase 1 begins (changing it mid-auction would renumber phases already run): the builder
+// then shows it without radios and never writes it; PHASE_PLAN_FIXED_TEXT is the setup lock's words for it (_setupFrozenMsg).
 const PHASE_PLAN_FIXED_TEXT='The phases are set for this auction once Phase 1 begins.';
 function phasePlanText(v){ const p=v||phasePlan(); return p.fall+' Fall phase'+(p.fall!==1?'s':'')+' · Phase 1: '+(p.p1All?'every week':'high-demand weeks only'); }
 function renderPhasePlanCard(){
@@ -7316,37 +7352,6 @@ function _phasePlanEditorBody(cur){
   return '<div style="display:flex;flex-direction:column">'+H('Fall phases')+[1,2,3].map(n=>R('ppFall',n,cur.fall===n,String(n))).join('')
     +H('Phase 1 weeks')+R('ppP1','hd',!cur.p1All,'High-demand weeks only')+R('ppP1','all',cur.p1All,'Every week')+'</div>';
 }
-async function _phasePlanWrite(val){
-  if(!_feedsHealthyOrExplain('Changing the phases')){ syncControls(); return; } // asked again at the moment of action: a dialog can sit open while a feed dies
-  if(phase1Started()){ toast(PHASE_PLAN_FIXED_TEXT,'err'); syncControls(); return; } // asked again at the write: another admin may have begun Phase 1
-  if((typeof _setupLocks==='function')&&_setupLocks('phasePlan')){ toast(SETUP_LOCKED_TEXT,'err'); syncControls(); return; }
-  val=phasePlanNormalize(val);
-  if(val===null){ toast('Invalid phases — nothing saved.','err'); syncControls(); return; }
-  const now=phasePlan();
-  if(val.fall===now.fall&&val.p1All===now.p1All){ toast('The phases are already set that way — nothing changed.','warn'); syncControls(); return; } // re-read at the moment of the write: another admin or tab may have changed it
-  try{ await setDoc(adminRef,{phasePlan:val,...((typeof _setupSaveExtra==='function')?_setupSaveExtra('phasePlan'):{})},{merge:true}); }
-  catch(e){ toast(((typeof _setupDenied==='function')&&_setupDenied(e))?SETUP_LOCKED_TEXT:_cfgDeniedMsg(e,'the phases')?PHASE_PLAN_FIXED_TEXT:('Phases NOT saved — nothing changed ('+(e?.message||e)+'). Try again.'),'err'); syncControls(); return; } // a server refusal = the lock's own words
-  try{ await adminLog('ALL','ALL','admin-phaseplan',undefined,{choice:val.fall+'|'+(val.p1All?'all':'hd')}); }catch(_){}
-  toast('Phases: '+phasePlanText(val)+' — the staff site follows within a moment','ok');
-}
-// Save in the pop-up: the choices are read first (the dialog's body is still in place), then the checks, then the write.
-function _phasePlanSave(){
-  let v=null;
-  try{ const f=document.querySelector('#cmBody input[name="ppFall"]:checked'), a=document.querySelector('#cmBody input[name="ppP1"]:checked'); v=(f&&a)?phasePlanNormalize({fall:Number(f.value),p1All:a.value==='all'}):null; }catch(_){ v=null; }
-  if(v===null){ syncControls(); return; }
-  if(!_feedsHealthyOrExplain('Changing the phases')){ syncControls(); return; }
-  if(phase1Started()){ toast(PHASE_PLAN_FIXED_TEXT,'err'); syncControls(); return; }
-  if((typeof _setupLocks==='function')&&_setupLocks('phasePlan')){ toast(SETUP_LOCKED_TEXT,'err'); syncControls(); return; }
-  const now=phasePlan();
-  if(v.fall===now.fall&&v.p1All===now.p1All){ toast('The phases are already set that way — nothing changed.','warn'); syncControls(); return; }
-  return _phasePlanWrite(v);
-}
-window.openPhasePlanEditor=function(){
-  if(!_feedsHealthyOrExplain('Changing the phases')){ syncControls(); return; } // never from a page whose data has not all arrived, or whose live feeds are down
-  if(phase1Started()){ toast(PHASE_PLAN_FIXED_TEXT,'err'); syncControls(); return; }
-  if((typeof _setupLocks==='function')&&_setupLocks('phasePlan')){ toast(SETUP_LOCKED_TEXT,'err'); syncControls(); return; }
-  openConfirm({ title:'Phases', body:_phasePlanEditorBody(phasePlan()), okText:'Save', onConfirm:_phasePlanSave, onCancel:()=>syncControls() });
-};
 // The Add box offers the allowed combinations too, after NP (owner, 16 Oct 2026: "Admin add box can add combos"). Rebuilt only when they differ.
 function renderAddPriorityOpts(){
   try{
@@ -8092,17 +8097,22 @@ function _beginPhase1Confirm(){
   // [build 268 · HDCB] Counts + list are DERIVED from the saved calendar's checked
   // high-demand weeks (no hardcoded 6/46 — the checkboxes decide). Zero checked gets a
   // dedicated, unmissable warning: the phase still runs, but empty (owner ruling 15 Aug).
-  const _hdN=HD_WEEK_LABELS.length, _stdN=Math.max(0,mondays.length-_hdN);
-  const _zeroWarn=`<div class="cmodal-danger" style="margin-top:10px;font-weight:800">No high-demand weeks are set — Phase 1 opens on zero weeks.</div>
-          <div style="margin-top:6px;font-size:12px">You must still close, complete and send results to reach Phase 2. Once it begins, only Reset returns you to the calendar editor.</div>`;
+  // [398 · §302 · 3b] The box lists the weeks that open (a high-demand week at or above its Smart Lock Control: _p1HdSplit, the rule the begin
+  // applies) and, apart, the high-demand weeks that stay locked. None open: the empty-Phase-1 box and button.
+  const _sp=p1AllWeeks()?{open:[],shut:[]}:_p1HdSplit();
+  const _hdN=_sp.open.length, _stdN=Math.max(0,mondays.length-_hdN);
+  const _shutList=_sp.shut.length?`<div class="cmodal-warn" style="margin-top:10px">These high-demand weeks stay locked — their remaining FTE is below their Smart Lock Control:</div>
+          <ul style="margin:8px 0 8px 18px;font-size:12px;color:var(--t2);line-height:1.7">${_sp.shut.map(w=>`<li>${_p1WkLabel(w)}</li>`).join('')}</ul>`:'';
+  const _zeroWarn=`<div class="cmodal-danger" style="margin-top:10px;font-weight:800">${_sp.shut.length?'No high-demand week has room at its Smart Lock Control — Phase 1 opens on zero weeks.':'No high-demand weeks are set — Phase 1 opens on zero weeks.'}</div>${_sp.shut.length?'':`
+          <div style="margin-top:6px;font-size:12px">You must still close, complete and send results to reach Phase 2. Once it begins, only Reset returns you to the calendar editor.</div>`}`; // [398 · review F3] the second line only when no high-demand week is set
   openConfirm(((typeof _setupBeginOpts==='function')?_setupBeginOpts:(k,o)=>o)('p1',{ // [383 · §287] the review line and, not reviewed, Review settings / Begin without review
     title:'▶ Begin Phase 1',
     body:`<div>Open bidding and begin <strong>Phase 1</strong>?${((typeof _setupLockOn==='function')&&_setupLockOn())?' <strong>Locks the '+(SETUP_ROWS.length+((typeof SETUP_ARCHIVED_ROWS!=='undefined')?SETUP_ARCHIVED_ROWS.length:0))+' auction settings</strong> until Reset Auction.':''}</div>`
         +(p1AllWeeks()?`<div class="cmodal-info" style="margin-top:10px">All ${mondays.length} weeks open; high-demand weeks keep their floors and labels.</div>` // [395 · E2]
-         :_hdN===0?_zeroWarn
+         :_hdN===0?_zeroWarn+_shutList
          :`<div class="cmodal-warn" style="margin-top:10px"><strong>Phase 1 opens ONLY these ${_hdN} high-demand week${_hdN!==1?'s':''};</strong> the other ${_stdN} stay LOCKED:</div>
-          <ul style="margin:8px 0 8px 18px;font-size:12px;color:var(--t2);line-height:1.7">${HD_WEEK_LABELS.map(w=>`<li>${w}</li>`).join('')}</ul>
-          ${fallPhases()>=2?'<div class="cmodal-info">The rest open from Phase 2 on.</div>':'<div class="cmodal-info">The rest open in the Rolling Vacation Auction.</div>'}`)
+          <ul style="margin:8px 0 8px 18px;font-size:12px;color:var(--t2);line-height:1.7">${_sp.open.map(w=>`<li>${_p1WkLabel(w)}</li>`).join('')}</ul>
+          ${_shutList}${fallPhases()>=2?'<div class="cmodal-info">The rest open from Phase 2 on.</div>':'<div class="cmodal-info">The rest open in the Rolling Vacation Auction.</div>'}`)
         +((typeof _welcomeBeginLine==='function')?_welcomeBeginLine():''), // [384 · §288 · plan §10e] the welcome e-mails this Begin sends: the count, or switched off
     okText:p1AllWeeks()?'Begin Phase 1':(_hdN===0?'Begin EMPTY Phase 1':'Lock standard weeks & Begin Phase 1'), // [395 · E2]
     danger:!p1AllWeeks()&&_hdN===0,
@@ -8142,7 +8152,7 @@ function _beginPhaseLockDecisionInner(next){
   // calendar locked with no phase started.
   if(blockedByMissingFte()) return;
   // Phase 1 is HIGH-DEMAND ONLY: deterministically lock every standard week and open
-  // the six high-demand weeks — no Smart-Lock decision applies. (The admin already
+  // the high-demand weeks that have room at their Smart Lock Control (§302 3b). (The admin already
   // confirmed this in the Begin Phase 1 dialog, which lists the exact weeks.)
   if(next===1&&p1AllWeeks()){ // [395 · E2] Phase 1 on every week: no week is locked - every week is opened, as the high-demand weeks are below
     return (async()=>{
@@ -8159,11 +8169,12 @@ function _beginPhaseLockDecisionInner(next){
   if(next===1){
     return (async()=>{
       try{
-        const dotted={}; let lockedCount=0;
-        mondays.forEach(d=>{ const wk=dateKey(d); if(HIGH_DEMAND_WEEKS.has(wk)){ dotted['weeks.'+wk]=false; } else { dotted['weeks.'+wk]=true; lockedCount++; } });
+        const _open=new Set(_p1HdSplit().open); // [398 · §302 · 3b] the high-demand weeks at or above their Smart Lock Control
+        const dotted={};
+        mondays.forEach(d=>{ const wk=dateKey(d); dotted['weeks.'+wk]=!_open.has(wk); });
         await mergeFields(locksRef,_withCloseLayout(dotted));
         await _commitBeginPhase(1);
-        { const _hn=(typeof HIGH_DEMAND_WEEKS!=='undefined'?HIGH_DEMAND_WEEKS.size:6); toast('Phase 1: '+lockedCount+' standard weeks locked — only the '+_hn+' high-demand week'+(_hn!==1?'s are':' is')+' open','warn'); } // [build 268 · HDCB] derived count (typeof = sandbox convention)
+        toast('Phase 1: '+_open.size+' week'+(_open.size!==1?'s':'')+' open — all other weeks locked','warn'); // [398 · §302 · 3b] W37
       }catch(e){
         toast('Could not begin Phase 1 — '+(e?.message||e)+'. Check the week locks (some standard weeks may already be locked) and try again.','err');
       }
@@ -8794,7 +8805,7 @@ Choose which alerts you get under E-mail alerts at the top of the site. Results,
 
 ${B('RULES AND REMINDERS OF THE AUCTION')}
 ${bullets([
-  ((typeof phasesRuleLine==='function')?phasesRuleLine():`The auction has 4 phases. Phase 1 is for certain high-demand weeks only; all other weeks open in Phase 2.`), // [395 · E2] word for word as on the staff page (the fallback is for test sandboxes)
+  ((typeof phasesRuleLine==='function')?phasesRuleLine():`The auction has 4 phases. Phase 1 is for the high-demand weeks only: Ski Week (Feb 14), Spring Break (Mar 28, Apr 4), Thanksgiving (Nov 21), Christmas (Dec 19) and New Year's (Dec 26). All other weeks open in Phase 2.`), // [395 · E2] word for word as on the staff page (the fallback is for test sandboxes) · [398 · §302] W39 at the default calendar
   ((typeof rvaRuleLine==='function')?rvaRuleLine():`Phase 4 is the Rolling Vacation Auction that has rounds periodically throughout 2027. Each round functions as its own phase.`), // [394 · E1] owner 28 Oct 2026 10:16 AM, word for word as on the staff page
   // [384 · §288] the alert list, the sentence above and this list: plan §11a / §11c / §11e, word for word as on the page · [392 · §297] the rule lines of Build C · [393 · §297] item 188
   ...capBullets,
@@ -9234,7 +9245,7 @@ function bwOutcomeLabel(o){ const k=uiOutcome(o); return k==='losing'?'LOSING':k
 const REPORT_SPECIAL=_acNameMap(); // [build 265 · B5] derived from auctionConfig
 function weekTypeLabel(wk,d){
   // Holiday name only — no generic "High demand" prefix in reports/summaries.
-  if(typeof HIGH_DEMAND_WEEKS!=='undefined'&&HIGH_DEMAND_WEEKS.has(wk)){
+  if(typeof HIGH_DEMAND_WEEKS!=='undefined'&&HIGH_DEMAND_WEEKS.has(wk)&&!(typeof SUMMER_HD_WEEKS!=='undefined'&&SUMMER_HD_WEEKS.has(wk))){ // [398 · §302] a summer week ticked high-demand is "Summer" below
     return REPORT_SPECIAL[wk]||'';
   }
   const isSummer=d>=AC_SUMMER_START&&d<=AC_SUMMER_END; // [build 265 · B5]
@@ -12471,8 +12482,8 @@ function systemActionText(e){
   if(t==='admin-destination-off') return 'Admin turned the sign-in <strong>Destination of the Day</strong> OFF'; // [336 · §196]
   if(t==='admin-blind-on') return 'Admin turned <strong>Blinded bidding</strong> ON — bidder names hidden on the staff site'; // [365 · §261]
   if(t==='admin-blind-off') return 'Admin turned <strong>Blinded bidding</strong> OFF — bidder names shown on the staff site'; // [365 · §261]
-  if(t==='admin-ruleset-strict') return 'Bid rule set changed to <strong>Strict</strong>'; // [380 · §282]
-  if(t==='admin-ruleset-standard') return 'Bid rule set changed to <strong>Loose</strong>'; // [380 · §282]
+  if(t==='admin-ruleset-strict') return 'Competition weeks changed to <strong>Strict</strong>'; // [380 · §282] · [398 · §303] A1: old rows read with the name too
+  if(t==='admin-ruleset-standard') return 'Competition weeks changed to <strong>Loose</strong>'; // [380 · §282] · [398 · §303] A1
   if(t==='admin-strict-level'){ const c=(typeof e.choice==='string')?e.choice:''; if(c==='10') return 'Strict now applies to <strong>every numbered bid</strong>'; if(['1','2','3','4','5','6','7','8','9'].indexOf(c)>=0) return 'Strict now applies to <strong>bids of '+c+' or stronger</strong>'; return 'Strict level changed'; } // [382 · §286] W4
   if(t==='admin-combobids'){ const L=(typeof e.choice==='string')?e.choice.split('|').filter(x=>x).map(x=>String(x).split(',').join('/')):null; return L?('Combination bids changed to: <strong>'+esc(L.length?L.join(' · '):'none')+'</strong>'):'Combination bids changed'; } // [381 · §285]
   if(t==='admin-topbid'){ const c=Number(e.choice); return (Number.isInteger(c)&&c>=10&&c<=16)?('Bid numbers changed to: <strong>1 to '+c+'</strong>'):'Bid numbers changed'; } // [390 · §295]
@@ -15970,6 +15981,8 @@ window.renderCloudBackups=async function(){
 // ── [397 · §299] THE RULES PAGE (Settings › Rules) — information only: it reads the settings and writes nothing ─────────────────
 // RULES_TEXT is the text he approved (29 Oct 2026 8:20 PM, review page version 4), put here by the build (b397/s2/s2.py) from
 // tests/docs/build397-plan/text/rules-text.json, word for word and in his order. Change it there and rebuild, never by hand here.
+// [398 · §302/§303] Now from tests/docs/build398-plan/text/rules-text.json: W45–W50 (W50 = 3.10, the end of section 3), "Competition weeks" (A1)
+// and "Calendar and Phases" (A2) — rule 24.
 // Each item: n (its number), kind (new / live / term), html (its approved words), and for a live line its label, the words shown
 // when the setting gives nothing (whenEmpty) and, for the timer mode, the name of each value.
 const RULES_TEXT={sub:"How the auction works: every setting, the decision engine, and the rules staff see.",sections:[
@@ -15984,7 +15997,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"1.8","kind":"live","html":"","label":"Cumulative bid caps","whenEmpty":"No bid cap in any phase."},
 {"n":"1.9","kind":"live","html":"","label":"Bid floors","whenEmpty":"No bid floors on any week."},
 {"n":"1.10","kind":"live","html":"","label":"FTE overage"},
-{"n":"1.11","kind":"live","html":"","label":"Bid rule set"},
+{"n":"1.11","kind":"live","html":"","label":"Competition weeks"},
 {"n":"1.12","kind":"live","html":"","label":"Timer Reset Mode","names":{"1":"1 · Every bid","2":"2 · Only when it affects others"}}
 ]},
 {n:"2",title:"Settings explained",items:[
@@ -15993,7 +16006,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.3","kind":"new","html":"<b>Bidding Timer<\/b> — turns the countdown on or off for everyone. Off: bidding stays open until the admin closes it."},
 {"n":"2.4","kind":"new","html":"<b>Global Lock<\/b> — freezes all bidding: no one can add, change or remove a bid. Individually locked weeks stay locked when it is turned off."},
 {"n":"2.5","kind":"new","html":"<b>Lock All · Unlock All · Lock All Except High Demand · one week<\/b> — a locked week takes no new bids, changes or removals; its projection stands. During a high-demand-only Phase 1, unlocking any other week asks first."},
-{"n":"2.6","kind":"new","html":"<b>Smart Lock and Unlock<\/b> (Lock Weeks Summary) — locks every open week whose remaining FTE is below its Smart Lock Control, and unlocks every locked week at or above it."},
+{"n":"2.6","kind":"new","html":"<b>Smart Lock and Unlock<\/b> (Lock Weeks Summary) — locks every open week whose remaining FTE is below its Smart Lock Control, and unlocks every locked week at or above it. During a high-demand-only Phase 1 it unlocks high-demand weeks only."},
 {"n":"2.7","kind":"new","html":"<b>FTE (per person)<\/b> — 0.4 to 1.0, required, no default. It is the room a person's bid takes on a week, so it changes every decision. Bidding cannot begin until everyone has one."},
 {"n":"2.8","kind":"new","html":"<b>FTE editing<\/b> — off locks the FTE fields. It turns off by itself when Phase 1 begins and on Reset Auction."},
 {"n":"2.9","kind":"new","html":"<b>Withhold a bid number<\/b> (click a green number) — that person cannot use the number. Reset Auction clears every withheld number."},
@@ -16002,9 +16015,9 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.12","kind":"new","html":"<b>Ask users for their KP e-mail at login<\/b> — asks anyone without a KP e-mail for one. Default on."},
 {"n":"2.13","kind":"new","html":"<b>Quota reset day<\/b> — the e-mail service's billing day, for the usage meter. No effect on bidding."},
 {"n":"2.14","kind":"new","html":"<b>Lock these settings once the auction begins<\/b> — the setup lock (see above). Default off. Can change only before Phase 1."},
-{"n":"2.15","kind":"new","html":"<b>Auction Calendar<\/b> — the year, the six high-demand holiday weeks and the summer range. Decides which weeks get which floor, and which weeks Phase 1 opens. Locked while a phase is running; the year is fixed once Phase 1 begins. Setup lock."},
-{"n":"2.16","kind":"new","html":"<b>Bid Floors by Week Category<\/b> — the weakest bid allowed on high-demand weeks and on summer weeks (3 to 10, or no floor; defaults 4 and no floor). A bid below it cannot be placed or approved. Any number blocks NP. Locked while a phase is running. Setup lock."},
-{"n":"2.17","kind":"new","html":"<b>Bid rule set<\/b> — off = Loose, on = Strict (section 5). Default Loose. Locked while a phase is running. Setup lock."},
+{"n":"2.15","kind":"new","html":"<b>Calendar and Phases<\/b> — the year, the summer range and the high-demand weeks: Thanksgiving, Christmas and New Year's, 0–3 Spring Break weeks and 0–1 Ski Week (each can be unticked), and any summer weeks ticked. Its pop-up starts with Phases. Decides which weeks get which floor, and which weeks Phase 1 opens. Locked while a phase is running; the year is fixed once Phase 1 begins. Setup lock."},
+{"n":"2.16","kind":"new","html":"<b>Bid Floors by Week Category<\/b> — the weakest bid allowed on high-demand weeks and on summer weeks (3 to 10, or no floor; defaults 4 and no floor). A summer week marked high-demand takes the summer floor. A bid below it cannot be placed or approved. Any number blocks NP. Locked while a phase is running. Setup lock."},
+{"n":"2.17","kind":"new","html":"<b>Competition weeks<\/b> — off = Loose, on = Strict (section 5). Default Loose. Locked while a phase is running. Setup lock."},
 {"n":"2.18","kind":"new","html":"<b>Strict applies to<\/b> — how strong a winning bid must be for Strict to hold it: every numbered bid (default) or 9 … 1 or stronger. Locked while a phase is running. Setup lock."},
 {"n":"2.19","kind":"new","html":"<b>Bid numbers<\/b> — how many numbers each person gets, 10 to 16 (default 10). Numbers above 10 rank below 10. Does not change the caps. Locked while a phase is running. Setup lock."},
 {"n":"2.20","kind":"new","html":"<b>Phases<\/b> — 1, 2 or 3 Fall phases before the Rolling Vacation Auction, and whether Phase 1 is high-demand weeks only or every week. Default 3, high-demand only. Fixed once Phase 1 begins."},
@@ -16036,7 +16049,8 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"3.6","kind":"new","html":"Begin Phase turns the countdown on and starts it at the starting reset (48 hours by default), or at the opening window when one is set."},
 {"n":"3.7","kind":"new","html":"<b>Opening window<\/b> (off by default) — each phase or round opens with a set number of days; bids do not reset the countdown until the starting reset remains."},
 {"n":"3.8","kind":"new","html":"Bids the admin adds or changes also restart the countdown: always in mode 1; in mode 2 only when they change someone else's projected outcome."},
-{"n":"3.9","kind":"new","html":"With the Bidding Timer off there is no countdown: bidding stays open until the admin closes it."}
+{"n":"3.9","kind":"new","html":"With the Bidding Timer off there is no countdown: bidding stays open until the admin closes it."},
+{"n":"3.10","kind":"new","html":"<b>Begin Phase 1<\/b> — when Phase 1 is every week, it opens every week. When Phase 1 is high-demand weeks only, it opens each high-demand week whose remaining FTE is at or above its Smart Lock Control and locks every other week. Reopen bidding and Unlock these follow the same rule while that phase runs."}
 ]},
 {n:"4",title:"Competition weeks",items:[
 {"n":"4.1","kind":"new","html":"<b>What makes one.<\/b> At one moment in the phase, at least two people have a bid of this phase on the week, and their FTE plus the FTE of earlier winners is more than the week's FTE available."},
@@ -16057,7 +16071,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"4.16","kind":"live","html":"","label":"The competition-week line staff see"}
 ]},
 {n:"5",title:"Strict and Loose",items:[
-{"n":"5.1","kind":"live","html":"In force: ","label":"Bid rule set in force"},
+{"n":"5.1","kind":"live","html":"In force: ","label":"Competition weeks in force"},
 {"n":"5.2","kind":"new","html":"<b>Loose.<\/b> Any bid of this phase can be removed while bidding is open and the week is unlocked. The competition-week rules (section 4) apply under both."},
 {"n":"5.3","kind":"new","html":"<b>Strict — held bids.<\/b> On a competition week, a Winning numbered bid of this phase, at the Strict level or stronger, cannot be removed — only moved."},
 {"n":"5.4","kind":"new","html":"Never held: tied, Under Review, Losing and NP bids, and Winning bids weaker than the Strict level. They can be removed as normal."},
@@ -16112,7 +16126,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"8.2","kind":"term","html":"Before Phase 1, or after a phase's results are sent and before the next begins. Settings locked while a phase is running can change only then.","term":"Between phases"},
 {"n":"8.3","kind":"term","html":"The weakest bid allowed on a high-demand or summer week (Bid Floors card). Not the same as a remembered bid.","term":"Bid floor"},
 {"n":"8.4","kind":"term","html":"One of a person's numbers, 1 (strongest) to the highest set. Each number can be used on one week per phase.","term":"Bid number"},
-{"n":"8.5","kind":"term","html":"Loose or Strict. Decides whether a winning bid on a competition week can be removed.","term":"Bid rule set"},
+{"n":"8.5","kind":"term","html":"Loose or Strict. Decides whether a winning bid on a competition week can be removed.","term":"Competition weeks"},
 {"n":"8.6","kind":"term","html":"The timer has reached 0, or the admin stopped bidding. Decisions are possible only then.","term":"Bidding closed"},
 {"n":"8.7","kind":"term","html":"A bid of two or three numbers, such as 1/2, that uses all of them. Ranks just above its lowest number.","term":"Combination bid"},
 {"n":"8.8","kind":"term","html":"A week where, at one moment this phase, two or more people's bids came to more than its FTE available (with earlier winners). Lasts the rest of the phase.","term":"Competition week"},
@@ -16128,10 +16142,10 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"8.18","kind":"term","html":"Freezes all bidding on every week at once.","term":"Global Lock"},
 {"n":"8.19","kind":"term","html":"Placing a weaker bid on a week. On a competition week it is allowed only if the bid would still be Winning and no weaker than the weakest other winning bid.","term":"Going down"},
 {"n":"8.20","kind":"term","html":"Under Strict: a Winning numbered bid on a competition week at the Strict level or stronger. It can be moved, not removed.","term":"Held bid"},
-{"n":"8.21","kind":"term","html":"One of the six holiday weeks in the Auction Calendar. Gets the high-demand floor; the only weeks open in a high-demand-only Phase 1.","term":"High-demand week"},
+{"n":"8.21","kind":"term","html":"A week ticked high-demand in Calendar and Phases: a holiday, Spring Break, Ski Week or a summer week. The only weeks open in a high-demand-only Phase 1. Gets the high-demand floor; a summer week keeps the summer floor.","term":"High-demand week"},
 {"n":"8.22","kind":"term","html":"Under Strict: someone else's change took a person from Winning to not Winning, or from Under Review or tied to Losing, on a week this phase.","term":"Knocked out"},
 {"n":"8.23","kind":"term","html":"Takes no new bids, changes or removals. Its projection stands.","term":"Locked week"},
-{"n":"8.24","kind":"term","html":"The bid rule set in which any bid can be removed. The default.","term":"Loose"},
+{"n":"8.24","kind":"term","html":"The Competition weeks setting in which any bid can be removed. The default.","term":"Loose"},
 {"n":"8.25","kind":"term","html":"Projected not to get the week.","term":"Losing"},
 {"n":"8.26","kind":"term","html":"On a competition week, the weakest bid a newcomer may place: the weakest Winning or Under Review bid there, or, with none, the strongest bid there.","term":"Minimum new bid"},
 {"n":"8.27","kind":"term","html":"Under Strict: shifting a held bid, in one step, to a week where its owner was knocked out and where it would win.","term":"Move"},
@@ -16146,12 +16160,12 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"8.36","kind":"term","html":"The admin has e-mailed a completed phase's results. Staff then see their outcomes.","term":"Results sent"},
 {"n":"8.37","kind":"term","html":"The last phase, run as rounds through the year. Each round opens chosen months and is its own phase.","term":"Rolling Vacation Auction (RVA)"},
 {"n":"8.38","kind":"term","html":"When on, keeps the core Auction Setup settings fixed from Begin Phase 1 until Reset Auction.","term":"Setup lock"},
-{"n":"8.39","kind":"term","html":"Locks open weeks whose remaining FTE is below their Smart Lock Control and unlocks locked weeks at or above it.","term":"Smart Lock"},
+{"n":"8.39","kind":"term","html":"Locks open weeks whose remaining FTE is below their Smart Lock Control and unlocks locked weeks at or above it — only high-demand weeks during a high-demand-only Phase 1.","term":"Smart Lock"},
 {"n":"8.40","kind":"term","html":"Per week, the least remaining FTE needed to stay open when Smart Lock runs. Default 0.4.","term":"Smart Lock Control"},
 {"n":"8.41","kind":"term","html":"The ranking of every bid: 1/2/3 › 1/2 › 1 › 2/3 › 2 › … › 10 › 11 … 16 › NP.","term":"Strength order"},
-{"n":"8.42","kind":"term","html":"The bid rule set in which a winning bid on a competition week can only be moved, not removed.","term":"Strict"},
+{"n":"8.42","kind":"term","html":"The Competition weeks setting in which a winning bid on a competition week can only be moved, not removed.","term":"Strict"},
 {"n":"8.43","kind":"term","html":"\"Strict applies to\": every numbered bid, or N or stronger. Weaker winning bids are not held.","term":"Strict level"},
-{"n":"8.44","kind":"term","html":"A week inside the Auction Calendar's summer range. Gets the summer floor.","term":"Summer week"},
+{"n":"8.44","kind":"term","html":"A week inside the summer range set in Calendar and Phases. Gets the summer floor.","term":"Summer week"},
 {"n":"8.45","kind":"term","html":"Two or more bids at the same place in the strength order. Shown as Under Review when one of them could fit within the overage.","term":"Tie"},
 {"n":"8.46","kind":"term","html":"Which bid changes restart the countdown: 1 every bid, 2 only changes that affect others.","term":"Timer Reset Mode"},
 {"n":"8.47","kind":"term","html":"Over the week's FTE available by no more than the FTE overage, alone or as part of a tie. The admin decides.","term":"Under Review"},
