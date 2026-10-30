@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 231;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 232;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -821,6 +821,8 @@ body{zoom:1.15}
       <select id="swapSelect" class="priority-input"></select>
       <!-- [202 · §259] Filled by _swapRowsPaint each time the Swap step opens: one button per week. -->
       <div id="swapRows" class="swap-rows" style="display:none"></div>
+      <!-- [232 · §299] Shown by openSwapStep only when the competition-week rule left at least one of your weeks out of the list above. -->
+      <div id="swapLeftOut" style="display:none;font-size:.78rem;color:#4a505a;margin:0 0 14px">Weeks the competition-week rules don't allow aren't listed.</div>
       <div class="modal-buttons">
         <button class="btn-secondary" onclick="closeModal()" style="flex:0 1 auto;white-space:nowrap;padding-left:13px;padding-right:13px">Cancel</button>
         <button class="btn-secondary" onclick="backFromSwap()" style="flex:0 1 auto;white-space:nowrap;padding-left:13px;padding-right:13px">← Back</button>
@@ -3623,7 +3625,7 @@ function showCenterAlert(msg){
   ov.style.cssText='position:fixed;inset:0;background:rgba(31,35,41,.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
   ov.innerHTML=`<div style="background:#ffffff;border:1px solid #cbc4b5;border-radius:14px;max-width:420px;width:100%;padding:22px 24px;text-align:center;box-shadow:0 20px 60px rgba(31,35,41,.5)">
     <div style="font-size:30px;margin-bottom:10px"><svg class="lic" viewBox="0 0 24 24" aria-hidden="true" style="width:1.1em;height:1.1em;vertical-align:-.17em;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none"><path d="M12 3.5 2.5 20h19L12 3.5z"/><path d="M12 10v4.5M12 17.4v.1"/></svg></div>
-    <div style="color:#1f2329;font-size:15px;font-weight:600;line-height:1.5;margin-bottom:18px">${msg}</div>
+    <div style="color:#1f2329;font-size:15px;font-weight:600;line-height:1.5;margin-bottom:18px">${escH(msg)}</div>
     <button id="centerAlertOk" style="background:#1f2329;color:#ffffff;border:none;border-radius:8px;padding:10px 28px;font-size:14px;font-weight:700;cursor:pointer">OK</button>
   </div>`;
   // No click-outside dismiss — the user must press OK so the alert is never missed.
@@ -4702,6 +4704,29 @@ function _swapPartners(user,wk){
   }catch(_){ return []; }
   return out;
 }
+// [232 · §299] The competition rule for exchanging this bidder's bids on wkA and wkB, on the picture with BOTH bids exchanged (on the
+// live board the incoming number would read as being on two weeks). Asked of both weeks; a bid that is not weaker than the one it
+// replaces is never refused. false = allowed; otherwise the week it refuses (_wwMsg says why). Read-only: it judges a copy of the board.
+// _swapCheck asks it at Continue; _swapOffered asks it to leave such a week out of the Swap list.
+function _swapCompRefuses(user,wkA,wkB){
+  const a=data[user][wkA], b=data[user][wkB];
+  const inc={}; inc[wkA]=b; inc[wkB]=a;
+  const pic=JSON.parse(JSON.stringify(data||{}));
+  if(!pic[user]||typeof pic[user]!=='object') pic[user]={};
+  pic[user][wkA]=b; pic[user][wkB]=a;
+  if(typeof _wwRefuses==='function'){ // typeof = sandbox convention
+    for(const w of [wkA,wkB]){ if(_wwRefuses(user,w,inc[w],pic)!==false) return w; }
+  }
+  return false;
+}
+// [232 · §299] The weeks the Swap list offers: _swapPartners less every week the competition rule refuses exchanging `wk` with. Every
+// other refusal (floors, held numbers, lowerings, locks) stays at Continue. A week whose check fails to run is listed, and judged at
+// Continue. Returns the list and how many weeks were left out. Asked only when the Swap button, the Swap list or the Remove box is drawn.
+function _swapOffered(user,wk){
+  const all=_swapPartners(user,wk), list=[];
+  for(const o of all){ let r=false; try{ r=_swapCompRefuses(user,wk,o.wk); }catch(_){ r=false; } if(r===false) list.push(o); }
+  return {list:list,left:all.length-list.length};
+}
 // May `user` exchange their bids on wkA and wkB, as the board stands? {ok:true,a,b,inc,low,spends,rem} or {ok:false,msg}.
 // Read-only. `inc` = the bid each week would RECEIVE; `low` = which weeks would spend a lowering.
 function _swapCheck(user,wkA,wkB){
@@ -4737,14 +4762,9 @@ function _swapCheck(user,wkA,wkB){
       const _bfF=bfFloorFor(w);
       if(!bfAllows(p,_bfF)) return no(_swapWeekName(w)+" is a "+(weekMeta[w]?.highPriorityOnly?"high-demand":"summer")+" week and needs a bid of "+_bfF+" or better.");
     }
-    // The competition rule, on the picture with BOTH bids exchanged (on the live board the incoming number would read as
-    // being on two weeks). Asked of both weeks; a bid that is not weaker than the one it replaces is never refused.
-    const pic=JSON.parse(JSON.stringify(data||{}));
-    if(!pic[user]||typeof pic[user]!=='object') pic[user]={};
-    pic[user][wkA]=b; pic[user][wkB]=a;
-    if(typeof _wwRefuses==='function'){ // typeof = sandbox convention
-      for(const w of [wkA,wkB]){ if(_wwRefuses(user,w,inc[w],pic)!==false) return no(_swapWeekName(w)+": "+_wwMsg()); }
-    }
+    // The competition rule, on the picture with BOTH bids exchanged: the shared helper (the Swap list asks the same one).
+    const _cw=_swapCompRefuses(user,wkA,wkB);
+    if(_cw!==false) return no(_swapWeekName(_cw)+": "+_wwMsg());
     // The priority lock: a bid weaker than the week's stored floor is a lowering, exactly as in Edit.
     const lockOn=adminSettings.priorityLockEnabled!==false;
     const low={}; let spends=0;
@@ -4773,13 +4793,13 @@ function _swapEntrySync(user,wk,isRebid){
     _swapWith=null; _swapExpect=null; _swapErr('');
     const set=(id,on)=>{ const e=document.getElementById(id); if(e) e.style.display=on?'block':'none'; };
     set('swapStep1',false); set('swapStep2',false);
-    set('swapEntry',!!isRebid&&_swapPartners(user,wk).length>0);
+    set('swapEntry',!!isRebid&&_swapOffered(user,wk).list.length>0); // [232 · §299] a week the list would offer
   }catch(_){}
 }
 window.openSwapStep=function(){
   const wk=pendingWeek, user=getCurrentUser(); if(!wk||!user||!weekMeta[wk]) return;
   { const _lr=(typeof _saveRefusal==='function')?_saveRefusal():null; if(_lr){ showError(_lr); return; } } // [215 · §282] not live: the Swap step does not open
-  const list=_swapPartners(user,wk);
+  const _off=_swapOffered(user,wk), list=_off.list; // [232 · §299] the weeks the competition rule refuses are left out
   if(!list.length){ showError("You have no other bid to swap with."); return; }
   const meta=weekMeta[wk];
   const here=document.getElementById('swapThisWeek');
@@ -4788,6 +4808,7 @@ window.openSwapStep=function(){
   sel.innerHTML='<option value="">-- Select a week --</option>'+list.map(o=>'<option value="'+escH(o.wk)+'">Week '+escH(weekMeta[o.wk].weekNum)+' ('+escH(weekMeta[o.wk].shortDate||weekMeta[o.wk].range)+') — bid '+escH(bidLbl(o.bid))+'</option>').join('');
   sel.value="";
   _swapWith=null; _swapExpect=null; _swapErr(''); _clearDlgErrs();
+  { const _lo=document.getElementById('swapLeftOut'); if(_lo) _lo.style.display=_off.left>0?'block':'none'; } // [232 · §299] the one line, only when a week was left out
   _swapShow('pick');
   let _rows=false; try{ if(typeof _swapRowsPaint==='function') _rows=_swapRowsPaint(sel)===true; }catch(_){ _rows=false; } // [202 · §259] the weeks as buttons; the drop-down when they cannot be drawn
   if(!_rows){ try{ sel.focus(); }catch(_){} } else if(typeof _pickFocus==='function') _pickFocus('swapRows');
@@ -5004,14 +5025,14 @@ async function removeSelection(wk){
   // phrasing ("X of Y bid lowerings left") for the finite-lowerings case.
   const _blA=blAllowance(Number(phasesData.currentPhase||1));
   const _blR=blRemaining(user);
-  const _floorLbl=bidLbl(bestEver!==undefined?bestEver:prio);
+  const _floorLbl=escH(bidLbl(bestEver!==undefined?bestEver:prio));
   const _boxAmber='margin-top:10px;font-size:.76rem;color:#6f6a60;line-height:1.45'; // [187 · §237] the lock note is quieter: plain small text, no box - the Edit note above it is the one to read
   // [187 · §237] Owner-found: bidders remove a bid and place a new one when Edit would do. [228 · §297] item 125 (his 20 Oct idea, PLAN §B3): the
   // boxed note keeps its bold line and holds two buttons, on white in the look of the bid box's "⇄ Swap bids", side by side, wrapping on a
   // narrow screen. ✎ Edit bid closes this box exactly as Cancel does (nothing removed) and opens the bid box for this week; ⇄ Swap bids does
   // the same, then opens the bid box's Swap step. "⇄ Swap bids" shows only when this week has another of your bids to swap with
-  // (_swapPartners - the bid box's own test). Each box runs every check it always runs. The shared confirm box (showConfirm) is untouched.
-  let _rmSwapOk=false; try{ _rmSwapOk=typeof _swapPartners==='function'&&_swapPartners(user,wk).length>0; }catch(_){ _rmSwapOk=false; }
+  // (_swapOffered - the bid box's own test). Each box runs every check it always runs. The shared confirm box (showConfirm) is untouched.
+  let _rmSwapOk=false; try{ _rmSwapOk=typeof _swapOffered==='function'&&_swapOffered(user,wk).list.length>0; }catch(_){ _rmSwapOk=false; }
   const _rmBtn='flex:1 1 auto;min-height:44px;padding:8px 12px;font-weight:700;font-size:1rem;white-space:nowrap;border-color:#1f2329;color:#4e5e36;background:#ffffff';
   const _editMsg='<div style="margin-top:12px;padding:11px 13px;background:rgba(111,106,96,.18);border:1.5px solid rgba(74,79,90,.6);border-radius:8px;font-size:.88rem;color:#5e5c57;line-height:1.5"><strong>Only changing your bid?</strong>'
     +'<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:8px"><button type="button" class="btn-secondary" data-rm-go="edit" style="'+_rmBtn+'">✎ Edit bid</button>'
@@ -5060,7 +5081,7 @@ async function removeSelection(wk){
   if(_rmShut) lockMsg=`<div style="${_boxAmber}">Competition week: if you remove this bid, a new bid here must match or beat the weakest winning or under-review bid — you may not get this bid back.</div>`; // [195 · §249] owner wording, 7 Oct 2026 · [228 · §297] item 131
   if(!_rmShut&&_rmLast) lockMsg=`<div style="${_boxAmber}">Competition week: after you remove this bid, any new bid here must be at least as strong as it.</div>`; // [198 · §254 · §255] owner wording, 8 Oct 2026 · [228 · §297] item 132
   const msg=`<div style="font-size:.95rem;font-weight:600;color:#1f2329">Remove your bid for <span style="color:#1f2329">Week ${meta.weekNum}</span> (${meta.range})?</div>
-  <div style="margin-top:8px;font-size:.85rem;color:#1f2329">Current bid: <strong style="color:#4e5e36">${bidLbl(prio)}</strong></div>${_editMsg}${lockMsg}`; // [228 · §297] item 124
+  <div style="margin-top:8px;font-size:.85rem;color:#1f2329">Current bid: <strong style="color:#4e5e36">${escH(bidLbl(prio))}</strong></div>${_editMsg}${lockMsg}`; // [228 · §297] item 124
   const _rmAsk=showConfirm(msg,{yesText:'Remove',noText:'Cancel'}); // [228 · §297] item 133
   try{ document.querySelectorAll('#confirmMsg [data-rm-go]').forEach(b=>{ b.onclick=()=>_rmGo(b.getAttribute('data-rm-go')==='swap'); }); }catch(_){} // [228 · §297] item 125: the box is drawn by now (showConfirm fills it at once)
   if(!await _rmAsk) return;
@@ -5607,10 +5628,10 @@ window.openPhaseHistory=function(){
       if(approvedHere.includes(user)){ outcome='APPROVED'; oc='#36694a'; }
       else if(deniedHere.includes(user)){ outcome='DENIED'; oc='#5c1f15'; }
       else { outcome='NOT APPROVED'; oc='#5c1f15'; }
-      const lbl=bidLbl(prio);
+      const lbl=escH(bidLbl(prio));
       html+=`<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid rgba(31,35,41,.04)">
         <span style="font-size:.72rem;font-weight:700;color:#1f2329;min-width:48px">W${meta?.weekNum||''}</span>
-        <span style="font-size:.8rem;color:#1f2329;flex:1">${meta?.range||wk}</span>
+        <span style="font-size:.8rem;color:#1f2329;flex:1">${escH(meta?.range||wk)}</span>
         <span style="font-size:.72rem;color:#4a505a">Bid: ${lbl}</span>
         <span style="font-size:.72rem;font-weight:700;color:${oc}">${outcome}</span>
       </div>`;
@@ -5932,7 +5953,7 @@ function renderSelections(user,ap){
   // tag write failed and was captured in a completed phase would show here as a phantom
   // "LOSING" bid while being absent from the board, pool, and engine.
   const uw={};
-  for(const wk of myCountedWeeks(user)) uw[wk]=data[user][wk];
+  for(const wk of myCountedWeeks(user)) if(weekMeta[wk]) uw[wk]=data[user][wk]; // [232 · §299] real weeks only (the link below is an onclick)
   // [build 132 · lead admin] Once this phase's results are ANNOUNCED, the cycle is over:
   // show a fresh slate instead of last phase's bids lingering as live-looking projections.
   // (The bids themselves stay in the data — wins lock in, and the next phase retires the
@@ -5957,7 +5978,7 @@ function renderSelections(user,ap){
     const wkLabel=`Week ${meta?.weekNum||''} · ${formatShort(wk)}`;
     return `<div class="selection-item" onclick="scrollToWeek('${wk}')" style="cursor:pointer">
       <span class="selection-date">${wkLabel}</span>
-      <span style="color:#4a505a;font-size:.72rem">${bidLbl(p)}</span>
+      <span style="color:#4a505a;font-size:.72rem">${escH(bidLbl(p))}</span>
       <span class="selection-outcome outcome-${uiOutcome(o)}">${label}</span>
 
     </div>`;
@@ -6076,7 +6097,7 @@ function _lockedCard(user,wk,ap){
     const myRow=document.createElement("div");
     myRow.className="week-stat";
     myRow.style.cssText="margin-top:5px;font-size:.7rem;color:#1f2329";
-    myRow.innerHTML=`<span style="font-size:.65rem;font-weight:600;color:#1f2329">My Bid:</span> <span class="competitor" style="background:rgba(31,35,41,.2);color:#4e5e36">${escH(bidLbl(data[user][wk]))}</span> ${outcomeIcon(o)}<span class="lk-out">${escH(outcomeText(o))}</span>`;
+    myRow.innerHTML=`<span style="font-size:.65rem;font-weight:600;color:#1f2329">My Bid:</span> <span class="competitor" style="background:rgba(31,35,41,.2);color:#4e5e36">${escH(bidLbl(data[user][wk]))}</span> ${currentPhaseAnnounced()?'<span class="lk-out">Denied</span>':outcomeIcon(o)+'<span class="lk-out">'+escH(outcomeText(o))+'</span>'}`; // [232 · §299] once results are sent: the stored decision (owner: "Denied")
     div.appendChild(myRow);
   }
   const tag=document.createElement("div"); tag.className="lk-tag";

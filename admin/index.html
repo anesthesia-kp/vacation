@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 396;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 397;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -284,8 +284,6 @@ input[type=range]:disabled::-webkit-slider-thumb{cursor:not-allowed}
 .mq-pending{animation:mqFlash 1.1s ease-in-out infinite;border-radius:8px}
 .mq-pending .trow-label{color:var(--red)!important;font-weight:800}
 .mq-badge-pending{color:var(--red)!important;font-weight:800}
-@keyframes mqTitleFlash{0%,100%{color:var(--red)}50%{color:#cebcb9}}
-.mq-title-pending{animation:mqTitleFlash 1.1s ease-in-out infinite}
 
 @media(max-width:700px){.stats{flex-direction:column}}
 
@@ -493,6 +491,7 @@ thead th{color:var(--t2)}
         <a onclick="nav('setup',this)">Auction Setup</a>
         <a onclick="nav('controls',this)">Phase Settings</a>
         <a onclick="nav('slots',this)">FTE Availability</a>
+        <a onclick="nav('rules',this)">Rules</a><!-- [397 · §299] -->
       </div></div>
       <a onclick="nav('simulator',this)">Simulator</a>
       <div class="nav-section">Other Systems</div>
@@ -1027,7 +1026,7 @@ thead th{color:var(--t2)}
         <div class="trow">
           <div>
             <div class="trow-label">Strict: a winning bid on a competition week can only be moved</div>
-            <div class="trow-desc">OFF = Standard: any bid can be removed. ON = Strict: a winning bid on a competition week can't be removed, only moved to a week where its owner was knocked out of winning. Locked while a phase is running.</div>
+            <div class="trow-desc">OFF = Loose: any bid can be removed. ON = Strict: a winning bid on a competition week can't be removed, only moved to a week where its owner was knocked out of winning. Locked while a phase is running.</div>
             <div id="ruleSetState" class="trow-desc" style="margin-top:4px;font-weight:700"></div>
           </div>
           <div class="tog" id="ruleSetTog" onclick="toggleRuleSet()"></div>
@@ -1344,6 +1343,16 @@ thead th{color:var(--t2)}
       <div id="adBody"></div>
     </div>
 
+    <!-- RULES [397 · §299] — information only, drawn fresh each time it opens (renderRulesPage, from nav): one search box, then the
+         sections, one open at a time. The blank space under the list (rulesSpacer) lets a section near the end reach the top. -->
+    <div class="panel" id="panel-rules">
+      <div class="page-head"><div class="page-title">Rules</div><div class="page-sub" id="rulesSub"></div></div>
+      <input type="search" id="rulesSearch" class="inp rl-search" placeholder="Search the rules" autocomplete="off" aria-label="Search the rules">
+      <div class="card rl-card" id="rulesList"></div>
+      <div class="rl-empty" id="rulesEmpty">No rule matches those words.</div>
+      <div id="rulesSpacer" aria-hidden="true"></div>
+    </div>
+
     <!-- SIMULATOR -->
     <div class="panel" id="panel-simulator">
       <div class="page-head">
@@ -1469,6 +1478,43 @@ thead th{color:var(--t2)}
 :root .nav .nav-items a{margin:1px 10px 1px 34px;padding:6px 12px;font-size:13px;font-weight:500;border-left:2px solid var(--rd-line2)!important;border-radius:0 12px 12px 0}
 :root .nav .nav-items a.on{font-weight:800;border-left-color:var(--rd-ink)!important}
 :root .nav > a[onclick]{font-weight:800;color:var(--rd-ink)}
+</style>
+<style id="rules-page">/* [397 · §299] The Rules page (Settings › Rules) — the look of the review page he approved (29 Oct 2026, 8:15–8:20 PM, version 4),
+   in this page's own colours: the menu's fold rows as section headings, numbered items, examples in a pale green box, each live value
+   under a thin rule. On a phone a heading stops below the ☰ button (scroll-margin-top), and the page keeps a 16px side gutter. */
+#panel-rules .rl-search{display:block;width:100%;font-size:16px;font-weight:500;padding:9px 12px;margin-bottom:14px;-webkit-appearance:none;appearance:none}
+#panel-rules .rl-card{padding-top:8px;padding-bottom:8px}
+.rl-grp{border-top:1px solid var(--rd-line);margin-top:4px;padding-top:2px}
+.rl-grp.rl-first{border-top:0;margin-top:0}
+.rl-grp.rl-gone,.rl-it.rl-gone{display:none}
+.rl-head{all:unset;box-sizing:border-box;display:flex;justify-content:space-between;align-items:center;gap:10px;width:100%;margin:6px 0 2px;padding:8px 12px;min-height:44px;border-radius:12px;font-size:12.5px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--rd-ink);cursor:pointer;-webkit-tap-highlight-color:transparent;scroll-margin-top:12px}
+.rl-grp.open .rl-head,.rl-head:hover{background:var(--rd-tint)}
+.rl-head:focus-visible{outline:2px solid var(--rd-ink)}
+.rl-hl{display:flex;align-items:baseline;gap:8px;min-width:0}
+.rl-sn{color:var(--rd-muted);font-variant-numeric:tabular-nums}
+.rl-hr{display:flex;align-items:center;gap:8px;flex:none}
+.rl-chev{display:inline-block;transition:transform .15s}
+.rl-grp.open .rl-chev{transform:rotate(90deg)}
+.rl-count{display:none;font-size:11px;font-weight:700;letter-spacing:0;text-transform:none;padding:2px 8px;border-radius:999px;background:var(--rd-ink);color:var(--rd-surface)}
+.rl-searching .rl-count{display:inline-block}
+.rl-items{display:none;padding:6px 0 12px}
+.rl-grp.open .rl-items{display:block}
+.rl-it{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;padding:10px 4px 10px 12px;border-bottom:1px solid var(--rd-line)}
+.rl-it.rl-last{border-bottom:0}
+.rl-num{font-size:11px;font-weight:700;color:var(--rd-muted);background:var(--rd-tint);border-radius:999px;padding:2px 7px;line-height:1.35;margin-top:1px;min-width:34px;text-align:center;font-variant-numeric:tabular-nums;align-self:start}
+.rl-body{font-size:14px;line-height:1.55;color:var(--rd-ink);overflow-wrap:anywhere;min-width:0}
+.rl-body b,.rl-term,.rl-label{font-weight:800}
+.rl-body ul{margin:6px 0 2px 18px}
+.rl-body li{margin:2px 0}
+.rl-body .ex{display:block;margin:8px 0 2px;padding:8px 11px;border-radius:12px;background:color-mix(in srgb,var(--rd-winFill) 9%,var(--rd-surface));border:1px solid color-mix(in srgb,var(--rd-winFill) 30%,var(--rd-surface));font-size:13px;line-height:1.5}
+.rl-label{font-size:13px;margin-bottom:2px}
+.rl-val{margin-top:6px;padding:2px 0 2px 10px;border-left:2px solid var(--rd-line2);color:var(--rd-muted);font-size:13px;line-height:1.5;white-space:pre-line}
+.rl-empty{display:none;padding:18px 12px;text-align:center;color:var(--rd-muted);font-size:13px}
+.rl-empty.on{display:block}
+#panel-rules mark{background:color-mix(in srgb,var(--rd-reviewFill) 45%,transparent);color:inherit;border-radius:3px;padding:0 1px}
+@media (max-width:900px){.rl-head{scroll-margin-top:64px}}
+@media (max-width:560px){#panel-rules{padding:0 6px}}
+@media (prefers-reduced-motion:reduce){.rl-chev{transition:none}}
 </style>
 <div id="authGate">
   <div class="ag-hero">
@@ -2601,20 +2647,16 @@ function updateMailQueueBadge(){
   const parked=_vals.filter(e=>(e.fails||0)>=MQ_MAX_FAILS).length;
   const n=_vals.length-parked;
   const label=parked?`${n} · ${parked} parked`:String(n);
-  const el=document.getElementById('mqCount');
-  if(el) el.textContent=label;
   // Compact copy on the dashboard header — same count, same flush button.
   const top=document.getElementById('mqCountTop');
   if(top) top.textContent=label;
   const pk=document.getElementById('mqParkedBtn');
   if(pk){ pk.style.display=parked?'':'none'; pk.textContent=`${parked} parked`; }
-  // Flash both queue rows red while any ACTIVE e-mail is queued, so pending
+  // Flash the queue row (#mqRowTop, on E-mail Info) red while any ACTIVE e-mail is queued, so pending
   // e-mails are impossible to miss; clears itself the moment the queue drains.
   const pending=n>0;
-  ['mqRowTop','mqRow'].forEach(id=>{ const r=document.getElementById(id); if(r) r.classList.toggle('mq-pending',pending); });
-  [el,top].forEach(b=>{ if(b) b.classList.toggle('mq-badge-pending',pending); });
-  const title=document.getElementById('messagingCardTitle');
-  if(title) title.classList.toggle('mq-title-pending',pending);
+  ['mqRowTop'].forEach(id=>{ const r=document.getElementById(id); if(r) r.classList.toggle('mq-pending',pending); });
+  [top].forEach(b=>{ if(b) b.classList.toggle('mq-badge-pending',pending); });
   try{ renderMqDashPills(); }catch(_){} // [353 · §236 C]
 }
 // [353 · §236 C] The Current Phase card's e-mail pills. WAITING = queued (not parked) for more than
@@ -2841,6 +2883,7 @@ window.nav = function(id, el) {
   if(id==='maillog'&&typeof renderMailLog==='function') renderMailLog(); // [352 · §234]
   if(id==='capacity'&&typeof renderCapacityPage==='function') renderCapacityPage(); // [335 · §194]
   if(id==='reports'&&typeof renderReportsPage==='function') renderReportsPage(); // [337 · §203]
+  if(id==='rules'&&typeof renderRulesPage==='function') renderRulesPage(); // [397 · §299] the Rules page, drawn fresh each time it opens
   if(id==='insights'&&typeof renderInsights==='function') renderInsights(); // [396 · §299] drawn now that its page is shown (a canvas measured while hidden draws empty)
 };
 
@@ -3120,13 +3163,6 @@ function comboRulesBullets(){
 function comboAdminList(){ const c=comboSet(); return ['1','2','3','4','5','6','7','8','9','10'].concat(bidNumList().filter(n=>n>10).map(String),['NP','1,2','1,2,3','2,3','3,4','4,5']).filter(v=>v.indexOf(',')<0||c.indexOf(v)>=0); } // [390 · §295] the allowed numbers above 10 before NP
 // "1/2/3 · 1/2", or "none" (the card's Now line, W8, the log row)
 function comboNowText(c){ const s=Array.isArray(c)?c:comboSet(); return s.length?s.map(comboLbl).join(' · '):'none'; }
-// The floors card's strength order: the allowed ladder written out as far as the single number just past the weakest allowed combination
-// (never saved: "1/2/3 › 1/2 › 1 › 2 › … › 10 › NP", the card's words before 381).
-function comboFloorOrder(){
-  const c=comboSet(), v=comboLadderVals(); let k=2;
-  c.forEach(x=>{ const lo=Number(x.split(',')[0]); if(lo+1>k) k=lo+1; });
-  return v.slice(0,v.indexOf(String(k))+1).map(comboLbl).join(' › ')+' › … › '+v.slice(v.indexOf('10')).map(comboLbl).join(' › '); // [390 · §295] W2: the tail runs from 10 to NP through the allowed numbers (at 10: " › … › 10 › NP")
-}
 // An explicit admin approval of a floor-filtered bid is the SANCTIONED override path (admin
 // authority, never-events philosophy): eligible only when the floor/NP-phase filter is the
 // ONE reason the bid left the competition — unscorable, I2-reused and dead prior-phase bids
@@ -5250,7 +5286,7 @@ window.smartLockUnlock=function(){
 
 function renderOverview(){
   const ap=computeApprovals();
-  try{ renderPhasePanel(); renderNoBidders(); renderPhaseProgress(); renderLockSummary(); renderInsights(); populatePhaseFilter(document.getElementById('repPhaseFilter')); }catch(e){ console.warn('dash',e); }
+  try{ renderPhasePanel(); renderNoBidders(); renderPhaseProgress(); renderLockSummary(); renderInsights(); }catch(e){ console.warn('dash',e); }
   const g=document.getElementById("ovgrid"); if(!g)return;
   const legendEl=document.getElementById("dashLegend");
   const weekEl=document.getElementById("weekSummary");
@@ -5450,7 +5486,7 @@ function syncControls(){
   const rst=document.getElementById("ruleSetTog"); // [380 · §282] only the exact string "strict" is on
   if(rst) rst.className="tog"+(adminSettings.bidRuleSet==='strict'?" on":"");
   const rss=document.getElementById("ruleSetState");
-  if(rss) rss.textContent='Now: '+(adminSettings.bidRuleSet==='strict'?'Strict':'Standard')+(((typeof _setupLocks==='function')&&_setupLocks('bidRuleSet'))?' — locked for this auction':((typeof cfgUnlockedNow==='function'&&!cfgUnlockedNow())?' — locked while a phase is running':'')); // [383 · §287] the setup lock in force: "— locked for this auction"
+  if(rss) rss.textContent='Now: '+(adminSettings.bidRuleSet==='strict'?'Strict':'Loose')+(((typeof _setupLocks==='function')&&_setupLocks('bidRuleSet'))?' — locked for this auction':((typeof cfgUnlockedNow==='function'&&!cfgUnlockedNow())?' — locked while a phase is running':'')); // [383 · §287] the setup lock in force: "— locked for this auction"
   if(typeof renderComboToggles==='function') renderComboToggles(); // [381 · §285] the Combination bids card
   if(typeof renderPhasePlanCard==='function') renderPhasePlanCard(); // [395 · E2] the Phases card: its Now line
   if(typeof renderTopBidCard==='function') renderTopBidCard(); // [390 · §295] the Bid numbers card: its Now line (and the Combination bids card's strength-order tail)
@@ -6492,7 +6528,7 @@ const SETUP_LOCKED_TEXT='Locked for the whole auction (the setup lock is ON) —
 // and "Unlock to edit…" come from SETUP_ARCHIVED_ROWS below (owner 1:25 PM, answer 5).
 // The Setup page's 9 locked rows ([390 · §295] Bid numbers added; [395 · E2] Phases added, after it), in the review's order: key, name, sentence (the approved test page), the element its card holds (the lock
 // line goes after that element's row), the page; c = where the review's "Change it" goes when it is not that card.
-const SETUP_ROWS=[{k:'auctionConfig',n:'Auction calendar',d:'Sets the year’s weeks, which weeks are high demand and the summer range the floors use.',a:'acEditBtn',p:'setup'},{k:'bidRuleSet',n:'Bid rule set',d:'Strict: a winning bid on a competition week can only be moved, not removed. Standard: any bid can be removed.',a:'ruleSetTog',p:'setup'},{k:'strictThreshold',n:'Strict applies to',d:'Under Strict, a winning bid weaker than this can still be removed.',a:'strictLvlSel',p:'setup'},{k:'topBid',n:'Bid numbers',d:'How many bid numbers each person holds.',a:'topBidEditBtn',p:'setup'},{k:'phasePlan',n:'Phases',d:'How many Fall phases run before the Rolling Vacation Auction, and whether Phase 1 opens every week.',a:'phasePlanEditBtn',p:'setup'},{k:'comboBids',n:'Combination bids',d:'Which combination bids people may use.',a:'comboToggles',p:'setup'},{k:'bidFloors',n:'Bid floors',d:'The weakest bid allowed on each kind of week.',a:'bfHd',p:'setup'},{k:'blindedBidding',n:'Blinded bidding',d:'When on, people see bids without the bidders’ initials.',a:'blindTog',p:'setup'},{k:'simulatorEnabled',n:'Rehearsal Mode',d:'Unlocks the simulator and the skip buttons. Must be off for a real auction.',a:'setupRehearsalNow',p:'setup',c:['simulator','simulatorToggle']}]; // one line: the test harness reads top-level constants line by line · [385 · §292] the Priority Lock row left (Archived settings) · [390 · §295] the Bid numbers row, before Combination bids
+const SETUP_ROWS=[{k:'auctionConfig',n:'Auction calendar',d:'Sets the year’s weeks, which weeks are high demand and the summer range the floors use.',a:'acEditBtn',p:'setup'},{k:'bidRuleSet',n:'Bid rule set',d:'Strict: a winning bid on a competition week can only be moved, not removed. Loose: any bid can be removed.',a:'ruleSetTog',p:'setup'},{k:'strictThreshold',n:'Strict applies to',d:'Under Strict, a winning bid weaker than this can still be removed.',a:'strictLvlSel',p:'setup'},{k:'topBid',n:'Bid numbers',d:'How many bid numbers each person holds.',a:'topBidEditBtn',p:'setup'},{k:'phasePlan',n:'Phases',d:'How many Fall phases run before the Rolling Vacation Auction, and whether Phase 1 opens every week.',a:'phasePlanEditBtn',p:'setup'},{k:'comboBids',n:'Combination bids',d:'Which combination bids people may use.',a:'comboToggles',p:'setup'},{k:'bidFloors',n:'Bid floors',d:'The weakest bid allowed on each kind of week.',a:'bfHd',p:'setup'},{k:'blindedBidding',n:'Blinded bidding',d:'When on, people see bids without the bidders’ initials.',a:'blindTog',p:'setup'},{k:'simulatorEnabled',n:'Rehearsal Mode',d:'Unlocks the simulator and the skip buttons. Must be off for a real auction.',a:'setupRehearsalNow',p:'setup',c:['simulator','simulatorToggle']}]; // one line: the test harness reads top-level constants line by line · [385 · §292] the Priority Lock row left (Archived settings) · [390 · §295] the Bid numbers row, before Combination bids
 // The 6 between-phases rows (the approved test page), in order; c = where "Change it" goes. [385 · §292] "Bid lowerings allowed" left (Archived settings).
 const SETUP_PHASE_ROWS=[{n:'FTE overage',d:'How far over capacity a week can go before bids show as Under Review.',c:['setup','reviewThresholdSlider']},{n:'NP bids this phase',d:'Whether people may place NP bids in the phase about to begin.',c:['setup','npPhaseToggles']},{n:'Cumulative bid caps',d:'How many weeks a person may have won by the end of each phase.',c:['setup','cap1']},{n:'Timer rules',d:'How long the timer runs, how far each bid resets it, and the opening window when one is set.',c:['controls','timerRulesWrap']},{n:'Projection-change e-mails',d:'E-mails people when another bid changes whether they are winning.',c:['maillog','emailNotifsToggle']},{n:'Locked weeks on the staff board',d:'Where weeks that are not open appear on the staff board: in their month, or gathered at the bottom.',c:['controls','lipPhaseToggles']}]; // one line: the test harness reads top-level constants line by line · [385 · §292] the 'Bid lowerings allowed' row left (Archived settings)
 // [385 · §292, owner 1:25 PM answer 5] The archived locked rows: the lock line, "Unlock to edit…" and Begin Phase 1's count read these with SETUP_ROWS;
@@ -6789,7 +6825,7 @@ function _srValue(name){
   switch(name){
     case 'auctionConfig':{ const d=_acDraftFromAC(), su=getSundays(AC_YEAR), w=i=>(i>=1&&i<=su.length)?('Wk '+i+' · '+_acFmtWkShort(dateKey(su[i-1]))):'not set';
       return L([String(AC_YEAR)].concat(AC_HD_FIXED.map(f=>f.label+': '+w(d.hd[f.key])+' — '+(d.hdOn[f.key]?'high demand':'not high demand')),['Summer: '+w(d.summerStartIdx)+' to '+w(d.summerEndIdx)])); }
-    case 'bidRuleSet': return esc(adminSettings.bidRuleSet==='strict'?'Strict':'Standard');
+    case 'bidRuleSet': return esc(adminSettings.bidRuleSet==='strict'?'Strict':'Loose');
     case 'strictThreshold': return esc(_strictLvlName(_strictN()));
     case 'topBid': return esc('1 to '+topBid()); // [390 · §295]
     case 'phasePlan': return esc(phasePlanText()); // [395 · E2]
@@ -7040,7 +7076,6 @@ function renderBidFloorsCard(){
     el.disabled=locked||((typeof _setupLocks==='function')&&_setupLocks('bidFloors')); // [383 · §287]
   }
   const note=document.getElementById('bfLockNote'); if(note) note.style.display=(locked&&!((typeof _setupLocks==='function')&&_setupLocks('bidFloors')))?'':'none'; // [383 · §287] not under "🔒 Locked" for the whole auction
-  try{ const o=document.getElementById('bfOrder'); if(o&&typeof comboFloorOrder==='function'){ const t=comboFloorOrder(); if(o.textContent!==t) o.textContent=t; } }catch(_){} // [381 · §285] the allowed ladder (never saved: the words as before)
 }
 window._bfChanged=function(){
   // Click-time guard is the enforcement (NE-11 pattern); the disabled selects are paint.
@@ -7078,11 +7113,11 @@ async function _ruleSetWrite(next){
   if((typeof _setupLocks==='function')&&_setupLocks('bidRuleSet')){ toast(SETUP_LOCKED_TEXT,'err'); syncControls(); return; } // [383 · §287] asked again at the write
   if(!cfgUnlockedNow()){ toast('The bid rule set is locked while a phase is running — editable between phases, once results are sent.','err'); syncControls(); return; }
   const now=(adminSettings&&adminSettings.bidRuleSet==='strict')?'strict':'standard';
-  if(now===next){ toast('The bid rule set is already '+(next==='strict'?'Strict':'Standard')+' — nothing changed.','warn'); syncControls(); return; }
+  if(now===next){ toast('The bid rule set is already '+(next==='strict'?'Strict':'Loose')+' — nothing changed.','warn'); syncControls(); return; }
   try{ await setDoc(adminRef,{bidRuleSet:next,...((typeof _setupSaveExtra==='function')?_setupSaveExtra('bidRuleSet'):{})},{merge:true}); } // [383 · §287]
   catch(e){ toast(((typeof _setupDenied==='function')&&_setupDenied(e))||_cfgDeniedMsg(e,'the bid rule set')||('Rule set NOT saved — nothing changed ('+(e?.message||e)+'). Try again.'),'err'); syncControls(); return; }
   try{ await adminLog('ALL','ALL',next==='strict'?'admin-ruleset-strict':'admin-ruleset-standard'); }catch(_){}
-  toast(next==='strict'?'Bid rule set: STRICT — the staff site follows within a moment':'Bid rule set: STANDARD — the staff site follows within a moment', next==='strict'?'warn':'ok');
+  toast(next==='strict'?'Bid rule set: STRICT — the staff site follows within a moment':'Bid rule set: LOOSE — the staff site follows within a moment', next==='strict'?'warn':'ok');
 }
 window.toggleRuleSet=function(){
   if(!_feedsHealthyOrExplain('Changing the bid rule set')){ syncControls(); return; } // [380 · §282] never from a page whose data has not all arrived, or whose live feeds are down (the guard of every dangerous admin action)
@@ -7093,13 +7128,13 @@ window.toggleRuleSet=function(){
   const _n=(typeof _strictN==='function')?_strictN():null; // [382 · §286] W12: with a Strict level set the body names it; none set: the 381 words exactly
   const body=next==='strict'
     ?`<div>Use <strong>Strict</strong>? On competition weeks, ${(_n===null)?'a winning numbered bid':'a winning bid of '+_n+' or stronger'} can't be removed — only <strong>moved</strong>, in one step, to a week its owner was knocked out of and where it would win; it then can't be lowered there for the rest of the phase (Phase ${fallPhases()+1}: the round). ${(_n===null)?'Tied, Under Review, losing and NP bids can still be removed.':'Weaker winning bids, and tied, Under Review, losing and NP bids, can still be removed.'}</div><div class="cmodal-info" style="margin-top:8px">Rules &amp; Reminders and the welcome e-mail update. Edit Selections can still remove any bid.</div>`
-    :`<div>Use <strong>Standard</strong>? Any bid can be removed.</div>`;
-  openConfirm({ title:next==='strict'?'Use Strict?':'Use Standard?', body, okText:next==='strict'?'Use Strict':'Use Standard',
+    :`<div>Use <strong>Loose</strong>? Any bid can be removed.</div>`;
+  openConfirm({ title:next==='strict'?'Use Strict?':'Use Loose?', body, okText:next==='strict'?'Use Strict':'Use Loose',
     onConfirm:()=>{
       if(!phase1Started()) return _ruleSetWrite(next);
       confirmAgain({ title:'Confirm again — the auction is under way',
         body:`<div style="color:var(--red);font-weight:700;font-size:15px">LIVE auction: changes the bid rules from the next ${isRvaPhase(Number(phasesData.currentPhase||1))?'round':'phase'} on.</div><div class="cmodal-danger" style="margin-top:8px">Every staff page updates within a moment.</div>`,
-        okText:next==='strict'?'Yes, use Strict':'Yes, use Standard', danger:true, onConfirm:()=>_ruleSetWrite(next), onCancel:()=>syncControls() });
+        okText:next==='strict'?'Yes, use Strict':'Yes, use Loose', danger:true, onConfirm:()=>_ruleSetWrite(next), onCancel:()=>syncControls() });
     },
     onCancel:()=>syncControls() });
 };
@@ -7220,7 +7255,6 @@ const TOP_BID_LOCKED_TEXT='Bid numbers are locked while a phase is running — e
 function renderTopBidCard(){
   const st=document.getElementById('topBidState');
   if(st) st.textContent='Now: 1 to '+topBid()+(((typeof _setupLocks==='function')&&_setupLocks('topBid'))?' — locked for this auction':((typeof cfgUnlockedNow==='function'&&!cfgUnlockedNow())?' — locked while a phase is running':''));
-  try{ const o=document.getElementById('comboOrderTail'); if(o){ const v=comboLadderVals(), t=v.slice(v.indexOf('10')).map(comboLbl).join(' › '); if(o.textContent!==t) o.textContent=t; } }catch(_){} // W2: the Combination bids card's strength order ends at the highest number (at 10: "10 › NP", the markup's own words)
 }
 function _topBidEditorBody(cur){
   const rows=[];
@@ -9859,10 +9893,10 @@ window.exportPhaseResults=function(format,scopeOverride,activeOnly){
 };
 
 // ── User Summary report (per USER) — same three formats as the weekly report,
-// driven by the SAME phase selector (repPhaseFilter). One block per user: every
+// for the phase its caller passes (the Reports page's rpPhaseFilter), else the current phase. One block per user: every
 // week they bid on, with its bid, projected status, and final result. ──
 window.exportUserSummary=function(format,scopeOverride,activeOnly){
-  const scope=scopeOverride||document.getElementById('repPhaseFilter')?.value||'current';
+  const scope=scopeOverride||'current';
   const exportLabel=bwScopeLabel(scope);
   const groups=bidsByWeekModel(scope);
   const showPhaseCol=scope==='all';
@@ -12438,7 +12472,7 @@ function systemActionText(e){
   if(t==='admin-blind-on') return 'Admin turned <strong>Blinded bidding</strong> ON — bidder names hidden on the staff site'; // [365 · §261]
   if(t==='admin-blind-off') return 'Admin turned <strong>Blinded bidding</strong> OFF — bidder names shown on the staff site'; // [365 · §261]
   if(t==='admin-ruleset-strict') return 'Bid rule set changed to <strong>Strict</strong>'; // [380 · §282]
-  if(t==='admin-ruleset-standard') return 'Bid rule set changed to <strong>Standard</strong>'; // [380 · §282]
+  if(t==='admin-ruleset-standard') return 'Bid rule set changed to <strong>Loose</strong>'; // [380 · §282]
   if(t==='admin-strict-level'){ const c=(typeof e.choice==='string')?e.choice:''; if(c==='10') return 'Strict now applies to <strong>every numbered bid</strong>'; if(['1','2','3','4','5','6','7','8','9'].indexOf(c)>=0) return 'Strict now applies to <strong>bids of '+c+' or stronger</strong>'; return 'Strict level changed'; } // [382 · §286] W4
   if(t==='admin-combobids'){ const L=(typeof e.choice==='string')?e.choice.split('|').filter(x=>x).map(x=>String(x).split(',').join('/')):null; return L?('Combination bids changed to: <strong>'+esc(L.length?L.join(' · '):'none')+'</strong>'):'Combination bids changed'; } // [381 · §285]
   if(t==='admin-topbid'){ const c=Number(e.choice); return (Number.isInteger(c)&&c>=10&&c<=16)?('Bid numbers changed to: <strong>1 to '+c+'</strong>'):'Bid numbers changed'; } // [390 · §295]
@@ -14135,7 +14169,6 @@ function _wlUnconfirmed(){ return (names||[]).filter(u=>!_wlConfirmed(u)).sort()
 let _wlRevealShown=false;
 window.toggleWlReveal=function(){ _wlRevealShown=!_wlRevealShown; renderWhitelistTracker(); };
 function renderWhitelistTracker(){
-  const lbl=document.getElementById('wlSenderLabel'); if(lbl) lbl.textContent=WHITELIST_SENDER;
   const roster=[...(names||[])].sort();
   const done=roster.filter(_wlConfirmed), notDone=roster.filter(u=>!_wlConfirmed(u));
   const sum=document.getElementById('wlSummary');
@@ -15934,6 +15967,330 @@ window.renderCloudBackups=async function(){
   }).join('')
   +(arr.length>3?`<div style="margin-top:2px"><a style="font-size:11.5px;color:var(--blue);cursor:pointer;text-decoration:underline;text-underline-offset:3px" onclick="_cbToggleShowAll()">${_cbShowAll?'▴ Show recent 3 only':'▾ Show all '+arr.length}</a></div>`:'');
 };
+// ── [397 · §299] THE RULES PAGE (Settings › Rules) — information only: it reads the settings and writes nothing ─────────────────
+// RULES_TEXT is the text he approved (29 Oct 2026 8:20 PM, review page version 4), put here by the build (b397/s2/s2.py) from
+// tests/docs/build397-plan/text/rules-text.json, word for word and in his order. Change it there and rebuild, never by hand here.
+// Each item: n (its number), kind (new / live / term), html (its approved words), and for a live line its label, the words shown
+// when the setting gives nothing (whenEmpty) and, for the timer mode, the name of each value.
+const RULES_TEXT={sub:"How the auction works: every setting, the decision engine, and the rules staff see.",sections:[
+{n:"1",title:"In brief",items:[
+{"n":"1.1","kind":"new","html":"Staff bid on weeks with numbered bids. The engine ranks the bids on each week and fills the week's FTE available, strongest bid first. When a phase's bidding closes, the admin approves or denies every bid, completes the phase and sends the results."},
+{"n":"1.2","kind":"new","html":"Staff see projections only (Winning, Under Review, Losing). The admin's decisions stay private until the phase's results are sent."},
+{"n":"1.3","kind":"live","html":"","label":"Phases"},
+{"n":"1.4","kind":"live","html":"","label":"Rolling Vacation Auction"},
+{"n":"1.5","kind":"live","html":"","label":"Bid numbers"},
+{"n":"1.6","kind":"live","html":"","label":"Combination bids allowed","whenEmpty":"none"},
+{"n":"1.7","kind":"live","html":"","label":"NP bids by phase"},
+{"n":"1.8","kind":"live","html":"","label":"Cumulative bid caps","whenEmpty":"No bid cap in any phase."},
+{"n":"1.9","kind":"live","html":"","label":"Bid floors","whenEmpty":"No bid floors on any week."},
+{"n":"1.10","kind":"live","html":"","label":"FTE overage"},
+{"n":"1.11","kind":"live","html":"","label":"Bid rule set"},
+{"n":"1.12","kind":"live","html":"","label":"Timer Reset Mode","names":{"1":"1 · Every bid","2":"2 · Only when it affects others"}}
+]},
+{n:"2",title:"Settings explained",items:[
+{"n":"2.1","kind":"new","html":"<b>When settings can change.<\/b> \"Locked while a phase is running\" means the setting can change before Phase 1, and between phases once that phase's results are sent. Each RVA round counts as a phase."},
+{"n":"2.2","kind":"new","html":"<b>Setup lock.<\/b> With \"Lock these settings once the auction begins\" on, the settings marked <i>setup lock<\/i> below stay fixed from Begin Phase 1 until Reset Auction. In an emergency, Unlock to edit opens one setting for one change."},
+{"n":"2.3","kind":"new","html":"<b>Bidding Timer<\/b> — turns the countdown on or off for everyone. Off: bidding stays open until the admin closes it."},
+{"n":"2.4","kind":"new","html":"<b>Global Lock<\/b> — freezes all bidding: no one can add, change or remove a bid. Individually locked weeks stay locked when it is turned off."},
+{"n":"2.5","kind":"new","html":"<b>Lock All · Unlock All · Lock All Except High Demand · one week<\/b> — a locked week takes no new bids, changes or removals; its projection stands. During a high-demand-only Phase 1, unlocking any other week asks first."},
+{"n":"2.6","kind":"new","html":"<b>Smart Lock and Unlock<\/b> (Lock Weeks Summary) — locks every open week whose remaining FTE is below its Smart Lock Control, and unlocks every locked week at or above it."},
+{"n":"2.7","kind":"new","html":"<b>FTE (per person)<\/b> — 0.4 to 1.0, required, no default. It is the room a person's bid takes on a week, so it changes every decision. Bidding cannot begin until everyone has one."},
+{"n":"2.8","kind":"new","html":"<b>FTE editing<\/b> — off locks the FTE fields. It turns off by itself when Phase 1 begins and on Reset Auction."},
+{"n":"2.9","kind":"new","html":"<b>Withhold a bid number<\/b> (click a green number) — that person cannot use the number. Reset Auction clears every withheld number."},
+{"n":"2.10","kind":"new","html":"<b>Projection-change alert e-mails<\/b> — off stops projection-change and \"week opened up\" e-mails. Default on."},
+{"n":"2.11","kind":"new","html":"<b>Welcome e-mails<\/b> — sent once to each person when Phase 1 begins, or at first sign-in if added later. Default on."},
+{"n":"2.12","kind":"new","html":"<b>Ask users for their KP e-mail at login<\/b> — asks anyone without a KP e-mail for one. Default on."},
+{"n":"2.13","kind":"new","html":"<b>Quota reset day<\/b> — the e-mail service's billing day, for the usage meter. No effect on bidding."},
+{"n":"2.14","kind":"new","html":"<b>Lock these settings once the auction begins<\/b> — the setup lock (see above). Default off. Can change only before Phase 1."},
+{"n":"2.15","kind":"new","html":"<b>Auction Calendar<\/b> — the year, the six high-demand holiday weeks and the summer range. Decides which weeks get which floor, and which weeks Phase 1 opens. Locked while a phase is running; the year is fixed once Phase 1 begins. Setup lock."},
+{"n":"2.16","kind":"new","html":"<b>Bid Floors by Week Category<\/b> — the weakest bid allowed on high-demand weeks and on summer weeks (3 to 10, or no floor; defaults 4 and no floor). A bid below it cannot be placed or approved. Any number blocks NP. Locked while a phase is running. Setup lock."},
+{"n":"2.17","kind":"new","html":"<b>Bid rule set<\/b> — off = Loose, on = Strict (section 5). Default Loose. Locked while a phase is running. Setup lock."},
+{"n":"2.18","kind":"new","html":"<b>Strict applies to<\/b> — how strong a winning bid must be for Strict to hold it: every numbered bid (default) or 9 … 1 or stronger. Locked while a phase is running. Setup lock."},
+{"n":"2.19","kind":"new","html":"<b>Bid numbers<\/b> — how many numbers each person gets, 10 to 16 (default 10). Numbers above 10 rank below 10. Does not change the caps. Locked while a phase is running. Setup lock."},
+{"n":"2.20","kind":"new","html":"<b>Phases<\/b> — 1, 2 or 3 Fall phases before the Rolling Vacation Auction, and whether Phase 1 is high-demand weeks only or every week. Default 3, high-demand only. Fixed once Phase 1 begins."},
+{"n":"2.21","kind":"new","html":"<b>Combination bids<\/b> — which of 1/2/3, 1/2, 2/3, 3/4 and 4/5 may be used (default 1/2/3 and 1/2). A switched-off combination cannot be placed and does not compete. Locked while a phase is running. Setup lock."},
+{"n":"2.22","kind":"new","html":"<b>Blinded bidding<\/b> — hides other people's initials on the staff site; the admin still sees names. No effect on decisions. Default off. Setup lock."},
+{"n":"2.24","kind":"new","html":"<b>NP Bids by Phase<\/b> — the phases where NP bids may be placed (default Phases 3 and 4). An NP bid counts only if NP was allowed in the phase it was placed. Locked while a phase is running."},
+{"n":"2.25","kind":"new","html":"<b>Cumulative Bid Caps<\/b> — the most weeks a person may hold through each phase: weeks won earlier plus bids placed this phase. One value for all RVA rounds; a later cap cannot be lower than an earlier one. Locked while a phase is running."},
+{"n":"2.26","kind":"new","html":"<b>FTE Overage Amount<\/b> — how far over a week's FTE available a bid can go and be Under Review instead of Losing. 0 to 2; default 0.5. Locked while a phase is running."},
+{"n":"2.27","kind":"new","html":"<b>Priority Lock<\/b> — on (default): a weaker re-bid counts against the lowerings allowed below. Off: bids can be lowered freely. Setup lock."},
+{"n":"2.28","kind":"new","html":"<b>Allowed lowerings per phase<\/b> — how many weaker re-bids each person may make per phase (default Unlimited). At the defaults these two add no rule; the competition-week rules apply either way. Locked while a phase is running."},
+{"n":"2.29","kind":"new","html":"<b>Backups &amp; Restore<\/b> — cloud and local copies of the whole auction. No effect on decisions."},
+{"n":"2.30","kind":"new","html":"<b>Timer Rules<\/b> — how long the countdown resets to, shortening as the phase goes on; overnight protection; the opening window (section 3). Can be saved at any time."},
+{"n":"2.31","kind":"new","html":"<b>Timer Reset Mode<\/b> — which bid changes restart the countdown: 1 every bid (default), 2 only changes that affect others (section 3). Can be changed at any time."},
+{"n":"2.32","kind":"new","html":"<b>Destination of the Day<\/b> — the photo on the staff sign-in screen. Default on. No effect on bidding."},
+{"n":"2.33","kind":"new","html":"<b>Locked weeks on the staff board<\/b> — per phase: locked weeks stay in their month in grey, or gather at the bottom. Defaults: Phase 1 at the bottom, later phases in their month. Display only."},
+{"n":"2.34","kind":"new","html":"<b>Reset Auction<\/b> — deletes every bid, decision, remembered bid, lock, withheld number and all phase history. Settings, users, FTE and FTE available stay. Offers a backup first."},
+{"n":"2.35","kind":"new","html":"<b>FTE Available (per week)<\/b> — the week's room, filled strongest bid first (section 6). A week with no saved value has 0 and cannot be won."},
+{"n":"2.36","kind":"new","html":"<b>Smart Lock Control<\/b> (per week, or Apply to All Weeks) — the least remaining FTE a week needs to stay open when Smart Lock runs; −1.0 to 1.0, default 0.4. Remaining = FTE available minus earlier winners and approved bids. No effect on the projection."},
+{"n":"2.37","kind":"new","html":"<b>Rehearsal Mode<\/b> — unlocks Run Simulation, Auto-Approve/Deny and the testing skip buttons for backups and results. Not a sandbox: real bids, real e-mails. Default off. After Phase 1 begins it asks first, and cannot be turned on at all if the setup lock is on."},
+{"n":"2.38","kind":"new","html":"<b>Run Simulation<\/b> — tops each person up to \"Bids per user\" (1–10, default 3) with random bids; their own bids count and are never changed. Skips locked weeks; cannot run under Global Lock."},
+{"n":"2.39","kind":"new","html":"<b>Auto-Approve/Deny Results<\/b> — writes real decisions: approves Winning and single Under Review bids, settles each tie at random (approving while the week stays within FTE available plus the overage), denies the rest."}
+]},
+{n:"3",title:"Timer",items:[
+{"n":"3.1","kind":"new","html":"The countdown decides when a phase's bidding ends. At 0, bidding closes for everyone."},
+{"n":"3.2","kind":"live","html":"","label":"Timer Rules, as staff see them"},
+{"n":"3.3","kind":"live","html":"Timer Reset Mode: ","label":"Timer Reset Mode in force","names":{"1":"1 · Every bid","2":"2 · Only when it affects others"}},
+{"n":"3.4","kind":"new","html":"<b>Mode 1<\/b> — any placed, changed or removed bid restarts the countdown."},
+{"n":"3.5","kind":"new","html":"<b>Mode 2<\/b> — only a change that alters someone else's projected outcome, weakens a competition week's Minimum new bid, or opens a week to someone with a \"Notify if a week opens up\" alert."},
+{"n":"3.6","kind":"new","html":"Begin Phase turns the countdown on and starts it at the starting reset (48 hours by default), or at the opening window when one is set."},
+{"n":"3.7","kind":"new","html":"<b>Opening window<\/b> (off by default) — each phase or round opens with a set number of days; bids do not reset the countdown until the starting reset remains."},
+{"n":"3.8","kind":"new","html":"Bids the admin adds or changes also restart the countdown: always in mode 1; in mode 2 only when they change someone else's projected outcome."},
+{"n":"3.9","kind":"new","html":"With the Bidding Timer off there is no countdown: bidding stays open until the admin closes it."}
+]},
+{n:"4",title:"Competition weeks",items:[
+{"n":"4.1","kind":"new","html":"<b>What makes one.<\/b> At one moment in the phase, at least two people have a bid of this phase on the week, and their FTE plus the FTE of earlier winners is more than the week's FTE available."},
+{"n":"4.2","kind":"new","html":"It stays a competition week for the rest of the phase, even if everyone leaves. The record starts fresh each phase and each RVA round. One person alone over the room does not make one."},
+{"n":"4.3","kind":"new","html":"Staff see \"Competition week\" on the week's card, with its \"Minimum new bid\"."},
+{"n":"4.4","kind":"new","html":"<b>Coming in (Minimum new bid).<\/b> Anyone with no bid on the week at that moment is a newcomer, including someone who left. A newcomer's bid must match or beat the weakest Winning or Under Review bid there; if none is Winning or Under Review, the strongest bid there."},
+{"n":"4.5","kind":"new","html":"The bid is judged with itself in place, so the bid that makes the week a competition week is held to the level too."},
+{"n":"4.6","kind":"new","html":"<b>Going down.<\/b> A weaker bid is allowed only if it would still be Winning (not tied, not Under Review) and is no weaker than the weakest other Winning bid of this phase there. So the weakest winning bid there (an only winner included) cannot weaken at all; any other winner can weaken as far as the weakest winning bid."},
+{"n":"4.7","kind":"new","html":"\"Weaker\" is measured against the bid the person holds there, or, with none, their remembered bid on the week. A same or stronger bid is never refused."},
+{"n":"4.8","kind":"new","html":"<b>Everyone left.<\/b> If nobody is on a competition week, a new bid must match or beat the last bid that was there. This applies to everyone, including people who left."},
+{"n":"4.9","kind":"new","html":"The admin is not held to these rules: Edit Selections warns when a change breaks them."},
+{"n":"4.10","kind":"new","html":"<span class=\"ex\"><b>Example A — coming in and going down<\/b><br>FTE available 2.0. AF 2, BB 5, CC 7. AF Winning, BB Winning, CC Losing. Three people over 2.0 → competition week. Minimum new bid: 5.<br>AF lowers 2 → 4: allowed. AF 2 → 5: allowed. AF 2 → 6: refused (weaker than BB's winning 5).<br>BB lowers 5 → 6: refused (BB's 5 is the weakest winning bid there, so BB cannot weaken).<br>DD (newcomer) bids 8: refused. DD bids 5: allowed → AF Winning, BB and DD Under Review (tie), CC Losing.<\/span>"},
+{"n":"4.11","kind":"new","html":"<span class=\"ex\"><b>Example B — the bid that makes one<\/b><br>FTE available 1.0. PW (0.5 FTE) won the week in Phase 1. AF bids 3: Under Review, alone, so not a competition week.<br>BB bids 6 or 4: refused — with BB's bid in place it would be a competition week, and AF's Under Review 3 sets the level. BB bids 3: allowed → AF and BB Under Review (tie); competition week, Minimum new bid 3.<\/span>"},
+{"n":"4.12","kind":"new","html":"<span class=\"ex\"><b>Example C — nothing winning there<\/b><br>FTE available 1.0, filled by PW's Phase 1 win. AF 3 and BB 5 both Losing; competition week. Minimum new bid: 3 (the strongest bid there). DD bids 4: refused. DD bids 3: allowed.<\/span>"},
+{"n":"4.13","kind":"new","html":"<span class=\"ex\"><b>Example D — the only winner<\/b><br>FTE available 1.0. AF 2 Winning, BB 6 Losing. AF lowers to 3 or 5: refused (no other winning bid). AF raises to 1: allowed.<\/span>"},
+{"n":"4.14","kind":"new","html":"<span class=\"ex\"><b>Example E — everyone left<\/b><br>AF placed 2 and BB placed 5 on a 1.0 week (competition week); AF left, then BB left. Minimum new bid: 5. CC or AF bids 6: refused. CC or AF bids 5: allowed.<\/span>"},
+{"n":"4.15","kind":"new","html":"<span class=\"ex\"><b>Example F — someone who left comes back<\/b><br>FTE available 2.0. AF 2, BB 5, CC 7; then AF removed the 2. BB and CC Winning; Minimum new bid 7.<br>DD (first time) bids 6: allowed. AF bids 6: refused — weaker than AF's remembered 2, and 6 is weaker than BB's winning 5. AF bids 5: allowed.<\/span>"},
+{"n":"4.16","kind":"live","html":"","label":"The competition-week line staff see"}
+]},
+{n:"5",title:"Strict and Loose",items:[
+{"n":"5.1","kind":"live","html":"In force: ","label":"Bid rule set in force"},
+{"n":"5.2","kind":"new","html":"<b>Loose.<\/b> Any bid of this phase can be removed while bidding is open and the week is unlocked. The competition-week rules (section 4) apply under both."},
+{"n":"5.3","kind":"new","html":"<b>Strict — held bids.<\/b> On a competition week, a Winning numbered bid of this phase, at the Strict level or stronger, cannot be removed — only moved."},
+{"n":"5.4","kind":"new","html":"Never held: tied, Under Review, Losing and NP bids, and Winning bids weaker than the Strict level. They can be removed as normal."},
+{"n":"5.5","kind":"new","html":"<b>The move.<\/b> A held bid moves in one step to a week where someone else's change knocked its owner out this phase (Winning → not Winning, or Under Review or tied → Losing), where the owner is not Winning, and where the moved bid would win. Every normal bid check must pass there too."},
+{"n":"5.6","kind":"new","html":"<b>The moved mark.<\/b> On the week it moved to, a moved bid cannot be lowered for the rest of the phase or round. It can be raised, or moved again."},
+{"n":"5.7","kind":"new","html":"A held bid may still be lowered by the going-down rule. Once it is weaker than the Strict level it is not held, and can be removed."},
+{"n":"5.8","kind":"new","html":"The admin can always remove a bid. Edit Selections warns when the bid is one Strict holds."},
+{"n":"5.9","kind":"new","html":"Staff never see the words Strict or Loose. Under Strict they see one extra rule line (below); under Loose, none."},
+{"n":"5.10","kind":"live","html":"Under Loose (the default) staff see no line. Under Strict, every numbered bid, they see:","label":"The Strict line staff see","whenEmpty":"(Loose: no line.)"},
+{"n":"5.11","kind":"new","html":"<span class=\"ex\"><b>Example G — which bids are held<\/b><br>Competition week, FTE available 2.0: AF 2 Winning, BB 5 Winning, CC 7 Losing.<br>Strict, every numbered bid: AF and BB held; CC not. Strict, 3 or stronger: AF held; BB (5) removable.<br>A tie under Strict (AF 3, BB 3 on a 1.0 week): both Under Review (tie), neither held.<\/span>"},
+{"n":"5.12","kind":"new","html":"<span class=\"ex\"><b>Example H — a move<\/b><br>Strict, every numbered bid. Weeks X and Y, FTE available 1.0 each. AF 3 on X (Winning), BB 6 on X. AF 5 on Y was Winning until CC bid 4 there.<br>AF removes 3 from X: refused (held). AF may move it to Y only. After the move: BB Winning on X; AF 3 Winning on Y, CC Losing.<br>On Y, AF 3 → 4: refused (moved mark). AF 3 → 1: allowed.<\/span>"},
+{"n":"5.13","kind":"new","html":"<span class=\"ex\"><b>Example I — lowered below the level<\/b><br>Strict, 3 or stronger. FTE available 3.0: AF 1, BB 5, DD 6 Winning; CC 8 Losing. AF's 1 is held.<br>AF lowers 1 → 4: allowed (still Winning, no weaker than DD's 6). AF's 4 is not held → AF can remove it.<\/span>"}
+]},
+{n:"6",title:"How decisions are made",items:[
+{"n":"6.1","kind":"new","html":"<b>The strength order<\/b>, strongest first:<br>1/2/3 › 1/2 › 1 › 2/3 › 2 › 3/4 › 3 › 4/5 › 4 › 5 › 6 … 10 › 11 … 16 › NP"},
+{"n":"6.2","kind":"new","html":"<ul><li>Each combination ranks just above the lowest number in it (2/3 beats 2, loses to 1).<\/li><li>Numbers above 10 exist only if Bid numbers is set above 10.<\/li><li>NP is always the weakest.<\/li><li>Bids at the same place are a tie. Nothing else breaks a tie — not FTE, not the time placed.<\/li><\/ul>"},
+{"n":"6.3","kind":"new","html":"<b>Each week's projection<\/b> is worked out every time anything changes, the same for everyone:"},
+{"n":"6.4","kind":"new","html":"<b>1 · Earlier winners first.<\/b> Anyone approved for the week in an earlier phase or round is Winning, and their FTE comes off the week's FTE available."},
+{"n":"6.5","kind":"new","html":"<b>2 · Only valid bids of this phase compete.<\/b> Left out (Losing): a bid from an earlier phase that was not approved; below the week's floor; NP placed while NP was off; a switched-off combination; a number above the highest; a number the person also used on another week this phase (every bid of theirs with that number)."},
+{"n":"6.6","kind":"new","html":"<b>3 · Line up the rest<\/b>, strongest first, in groups of equal strength."},
+{"n":"6.7","kind":"new","html":"<b>4 · Fill the week one group at a time.<\/b> If the whole group fits in the FTE left, everyone in it is Winning and their FTE is used."},
+{"n":"6.8","kind":"new","html":"<b>5 · The first group that does not fit settles the week.<\/b> One bid: over by no more than the FTE overage → Under Review; further over → Losing. A tie: if any one of them alone would fit or go over by no more than the FTE overage → all Under Review (tie); otherwise all Losing."},
+{"n":"6.9","kind":"new","html":"<b>6 · Every bid after that group loses<\/b> — even a smaller-FTE bid that would fit in the room left. This is deliberate: it would be unfair for a lower-FTE person to get an advantage that way (Example 3d)."},
+{"n":"6.10","kind":"new","html":"<b>7 ·<\/b> FTE sums are rounded to one decimal, so 0.8 + 0.8 + 0.8 + 0.6 is exactly 3.0."},
+{"n":"6.11","kind":"new","html":"Each person's FTE (Users) decides how much room their bid takes, so the same bids can end differently. The admin sees the projection as WIN, UNDER REVIEW or LOSE."},
+{"n":"6.12","kind":"new","html":"<span class=\"ex\"><b>Example — FTE changes the result<\/b><br>FTE available 1.5. AF 1 (1.0 FTE), BB 2. With BB at 1.0 FTE: AF Winning, BB Under Review. With BB at 0.5 FTE: both Winning.<\/span>"},
+{"n":"6.13","kind":"new","html":"<b>What the admin's decision does<\/b>"},
+{"n":"6.14","kind":"new","html":"Approve and Deny are blocked while bidding is open. Bidding is closed when the timer reaches 0 or the admin stops bidding."},
+{"n":"6.15","kind":"new","html":"A decision never changes the projection. A denied bid keeps its place, and the bids below it do not move up (Example 1)."},
+{"n":"6.16","kind":"new","html":"<b>Approve<\/b> records the person as getting the week, with a warning if it puts the week over its FTE available. Refused for a bid that does not count (step 2) or is not a valid value."},
+{"n":"6.17","kind":"new","html":"<b>Deny<\/b> records \"not getting it\" and removes any approval. The bid number comes back to the person next phase."},
+{"n":"6.18","kind":"new","html":"Ties and Under Review are the admin's call: approve as many as the week can take, deny the rest. Wheel of Names (Under Review and Approvals/Denials pages) picks one tied person at random; the admin then decides."},
+{"n":"6.19","kind":"new","html":"<b>Complete Phase<\/b> needs bidding closed, every week locked (or Global Lock on), and every bid of the phase approved or denied."},
+{"n":"6.20","kind":"new","html":"Completing locks the approvals in. Each approved person becomes an earlier winner of that week (step 1) for the rest of the auction, and that bid's numbers are gone for good. Losing and denied bids end with the phase; their numbers come back. Remembered bids and the competition-week record start fresh."},
+{"n":"6.21","kind":"new","html":"Staff learn their results when the admin sends the phase results."},
+{"n":"6.22","kind":"new","html":"<b>Rolling Vacation Auction.<\/b> Each round is its own phase: its own bids, decisions and competition record. Earlier rounds' winners are earlier winners. All rounds share the RVA's one set of per-phase settings."},
+{"n":"6.23","kind":"new","html":"<span class=\"ex\"><b>Example 1 — a clean week; a decision changes nothing<\/b><br>Phase 2. FTE available 3.0. PW won it in Phase 1. AF 1, BB 3, CC 5.<br>PW Winning (earlier winner, 1.0 used) · AF Winning · BB Winning (3.0 filled) · CC Losing.<br>The admin denies AF and approves CC: PW, AF, BB still Winning, CC still Losing.<\/span>"},
+{"n":"6.24","kind":"new","html":"<span class=\"ex\"><b>Example 2 — ties<\/b><br>(a) FTE available 1.0. AF 3, BB 3: each alone fits → both Under Review (tie).<br>(b) FTE available 1.5. AF 1, BB 4, CC 4, DD 6: AF Winning (0.5 left); BB + CC need 2.0, each alone over by 0.5 → both Under Review (tie); DD Losing.<br>(c) FTE available 1.0. AF 1, BB 4, CC 4: AF Winning (0 left); each tied bid over by 1.0 → both Losing.<\/span>"},
+{"n":"6.25","kind":"new","html":"<span class=\"ex\"><b>Example 3 — one bid over<\/b><br>AF 2, BB 4, CC 6. (a) FTE available 1.5: AF Winning; BB over by 0.5 → Under Review; CC Losing.<br>(b) FTE available 1.2: AF Winning; BB over by 0.8 → Losing; CC Losing.<br>(c) FTE available 1.5, FTE overage 0: AF Winning; BB Losing; CC Losing.<br>(d) FTE available 1.5. AF 1, BB 2, CC 3 at 0.5 FTE: AF Winning; BB Under Review; CC Losing — CC's 0.5 would fit in the 0.5 left, but the week settled at BB (step 6).<\/span>"},
+{"n":"6.26","kind":"new","html":"<span class=\"ex\"><b>Example 4 — combinations, numbers above 10, NP, a floor<\/b><br>(a) 1/2/3, 1/2 and 2/3 on; FTE available 1.0. AF 1/2 vs BB 1 → AF Winning. CC 2/3 vs DD 2 → CC Winning.<br>(b) Bid numbers 1–12. AF 12 vs BB NP → AF Winning. CC 11 vs DD 10 → DD Winning.<br>(c) High-demand week, floor 4. AF 6, BB NP, CC 4 → CC Winning; AF and BB Losing (below the floor, they do not compete).<\/span>"}
+]},
+{n:"7",title:"What staff see",items:[
+{"n":"7.1","kind":"new","html":"Staff read this list in Rules &amp; Reminders (☰ menu) and in their welcome e-mail. It follows the settings."},
+{"n":"7.2","kind":"live","html":"","label":"Rules and Reminders — the full list"},
+{"n":"7.3","kind":"live","html":"Shown under Timer Rules (the same text as 3.2).","label":"Timer Rules"},
+{"n":"7.4","kind":"live","html":"","label":"Understanding Outcomes"},
+{"n":"7.5","kind":"new","html":"On the board staff see each projection, the \"Competition week\" label and the Minimum new bid. They never see the admin's decisions before results are sent. Under Blinded bidding they see no one else's initials."},
+{"n":"7.6","kind":"new","html":"On a locked week's card, once results are sent, a bid that won shows <b>Won in<\/b> and the phase's name; any other bid of theirs shows <b>My Bid: N · Denied<\/b>."}
+]},
+{n:"8",title:"Glossary",items:[
+{"n":"8.1","kind":"term","html":"The admin's decision that a person gets the week. Possible only once bidding is closed.","term":"Approve"},
+{"n":"8.2","kind":"term","html":"Before Phase 1, or after a phase's results are sent and before the next begins. Settings locked while a phase is running can change only then.","term":"Between phases"},
+{"n":"8.3","kind":"term","html":"The weakest bid allowed on a high-demand or summer week (Bid Floors card). Not the same as a remembered bid.","term":"Bid floor"},
+{"n":"8.4","kind":"term","html":"One of a person's numbers, 1 (strongest) to the highest set. Each number can be used on one week per phase.","term":"Bid number"},
+{"n":"8.5","kind":"term","html":"Loose or Strict. Decides whether a winning bid on a competition week can be removed.","term":"Bid rule set"},
+{"n":"8.6","kind":"term","html":"The timer has reached 0, or the admin stopped bidding. Decisions are possible only then.","term":"Bidding closed"},
+{"n":"8.7","kind":"term","html":"A bid of two or three numbers, such as 1/2, that uses all of them. Ranks just above its lowest number.","term":"Combination bid"},
+{"n":"8.8","kind":"term","html":"A week where, at one moment this phase, two or more people's bids came to more than its FTE available (with earlier winners). Lasts the rest of the phase.","term":"Competition week"},
+{"n":"8.9","kind":"term","html":"Locks in the phase's approvals. Needs bidding closed, all weeks locked and every bid decided.","term":"Complete Phase"},
+{"n":"8.10","kind":"term","html":"The most weeks a person may hold through a phase: weeks won earlier plus bids placed this phase.","term":"Cumulative bid cap"},
+{"n":"8.11","kind":"term","html":"The admin's decision that a person does not get the week. The bid number returns next phase.","term":"Deny"},
+{"n":"8.12","kind":"term","html":"Someone approved for a week in an earlier phase or round. Counted first, with their FTE.","term":"Earlier winner"},
+{"n":"8.13","kind":"term","html":"A competition week with no one on it. A new bid must match or beat the last bid there.","term":"Everyone left"},
+{"n":"8.14","kind":"term","html":"The 1 to 3 phases before the Rolling Vacation Auction.","term":"Fall phases"},
+{"n":"8.15","kind":"term","html":"How much of a week's room a person's bid takes, 0.4 to 1.0, set on Users.","term":"FTE (per person)"},
+{"n":"8.16","kind":"term","html":"A week's room, set on FTE Availability. A week with none saved has 0.","term":"FTE available"},
+{"n":"8.17","kind":"term","html":"How far over FTE available a bid can go and be Under Review instead of Losing. Default 0.5.","term":"FTE overage"},
+{"n":"8.18","kind":"term","html":"Freezes all bidding on every week at once.","term":"Global Lock"},
+{"n":"8.19","kind":"term","html":"Placing a weaker bid on a week. On a competition week it is allowed only if the bid would still be Winning and no weaker than the weakest other winning bid.","term":"Going down"},
+{"n":"8.20","kind":"term","html":"Under Strict: a Winning numbered bid on a competition week at the Strict level or stronger. It can be moved, not removed.","term":"Held bid"},
+{"n":"8.21","kind":"term","html":"One of the six holiday weeks in the Auction Calendar. Gets the high-demand floor; the only weeks open in a high-demand-only Phase 1.","term":"High-demand week"},
+{"n":"8.22","kind":"term","html":"Under Strict: someone else's change took a person from Winning to not Winning, or from Under Review or tied to Losing, on a week this phase.","term":"Knocked out"},
+{"n":"8.23","kind":"term","html":"Takes no new bids, changes or removals. Its projection stands.","term":"Locked week"},
+{"n":"8.24","kind":"term","html":"The bid rule set in which any bid can be removed. The default.","term":"Loose"},
+{"n":"8.25","kind":"term","html":"Projected not to get the week.","term":"Losing"},
+{"n":"8.26","kind":"term","html":"On a competition week, the weakest bid a newcomer may place: the weakest Winning or Under Review bid there, or, with none, the strongest bid there.","term":"Minimum new bid"},
+{"n":"8.27","kind":"term","html":"Under Strict: shifting a held bid, in one step, to a week where its owner was knocked out and where it would win.","term":"Move"},
+{"n":"8.28","kind":"term","html":"Under Strict: a moved bid cannot be lowered on the week it moved to for the rest of the phase or round.","term":"Moved mark"},
+{"n":"8.29","kind":"term","html":"Anyone with no bid on a week at that moment, including someone who left.","term":"Newcomer"},
+{"n":"8.30","kind":"term","html":"The no-priority bid, always the weakest. Allowed only in the phases set in NP Bids by Phase.","term":"NP"},
+{"n":"8.31","kind":"term","html":"An optional start to each phase: a countdown of set days that bids do not reset until the starting reset remains.","term":"Opening window"},
+{"n":"8.32","kind":"term","html":"One bidding period with its own bids, decisions and results. Each RVA round is a phase of its own.","term":"Phase"},
+{"n":"8.33","kind":"term","html":"The engine's live answer to who gets each week: Winning, Under Review or Losing. Decisions never change it.","term":"Projection"},
+{"n":"8.34","kind":"term","html":"With a short reset, the countdown is not allowed to run out overnight (default 9 PM to 9 AM Pacific).","term":"Quiet hours"},
+{"n":"8.35","kind":"term","html":"A person's own reference bid on a week this phase: the bid they last placed there (with Priority Lock off, their strongest), kept after they remove it. \"Weaker\" is measured against it. Cleared when a phase completes. Not the same as a bid floor.","term":"Remembered bid"},
+{"n":"8.36","kind":"term","html":"The admin has e-mailed a completed phase's results. Staff then see their outcomes.","term":"Results sent"},
+{"n":"8.37","kind":"term","html":"The last phase, run as rounds through the year. Each round opens chosen months and is its own phase.","term":"Rolling Vacation Auction (RVA)"},
+{"n":"8.38","kind":"term","html":"When on, keeps the core Auction Setup settings fixed from Begin Phase 1 until Reset Auction.","term":"Setup lock"},
+{"n":"8.39","kind":"term","html":"Locks open weeks whose remaining FTE is below their Smart Lock Control and unlocks locked weeks at or above it.","term":"Smart Lock"},
+{"n":"8.40","kind":"term","html":"Per week, the least remaining FTE needed to stay open when Smart Lock runs. Default 0.4.","term":"Smart Lock Control"},
+{"n":"8.41","kind":"term","html":"The ranking of every bid: 1/2/3 › 1/2 › 1 › 2/3 › 2 › … › 10 › 11 … 16 › NP.","term":"Strength order"},
+{"n":"8.42","kind":"term","html":"The bid rule set in which a winning bid on a competition week can only be moved, not removed.","term":"Strict"},
+{"n":"8.43","kind":"term","html":"\"Strict applies to\": every numbered bid, or N or stronger. Weaker winning bids are not held.","term":"Strict level"},
+{"n":"8.44","kind":"term","html":"A week inside the Auction Calendar's summer range. Gets the summer floor.","term":"Summer week"},
+{"n":"8.45","kind":"term","html":"Two or more bids at the same place in the strength order. Shown as Under Review when one of them could fit within the overage.","term":"Tie"},
+{"n":"8.46","kind":"term","html":"Which bid changes restart the countdown: 1 every bid, 2 only changes that affect others.","term":"Timer Reset Mode"},
+{"n":"8.47","kind":"term","html":"Over the week's FTE available by no more than the FTE overage, alone or as part of a tie. The admin decides.","term":"Under Review"},
+{"n":"8.48","kind":"term","html":"Picks one tied person at random. It records nothing; the admin then approves or denies.","term":"Wheel of Names"},
+{"n":"8.49","kind":"term","html":"Projected to get the week.","term":"Winning"},
+{"n":"8.50","kind":"term","html":"A bid number the admin has taken from one person on User Bids. Cleared by Reset Auction.","term":"Withheld number"}
+]}
+]};
+// The live lines: each value is the page's own text — the same functions the welcome e-mail and the setting cards use. Every one
+// returns text and writes nothing (1.11 / 5.1 name the rule set in force from _fpStrict and the Strict level). 5.10's approved words
+// introduce the line staff see "Under Strict, every numbered bid", so it shows that line (the function _ruleCompSetText calls, set to it).
+function _rulesSetName(){ return _fpStrict()?'Strict · '+_strictLvlName(_strictN()):'Loose'; }
+// One part of the welcome e-mail's text (it writes nothing): the lines under its heading, up to the blank line that ends them.
+function _rulesWelcomePart(title){
+  const body=String(buildWelcomeEmailBody('')), head=_emBold(title)+'\n', i=body.indexOf(head);
+  if(i<0) return '';
+  const rest=body.slice(i+head.length), j=rest.indexOf('\n\n');
+  return j<0?rest:rest.slice(0,j);
+}
+const RULES_LIVE={
+  '1.3':()=>phasesRuleLine(), '1.4':()=>rvaRuleLine(), '1.5':()=>bidNumbersLine(), '1.6':()=>comboNowText(),
+  '1.7':()=>npPhasesDescription(), '1.8':()=>cumulativeCapEmailText(), '1.9':()=>bfRulesBullets(), '1.10':()=>getReviewThreshold(),
+  '1.11':()=>_rulesSetName(), '1.12':()=>_timerModeCurrent(), '3.2':()=>timerRulesEmailText(), '3.3':()=>_timerModeCurrent(),
+  '4.16':()=>_ruleNoWeakenText(), '5.1':()=>_rulesSetName(), '5.10':()=>_ruleCompSetLine(true,null),
+  '7.2':()=>_rulesWelcomePart('RULES AND REMINDERS OF THE AUCTION'), '7.3':()=>timerRulesEmailText(), '7.4':()=>_rulesWelcomePart('UNDERSTANDING OUTCOMES')
+};
+// A live value as plain text: a list one line per entry, a number as written, a timer mode by its name. Nothing to show → the
+// item's own words for that (whenEmpty), else a dash. A function that fails → a dash: the page still draws, and never says "none"
+// for a value it could not read. The caller escapes what this returns.
+function _rulesLiveText(it){
+  let v;
+  try{ const g=RULES_LIVE[it.n]; if(typeof g!=='function') return '—'; v=g(); }catch(_){ return '—'; }
+  if(it.names) return Object.prototype.hasOwnProperty.call(it.names,String(v))?it.names[String(v)]:'—';
+  if(Array.isArray(v)) v=v.filter(x=>typeof x==='string'&&x.trim()).join('\n');
+  else if(typeof v==='number') v=Number.isFinite(v)?String(v):'';
+  else if(typeof v!=='string') v='';
+  return v.trim()?v:(it.whenEmpty||'—');
+}
+// One row: its number, then its words. Approved html goes in as written (it is this page's own constant); every live value,
+// label and glossary term goes in escaped.
+function _rulesItemHtml(it){
+  let inner;
+  if(it.kind==='term') inner='<span class="rl-term">'+esc(it.term)+'</span> '+it.html;
+  else if(it.kind==='live') inner='<div class="rl-label">'+esc(it.label)+'</div>'+(it.html?'<div>'+it.html+'</div>':'')+'<div class="rl-val">'+esc(_rulesLiveText(it))+'</div>';
+  else inner=it.html;
+  return '<div class="rl-it"><span class="rl-num">'+esc(it.n)+'</span><div class="rl-body">'+inner+'</div></div>';
+}
+let _rulesGroups=[], _rulesSearching=false;
+function _rulesOpen(g,on){ g.el.classList.toggle('open',on); g.head.setAttribute('aria-expanded',on?'true':'false'); }
+function _rulesSpace(px){ const s=document.getElementById('rulesSpacer'); if(s) s.style.height=(px>0?Math.ceil(px):0)+'px'; }
+// Room below a heading for it to reach the top of the screen: a section near the end of the page gets a blank space under the
+// list just tall enough (cleared again when the section closes, on search, and each time the page is drawn).
+function _rulesRoom(head){
+  const m=parseFloat(getComputedStyle(head).scrollMarginTop)||0;
+  const top=head.getBoundingClientRect().top+window.scrollY-m;
+  _rulesSpace(window.innerHeight-(document.documentElement.scrollHeight-top));
+}
+// A section's heading clicked: it opens and every other one closes (while searching, each opens and closes on its own). The opened
+// heading is brought to the top of the screen — closing a section above moves it up first — smoothly, unless the device asks for
+// less motion. Its scroll-margin-top (CSS) keeps it clear of the phone's menu button.
+function _rulesToggle(g){
+  if(_rulesSearching){ _rulesOpen(g,!g.el.classList.contains('open')); return; }
+  const willOpen=!g.el.classList.contains('open');
+  _rulesGroups.forEach(x=>_rulesOpen(x,false));
+  _rulesSpace(0);
+  if(!willOpen) return;
+  _rulesOpen(g,true);
+  const still=!!(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  _rulesRoom(g.head);
+  g.head.scrollIntoView({block:'start',behavior:still?'auto':'smooth'});
+}
+// Marks each typed word inside the text of a row (text only; the row's markup is left as it is).
+function _rulesMark(el,words){
+  const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT,null), nodes=[];
+  let t; while((t=walker.nextNode())) nodes.push(t);
+  nodes.forEach(node=>{
+    const s=node.nodeValue, low=s.toLowerCase(), cuts=[];
+    let i=0;
+    while(i<low.length){
+      let at=-1, len=0;
+      words.forEach(w=>{ const j=low.indexOf(w,i); if(j!==-1&&(at===-1||j<at||(j===at&&w.length>len))){ at=j; len=w.length; } });
+      if(at===-1) break;
+      cuts.push([at,at+len]); i=at+len;
+    }
+    if(!cuts.length) return;
+    const frag=document.createDocumentFragment(); let last=0;
+    cuts.forEach(c=>{ if(c[0]>last) frag.appendChild(document.createTextNode(s.slice(last,c[0]))); const mk=document.createElement('mark'); mk.textContent=s.slice(c[0],c[1]); frag.appendChild(mk); last=c[1]; });
+    if(last<s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+    node.parentNode.replaceChild(frag,node);
+  });
+}
+// The search: a row stays when it holds every typed word (its number counts); a section with no such row hides, the others open
+// with their count. An empty box shows every section again, all closed.
+function _rulesFilter(){
+  const box=document.getElementById('rulesSearch'), list=document.getElementById('rulesList'), empty=document.getElementById('rulesEmpty');
+  if(!list) return;
+  const words=String(box?box.value:'').toLowerCase().trim().split(/\s+/).filter(Boolean);
+  _rulesSearching=words.length>0;
+  list.classList.toggle('rl-searching',_rulesSearching);
+  _rulesSpace(0);
+  let total=0, firstSeen=false;
+  _rulesGroups.forEach(g=>{
+    let hits=0, lastIt=null;
+    g.items.forEach(it=>{
+      it.body.innerHTML=it.orig;
+      const ok=!_rulesSearching||words.every(w=>it.text.indexOf(w)!==-1);
+      it.el.classList.toggle('rl-gone',!ok);
+      it.el.classList.remove('rl-last');
+      if(ok){ lastIt=it; if(_rulesSearching){ hits++; _rulesMark(it.body,words); } }
+    });
+    if(lastIt) lastIt.el.classList.add('rl-last');
+    total+=hits;
+    g.el.classList.toggle('rl-gone',_rulesSearching&&hits===0);
+    _rulesOpen(g,_rulesSearching&&hits>0);
+    g.count.textContent=_rulesSearching?hits+(hits===1?' match':' matches'):'';
+    const vis=!g.el.classList.contains('rl-gone');
+    g.el.classList.toggle('rl-first',vis&&!firstSeen);
+    if(vis) firstSeen=true;
+  });
+  const none=_rulesSearching&&total===0;
+  if(empty) empty.classList.toggle('on',none);
+  list.style.display=none?'none':'';
+}
+// Drawn fresh each time the page opens (nav): the live values read now, the search box empty, every section closed.
+function renderRulesPage(){
+  const list=document.getElementById('rulesList'), sub=document.getElementById('rulesSub'), box=document.getElementById('rulesSearch');
+  if(!list) return;
+  if(sub) sub.textContent=RULES_TEXT.sub;
+  if(box){ box.value=''; if(!box.dataset.rl){ box.dataset.rl='1'; box.addEventListener('input',_rulesFilter); box.addEventListener('search',_rulesFilter); } }
+  list.innerHTML=RULES_TEXT.sections.map((s,si)=>'<div class="rl-grp"><button type="button" class="rl-head" aria-expanded="false" aria-controls="rl-sec-'+si+'">'
+    +'<span class="rl-hl"><span class="rl-sn">'+esc(s.n)+'</span><span>'+esc(s.title)+'</span></span>'
+    +'<span class="rl-hr"><span class="rl-count"></span><span class="chev rl-chev" aria-hidden="true">▸</span></span></button>'
+    +'<div class="rl-items" id="rl-sec-'+si+'">'+s.items.map(_rulesItemHtml).join('')+'</div></div>').join('');
+  _rulesGroups=[...list.querySelectorAll('.rl-grp')].map(el=>({ el, head:el.querySelector('.rl-head'), count:el.querySelector('.rl-count'),
+    items:[...el.querySelectorAll('.rl-it')].map(r=>{ const b=r.querySelector('.rl-body'); return { el:r, body:b, orig:b.innerHTML, text:(r.textContent||'').toLowerCase() }; }) }));
+  _rulesGroups.forEach(g=>g.head.addEventListener('click',()=>_rulesToggle(g)));
+  _rulesFilter();
+}
+window.renderRulesPage=renderRulesPage; window._rulesLive=RULES_LIVE; // testing: a check redraws the page, or swaps one live getter for one that fails
 // ── Toast ──
 let toastT;
 // sticky=true leaves the message up until the NEXT toast replaces it — for work that outlasts the
