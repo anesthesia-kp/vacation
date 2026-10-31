@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 233;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 234;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -400,6 +400,7 @@ select:focus{outline:none;border-color:#1f2329}
 .al-gi-none{font-size:.84rem;color:#4a505a}
 .al-add{flex:none;display:inline-block;margin-top:2px;font-size:.82rem;font-weight:700;color:#4e5e36;background:none;border:none;padding:0;cursor:pointer;text-decoration:underline}
 .al-add:disabled{opacity:.5;cursor:default}
+.al-kp-line{font-size:.82rem;color:#4a505a;margin-top:2px;overflow-wrap:anywhere}#emailModal [hidden]{display:none!important} /* [399 · §305] KP §2: the KP e-mail row's small line; menu mode hides buttons of the sign-in box · [399 · §311] the row's control is the alert switches' own .al-toggle */
 .flash.al-toast{top:auto;bottom:calc(88px + env(safe-area-inset-bottom,0px));background:#1f2329;border:1px solid #1f2329;color:#ffffff} /* low on the screen: never over the box's title or the window's header */
 .al-bell{position:absolute;top:0;right:12px;font-size:9px;line-height:10px;height:10px;opacity:.85;pointer-events:none;text-transform:none;letter-spacing:0} /* [fix round, review lane 3 H1] in the card's top edge, above the week-number row: it takes no room there and touches nothing (the card's padding strip, clear of its rounded corner) */
 .al-win{position:fixed;inset:0;z-index:1001;display:flex;flex-direction:column;background:#eeebe2;color:#1f2329}
@@ -646,6 +647,7 @@ body{zoom:1.15}
       <button class="btn-primary" onclick="saveEmail()">Save</button><!-- [228 · §297] -->
       <button class="btn-secondary" onclick="remindLater()" style="font-size:.8rem">Remind me later</button>
       <button class="btn-secondary" onclick="declineEmail()" style="font-size:.8rem;opacity:.85">No thanks — don't ask again</button>
+      <button type="button" class="btn-secondary" id="kpMenuCancel" onclick="_kpMenuCancel()" style="font-size:.8rem" hidden>Cancel</button><!-- [399 · §305] KP §4: shown only in menu mode (Turn on under E-mail alerts), in place of the two buttons above -->
     </div>
   </div>
 </div>
@@ -691,7 +693,7 @@ body{zoom:1.15}
       </div>
       <ul class="rules-list" style="margin-top:10px"><!-- [228 · §297] items 213, 214 removed; 212 and 215 in their short words; 211 kept word for word (his ruling, 5:33 PM) -->
         <li>E-mail alerts tell you when someone else's bid changes your projection on a week you bid on, and when a bid you withdrew would now win. Turn either off under E-mail alerts.</li><!-- [220 · §288] the two alert rules (plan §11b line 1; line 2 = §11k item 4) -->
-        <li>Week out of reach? Use “Notify if a week opens up” under E-mail alerts with the bid you'd place. If that bid could later win or be under review, you'll be e-mailed and the countdown restarts so you have time to bid. Lasts until the phase ends.</li><!-- [221 · §292] the get-in rule line, as ruled (10:26 AM) · [228 · §297] item 212 · [229 · §297] item 212 -->
+        <li>Week out of reach? Use “Notify if a week opens up” under E-mail alerts with the bid you'd place. If that bid could later win or be under review, you'll be e-mailed and the timer restarts so you have time to bid. Lasts until the phase ends.</li><!-- [221 · §292] the get-in rule line, as ruled (10:26 AM) · [228 · §297] item 212 · [229 · §297] item 212 · [399 · §306] L5 "timer" -->
         <li style="margin-top:8px"><strong style="color:#1f2329">Projections are not final — they can change as others bid or staffing needs change.</strong></li>
       </ul>
     </div>
@@ -714,6 +716,13 @@ body{zoom:1.15}
         <div class="al-sw-name" id="alSw2n">My withdrawn bid would win again</div>
       </div>
       <button type="button" class="al-toggle" role="switch" aria-checked="true" aria-labelledby="alSw2n" id="alSw2" onclick="_alToggle('chance')"></button>
+    </div>
+    <div class="al-sw" id="alKpRow" hidden><!-- [399 · §305] KP §2: the KP e-mail row (W23), painted by _alKpPaint; hidden while "Ask users for their KP e-mail at login" is off -->
+      <div class="al-sw-txt">
+        <div class="al-sw-name" id="alKpName">KP e-mail</div>
+        <div class="al-kp-line" id="alKpLine">Loading…</div>
+      </div>
+      <button type="button" class="al-toggle" role="switch" aria-checked="false" aria-labelledby="alKpName" aria-describedby="alKpLine" id="alKpBtn" onclick="_alKpClick()" disabled></button><!-- [399 · §311] the alert switches' own switch: on = a KP e-mail on file -->
     </div>
     <div class="al-gi-h">Notify if a week opens up</div><!-- [229 · §297] the alert's name -->
     <div id="alGiList" onclick="_alListClick(event)"></div>
@@ -2228,7 +2237,7 @@ function renderTimerRulesInfo(){
   // "Timer is off" wording only applies mid-auction — before Phase 1 the timer is
   // merely dormant (Begin Phase 1 arms it), so show the configured rules instead.
   if(typeof timerData!=='undefined'&&timerData&&timerData.enabled!==true&&biddingOpen()){
-    el.innerHTML='<p style="margin:0 0 6px">The countdown is <strong>off</strong>: bidding stays open until the admin closes the phase.</p>'; // [228 · §297] item 204
+    el.innerHTML='<p style="margin:0 0 6px">The timer is <strong>off</strong>: bidding stays open until the admin closes the phase.</p>'; // [228 · §297] item 204 · [399 · §306] L5 "timer"
     return;
   }
   const r=getTimerRules(), st=r.stages;
@@ -2236,21 +2245,21 @@ function renderTimerRulesInfo(){
   let items='';
   st.forEach((s,i)=>{ items+= i===0 ? li('At the start of the round', s.hours) : li('After '+s.days+' days', s.hours); });
   let quiet='';
-  if(r.quietEnabled){ quiet=`<p style="margin:8px 0 0">Once the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between <strong>${fmtHour12(r.quietStart)}</strong> and <strong>${fmtHour12(r.quietEnd)}</strong> Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.</p>`; }
+  if(r.quietEnabled){ quiet=`<p style="margin:8px 0 0">Once the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the timer would run out between <strong>${fmtHour12(r.quietStart)}</strong> and <strong>${fmtHour12(r.quietEnd)}</strong> Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.</p>`; } // [399 · §306] L5 "timer"
   let owHtml='';
   if(r.openingWindow){ owHtml=`<p style="margin:0 0 6px"><strong>Each phase or round opens with a ${r.openingWindow.days}-day window:</strong> bids don't reset the timer until <strong>${(st[0]||{}).hours||48} hours</strong> remain.</p>`; } // [228 · §297] item 205
   // [build 274 · V3] The reset sentence follows the admin-selected mode, so bidders
   // always see the rule actually in force. Mode 1 keeps the classic wording exactly.
   const resetSentence=(function(){
     const m=_timerResetMode();
-    if(m===2) return 'The countdown resets only when a bid change alters someone else\'s projected outcome, weakens a competition week\'s minimum new bid, or opens a week to someone with a “notify if a week opens up” alert'; // [221 · §292] W1; mode 3's sentence gone · [228 · §297] item 207 · [229 · §297] the alert's name
-    return 'Every time anyone places or changes a bid, the countdown resets';
+    if(m===2) return 'The timer resets only when a bid change alters someone else\'s projected outcome, weakens a competition week\'s minimum new bid, or opens a week to someone with a “notify if a week opens up” alert'; // [221 · §292] W1; mode 3's sentence gone · [228 · §297] item 207 · [229 · §297] the alert's name · [399 · §306] L5 "timer"
+    return 'Every time anyone places or changes a bid, the timer resets'; // [399 · §306] L5 "timer"
   })();
-  const endLine=`<p style="margin:0 0 6px"><strong>Each phase ends when the countdown timer gets to 0.</strong></p>`;
-  const noReset=`<p style="margin:8px 0 0">A bid resets the countdown only when less than the reset time remains.</p>`; // [181 · §225] · [228 · §297] item 208
+  const endLine=`<p style="margin:0 0 6px"><strong>Each phase ends when the timer gets to 0.</strong></p>`; // [399 · §306] L5 "timer"
+  const noReset=`<p style="margin:8px 0 0">A bid resets the timer only when less than the reset time remains.</p>`; // [181 · §225] · [228 · §297] item 208 · [399 · §306] L5 "timer"
   if(st.length<=1){ el.innerHTML=endLine+owHtml+(_timerResetMode()===1
-    ?`<p style="margin:0 0 6px">Every time anyone places or changes a bid, the countdown resets to <strong>${(st[0]||{}).hours||48} hours</strong>.</p>`
-    :`<p style="margin:0 0 6px">${resetSentence}. Each qualifying reset returns the countdown to <strong>${(st[0]||{}).hours||48} hours</strong>.</p>`)+noReset+quiet; return; }
+    ?`<p style="margin:0 0 6px">Every time anyone places or changes a bid, the timer resets to <strong>${(st[0]||{}).hours||48} hours</strong>.</p>` // [399 · §306] L5 "timer"
+    :`<p style="margin:0 0 6px">${resetSentence}. Each qualifying reset returns the timer to <strong>${(st[0]||{}).hours||48} hours</strong>.</p>`)+noReset+quiet; return; } // [399 · §306] L5 "timer"
   el.innerHTML=endLine+owHtml+`<p style="margin:0 0 6px">${resetSentence}. How long it resets to gets shorter as the round goes on:</p><ul style="margin:0 0 0 18px;padding:0">${items}</ul>${noReset}${quiet}`;
 }
 function isAuctionClosed(){
@@ -2346,7 +2355,7 @@ function _rbGateCheck(){
 // during the anonymous bootstrap it was rejected permission-denied (a dead, error-logging
 // listener that never recovers). The signed-in path (_subscribeSensitiveOnce + a getDoc)
 // covers it after login; _emailsReady already initializes true so sign-in never waits on it.
-onSnapshot(adminRef,    snap=>{ _boardMark('settings',snap); adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _acCheckRemote(adminSettings); _rbGateCheck(); _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); if(typeof renderDestinationPill==='function') renderDestinationPill(); if(typeof renderSimModeBanner==='function') renderSimModeBanner(); if(typeof _blindSync==='function') _blindSync(); if(typeof _lipSync==='function') _lipSync(); if(typeof _ruleSetSync==='function') _ruleSetSync(); if(typeof renderPhaseLabel==='function') renderPhaseLabel(); if(typeof updateSigninPhase==='function'&&_boardLoaded&&_boardLoaded.phases===true) updateSigninPhase(); }); // [231 · E2] the phase names follow phasePlan · fix round (review staff L3): the sign-in line only once the phases have arrived // [204 · §261] the blind follows this doc · [216 · §282] the competition-week rule line follows the rule set · [177 · §201] the test-mode banner follows this doc too // [build 136 · B5] config check first · [build 139 · GATE] · [174 · §196] the destination pill follows this doc
+onSnapshot(adminRef,    snap=>{ _boardMark('settings',snap); adminSettings=snap.exists()?snap.data():{emailNotifsEnabled:true,passcodesEnabled:false,emailPromptEnabled:false}; _acCheckRemote(adminSettings); _rbGateCheck(); _adminSettingsReady=true; if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof updateLoginPwState==='function') updateLoginPwState(); updateBidLimitRule(); if(typeof renderTimerRulesInfo==='function') renderTimerRulesInfo(); if(typeof renderDestinationPill==='function') renderDestinationPill(); if(typeof renderSimModeBanner==='function') renderSimModeBanner(); if(typeof _blindSync==='function') _blindSync(); if(typeof _lipSync==='function') _lipSync(); if(typeof _ruleSetSync==='function') _ruleSetSync(); if(typeof renderPhaseLabel==='function') renderPhaseLabel(); if(typeof updateSigninPhase==='function'&&_boardLoaded&&_boardLoaded.phases===true) updateSigninPhase(); if(typeof _alKpLive==='function') _alKpLive(); /* [399 · §305] KP §5: the KP e-mail row follows this doc while the E-mail alerts box is open */ }); // [231 · E2] the phase names follow phasePlan · fix round (review staff L3): the sign-in line only once the phases have arrived // [204 · §261] the blind follows this doc · [216 · §282] the competition-week rule line follows the rule set · [177 · §201] the test-mode banner follows this doc too // [build 136 · B5] config check first · [build 139 · GATE] · [174 · §196] the destination pill follows this doc
 
 // ── Maximum bids per phase (admin-set; 'none' = no limit) ──
 // NP bids allowed this phase? Admin toggles per phase (Controls → NP Bids by
@@ -4821,7 +4830,7 @@ window.openSwapStep=function(){
   const wk=pendingWeek, user=getCurrentUser(); if(!wk||!user||!weekMeta[wk]) return;
   { const _lr=(typeof _saveRefusal==='function')?_saveRefusal():null; if(_lr){ showError(_lr); return; } } // [215 · §282] not live: the Swap step does not open
   const _off=_swapOffered(user,wk), list=_off.list; // [232 · §299] the weeks the competition rule refuses are left out
-  if(!list.length){ showError("You have no other bid to swap with."); return; }
+  if(!list.length){ showError(_off.left>0?"The competition-week rules don't allow swapping this week with any of your other bids right now.":"You have no other bid to swap with."); return; } // [399 · §306] L3 W40: the list is empty because the competition rule left weeks out
   const meta=weekMeta[wk];
   const here=document.getElementById('swapThisWeek');
   if(here) here.innerHTML='<div style="font-size:.7rem;color:#4a505a;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">This week</div><div style="font-weight:700;color:#1f2329">Week '+escH(meta.weekNum)+' ('+escH(meta.range)+') — bid '+escH(bidLbl(data[user][wk]))+'</div>';
@@ -6113,12 +6122,12 @@ function _lockedCard(user,wk,ap){
     div.appendChild(pb);
     return div;
   }
-  if(isVisibleBid(user,wk)){
+  if(isVisibleBid(user,wk)&&!currentPhaseAnnounced()){ // [399 · §312] L1: once results are sent, a bid that did not win draws the ordinary locked card (no "My Bid" row), as a locked week with no bid of theirs
     const o=getOutcome(wk,user,ap);
     const myRow=document.createElement("div");
     myRow.className="week-stat";
     myRow.style.cssText="margin-top:5px;font-size:.7rem;color:#1f2329";
-    myRow.innerHTML=`<span style="font-size:.65rem;font-weight:600;color:#1f2329">My Bid:</span> <span class="competitor" style="background:rgba(31,35,41,.2);color:#4e5e36">${escH(bidLbl(data[user][wk]))}</span> ${currentPhaseAnnounced()?'<span class="lk-out">Denied</span>':outcomeIcon(o)+'<span class="lk-out">'+escH(outcomeText(o))+'</span>'}`; // [232 · §299] once results are sent: the stored decision (owner: "Denied")
+    myRow.innerHTML=`<span style="font-size:.65rem;font-weight:600;color:#1f2329">My Bid:</span> <span class="competitor" style="background:rgba(31,35,41,.2);color:#4e5e36">${escH(bidLbl(data[user][wk]))}</span> ${outcomeIcon(o)+'<span class="lk-out">'+escH(outcomeText(o))+'</span>'}`; // [399 · §312] before results only: the projection (the "Denied" / "Not approved" labels retired)
     div.appendChild(myRow);
   }
   const tag=document.createElement("div"); tag.className="lk-tag";
@@ -6779,6 +6788,7 @@ function _alBoxPaint(){
         :(rows.length?rows.map(x=>'<div class="al-gi-row'+(_alPendWk(user,x.wk)?' al-pend':'')+'"><span class="al-gi-t">'+escH(formatShort(x.wk))+' — a bid of <b>'+escH(blFmtBid(x.bid))+'</b></span><span class="al-gi-b"><button type="button" class="al-gi-ch" data-al-ch="'+escH(x.wk)+'">Change</button><button type="button" class="al-gi-rm" data-al-rm="'+escH(x.wk)+'">Remove</button></span></div>').join(''):'<div class="al-gi-none">'+escH(AL_EMPTY)+'</div>');
     }
     const add=document.getElementById('alAdd'); if(add) add.disabled=!ready||_alBox.busy;
+    if(typeof _alKpPaint==='function') _alKpPaint(); // [399 · §305] KP §2: the KP e-mail row
   }catch(_){}
 }
 // The listener's arrival (and every later change): the board's bells, and the box when it is open.
@@ -6824,6 +6834,125 @@ function _alDone(){
   // [228 · §297] item 174: nothing changed - no toast
 }
 window._alDone=_alDone;
+// [399 · §305] THE KP E-MAIL ROW (PLAN-AMENDMENT-KP §2-§4, path A). The person's own key in vacations/emails holds one of the two values the
+// sign-in question writes: an address (on: it gets a copy of every e-mail) or "__skip__" (off); nothing stored reads as off too. The row shows
+// only while adminSettings.kpEmailPromptEnabled is not false, and shows "Loading…" with no button until the address book has genuinely loaded
+// (_emLoadedOk), so nothing is ever written on a guess. Turn off: one pop-up, then the person's own key = "__skip__" (merge); no e-mail (KP Q1).
+// Turn on: the sign-in box (#emailModal) in menu mode (_kpMenu), whose Save is saveEmail with every one of its checks.
+const AL_KP_LOADING='Loading…'; // W28 - the row's only line, while the address book loads [399 · §312] (W24 / W25 retired: loaded, the row is the name and the switch)
+let _alKp={busy:false,flow:null}; // busy: a Turn off write under way · flow: 'off' / 'on' while a flow is open (the pop-up, the KP box, the write) [399 · §311]
+let _kpMenu=false;      // #emailModal was opened by Turn on; cleared on every close of that mode
+// The person's KP address when it is on, else '' (a stored "__skip__", nothing stored, or a value without "@") - the sign-in question's own test.
+function _alKpAddr(user){
+  const v=(user&&emailsData)?emailsData[user]:null;
+  return (v&&v!=='__skip__'&&String(v).includes('@'))?String(v):'';
+}
+// [399 · §311] The row's switch (the alert switches' own .al-toggle): aria-checked = a KP address on file. Disabled until the address book has
+// loaded (W28) and while a write is under way. While a flow is open its position is held (a listener's repaint repaints the line, never the
+// switch); when the flow ends, the next paint shows the stored value.
+function _alKpPaint(){
+  try{
+    const row=document.getElementById('alKpRow'), line=document.getElementById('alKpLine'), sw=document.getElementById('alKpBtn'); if(!row||!line||!sw) return;
+    const user=getCurrentUser();
+    if(!user||(adminSettings&&adminSettings.kpEmailPromptEnabled===false)){ row.hidden=true; return; } // the admin setting off: no row (KP Q2)
+    row.hidden=false;
+    if(typeof _emLoadedOk==='undefined'||_emLoadedOk!==true){ line.textContent=AL_KP_LOADING; line.hidden=false; sw.setAttribute('aria-describedby','alKpLine'); sw.setAttribute('aria-checked','false'); sw.disabled=true; return; } // [399 · §312] W28 under the name
+    const a=_alKpAddr(user);
+    line.hidden=true; line.textContent=''; sw.removeAttribute('aria-describedby'); // [399 · §312] loaded: the name and the switch only, as the two switch rows above
+    if(!_alKp.flow) sw.setAttribute('aria-checked',String(!!a));
+    sw.disabled=_alKp.busy===true;
+    if(_alKp.busy) sw.setAttribute('aria-busy','true'); else sw.removeAttribute('aria-busy');
+  }catch(_){}
+}
+window._alKpPaint=_alKpPaint;
+// The emails and adminSettings listeners: the row repaints in place, only while the box is open.
+function _alKpLive(){ try{ if(_alBox.open) _alKpPaint(); }catch(_){} }
+// [399 · §311] The switch: a tap flips it and starts ONE flow — off when it showed on, on when it showed off. A tap while a flow is open, while
+// a write is under way or before the address book has loaded does nothing.
+function _alKpClick(){
+  try{
+    const sw=document.getElementById('alKpBtn'); if(!sw||sw.disabled||_alKp.flow||_alKp.busy) return;
+    if(typeof _emLoadedOk==='undefined'||_emLoadedOk!==true) return;
+    if(sw.getAttribute('aria-checked')==='true') _alKpOff(); else _alKpOn();
+  }catch(_){}
+}
+window._alKpClick=_alKpClick;
+// The flow is over: the switch shows the stored value again.
+function _alKpFlowEnd(){ _alKp.flow=null; _alKpPaint(); }
+async function _alKpOff(){
+  const user=getCurrentUser();
+  if(!user||_alKp.busy||_alKp.flow||typeof _emLoadedOk==='undefined'||_emLoadedOk!==true) return;
+  const a=_alKpAddr(user); if(!a){ _alKpPaint(); return; } // already off: just the repaint, nothing is written
+  _alKp.flow='off'; try{ document.getElementById('alKpBtn').setAttribute('aria-checked','false'); }catch(_){} // [399 · §311] the switch shows the tap at once
+  let login=''; try{ login=String((auth.currentUser&&!auth.currentUser.isAnonymous&&auth.currentUser.email)||loginEmailsData[user]||'').trim(); }catch(_){ login=''; }
+  let yes=false;
+  try{ yes=await showConfirm('Stop sending auction e-mails to <strong>'+escH(a)+'</strong>? Your Google address'+(login?' ('+escH(login)+')':'')+' still gets every one.',{yesText:'Turn off',noText:'Cancel'}); }catch(_){ yes=false; } // W29
+  if(!yes||getCurrentUser()!==user){ _alKpFlowEnd(); if(yes===false) _alKpRefocus(); return; } // Cancel (back ON), or signed out meanwhile: nothing is written
+  _alKp.busy=true; _alKpPaint(); // no double tap while the write is under way
+  let ok=false, late=false;
+  try{ await _awaitWrite(setDoc(emailsRef,{[user]:'__skip__'},{merge:true})); ok=true; }catch(e){ ok=false; late=!!(e&&e.code==='write-deadline'); } // the person's own key only · [399 · §309] L2: the page's write deadline
+  _alKp.busy=false;
+  if(getCurrentUser()!==user){ _alKpFlowEnd(); return; } // signed out meanwhile: nothing more is shown
+  if(ok){ emailsData=Object.assign({},emailsData,{[user]:'__skip__'}); _alToast('KP e-mail off.'); } // W30 - the page's copy at once (the listener brings the same value)
+  else _alToast(late?AL_LATE:AL_NOSAVE); // W31 - the switch goes back ON · [399 · §309] L2: past the deadline, the box's own late message (the listener repaints the row when the write lands)
+  _alKpFlowEnd();
+  _alKpRefocus(); // [399 · §309] L3
+}
+window._alKpOff=_alKpOff;
+// A sign-out or an outside session end with the Turn off pop-up open: it is answered Cancel (nothing is written; the flow ends). [399 · §311]
+function _alKpReset(){
+  try{ if(_alKp.flow!=='off'||_alKp.busy) return; const m=document.getElementById('confirmModal'), n=document.getElementById('confirmNo'); if(m&&n&&m.classList.contains('show')&&typeof n.onclick==='function') n.onclick(); else _alKp.flow=null; }catch(_){}
+}
+// [399 · §311] focus back on the switch while the box shows (the §309 L3 rule, through _alKpFocus).
+function _alKpRefocus(){ try{ if(_alBox.open&&document.getElementById('alertsModal').classList.contains('show')) _alKpFocus(); }catch(_){} }
+// Turn on: the E-mail alerts box steps aside (the sign-in box sits under it in the page; the alert window's own pattern) and the sign-in box
+// opens empty in menu mode: "Remind me later" and "No thanks" hidden, Cancel shown. Its title, line, field and Save are its own (W32).
+// [399 · §311] The switch shows ON while the box is open; Cancel ends the flow (back OFF), Save ends it on (W33).
+function _alKpOn(){
+  const user=getCurrentUser();
+  if(!user||_alKp.busy||_alKp.flow||typeof _emLoadedOk==='undefined'||_emLoadedOk!==true) return;
+  if(_alKpAddr(user)||(adminSettings&&adminSettings.kpEmailPromptEnabled===false)){ _alKpPaint(); return; } // on already, or the row is gone
+  const em=document.getElementById('emailModal'), inp=document.getElementById('emailInput'); if(!em||!inp) return;
+  _alKp.flow='on'; try{ document.getElementById('alKpBtn').setAttribute('aria-checked','true'); }catch(_){}
+  _kpMenu=true; _kpMenuButtons(true);
+  try{ document.getElementById('alertsModal').classList.remove('show'); }catch(_){}
+  inp.value=''; em.classList.add('show');
+  try{ inp.focus(); }catch(_){}
+}
+window._alKpOn=_alKpOn;
+// Menu mode's buttons (on): Remind me later and No thanks hidden, Cancel shown. Off: the sign-in question's own three buttons, no Cancel.
+function _kpMenuButtons(on){
+  try{ document.querySelectorAll('#emailModal .modal-buttons button').forEach(b=>{ if(b.id==='kpMenuCancel') b.hidden=!on; else if(!b.classList.contains('btn-primary')) b.hidden=!!on; }); }catch(_){}
+}
+// Menu mode ends: the sign-in box closes and the flag clears (Cancel, a menu-mode Save, a sign-out or an outside session end).
+function _kpMenuEnd(){
+  if(!_kpMenu) return;
+  _kpMenu=false;
+  try{ const em=document.getElementById('emailModal'); if(em) em.classList.remove('show'); }catch(_){}
+  try{ const i=document.getElementById('emailInput'); if(i) i.value=''; }catch(_){} // [399 · §309] M1: what was typed never stays for the next person
+  _kpMenuButtons(false);
+  if(_alKp.flow==='on') _alKp.flow=null; // [399 · §311] the Turn on flow is over: the next paint shows the stored value
+}
+// [399 · §309] L3: focus on the row's switch only when the row shows and the switch is visible and enabled; true when it took the focus. [399 · §311]
+function _alKpFocus(){
+  try{ const r=document.getElementById('alKpRow'), b=document.getElementById('alKpBtn'); if(!r||r.hidden||!b||b.hidden||b.disabled) return false; b.focus({preventScroll:true}); return true; }catch(_){ return false; }
+}
+// Back to the E-mail alerts box, repainted, focus on the row's button (else Done), with an optional toast.
+function _kpMenuBack(msg){
+  _kpMenuEnd();
+  if(_alBox.open){ try{ _alBoxPaint(); document.getElementById('alertsModal').classList.add('show'); if(!_alKpFocus()) document.querySelector('#alertsModal .modal-buttons .btn-primary').focus({preventScroll:true}); /* [399 · §309] L3 */ }catch(_){} }
+  if(msg) _alToast(msg);
+}
+window._kpMenuBack=_kpMenuBack;
+function _kpMenuCancel(){ _kpMenuBack(''); } // nothing is written
+window._kpMenuCancel=_kpMenuCancel;
+// saveEmail's one addition (typeof-guarded there), at the end of its success path: in menu mode, back to the box with W33. Outside menu mode
+// it does nothing. The page's copy takes the address at once (the listener brings the same value).
+function _kpMenuSaved(user,val){
+  if(!_kpMenu) return;
+  try{ emailsData=Object.assign({},emailsData,{[user]:val}); }catch(_){}
+  _kpMenuBack('KP e-mail on: '+val); // W33
+}
 // [fix round, review lane 1 L3] Signing out with the box open after a change: the visit's confirmation e-mail is sent FIRST, while the page
 // still has its sign-in (the queue entry, the E-mail Log), and then the sign-out goes on - at most AL_SIGNOUT_MS later. A second tap on Sign
 // out meanwhile signs out at once. true = the caller waits (`go` is called later); false = sign out now. (An outside end of the session - a
@@ -7055,9 +7184,10 @@ function _alCloseAll(){
   try{ if(!document.getElementById('alWin').hidden) _alWinClose(false); }catch(_){}
   try{ document.getElementById('alertsModal').classList.remove('show'); }catch(_){}
   _alBox.open=false; _alBox.visit=null; _alPend=[];
+  try{ if(typeof _kpMenuEnd==='function') _kpMenuEnd(); }catch(_){} try{ if(typeof _alKpReset==='function') _alKpReset(); }catch(_){} /* [399 · §311] */ // [399 · §305] KP §4.6: the sign-in box opened by Turn on closes too, and menu mode clears
 }
 // Escape closes the topmost: the window (back to the box), else the box (as Done). [fix round, review lane 3 L5]
-try{ document.addEventListener('keydown',ev=>{ try{ if(ev.key!=='Escape') return; if(!document.getElementById('alWin').hidden) _alWinClose(true); else if(_alBox.open&&document.getElementById('alertsModal').classList.contains('show')) _alDone(); }catch(_){} }); }catch(_){}
+try{ document.addEventListener('keydown',ev=>{ try{ if(ev.key!=='Escape') return; const _cm=document.getElementById('confirmModal'); if(_cm&&_cm.classList.contains('show')) return; if(!document.getElementById('alWin').hidden) _alWinClose(true); else if(_alBox.open&&document.getElementById('alertsModal').classList.contains('show')) _alDone(); }catch(_){} }); }catch(_){} // [399 · §309] L1: not while the pop-up shows
 
 // ── [220 · §288 · plan §10f, his design 18 Oct 2026 5:52 PM] THE 60-SECOND HOLD ON A CANCEL'S ALERTS ─────────────────────────────────────────
 // Someone who removes a bid (✕ Remove) and bids on the same week a moment later used to send colleagues two e-mails that undo each other.
@@ -7434,7 +7564,7 @@ function _subscribeSensitiveOnce(){
   if(!(auth.currentUser&&!auth.currentUser.isAnonymous)) return;
   _sensitiveSubbed=true;
   _sensitiveUnsubs.push(onSnapshot(loginEmailsRef, snap=>{ loginEmailsData=snap.exists()?snap.data():{}; }));
-  _sensitiveUnsubs.push(onSnapshot(emailsRef, snap=>{ emailsData=snap.exists()?snap.data():{}; _emailsReady=true; _emLoadedOk=true; _kpModalSync(); if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); })); // [build 139 · KPFIX] flag + late-arrival modal sync
+  _sensitiveUnsubs.push(onSnapshot(emailsRef, snap=>{ emailsData=snap.exists()?snap.data():{}; _emailsReady=true; _emLoadedOk=true; _kpModalSync(); if(typeof _updateSignInBtnState==='function') _updateSignInBtnState(); if(typeof _alKpLive==='function') _alKpLive(); /* [399 · §305] KP §2: the KP e-mail row repaints while the E-mail alerts box is open */ })); // [build 139 · KPFIX] flag + late-arrival modal sync
   if(typeof alertPrefsRef!=='undefined') _sensitiveUnsubs.push(onSnapshot(alertPrefsRef, snap=>{ alertPrefsData=snap.exists()?(snap.data()||{}):{}; _alLoaded=true; if(typeof _alOnPrefs==='function') _alOnPrefs(); })); // [220 · §288 · plan §3e] the alert choices, beside the address books: ONE listener, no read per e-mail (typeof = sandbox convention)
   // [AUDIT 2026-07-25 #6] mailQueue moved here from the top level — it is registered-user
   // -only in firestore.rules now, so it must not be subscribed during anonymous bootstrap.
@@ -8044,6 +8174,7 @@ function completeSignIn(){
       const _declined = _kp==="__skip__";
       const _hasKp = _kp && !_declined && String(_kp).includes("@");
       if(_hasKp || _declined) return;                                // already answered — never re-prompt
+      { const _ei=document.getElementById("emailInput"); if(_ei) _ei.value=""; } // [399 · §309] M1: an empty field for this person
       document.getElementById("emailModal")?.classList.add("show");
       document.getElementById("emailInput")?.focus();
     }, 300);
@@ -8058,6 +8189,7 @@ function _kpModalSync(){
   try{
     const m=document.getElementById("emailModal");
     if(!m||!m.classList.contains("show")) return;
+    if(typeof _kpMenu!=='undefined'&&_kpMenu) return; // [399 · §305] KP §4.5: menu mode (Turn on under E-mail alerts) is not the sign-in question
     const v=emailsData[selectedSignInName];
     if(v==="__skip__"||(v&&String(v).includes("@"))) m.classList.remove("show");
   }catch(_){}
@@ -8081,26 +8213,26 @@ function _emBold(s){
 // live rules, including whatever the admin has set for the stages and the overnight window.
 function timerRulesEmailText(){
   if(typeof timerData!=='undefined'&&timerData&&timerData.enabled!==true&&biddingOpen()){
-    return 'The countdown is OFF: bidding stays open until the admin closes the phase.'; // [228 / 392 · §297] item 204 (OFF in capitals: the page's bold)
+    return 'The timer is OFF: bidding stays open until the admin closes the phase.'; // [228 / 392 · §297] item 204 (OFF in capitals: the page's bold) · [399 · §306] L5 "timer"
   }
   const r=getTimerRules(), st=r.stages;
   const lines=st.map((s,i)=> i===0 ? `At the start of the round: resets to ${s.hours} hours` : `After ${s.days} days: resets to ${s.hours} hours`);
   let quiet='';
-  if(r.quietEnabled){ quiet=`\n\nOnce the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the countdown would run out between ${fmtHour12(r.quietStart)} and ${fmtHour12(r.quietEnd)} Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.`; }
+  if(r.quietEnabled){ quiet=`\n\nOnce the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the timer would run out between ${fmtHour12(r.quietStart)} and ${fmtHour12(r.quietEnd)} Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.`; } // [399 · §306] L5 "timer"
   let owTxt='';
   if(r.openingWindow){ owTxt=`\n\nEach phase or round opens with a ${r.openingWindow.days}-day window: bids don't reset the timer until ${(st[0]||{}).hours||48} hours remain.`; } // [228 / 392 · §297] item 205, as on the page
-  const endLine='Each phase ends when the countdown timer gets to 0. ';
-  const noReset='\n\nA bid resets the countdown only when less than the reset time remains.'; // [181/344 · §225] · [228 / 392 · §297] item 208
+  const endLine='Each phase ends when the timer gets to 0. '; // [399 · §306] L5 "timer"
+  const noReset='\n\nA bid resets the timer only when less than the reset time remains.'; // [181/344 · §225] · [228 / 392 · §297] item 208 · [399 · §306] L5 "timer"
   // [157 · RA-M2] The reset sentence follows the admin-selected mode, exactly like the
   // on-site explainer (build 274 V3) whose wording this e-mail promises to match.
   // Mode 1 keeps the classic wording byte-for-byte.
   const _m=_timerResetMode();
   const resetSentence=_m===2 // [221 · §292] W1; mode 3's sentence gone
-    ?'The countdown resets only when a bid change alters someone else\'s projected outcome, weakens a competition week\'s minimum new bid, or opens a week to someone with a “notify if a week opens up” alert' // [228 / 392 · §297] item 207 · [229 / 393 · §297] the alert's name
-    :'Every time anyone places or changes a bid, the countdown resets';
+    ?'The timer resets only when a bid change alters someone else\'s projected outcome, weakens a competition week\'s minimum new bid, or opens a week to someone with a “notify if a week opens up” alert' // [228 / 392 · §297] item 207 · [229 / 393 · §297] the alert's name · [399 · §306] L5 "timer"
+    :'Every time anyone places or changes a bid, the timer resets'; // [399 · §306] L5 "timer"
   if(st.length<=1){ return endLine+(_m===1
-    ?`Every time anyone places or changes a bid, the countdown resets to ${(st[0]||{}).hours||48} hours.${noReset}${quiet}${owTxt}`
-    :`${resetSentence}. Each qualifying reset returns the countdown to ${(st[0]||{}).hours||48} hours.${noReset}${quiet}${owTxt}`); }
+    ?`Every time anyone places or changes a bid, the timer resets to ${(st[0]||{}).hours||48} hours.${noReset}${quiet}${owTxt}` // [399 · §306] L5 "timer"
+    :`${resetSentence}. Each qualifying reset returns the timer to ${(st[0]||{}).hours||48} hours.${noReset}${quiet}${owTxt}`); } // [399 · §306] L5 "timer"
   return endLine+`${resetSentence}. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${noReset}${quiet}${owTxt}`;
 }
 function buildWelcomeEmailBody(user){ // [227 · §296] greets by the full name (displayName, initials when none is on file) · [229 · §297] item 8: by the first name (greetName)
@@ -8160,7 +8292,7 @@ ${bullets([
   `Under Review (R): Over the FTE cap, alone or together with other bids; outcome uncertain`,
   `Losing (L): Projected not to be approved`,
   `E-mail alerts tell you when someone else's bid changes your projection on a week you bid on, and when a bid you withdrew would now win. Turn either off under E-mail alerts.`, // [220 · §288] the two alert rules, in the same place as on the page (plan §11b line 1, §11k item 4)
-  `Week out of reach? Use “Notify if a week opens up” under E-mail alerts with the bid you'd place. If that bid could later win or be under review, you'll be e-mailed and the countdown restarts so you have time to bid. Lasts until the phase ends.`, // [221 / 385 · §292] the get-in rule line, as ruled (10:26 AM) · [229 / 393 · §297] item 212
+  `Week out of reach? Use “Notify if a week opens up” under E-mail alerts with the bid you'd place. If that bid could later win or be under review, you'll be e-mailed and the timer restarts so you have time to bid. Lasts until the phase ends.`, // [221 / 385 · §292] the get-in rule line, as ruled (10:26 AM) · [229 / 393 · §297] item 212 · [399 · §306] L5 "timer"
   `Projections are not final — they can change as others bid or staffing needs change.`
 ])}
 
@@ -8251,6 +8383,7 @@ window.saveEmail=async function(){
   // re-entry or edits of the same address will not trigger another welcome.
   // [220 · §288 · plan §10e] …and only once Phase 1 has begun: before that, ▶ Begin Phase 1 welcomes this address with the rest.
   ((typeof _welcomeAfterBegin==='function')?_welcomeAfterBegin:welcomeOnce)(user,val);
+  if(typeof _kpMenuSaved==='function') _kpMenuSaved(user,val); // [399 · §305] KP §4.3: in menu mode, back to the E-mail alerts box (W33); outside it, nothing
 };
 window.remindLater=function(){ document.getElementById("emailModal").classList.remove("show"); };
 // Decline: record "__skip__" so the user is NEVER prompted again this cycle. Alerts
