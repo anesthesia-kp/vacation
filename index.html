@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 234;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 235;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -6650,6 +6650,7 @@ function _giOpenings(prevSnap,newSnap,actor,evenIfOff){
 const AL_SW1='Changes to my projections';
 const AL_SW2='My withdrawn bid would win again';
 const AL_GI='Notify if a week opens up'; // [229 · §297] the alert's name (read only by _alConfBody)
+const AL_KPL='KP e-mail'; // [235 · §315] S2: the KP line's name in the confirmation e-mail (W5 / W6, read only by _alConfKpLine)
 const AL_ALWAYS='You will always receive: Phase results, messages from admin, and occasional reminders.'; // [221 · §292] as ruled (9:50 AM) · [227 · §296] · [228 · §297] the confirmation e-mail only (the box's footer line is gone)
 const AL_EMPTY="None set."; // [228 · §297] item 168
 const AL_SAVED='Saved.';
@@ -6661,7 +6662,18 @@ function _alConfRow(x){ return formatShort(x.wk)+' (a bid of '+blFmtBid(x.bid)+'
 function _alConfBody(user){
   const w=_alWatches(user);
   return 'Hi '+((typeof greetName==='function')?greetName(user):user)+',\n\nYour e-mail alert choices have been saved.\n• '+AL_SW1+': '+(_alOn(user,'proj')?'ON':'OFF')+'\n• '+AL_SW2+': '+(_alOn(user,'chance')?'ON':'OFF')
-    +'\n• '+AL_GI+': '+(w.length?w.map(_alConfRow).join(' · '):'no custom alerts set')+'\n\n'+AL_ALWAYS+'\nChange these any time under E-mail alerts at the top of the site.'; // [227 · §296] the full name (displayName, initials when none is on file); the get-in line when none is set · [229 · §297] item 8: the first name (greetName)
+    +'\n• '+AL_GI+': '+(w.length?w.map(_alConfRow).join(' · '):'no custom alerts set')+_alConfKpLine(user)+'\n\n'+AL_ALWAYS+'\nChange these any time under E-mail alerts at the top of the site.'; // [227 · §296] the full name (displayName, initials when none is on file); the get-in line when none is set · [229 · §297] item 8: the first name (greetName)
+}
+// [235 · §315] S2: the KP line - "\n• KP e-mail: ON (<address>)" (W5) or "\n• KP e-mail: OFF" (W6), from the address book at sending - only while the
+// KP row shows (the admin's "Ask users for their KP e-mail at login" not off, Q3: in every confirmation) and only once the address book has
+// genuinely loaded (_emLoadedOk): before that the page cannot tell ON from OFF, and the e-mail never states a guess. '' otherwise.
+function _alConfKpLine(user){
+  try{
+    if(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.kpEmailPromptEnabled===false) return '';
+    if(typeof _emLoadedOk==='undefined'||_emLoadedOk!==true) return '';
+    const a=_alKpAddr(user);
+    return '\n• '+AL_KPL+': '+(a?'ON ('+a+')':'OFF');
+  }catch(_){ return ''; }
 }
 // Sent at once, to the person only, at both their addresses, by the steps of the alert send in sendEmailNotifications: the entry is written
 // into the mail queue first and CLAIMED by this page in the same write (no other page sends it while this one does), then sent to each
@@ -6765,13 +6777,16 @@ function _alChoiceKey(e,st){
 
 // ── The 🔔 E-mail alerts box (plan §3h with §10a, §11j item 4, §11k item 4; the approved test page v5) ───────────────────────────────────
 // visit: one opening of the box — whose, the person's STORED entry when it began, and the late answers of saves not confirmed yet. Done sends
-// ONE confirmation e-mail when the stored choices differ from that entry (plan §10d) — the only e-mail the box and its window send ([220 ·
-// §291, 22 Oct 2026] his ruling: "all e-mails should send when done is clicked and not before").
+// ONE confirmation e-mail when the stored choices differ from that entry (plan §10d) — with the unsubscribe note (_alVisitSend), the only
+// e-mails the box and its window send ([220 · §291, 22 Oct 2026] his ruling: "all e-mails should send when done is clicked and not before"). [235 · §315 fix round] L5
+// [235 · §315] S1: the visit also remembers kp - the person's KP address when the box opened ('' = off), or null while the address book has not
+// loaded yet (set when it arrives, _alKpLive). A KP address that differs at Done makes the visit owe its confirmation (_alVisitDue), and
+// the address it began with, when it is no longer the KP address, gets the unsubscribe note (_alKpNoteTo).
 let _alBox={open:false,busy:false,visit:null};
 const AL_LATE='Not confirmed yet — it will save when your connection returns.';
 function openAlertsBox(){
   const user=getCurrentUser(); const m=document.getElementById('alertsModal'); if(!user||!m) return;
-  _alBox.open=true; _alBox.visit={user:user,base:_alLoaded?_alEntry(user):null,pend:[]};
+  _alBox.open=true; _alBox.visit={user:user,base:_alLoaded?_alEntry(user):null,pend:[],kp:(typeof _emLoadedOk!=='undefined'&&_emLoadedOk===true)?_alKpAddr(user):null}; // [235 · §315] S1: kp
   _alBoxPaint(); m.classList.add('show');
 }
 window.openAlertsBox=openAlertsBox;
@@ -6819,25 +6834,99 @@ function _alListClick(ev){
 window._alListClick=_alListClick;
 // Does the visit `v` owe a confirmation e-mail? Its person's STORED choices now differ from the entry it began with (both read at the stamp of
 // now). [fix round, review lane 1 L2]
+// [235 · §315] S1: OR the KP address differs from the one the visit began with. The confirmation lists the alert choices, so it is owed only
+// once they have arrived (_alLoaded); a KP change counts even when the visit began before they did (base null).
 function _alVisitDue(v){
-  try{ if(!v||!v.user||v.base===null||!_alLoaded) return false; const st=_alStamp(); return _alChoiceKey(_alEntry(v.user),st)!==_alChoiceKey(v.base,st); }catch(_){ return false; }
+  try{
+    if(!v||!v.user||!_alLoaded) return false;
+    if(v.base!==null){ const st=_alStamp(); if(_alChoiceKey(_alEntry(v.user),st)!==_alChoiceKey(v.base,st)) return true; }
+    return _alKpChanged(v); // [235 · §315]
+  }catch(_){ return false; }
 }
+// [235 · §315] Has the person's KP address changed since the visit began? Only a visit that knows its starting address (kp a string) and a
+// loaded address book can tell.
+// [235 · §315 fix round] H1: only a change the person made in THIS visit counts (kpMine, set when their own write lands, _alKpJoin / _kpMenuSaved): an
+// admin's Save, the Daily Schedule admin or another tab of theirs changing the address meanwhile sends neither a note nor a confirmation.
+// H2: the addresses are compared trimmed and lower-cased (_alKpSame), so the same mailbox re-entered in another case is no change.
+function _alKpChanged(v){
+  try{ return !!v&&v.kpMine===true&&typeof v.kp==='string'&&typeof _emLoadedOk!=='undefined'&&_emLoadedOk===true&&!_alKpSame(_alKpAddr(v.user),v.kp); }catch(_){ return false; }
+}
+// [235 · §315 fix round] H2: the same KP address, case and spaces aside.
+function _alKpSame(a,b){ const n=s=>String(s||'').trim().toLowerCase(); return n(a)===n(b); }
+// [235 · §315 fix round] H1 / L3: the person's own KP write `p` joins the open visit (only a visit of the same person): Done and Sign out wait for its
+// real answer, as for _alWrite's late answers, and only a write that LANDED marks the visit's KP change as its own (kpMine).
+function _alKpJoin(user,p){
+  try{ const v=_alBox.visit; if(!v||v.user!==user) return; const lp=Promise.resolve(p).then(()=>{ v.kpMine=true; },()=>{}); v.pend.push(lp); lp.then(()=>{ v.pend=v.pend.filter(x=>x!==lp); }); }catch(_){}
+}
+// [235 · §315] S3 / Q4: the address the unsubscribe note goes to - the KP address the visit began with, when it is no longer the KP address
+// (turned off, or replaced by another); '' when there is none (nothing changed, off and back on with the same address, or off -> on).
+function _alKpNoteTo(v){ return (_alKpChanged(v)&&v.kp)?v.kp:''; }
 // Done: the box closes; ONE confirmation e-mail when the stored choices now differ from when the visit began (plan §10d, §10i Q1: one per
-// visit). A save not confirmed yet is waited for: the e-mail follows the stored truth once it has landed (or been refused).
+// visit), and the unsubscribe note when the visit owes one (_alVisitSend). A save not confirmed yet is waited for: the e-mails follow the
+// stored truth once it has landed (or been refused). [235 · §315 fix round] L5
 function _alDone(){
   if(_alBox.busy) return; // [220 · §291 · review lane B, 1] a save is still being written: Done waits for it (a second tap after it), so the visit's one e-mail cannot miss it
+  if(_alKp.busy===true) return; // [235 · §315] so does a KP e-mail write (Turn off): the confirmation's KP line and the note follow the stored address
   try{ const m=document.getElementById('alertsModal'); if(m) m.classList.remove('show'); }catch(_){}
   const v=_alBox.visit; _alBox.open=false; _alBox.visit=null;
   try{ const b=document.getElementById('menuBtn'); if(b) b.focus({preventScroll:true}); }catch(_){} // [fix round, review lane 3 L5] back to the button that opened it · [227 · §296] the ☰ button
-  if(v&&v.pend.length){ _alToast(AL_LATE); Promise.all(v.pend).then(()=>{ if(_alVisitDue(v)) _alConfSend(v.user).catch(()=>{}); }); return; }
-  if(_alVisitDue(v)){ _alConfSend(v.user).catch(()=>{}); _alToast('Saved.'); } // [228 · §297] item 173
+  if(v&&v.pend.length){ _alToast(AL_LATE); Promise.all(v.pend).then(()=>_alVisitSend(v)).catch(()=>{}); return; } // [235 · §315] the confirmation, then the note
+  if(_alVisitDue(v)) _alToast('Saved.'); // [228 · §297] item 173
+  _alVisitSend(v).catch(()=>{}); // [235 · §315] the confirmation when owed, then the unsubscribe note when owed
   // [228 · §297] item 174: nothing changed - no toast
 }
 window._alDone=_alDone;
+// [235 · §315] S3 / Q4: THE VISIT'S E-MAILS, at Done and at Sign out with the box open (never at a switch tap, §291): the confirmation when
+// the visit owes one, and AFTER it the unsubscribe note to the KP address the visit began with, when that address is no longer the KP
+// address (off, or replaced). Both are judged on the stored values at this moment. Never throws; resolves when both are done.
+async function _alVisitSend(v){
+  try{
+    if(!v||!v.user) return;
+    const to=_alKpNoteTo(v), off=!_alKpAddr(v.user);
+    if(_alVisitDue(v)){ try{ await _alConfSend(v.user); }catch(_){} }
+    if(to&&!_alKpSame(_alKpAddr(v.user),to)) await _alKpNoteSend(v.user,to,off); // [235 · §315 fix round] L1: still not the KP address just before the note goes
+  }catch(_){}
+}
+// [235 · §315] W7 and its twin for a replaced address: the toast when the note could not be sent.
+const AL_KP_NOTE_FAIL={off:a=>'KP e-mail off, but the note to '+a+' could not be sent.',replaced:a=>'KP e-mail changed, but the note to '+a+' could not be sent.'};
+// [235 · §315] The unsubscribe note to `addr` (the address that was on): the admin's note word for word (_unsubscribeNoteBody, naming the
+// person's Google address on record), sent STRAIGHT AWAY as the admin's sendUnsubscribeNote sends it - not through the outbox, whose relay
+// sends only to the person's current addresses and `addr` is no longer one. Logged in the E-mail Log as "unsubscribe" either way. If the mail
+// service fails the note is not retried; the toast says so. `off`: true when the KP e-mail is off now, false when it was replaced. true = sent.
+async function _alKpNoteSend(user,addr,off){
+  let google=''; try{ google=String(loginEmailsData[user]||(auth.currentUser&&!auth.currentUser.isAnonymous&&auth.currentUser.email)||'').trim(); }catch(_){ google=''; }
+  let ok=false;
+  try{
+    const body=_unsubscribeNoteBody(user,addr,google);
+    if(typeof emailjs==='undefined') _mailLogNote(user,addr,'unsubscribe',false,'mailer not loaded');
+    else{
+      try{ await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:addr,changes:body}); ok=true; trackEmailSent(); _mailLogNote(user,addr,'unsubscribe',true); } // [235 · §315 fix round] logged on the send line (the page's convention)
+      catch(err){ if(!ok) _mailLogNote(user,addr,'unsubscribe',false,err); }
+    }
+  }catch(_){}
+  if(!ok&&getCurrentUser()===user) _alToast((off?AL_KP_NOTE_FAIL.off:AL_KP_NOTE_FAIL.replaced)(addr)); // [235 · §315 fix round] L2: not on the sign-in screen, nor to the next person
+  return ok;
+}
+// [235 · §315] TWIN of the admin page's _unsubscribeNoteBody, byte for byte (the note's one text; pinned by test-235-kp-mail.mjs).
+function _unsubscribeNoteBody(user,oldKp,google){ // [391 · §296] greets by the full name (usernamesData, initials when none is on file) · [393 · §297] item 8: by the first name (greetName)
+  const g=String(google||'').trim();
+  return `Hi ${((typeof greetName==='function')?greetName(user):user)},
+
+This address (${oldKp}) has been unsubscribed from Vacation Auction e-mail alerts.
+
+`+(g.includes('@')
+  ? `You will continue to receive all auction notifications at your Google address on record: ${g}.`
+  : `Please contact your admin to confirm where your auction notifications should go.`)
++`
+
+If you would like KP alerts again later, turn KP e-mail on under ☰ → E-mail alerts on the auction site.`; // [399 · §305] W37
+}
 // [399 · §305] THE KP E-MAIL ROW (PLAN-AMENDMENT-KP §2-§4, path A). The person's own key in vacations/emails holds one of the two values the
 // sign-in question writes: an address (on: it gets a copy of every e-mail) or "__skip__" (off); nothing stored reads as off too. The row shows
 // only while adminSettings.kpEmailPromptEnabled is not false, and shows "Loading…" with no button until the address book has genuinely loaded
-// (_emLoadedOk), so nothing is ever written on a guess. Turn off: one pop-up, then the person's own key = "__skip__" (merge); no e-mail (KP Q1).
+// (_emLoadedOk), so nothing is ever written on a guess. Turn off: one pop-up, then the person's own key = "__skip__" (merge); no e-mail at the tap (KP Q1).
+// [235 · §315] At Done (or Sign out with the box open) the visit's confirmation lists the KP e-mail, and an address that was on when the box
+// opened and is not the KP address then gets the unsubscribe note (_alVisitSend).
 // Turn on: the sign-in box (#emailModal) in menu mode (_kpMenu), whose Save is saveEmail with every one of its checks.
 const AL_KP_LOADING='Loading…'; // W28 - the row's only line, while the address book loads [399 · §312] (W24 / W25 retired: loaded, the row is the name and the switch)
 let _alKp={busy:false,flow:null}; // busy: a Turn off write under way · flow: 'off' / 'on' while a flow is open (the pop-up, the KP box, the write) [399 · §311]
@@ -6866,7 +6955,7 @@ function _alKpPaint(){
 }
 window._alKpPaint=_alKpPaint;
 // The emails and adminSettings listeners: the row repaints in place, only while the box is open.
-function _alKpLive(){ try{ if(_alBox.open) _alKpPaint(); }catch(_){} }
+function _alKpLive(){ try{ if(_alBox.open){ const v=_alBox.visit; if(v&&v.kp===null&&typeof _emLoadedOk!=='undefined'&&_emLoadedOk===true) v.kp=_alKpAddr(v.user); /* [235 · §315] S1 */ _alKpPaint(); } }catch(_){} }
 // [399 · §311] The switch: a tap flips it and starts ONE flow — off when it showed on, on when it showed off. A tap while a flow is open, while
 // a write is under way or before the address book has loaded does nothing.
 function _alKpClick(){
@@ -6890,7 +6979,7 @@ async function _alKpOff(){
   if(!yes||getCurrentUser()!==user){ _alKpFlowEnd(); if(yes===false) _alKpRefocus(); return; } // Cancel (back ON), or signed out meanwhile: nothing is written
   _alKp.busy=true; _alKpPaint(); // no double tap while the write is under way
   let ok=false, late=false;
-  try{ await _awaitWrite(setDoc(emailsRef,{[user]:'__skip__'},{merge:true})); ok=true; }catch(e){ ok=false; late=!!(e&&e.code==='write-deadline'); } // the person's own key only · [399 · §309] L2: the page's write deadline
+  try{ const _w=setDoc(emailsRef,{[user]:'__skip__'},{merge:true}); _alKpJoin(user,_w); /* [235 · §315 fix round] H1 / L3 */ await _awaitWrite(_w); ok=true; }catch(e){ ok=false; late=!!(e&&e.code==='write-deadline'); } // the person's own key only · [399 · §309] L2: the page's write deadline
   _alKp.busy=false;
   if(getCurrentUser()!==user){ _alKpFlowEnd(); return; } // signed out meanwhile: nothing more is shown
   if(ok){ emailsData=Object.assign({},emailsData,{[user]:'__skip__'}); _alToast('KP e-mail off.'); } // W30 - the page's copy at once (the listener brings the same value)
@@ -6950,6 +7039,7 @@ window._kpMenuCancel=_kpMenuCancel;
 // it does nothing. The page's copy takes the address at once (the listener brings the same value).
 function _kpMenuSaved(user,val){
   if(!_kpMenu) return;
+  try{ const v=_alBox.visit; if(v&&v.user===user) v.kpMine=true; }catch(_){} // [235 · §315 fix round] H1: the person's own Turn on, landed
   try{ emailsData=Object.assign({},emailsData,{[user]:val}); }catch(_){}
   _kpMenuBack('KP e-mail on: '+val); // W33
 }
@@ -6963,7 +7053,7 @@ function _alBeforeSignOut(go){
   try{
     if(_alSigningOut){ _alSigningOut=false; return false; }
     const v=_alBox.visit; if(!_alBox.open||!v) return false;
-    const due=_alVisitDue(v);
+    const due=_alVisitDue(v)||!!_alKpNoteTo(v); // [235 · §315] the unsubscribe note is owed too
     if(!due&&!v.pend.length) return false;
     try{ if(!document.getElementById('alWin').hidden) _alWinClose(false); }catch(_){}
     try{ document.getElementById('alertsModal').classList.remove('show'); }catch(_){}
@@ -6971,7 +7061,7 @@ function _alBeforeSignOut(go){
     _alSigningOut=true; _alToast('Saved.'); // [228 · §297] item 173
     const fin=()=>{ if(!_alSigningOut) return; _alSigningOut=false; try{ go(); }catch(_){} };
     const t=setTimeout(fin,AL_SIGNOUT_MS);
-    Promise.all(v.pend).then(()=>_alVisitDue(v)?_alConfSend(v.user):false).catch(()=>false).then(()=>{ clearTimeout(t); fin(); });
+    Promise.all(v.pend).then(()=>_alVisitSend(v)).catch(()=>false).then(()=>{ clearTimeout(t); fin(); }); // [235 · §315] the confirmation, then the note, then the sign-out
     return true;
   }catch(_){ _alSigningOut=false; return false; }
 }

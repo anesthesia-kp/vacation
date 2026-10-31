@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 399;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 400;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -172,6 +172,10 @@ thead th{background:var(--s2);color:var(--t2);text-align:left;padding:8px 12px;f
 tbody td{padding:9px 12px;border-bottom:1px solid var(--b1);color:var(--t1);vertical-align:middle}
 tbody tr:last-child td{border:none}
 tbody tr:hover td{background:rgba(255,255,255,.02)}
+/* [400 · §315] A4: the All Users table only — shorter rows, smaller boxes (its box widths are fitted by _fitUserCols); u-fte-txt is the FTE drawn as text from Phase 1 on */
+#usersTable tbody td{padding:4px 8px}
+#usersTable .inp{padding:3px 6px}
+#usersTable .u-fte-txt{display:inline-block;min-width:56px;font-variant-numeric:tabular-nums}
 
 /* Inline select/input */
 .sel,.inp{background:var(--s2);border:1px solid var(--b2);color:var(--t1);padding:4px 8px;font-family:'Hanken Grotesk',sans-serif;font-size:12px}
@@ -698,6 +702,20 @@ thead th{color:var(--t2)}
     <!-- USERS -->
     <div class="panel" id="panel-users">
       <div class="page-head"><div class="page-title">Manage Users</div><div class="page-sub">Add or remove users. Changes apply to both scheduler and admin.</div></div>
+      <!-- [400 · §315] A1: the cards in his order — Admin Access, Unmatched sign-ins, Add User, All Users -->
+      <div class="card">
+        <div class="card-title">Admin Access (Google sign-in)</div>
+        <div class="page-sub" style="margin-bottom:10px">Google accounts that can use this admin page.</div>
+        <div id="adminAccessList" style="margin-bottom:12px"></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="email" id="newAdminEmail" class="inp" autocomplete="off" style="width:250px" placeholder="their-account@gmail.com">
+          <button class="btn btn-primary" onclick="addAdminEmail()">Grant Admin Access</button>
+        </div>
+      </div>
+      <div class="card"><!-- [400 · §315] A1: Unmatched sign-ins, a card of its own — "None" or the attempted addresses (renderSignInMisses) -->
+        <div class="card-title">Unmatched sign-ins</div>
+        <div id="signInMissBox" style="font-size:12.5px;line-height:1.6"></div>
+      </div>
       <div class="card">
         <div class="card-title">Add User</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -715,30 +733,14 @@ thead th{color:var(--t2)}
         <div class="page-sub" style="margin-top:6px">Every field is required except the KP e-mail. FTE isn't shared with the Daily Schedule.</div>
       </div>
       <div class="card">
-        <div class="card-title">Admin Access (Google sign-in)</div>
-        <div class="page-sub" style="margin-bottom:10px">Google accounts that can use this admin page.</div>
-        <div id="adminAccessList" style="margin-bottom:12px"></div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <input type="email" id="newAdminEmail" class="inp" autocomplete="off" style="width:250px" placeholder="their-account@gmail.com">
-          <button class="btn btn-primary" onclick="addAdminEmail()">Grant Admin Access</button>
-        </div>
-      </div>
-      <div class="card">
         <div class="card-title">All Users (<span id="userCount">0</span>)<span id="fteTotal" style="font-weight:400;color:var(--t2)"></span></div>
-        <!-- [399 · §313] no line under the heading; the FTE editing row is its title with the toggle right beside it (this row only); no lock note -->
-        <div class="trow" style="margin-bottom:10px;justify-content:flex-start;gap:12px">
-          <div>
-            <div class="trow-label">FTE editing</div>
-          </div>
-          <div class="tog" id="fteEditToggle" onclick="toggleFteEdit()"></div>
-        </div>
+        <!-- [400 · §315] no line under the heading and no editing switch: FTE is fixed once Phase 1 begins (A2, A3) -->
         <!-- [FTE 25 Jul 2026] Shown only while some users still have no SAVED FTE. The old
              UI printed a fallback number in every box, so "never entered" looked identical
              to "entered" — this names the gap and offers one deliberate write to close it. -->
         <div id="fteMissingBox" style="display:none;background:rgba(111,106,96,.10);border:1px solid rgba(111,106,96,.4);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:12.5px"></div>
-        <div id="signInMissBox" style="display:none;background:rgba(92,31,21,.08);border:1px solid rgba(92,31,21,.3);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:12.5px"></div>
         <div class="tbl-box" style="overflow-x:auto;max-height:560px;overflow-y:auto">
-          <table><thead><tr><th>Initials</th><th>Full Name</th><th>FTE</th><th>Login e-mail (Google)</th><th>KP e-mail</th><th></th></tr></thead><tbody id="usersBody"></tbody></table>
+          <table id="usersTable"><thead><tr><th>Initials</th><th>Full Name</th><th>FTE</th><th>Login e-mail (Google)</th><th>KP e-mail</th><th></th></tr></thead><tbody id="usersBody"></tbody></table><!-- [400 · §315] id: the A4 CSS -->
         </div>
         <div style="display:flex;justify-content:flex-end;margin-top:10px"><!-- [399 · §313] Delete All Users, below the table -->
           <button class="btn btn-danger" style="background:rgba(92,31,21,.22);border-color:rgba(92,31,21,.6)" onclick="deleteAllUsers()">Delete All Users</button>
@@ -3207,7 +3209,7 @@ function bfRulesBullets(){
 // Editing is REFUSED while phase1Started() (rehearsal included) and unlocks only after
 // Reset Auction. Saving writes adminSettings.auctionConfig (admin-only by rules) and the
 // page reloads via the normal _acCheckRemote snapshot path — one code path for local and
-// remote changes alike. Reset Auction never touches this (merge-write of fteEditEnabled).
+// remote changes alike. Reset Auction never touches this (its adminSettings write is a merge). [400 · §315]
 function _acFmtWkShort(wk){ const d=new Date(wk+'T00:00:00');
   const mo=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
   return mo+' '+d.getDate(); }
@@ -6478,8 +6480,8 @@ window.clearEverything=function(){
               // New auction → drop the per-phase archive so the Fair Play report
               // starts empty (it covers everything since the last auction reset).
               setDoc(changesArchiveRef,{}),
-              // FTE editing re-locks on every reset (accidental-change guard).
-              setDoc(adminRef,{fteEditEnabled:false,...((typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.setupReview!==undefined)?{setupReview:deleteField()}:{}),...((typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.setupUnlock!==undefined)?{setupUnlock:deleteField()}:{})},{merge:true}), // [383 · §287] Reset clears the review mark and any open unlock (only when there is one: otherwise the 382 write); the setup lock stays as it is
+              // [400 · §315] A2: no FTE switch to re-lock (Phase 1 fixes FTE; Reset ends the auction, so FTE can be changed again).
+              setDoc(adminRef,{...((typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.setupReview!==undefined)?{setupReview:deleteField()}:{}),...((typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.setupUnlock!==undefined)?{setupUnlock:deleteField()}:{})},{merge:true}), // [383 · §287] Reset clears the review mark and any open unlock (only when there is one: otherwise the 382 write); the setup lock stays as it is
               // New auction cycle → clear the welcome-e-mail log so each user can
               // receive their one welcome per account again next cycle.
               setDoc(doc(db,"vacations","welcomeLog"),{sent:{}}),
@@ -7483,7 +7485,7 @@ function renderNextStep(){
   // said "bidding cannot begin" when it had already begun. Pre-launch it is genuinely the next
   // step; once Phase 1 has started it becomes a banner ABOVE the real next step instead.
   const fteNote=(missingFte.length&&phase1Started())
-    ? `<div style="background:rgba(111,106,96,.10);border:1px solid rgba(111,106,96,.4);border-radius:10px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:var(--t1)"><strong>${missingFte.length}</strong> user${missingFte.length!==1?'s have':' has'} an FTE the engine can't score correctly (${missingFte.map(u=>esc(u)).join(', ')}) — ${usersTrulyMissingFte().length?'some are unset (scored with a fallback)':''}${usersTrulyMissingFte().length&&usersOffGridFte().length?'; ':''}${usersOffGridFte().length?'some are off the 0.1 grid (a real value that mis-rounds)':''}. Fix before the next phase begins — the FTE panel's set/snap tool handles both. <button class="btn btn-ghost" style="padding:2px 8px;font-size:11px;margin-left:6px" onclick="gotoUsersPanel()">Open Users</button></div>`
+    ? `<div style="background:rgba(111,106,96,.10);border:1px solid rgba(111,106,96,.4);border-radius:10px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:var(--t1)">${missingFte.map(u=>esc(u)).join(', ')} ${missingFte.length!==1?'have':'has'} no valid FTE. The next phase cannot begin until each has one. FTE is fixed once Phase 1 begins.</div>` // [400 · §315 11:10] item 3: no tool to point to
     : '';
   if(_slotsReady && missingCaps>0){
     // [build 242] Only claim weeks are uncapped once the slots doc has actually reported. On a cold
@@ -7861,12 +7863,17 @@ window.completePhase=function(){
 function blockedByMissingFte(){
   const miss=usersMissingFte();
   if(!miss.length) return false;
+  const _p1=(typeof phase1Started!=='function')||phase1Started(); // [400 · §315 11:10] item 3: from Phase 1 on no FTE is edited on this page — say so, point to no tool
   openConfirm({
     title:'FTE missing or invalid for '+miss.length+' user'+(miss.length!==1?'s':''),
-    body:`<div>Bidding can't begin until every user has an FTE between ${FTE_MIN} and 1.0.</div>
+    body:_p1
+      ?`<div>Every user needs an FTE between ${FTE_MIN} and 1.0.</div><!-- [400 · §315 verify V1] bidding has begun: the line says only what is true -->
+          <div style="margin-top:8px;color:var(--t2);font-size:12px;line-height:1.6">${miss.map(u=>esc(u)).join(', ')}</div>
+          <div class="cmodal-danger">The next phase cannot begin until each has one. FTE is fixed once Phase 1 begins.</div>`
+      :`<div>Bidding can't begin until every user has an FTE between ${FTE_MIN} and 1.0.</div>
           <div style="margin-top:8px;color:var(--t2);font-size:12px;line-height:1.6">${miss.map(u=>esc(u)).join(', ')}</div>
           <div class="cmodal-danger">Enter an FTE for each on the Users page, then begin the phase.</div>`,
-    okText:'Open Users', onConfirm:()=>{ if(typeof gotoUsersPanel==='function') gotoUsersPanel(); }
+    okText:_p1?'OK':'Open Users', onConfirm:()=>{ if(!_p1&&typeof gotoUsersPanel==='function') gotoUsersPanel(); }
   });
   return true;
 }
@@ -8018,9 +8025,7 @@ async function _commitBeginPhase(next){
   // every phase opens with the full default bidding time. [begin-phase timer fix]
   // Do NOT swallow a failure here: if the timer write fails, the user site can show
   // the auction as CLOSED (prior expired state) while the admin thinks it is open.
-  // Beginning Phase 1 always locks FTE editing — any mid-auction change must be a
-  // deliberate, confirmed re-unlock by the admin.
-  if(next===1) await setDoc(adminRef,{fteEditEnabled:false},{merge:true}).catch(()=>{});
+  // [400 · §315] A2/A3: beginning Phase 1 fixes every FTE by itself (phase1Started) — no setting is written for it.
   // [build 227 · LOST-WRITE FIX] The 30 Jul rehearsal proved a damaged tab can lose this write
   // SILENTLY: the arm's promise hung (never resolved, never rejected), no error was logged, and
   // the phase ran on a two-day-old expired timer — the rules refused every user bid while the
@@ -10120,7 +10125,7 @@ window.exportCapacityByWeek=function(format){
   const dateCell=function(r){ return '<td style="color:'+rowColor(r)+'">'+r.date+'</td>'; };
   const availCell=function(r){ return '<td style="text-align:center;color:'+rowColor(r)+'">'+r.avail+'</td>'; };
   const wkCell=function(r){ const open=_capacityWeekOpen(r); return '<td><strong style="color:'+(open?'#36694a':'#4a1911')+'" title="Available '+r.avail+' vs Smart Lock Control '+getSlc(r.wk)+' — '+(open?'stays open':'Smart Lock locks it')+'">W'+r.wn+'</strong></td>'; };
-  const body='<div class="wk"><div class="wk-head">Available capacity by week<span class="fte">'+CAPACITY_DEF_TEXT+'</span><span class="fte">Week label: <b style="color:#bed4c5">'+CAPACITY_LEGEND_GREEN+'</b> · <b style="color:#d6c7c4">'+CAPACITY_LEGEND_RED+'</b></span></div>'
+  const body='<div class="wk" style="break-inside:auto"><div class="wk-head">Available capacity by week<span class="fte">'+CAPACITY_DEF_TEXT+'</span><span class="fte">Week label: <b style="color:#bed4c5">'+CAPACITY_LEGEND_GREEN+'</b> · <b style="color:#d6c7c4">'+CAPACITY_LEGEND_RED+'</b></span></div>'
     +'<table><thead><tr><th>Week</th><th>Date</th><th>Type</th><th>Capacity</th><th>Taken (FTE)</th><th>Available</th><th>Approved winners</th></tr></thead><tbody>'
     +rows.map(function(r){
       return '<tr>'+wkCell(r)+dateCell(r)+'<td>'+(r.type||'')+'</td>'
@@ -12231,8 +12236,9 @@ window.adminAddSelection=function(){
 };
 
 // ── [330 · §189] KP e-mail off for a user — the unsubscribe note ───────────────────────────────────────────
-// [399 · §305] Sent by the Users page's row Save (adminSaveUserRow, below) when a KP e-mail that was on file is saved BLANK: the
-// admin's version of the user's own "No thanks". The entry becomes "__skip__" (tag "off" — never prompted again, no more KP-address
+// [399 · §305] Sent by the Users page's row Save (adminSaveUserRow, below) when a KP e-mail that was on file is saved BLANK — or, [400 · §315 fix round]
+// (Q4), REPLACED by a different address: then the entry holds the new address and the old one gets the same note. Saved blank is the
+// admin's version of the user's own "No thanks". The entry becomes "__skip__" (an empty KP box — never prompted again, no more KP-address
 // mail; the Google address still gets every alert), and the address that WAS on file receives one plain note saying so and naming the
 // Google address. Order matters: the opt-out is WRITTEN FIRST (the row's batch), the note sent after, so a mail failure can never
 // leave the address subscribed. Admin-initiated, like results mail: it does not consult the outbid-alert or welcome switches.
@@ -12250,16 +12256,17 @@ This address (${oldKp}) has been unsubscribed from Vacation Auction e-mail alert
 
 If you would like KP alerts again later, turn KP e-mail on under ☰ → E-mail alerts on the auction site.`; // [399 · §305] W37
 }
-async function sendUnsubscribeNote(user,addr,google){
+async function sendUnsubscribeNote(user,addr,google,replaced){ // [400 · §315 fix round] L2: replaced=true when the KP address was replaced, not turned off
   const body=_unsubscribeNoteBody(user,addr,google);
-  if(typeof emailjs==='undefined'){ _mailLogNote(user,addr,'unsubscribe',false,'mailer not loaded'); toast('KP e-mail is OFF for '+user+', but the note to '+addr+' could not be sent (mailer not loaded on this page).','warn'); return false; }
+  const head=replaced?'KP e-mail changed for '+user:'KP e-mail is OFF for '+user;
+  if(typeof emailjs==='undefined'){ _mailLogNote(user,addr,'unsubscribe',false,'mailer not loaded'); toast(head+', but the note to '+addr+' could not be sent (mailer not loaded on this page).','warn'); return false; }
   try{
     await emailjs.send("service_wpprivw","template_rss3fn3",{to_name:user,to_email:addr,changes:body});
     trackEmailSent(); _mailLogNote(user,addr,'unsubscribe',true);
     toast('Unsubscribe note sent to '+addr,'ok'); return true;
   }catch(err){
     _mailLogNote(user,addr,'unsubscribe',false,err);
-    toast('KP e-mail is OFF for '+user+', but the note to '+addr+' could not be sent ('+(err?.text||err?.message||err?.status||'send failed')+').','warn'); return false;
+    toast(head+', but the note to '+addr+' could not be sent ('+(err?.text||err?.message||err?.status||'send failed')+').','warn'); return false;
   }
 }
 // ── [399 · §305] THE USERS PAGE ROW SAVE (PLAN §2–§3, Q1 yes, Q2 yes) ──────────────────────────────────────────────────────
@@ -12268,7 +12275,9 @@ async function sendUnsubscribeNote(user,addr,google){
 // land together or not at all. E-mails go out only AFTER the batch has landed.
 // THE WRITE RULE: a box is written only when (a) it was changed — its text differs from data-v, the text the row was drawn with — AND
 // (b) its cleaned value differs from what is stored right now. So the 1.0 FTE fallback is never saved, a change another tab made to a
-// box left untouched here stands, and a second Save of the same row writes nothing. FTE is not read at all while FTE editing is off.
+// box left untouched here stands, and a second Save of the same row writes nothing. FTE is not read at all once Phase 1 has begun
+// (phase1Started — [400 · §315] A3: FTE is fixed for the auction from then on), and the write re-checks it.
+// [400 · §315] Q4: a KP address REPLACED by a different address also sends one unsubscribe note to the address stored at the write.
 // KP: an address -> saved (lower-cased, _normKpEmail); blank over a stored address -> "__skip__" (off) and one unsubscribe note to the
 // address stored at the moment of the write; blank over "__skip__" or over nothing stored -> nothing written (PLAN Q2).
 // The KP welcome judges "has signed in" on the login stored BEFORE this Save, so changing both in one Save still welcomes them.
@@ -12277,7 +12286,7 @@ window.adminSaveUserRow=async function(I){
   if(!names.includes(I)){ toast(NOT_ON,'err'); return; }
   const bN=document.getElementById(`ufn_${I}`), bF=document.getElementById(`fte_${I}`), bL=document.getElementById(`lem_${I}`), bK=document.getElementById(`em_${I}`);
   if(!bN||!bL||!bK){ toast(NOT_ON,'err'); return; } // [399 · §310] the row is not on the page: W18, nothing written
-  const fteOn=adminSettings.fteEditEnabled===true;
+  const fteOn=(typeof phase1Started==='function')&&!phase1Started(); // [400 · §315] A3: FTE is read only before Phase 1 begins
   // (a) changed: compared trimmed, because an e-mail box hands back its text without the spaces a stored value may carry
   const chg=el=>String(el.value??'').trim()!==String(el.getAttribute('data-v')??'').trim();
   const chN=chg(bN), chL=chg(bL), chK=chg(bK), chF=fteOn&&!!bF&&chg(bF);
@@ -12302,13 +12311,14 @@ window.adminSaveUserRow=async function(I){
   if(chK){ if(kpV){ if(kpV!==sKp) ch.kp=kpV; } else if(sKp&&sKp!=='__skip__') ch.kpOff=true; }
   if(ch.login!==undefined){ const _h=_loginEmailOwner(ch.login,I); if(_h){ toast('NOT saved — '+ch.login+' is already the login e-mail for '+_h+'. Two users can never share a Google login; fix '+_h+"'s address first if this is a correction.",'err'); return; } }
   if(!Object.keys(ch).length){ toast('No change — nothing to save for '+I+'.','ok'); return; }
-  // At the write (inside OK, or straight away when there is no pop-up): the roster, the duplicate login and FTE editing checked again
+  // At the write (inside OK, or straight away when there is no pop-up): the roster, the duplicate login and Phase 1 (FTE) checked again
   const write=async()=>{
     if(!names.includes(I)){ toast(NOT_ON,'err'); return; }
     if(ch.login!==undefined){ const _h2=_loginEmailOwner(ch.login,I); if(_h2){ toast('NOT saved — '+ch.login+' became the login e-mail for '+_h2+' while this dialog was open. Two users can never share a Google login.','err'); return; } }
-    if(ch.fte!==undefined&&adminSettings.fteEditEnabled!==true){ toast('Not saved — FTE editing was switched off while this dialog was open. Nothing was written.','err'); return; }
+    if(ch.fte!==undefined&&(typeof phase1Started!=='function'||phase1Started())){ toast('Not saved — Phase 1 has begun, so FTE is fixed. Nothing was written.','err'); return; } // [400 · §315] A3 W3
     const oldKp=String(emailsData?.[I]||'').trim().toLowerCase(); // the KP e-mail stored at the moment of the write
     const kpOff=!!ch.kpOff&&!!oldKp&&oldKp!=='__skip__';
+    const kpRepl=ch.kp!==undefined&&oldKp.includes('@')&&oldKp!==ch.kp; // [400 · §315] Q4: an address on file replaced by a different one
     const loginBefore=String(loginEmailsData?.[I]||''); // the login stored BEFORE this Save: the welcome's "has signed in"
     const loginAfter=ch.login!==undefined?ch.login:loginBefore.trim().toLowerCase(); // the Google address the note names
     const b=writeBatch(db), list=[];
@@ -12325,13 +12335,14 @@ window.adminSaveUserRow=async function(I){
     renderUsersCombined();
     if(ch.login!==undefined) await maybeSyncEmailToUser(); // sync NOW so the user's very next bid write is permitted
     const rounded=ch.fte!==undefined&&ch.fte!==fteRaw;
-    toast('Saved '+I+': '+list.join(', ')+(rounded?' (FTE rounded from '+fteRaw+' — FTE uses 0.1 steps)':'')+'.',(rounded||kpOff)?'warn':'ok');
+    toast('Saved '+I+': '+list.join(', ')+(rounded?' (FTE rounded from '+fteRaw+' — FTE uses 0.1 steps)':'')+'.',(rounded||kpOff||kpRepl)?'warn':'ok'); // [400 · §315] Q4: a replaced KP address warns as an off one does
     if(ch.kp!==undefined){
       const gk=_wlKey(loginBefore);
       const loggedIn=!!(gk&&welcomeLogData.sent&&welcomeLogData.sent[gk]);
       if(loggedIn&&(typeof phase1Started!=='function'||phase1Started())) welcomeOnce(I,ch.kp); // once Phase 1 has begun; before that, Begin Phase 1 welcomes it
     }
     if(kpOff&&oldKp.includes('@')) await sendUnsubscribeNote(I,oldKp,loginAfter);
+    if(kpRepl) await sendUnsubscribeNote(I,oldKp,loginAfter,true); // [400 · §315] Q4: the old address gets one note, after the batch · [400 · §315 fix round] L2
   };
   if(ch.login===undefined&&ch.kp===undefined&&!ch.kpOff){ await write(); return; } // a name or FTE change alone saves at once
   // ONE pop-up (W14): every change in the row, each with its warning; red when the login is replaced or KP is turned off
@@ -12343,7 +12354,8 @@ window.adminSaveUserRow=async function(I){
   if(ch.login!==undefined) body+=LN('Login e-mail: '+M(sLogin||'none saved')+' → '+M(ch.login))
     +WN(esc(I)+' signs in and bids with it — a typo locks them out of both without telling them why. Check every letter.');
   if(ch.kp!==undefined) body+=LN('KP e-mail: '+M(sKp==='__skip__'?'off':(sKp||'none saved'))+' → '+M(ch.kp))
-    +WN((typeof phase1Started!=='function'||phase1Started())?'Alerts CC here. If '+esc(I)+' has signed in, a welcome e-mail goes here now — check for typos.':'Alerts CC here; the welcome e-mail goes here when Phase 1 begins — check for typos.');
+    +WN(((typeof phase1Started!=='function'||phase1Started())?'Alerts CC here. If '+esc(I)+' has signed in, a welcome e-mail goes here now — check for typos.':'Alerts CC here; the welcome e-mail goes here when Phase 1 begins — check for typos.')
+      +(sKp.includes('@')?' One unsubscribe note goes to <span style="font-family:var(--mono)">'+esc(sKp)+'</span>.':'')); // [400 · §315] Q4
   if(ch.kpOff){ const g=ch.login!==undefined?ch.login:sLogin;
     body+=LN('KP e-mail: '+M(sKp)+' → <strong>off</strong>')
       +WN(esc(I)+' is never asked for a KP e-mail again. '+(sKp.includes('@')?'One unsubscribe note goes to '+esc(sKp)+'; alerts continue at '+(g.includes('@')?'<span style="font-family:var(--mono)">'+esc(g)+'</span>':'their Google address')+'. ':'')+'Undo: save a KP address.'); }
@@ -13513,13 +13525,10 @@ function renderUsersCombined(){
   const count=document.getElementById('userCount'); if(count) count.textContent=names.length;
   { const ft=document.getElementById('fteTotal'); if(ft){ let t=0; names.forEach(n=>{ const f=Number(getUserFTE(n)); if(isFinite(f)) t+=f; }); ft.textContent=' · Total FTE: '+(Math.round(t*100)/100)+' ('+names.length+' user'+(names.length!==1?'s':'')+')'; } }
   if(tb.contains(document.activeElement)) return; // H-7: don't wipe an in-progress name/FTE/email edit on a snapshot
-  // FTE fields are locked unless the admin has deliberately switched "FTE editing" ON
-  // (adminSettings.fteEditEnabled). Editing auto-switches OFF when Phase 1 begins and on
-  // auction reset, so mid-auction FTE changes require an explicit, confirmed unlock.
-  const fteLocked=adminSettings.fteEditEnabled!==true;
-  // [399 · §313] no lock note under the toggle (the lock icon by each FTE box says it)
-  const ftog=document.getElementById('fteEditToggle');
-  if(ftog) ftog.className='tog'+(fteLocked?'':' on');
+  // [400 · §315] A3: FTE is fixed once Phase 1 begins (phase1Started — Reset Auction makes it changeable again). Before: each FTE is an
+  // ordinary box, saved by its row's Save. From Phase 1 on: the number as plain text, no box. The phases listener redraws this page
+  // (refreshAll), so the cells change when Phase 1 begins.
+  const fteFixed=(typeof phase1Started!=='function')||phase1Started();
   // [FTE 25 Jul 2026] Name the users whose FTE has never actually been saved, and offer a
   // single deliberate write to set them all at once.
   // [399 · §313] item 7: the box's second line says only that bidding waits for each FTE (their boxes are drawn empty, §310).
@@ -13532,13 +13541,13 @@ function renderUsersCombined(){
       mbox.innerHTML=`<div style="font-weight:700;color:#6f6a60">${_miss.length} user${_miss.length!==1?'s have':' has'} no saved FTE</div>
         <div style="color:var(--t2);margin-top:4px;line-height:1.5">Bidding cannot begin until each is saved.</div>
         <div style="color:var(--t2);margin-top:6px;font-size:11.5px">${_miss.map(u=>esc(u)).join(', ')}</div>
-        ${fteLocked
-          ? '<div style="margin-top:8px;color:var(--t3);font-size:11.5px">Switch FTE editing ON above to set them.</div>'
-          : `<button class="btn btn-primary" style="margin-top:8px;padding:4px 12px;font-size:12px" onclick="bulkSaveMissingFte()">✓ Set FTE for all ${_miss.length}…</button>`}`;
+        ${fteFixed
+          ? '<div style="margin-top:8px;color:var(--t3);font-size:11.5px">FTE is fixed once Phase 1 begins.</div>'
+          : `<button class="btn btn-primary" style="margin-top:8px;padding:4px 12px;font-size:12px" onclick="bulkSaveMissingFte()">✓ Set FTE for all ${_miss.length}…</button>`}`; // [400 · §315] A3 W4
     }
   }
   // [399 · §305] each box carries data-v (the text it was drawn with: the row Save writes only the boxes changed from it); the per-box
-  // buttons are gone; the last cell holds Save (adminSaveUserRow) then Delete; a stored "__skip__" is tagged "off".
+  // buttons are gone; the last cell holds Save (adminSaveUserRow) then Delete; a stored "__skip__" draws an empty KP box ([400 · §315] A6: no tag).
   tb.innerHTML=names.map(n=>{
     const fte=getUserFTE(n);
     const _unsaved=_miss.includes(n);
@@ -13549,16 +13558,45 @@ function renderUsersCombined(){
     return `<tr>
       <td class="mono" style="white-space:nowrap"><strong>${n}</strong></td>
       <td style="white-space:nowrap"><input type="text" id="ufn_${n}" class="inp" autocomplete="off" style="width:160px" value="${esc(usernamesData[n]||'')}" data-v="${esc(usernamesData[n]||'')}" placeholder="Full name"></td>
-      <td style="white-space:nowrap"><input type="number" id="fte_${n}" class="inp" autocomplete="off" style="width:70px${_unsaved?';border-color:#6f6a60;background:rgba(111,106,96,.08)':''}" value="${_noFte?'':fte}" data-v="${_noFte?'':fte}"${_noFte?' placeholder="1.0"':''} step="0.1" min="0.4" max="1"${_unsaved?' title="NOT SAVED — this is the code\'s fallback, not a value you entered"':''}${fteLocked?' disabled title="FTE editing is off — use the FTE editing toggle above"':''}>
-        ${_unsaved?'<span title="Not saved — this number is the fallback the code shows when no FTE is stored" style="font-size:11px;color:#6f6a60;font-weight:700">unsaved</span> ':''}${fteLocked?'<span title="FTE editing is off — use the FTE editing toggle above" style="font-size:13px;color:var(--t3)"><svg class="lic" viewBox="0 0 24 24" aria-hidden="true" style="width:1.1em;height:1.1em;vertical-align:-.17em;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>':''}</td>
+      <td style="white-space:nowrap">${fteFixed
+        ? `<span class="u-fte-txt">${_noFte?'—':esc(String(fte))}</span>`
+        : `<input type="number" id="fte_${n}" class="inp" autocomplete="off" style="width:56px${_unsaved?';border-color:#6f6a60;background:rgba(111,106,96,.08)':''}" value="${_noFte?'':fte}" data-v="${_noFte?'':fte}"${_noFte?' placeholder="1.0"':''} step="0.1" min="0.4" max="1">${_unsaved?' <span style="font-size:11px;color:#6f6a60;font-weight:700">unsaved</span>':''}`}</td>
       <td style="white-space:nowrap"><input type="email" id="lem_${n}" class="inp" autocomplete="off" style="width:200px" value="${esc(loginEmailsData[n]||'')}" data-v="${esc(loginEmailsData[n]||'')}" placeholder="their-google@gmail.com"></td>
-      <td style="white-space:nowrap"><input type="email" id="em_${n}" class="inp" autocomplete="off" style="width:190px" value="${skip?'':esc(em)}" data-v="${skip?'':esc(em)}" placeholder="KP e-mail">${skip?' <span class="pill p-yellow">off</span>':''}</td>
+      <td style="white-space:nowrap"><input type="email" id="em_${n}" class="inp" autocomplete="off" style="width:190px" value="${skip?'':esc(em)}" data-v="${skip?'':esc(em)}" placeholder="KP e-mail"></td>
       <td style="white-space:nowrap"><button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="adminSaveUserRow('${_jsq(n)}')">Save</button>
         <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="removeUser('${_jsq(n)}')">Delete</button></td>
     </tr>`;
   }).join('');
+  if(typeof _fitUserCols==='function') _fitUserCols(); // [400 · §315] A4
 }
 window.renderUsersCombined=renderUsersCombined;
+// [400 · §315] A4: the full name, login e-mail and KP e-mail columns each get ONE box width — the widest of that column's values and its
+// placeholder, measured in the box's own computed font (canvas measureText), plus its left and right padding and borders, plus 6px — so
+// no value on file is cut off. Run after every draw of the table, and once more when the page's fonts have loaded (a measure taken in the
+// fallback font is then redone in the real one; skipped while focus is in the table, as the draw is — H-7). A width only: nothing is
+// redrawn, no value is touched. Any failure leaves the widths the CSS gives (a fit must never break the table).
+function _fitUserCols(){
+  try{
+    const tb=document.getElementById('usersBody'); if(!tb) return;
+    const gcs=(typeof window!=='undefined'&&window&&typeof window.getComputedStyle==='function')?window.getComputedStyle.bind(window):null; if(!gcs) return;
+    if(!_fitUserCols.cv){ const c=document.createElement('canvas'); _fitUserCols.cv=(c&&typeof c.getContext==='function')?c.getContext('2d'):null; }
+    const cv=_fitUserCols.cv; if(!cv||typeof cv.measureText!=='function') return;
+    ['ufn_','lem_','em_'].forEach(p=>{
+      const boxes=Array.from(tb.querySelectorAll('input[id^="'+p+'"]')); if(!boxes.length) return;
+      const cs=gcs(boxes[0]);
+      cv.font=[cs.fontStyle,cs.fontWeight,cs.fontSize,cs.fontFamily].filter(Boolean).join(' ');
+      let w=0;
+      boxes.forEach(b=>{ [b.value,b.getAttribute('placeholder')].forEach(t=>{ if(t){ const m=cv.measureText(String(t)).width; if(m>w) w=m; } }); });
+      const px=k=>{ const v=parseFloat(cs[k]); return isFinite(v)?v:0; };
+      const width=Math.ceil(w+px('paddingLeft')+px('paddingRight')+px('borderLeftWidth')+px('borderRightWidth')+6);
+      boxes.forEach(b=>{ b.style.width=width+'px'; });
+    });
+    if(!_fitUserCols.fontsHooked&&document.fonts&&document.fonts.ready&&typeof document.fonts.ready.then==='function'){
+      _fitUserCols.fontsHooked=true;
+      document.fonts.ready.then(()=>{ const t=document.getElementById('usersBody'); if(t&&!t.contains(document.activeElement)) _fitUserCols(); }).catch(()=>{});
+    }
+  }catch(_){}
+}
 
 // ── [build 268 · BL] Bid Lowerings — config + tracking panel ────────────────────
 // One global allowance per phase (0–9 or 'unlimited'; Phase 4 = per ROUND), applied to
@@ -14247,19 +14285,16 @@ window.sendWhitelistReminder=function(){
 // Unmatched sign-ins: Google accounts that authenticated but matched no roster login
 // e-mail (typo, gmail dots, alias). The user site logs each attempt; surfacing them here
 // turns "I can't log in" phone calls into a 5-second diagnosis.
+// [400 · §315] A1 (his 8:08 AM: "remove all the wordage. Just None or the e-mail addresses attempted."): the card shows "None", or each
+// attempted address on its own line (the 8 most recent, newest first; no times, no sentence), then the Clear list button.
+// [400 · §315 fix round] M1 (his 9:27 AM): while addresses are listed the box takes 399's red tint and border; "None" is plain.
 function renderSignInMisses(){
   const el=document.getElementById('signInMissBox'); if(!el) return;
   const entries=Object.entries(signInMissesData||{}).filter(([k,v])=>typeof v==='number').sort((a,b)=>b[1]-a[1]).slice(0,8);
-  el.style.display='';
-  if(!entries.length){
-    el.style.background='rgba(54,105,74,.08)'; el.style.borderColor='rgba(54,105,74,.3)';
-    el.innerHTML='<strong style="color:var(--green)">✓ Unmatched sign-ins: none</strong> <span style="color:var(--t2)">— if someone signs in with a Google account that isn\'t on the roster (typo, wrong account), the attempted address will show here.</span>';
-    return;
-  }
-  el.style.background='rgba(92,31,21,.08)'; el.style.borderColor='rgba(92,31,21,.3)';
-  el.innerHTML='<strong style="color:var(--red)">Unmatched sign-in attempts</strong> — these Google accounts signed in but are not on the roster (typo in a login e-mail?):<br>'
-    +entries.map(([em,ts])=>`<span class="mono">${esc(em)}</span> <span style="color:var(--t3)">(${new Date(ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})})</span>`).join('<br>')
-    +`<br><button class="btn btn-ghost" style="margin-top:6px;padding:2px 8px;font-size:11px" onclick="clearSignInMisses()">Clear list</button>`;
+  if(!entries.length){ el.setAttribute('style','font-size:12.5px;line-height:1.6'); el.innerHTML='None'; return; }
+  el.setAttribute('style','font-size:12.5px;line-height:1.6;background:rgba(92,31,21,.08);border:1px solid rgba(92,31,21,.3);border-radius:8px;padding:10px 12px'); // [400 · §315 fix round] M1
+  el.innerHTML=entries.map(([em])=>`<div class="mono">${esc(em)}</div>`).join('')
+    +`<button class="btn btn-ghost" style="margin-top:6px;padding:2px 8px;font-size:11px" onclick="clearSignInMisses()">Clear list</button>`;
 }
 window.clearSignInMisses=async function(){ await setDoc(signInMissesRef,{}); toast('Cleared unmatched sign-in list','ok'); };
 
@@ -14303,6 +14338,11 @@ window.addUser=async function(){
   // capacity. If a NEW hire is added with those same initials, this write would overwrite that
   // kept FTE with the new person's value — retroactively revaluing the old person's locked-in
   // wins (an under-value silently OVER-allocates every later phase's weeks). Warn and confirm.
+  // [400 · §315 fix round] L4: from Phase 1 on a SAVED FTE is fixed — re-adding initials whose FTE is still on file (a departed prior winner keeps theirs)
+  // with a DIFFERENT FTE is refused before anything is written; the same FTE re-adds them (it writes the value already stored).
+  { const _sv=fteData[val], _svN=Number(_sv);
+    if(((typeof phase1Started!=='function')||phase1Started())&&_sv!==undefined&&_sv!==null&&_sv!==''&&!isNaN(_svN)&&_svN>=FTE_MIN&&_svN<=1&&Math.abs(_svN-fte)>1e-9){
+      toast('NOT added — '+val+' already has a saved FTE of '+_svN+', which is fixed from Phase 1 on. Enter '+_svN+' to re-add the same person, or use different initials.','err'); return; } }
   if(!_addUserBypass){
     const _cp=phasesData.completedPhases||{};
     const _wonWk=[]; for(const ph in _cp){ const ap=_cp[ph]?.approvals||{}; for(const wk in ap){ if(Array.isArray(ap[wk])&&ap[wk].includes(val)&&!_wonWk.includes(wk)) _wonWk.push(wk); } }
@@ -14318,27 +14358,25 @@ window.addUser=async function(){
       return;
     }
   }
-  try{ await updateDoc(userListRef,{users:arrayUnion(val)}); }
-  catch(e){ await setDoc(userListRef,{users:[val]},{merge:true}); } // doc doesn't exist yet
-  // [BATCH D · M5 · build 234] The FTE save's failure was swallowed and the toast below said
-  // "Added · FTE X" regardless. Three downstream gates trap the missing-FTE state loudly, but
-  // the admin deserves the truth at the moment it happens, not at the next Begin Phase.
-  let _fteOk=true;
-  try{ await setDoc(fteRef,{[val]:fte},{merge:true}); }catch(_fe){ _fteOk=false; } // FTE is this site's own (not shared)
-  // Shared with the Daily Schedule (port to the other site): full name, login e-mail, secondary e-mail.
-  if(fullName) await setDoc(usernamesRef,{[val]:fullName},{merge:true}).catch(()=>{});
-  if(loginEmail){ await setDoc(loginEmailsRef,{[val]:loginEmail},{merge:true}).catch(()=>{}); await maybeSyncEmailToUser(); }
-  // [build 270 · M3] the KP address, normalised and checked before any write ([399 · §305]); a blank box writes nothing (asked at sign-in)
-  if(_kp2) await setDoc(emailsRef,{[val]:_kp2},{merge:true}).catch(()=>{});
+  // [400 · §315 11:35] the person is added in ONE batch — roster entry, FTE, full name, login e-mail and KP e-mail land together or
+  // not at all ([400 · §315 11:10] item 4 for the first two; his 11:35 AM ruling for the rest). Each is a merge write of this person's one key, so no
+  // other key of the shared documents changes (full name, login e-mail and KP e-mail are shared with the Daily Schedule; FTE is this site's own).
+  // A merge set with arrayUnion also makes the roster document if it is absent. A blank KP box writes nothing (asked at sign-in) — [build 270 · M3]
+  // the KP address is the one normalised and checked above.
+  { const b=writeBatch(db);
+    b.set(userListRef,{users:arrayUnion(val)},{merge:true});
+    b.set(fteRef,{[val]:fte},{merge:true});
+    b.set(usernamesRef,{[val]:fullName},{merge:true});
+    b.set(loginEmailsRef,{[val]:loginEmail},{merge:true});
+    if(_kp2) b.set(emailsRef,{[val]:_kp2},{merge:true});
+    try{ await b.commit(); }catch(e){ toast('NOT added — the write was rejected ('+(e?.code||e?.message||e)+'). Nothing was written.','err'); return; } }
+  if(loginEmail) await maybeSyncEmailToUser(); // after the batch, as before: the sign-in map, so the person can bid at once
   ['newUserInput','newUserFullName','newUserLoginEmail','newUserEmail2'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
   if(fteEl) fteEl.value="";   // blank, not 1.0 — the next user's FTE must be typed too
   // NO welcome e-mail is sent at user creation. Welcomes only ever go out once the user
   // logs in for the first time: their Google address and (if set here) their KP address
   // are both welcomed then, and the KP prompt is skipped because it's already on file.
-  toast(_fteOk
-    ?("Added "+val+(fullName?" ("+fullName+")":"")+" · FTE "+fte)
-    :("Added "+val+" — but saving their FTE FAILED. Set "+val+"'s FTE on this page now; Begin Phase stays blocked while it is missing."), // [399 · §305] W6
-    _fteOk?"ok":"err");
+  toast("Added "+val+(fullName?" ("+fullName+")":"")+" · FTE "+fte,"ok"); // [400 · §315 11:10] item 4: the roster and the FTE land together, so there is no "FTE failed" case
 };
 
 window.removeUser=function(u){
@@ -14485,27 +14523,14 @@ window.togglePrioLock=async function(){
   });
 };
 
-// ── FTE: the editing lock and the bulk tools of the Users page [399 · §310] ──
-window.toggleFteEdit=function(){
-  const turningOn=adminSettings.fteEditEnabled!==true;
-  const liveWarn=turningOn&&phase1Started()
-    ?'<div class="cmodal-danger">The auction is LIVE: changing an FTE shifts week capacity for everyone. Only for a genuine correction — turn editing OFF right after.</div>':'';
-  openConfirm({
-    title:turningOn?'Enable FTE editing?':'Lock FTE editing?',
-    body:turningOn
-      ?(liveWarn||`<div>Unlock the FTE fields?</div>`)
-      :`<div>Lock the FTE fields again?</div>`,
-    okText:turningOn?'Enable editing':'Lock editing', danger:turningOn&&phase1Started(),
-    onConfirm:async()=>{ await setDoc(adminRef,{fteEditEnabled:turningOn},{merge:true}); toast(turningOn?'FTE editing ON':'FTE editing OFF',turningOn?'warn':'ok'); }
-  });
-};
+// ── FTE: the bulk tools of the Users page [399 · §310] · [400 · §315] A2: no editing switch — FTE is fixed once Phase 1 begins ──
 // [FTE 25 Jul 2026] Bulk-set every user who has no SAVED FTE. Their boxes have been
 // showing the code's 1.0 fallback, which is indistinguishable from a real entry — this
 // turns that assumption into an explicit, admin-authored value in one deliberate action.
 // The dialog names every user and takes ONE value; anyone part-time still needs their own
 // entry, so the confirm says so rather than pretending this is a general-purpose tool.
 window.bulkSaveMissingFte=function(){
-  if(adminSettings.fteEditEnabled!==true){ toast('FTE editing is OFF — flip the FTE editing toggle first.','warn'); return; }
+  if((typeof phase1Started!=='function')||phase1Started()){ toast('FTE is fixed once Phase 1 begins.','warn'); return; } // [400 · §315] A3 W4
   // [AUDIT 2026-07-26 low] Off-grid users (a real 0.75) are NOT bulk-set to a shared value —
   // that would overwrite a genuine part-time value with 1.0. They are snapped to their OWN
   // nearest grid value in one write. Only truly-UNSET users get the shared bulk value.
@@ -14517,7 +14542,7 @@ window.bulkSaveMissingFte=function(){
       body:`<div>These ${off.length} user${off.length!==1?'s have':' has'} an FTE <strong>off the 0.1 grid</strong> (e.g. 0.75), which can mis-score a week. Each snaps to <strong>its own nearest 0.1</strong>.</div>
             <div style="margin-top:8px;color:var(--t2);font-size:12px;line-height:1.7">${off.map(u=>esc(u)+': '+fteData[u]+' → '+patch[u]).join('<br>')}</div>`,
       okText:'Snap to grid',
-      onConfirm:async()=>{ try{ await setDoc(fteRef,patch,{merge:true}); await adminLog('ALL','ALL','admin-fte-snap').catch(()=>{}); toast('Snapped '+off.length+' FTE value'+(off.length!==1?'s':'')+' to the 0.1 grid','ok'); }catch(e){ toast('Could not save — '+(e?.message||e),'err'); } }
+      onConfirm:async()=>{ if((typeof phase1Started!=='function')||phase1Started()){ toast('FTE is fixed once Phase 1 begins.','warn'); return; } /* [400 · §315] A3: asked again at OK */ try{ await setDoc(fteRef,patch,{merge:true}); await adminLog('ALL','ALL','admin-fte-snap').catch(()=>{}); toast('Snapped '+off.length+' FTE value'+(off.length!==1?'s':'')+' to the 0.1 grid','ok'); }catch(e){ toast('Could not save — '+(e?.message||e),'err'); } }
     });
     return;
   }
@@ -14532,6 +14557,7 @@ window.bulkSaveMissingFte=function(){
           <div class="cmodal-warn" style="margin-top:8px">Writes the same value to all ${miss.length}. Set part-timers individually.</div>`,
     okText:'Save for all '+miss.length,
     onConfirm:async()=>{
+      if((typeof phase1Started!=='function')||phase1Started()){ toast('FTE is fixed once Phase 1 begins.','warn'); return; } // [400 · §315] A3: asked again at OK
       const raw=parseFloat(document.getElementById('bulkFteVal')?.value);
       if(isNaN(raw)||raw<FTE_MIN||raw>1){ toast('FTE must be between '+FTE_MIN+' and 1','err'); return; }
       const val=Math.round(raw*10)/10;                      // 0.1 grid, same as the row Save (adminSaveUserRow) [399 · §310]
@@ -14544,7 +14570,7 @@ window.bulkSaveMissingFte=function(){
     }
   });
 };
-// [399 · §305] One FTE is saved by the Users page's row Save (adminSaveUserRow): only while FTE editing is on, 0.4 to 1, on the 0.1 grid.
+// [399 · §305] One FTE is saved by the Users page's row Save (adminSaveUserRow): only before Phase 1 begins ([400 · §315]), 0.4 to 1, on the 0.1 grid.
 // [AUDIT 2026-07-25 #10] The engine's fit test rounds to the 0.1 FTE grid, so an off-grid FTE like 0.75 could let a real 0.05 overage
 // round to zero; snapping on save keeps what is stored what the engine can represent.
 
@@ -15942,7 +15968,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.5","kind":"new","html":"<b>Lock All · Unlock All · Lock All Except High Demand · one week<\/b> — a locked week takes no new bids, changes or removals; its projection stands. During a high-demand-only Phase 1, unlocking any other week asks first."},
 {"n":"2.6","kind":"new","html":"<b>Smart Lock and Unlock<\/b> (Lock Weeks Summary) — locks every open week whose remaining FTE is below its Smart Lock Control, and unlocks every locked week at or above it. During a high-demand-only Phase 1 it unlocks high-demand weeks only."},
 {"n":"2.7","kind":"new","html":"<b>FTE (per person)<\/b> — 0.4 to 1.0, required, no default. It is the room a person's bid takes on a week, so it changes every decision. Bidding cannot begin until everyone has one."},
-{"n":"2.8","kind":"new","html":"<b>FTE editing<\/b> — off locks the FTE fields. It turns off by itself when Phase 1 begins and on Reset Auction."},
+{"n":"2.8","kind":"new","html":"<b>FTE changes<\/b> — made on Users with each row's Save before Phase 1 begins. From Phase 1 on every FTE is fixed for the auction; Reset Auction makes them changeable again."},
 {"n":"2.9","kind":"new","html":"<b>Withhold a bid number<\/b> (click a green number) — that person cannot use the number. Reset Auction clears every withheld number."},
 {"n":"2.10","kind":"new","html":"<b>Projection-change alert e-mails<\/b> — off stops projection-change and \"week opened up\" e-mails. Default on."},
 {"n":"2.11","kind":"new","html":"<b>Welcome e-mails<\/b> — sent once to each person when Phase 1 begins, or at first sign-in if added later. Default on."},
@@ -15973,7 +15999,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.37","kind":"new","html":"<b>Rehearsal Mode<\/b> — unlocks Run Simulation, Auto-Approve/Deny and the testing skip buttons for backups and results. Not a sandbox: real bids, real e-mails. Default off. After Phase 1 begins it asks first, and cannot be turned on at all if the setup lock is on."},
 {"n":"2.38","kind":"new","html":"<b>Run Simulation<\/b> — tops each person up to \"Bids per user\" (1–10, default 3) with random bids; their own bids count and are never changed. Skips locked weeks; cannot run under Global Lock."},
 {"n":"2.39","kind":"new","html":"<b>Auto-Approve/Deny Results<\/b> — writes real decisions: approves Winning and single Under Review bids, settles each tie at random (approving while the week stays within FTE available plus the overage), denies the rest."},
-{"n":"2.40","kind":"new","html":"<b>Users<\/b> — each person has initials, a full name, an FTE, a Google login e-mail and, if they want one, a KP e-mail. Initials cannot change. Adding a person needs every field but the KP e-mail. Each row has one Save: it refuses a blank full name or login e-mail, and changes FTE only while FTE editing is on. Two people can never share a login e-mail. A KP e-mail saved blank is off: that person is not asked for one, and the address that was on file gets one note saying so."}
+{"n":"2.40","kind":"new","html":"<b>Users<\/b> — each person has initials, a full name, an FTE, a Google login e-mail and, if they want one, a KP e-mail. Initials cannot change. Adding a person needs every field but the KP e-mail. Each row has one Save: it refuses a blank full name or login e-mail, and changes FTE only before Phase 1 begins. Two people can never share a login e-mail. A KP e-mail saved blank is off: that person is not asked for one. When a KP e-mail is turned off or replaced, the address that was on file gets one note saying so."}
 ]},
 {n:"3",title:"Timer",items:[
 {"n":"3.1","kind":"new","html":"The timer decides when a phase's bidding ends. At 0, bidding closes for everyone."},
@@ -16055,7 +16081,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"7.4","kind":"live","html":"","label":"Understanding Outcomes"},
 {"n":"7.5","kind":"new","html":"On the board staff see each projection, the \"Competition week\" label and the Minimum new bid. They never see the admin's decisions before results are sent. Under Blinded bidding they see no one else's initials."},
 {"n":"7.6","kind":"new","html":"On a locked week's card, once results are sent, a bid that won shows <b>Won in<\/b> and the phase's name; any other bid shows as an ordinary locked week."},
-{"n":"7.7","kind":"new","html":"<b>KP e-mail under E-mail alerts<\/b> (☰ menu) — shown only while \"Ask users for their KP e-mail at login\" is on. It is an on / off switch. Turn off stops every copy to that address; nothing is sent to it, and the person is not asked for one at sign-in. Turn on asks for the address and checks it as the sign-in question does; from Phase 1 on, an address not yet welcomed gets the welcome e-mail. It is the same KP e-mail the Users page shows."}
+{"n":"7.7","kind":"new","html":"<b>KP e-mail under E-mail alerts<\/b> (☰ menu) — shown only while \"Ask users for their KP e-mail at login\" is on. It is an on / off switch. Off stops every copy to that address, and the person is not asked for one at sign-in. On asks for the address and checks it as the sign-in question does; from Phase 1 on, an address not yet welcomed gets the welcome e-mail. At Done, the confirmation e-mail lists the KP e-mail with the alert choices; when it is turned off or replaced, the address that was on file gets one note saying so. It is the same KP e-mail the Users page shows."}
 ]},
 {n:"8",title:"Glossary",items:[
 {"n":"8.1","kind":"term","html":"The admin's decision that a person gets the week. Possible only once bidding is closed.","term":"Approve"},
