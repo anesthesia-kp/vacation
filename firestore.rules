@@ -778,6 +778,174 @@ service cloud.firestore {
       }
     }
 
+    // ── [Build A · DECISIONS §317 · PLAN-AMENDMENT-3 §3.5] The e-mail outbox: mailOutbox/{id} ──
+    // One document per e-mail request; the contract is tests/docs/server-mail-plan/build-a/SCHEMA.md §1–§3.
+    // THIS BLOCK IS THE WHOLE RULES CHANGE OF BUILD A — nothing above or below it changes.
+    //
+    // What it allows, in plain words:
+    //   • A page may only CREATE a request. Nobody may change or remove one from a page — not even the admin
+    //     (there is no `allow update` and no `allow delete` here, and the catch-all below refuses both). Only the
+    //     mail server changes a document after it is written; it uses server credentials that skip these rules.
+    //   • Creating a document whose name already exists counts as a CHANGE, so it is refused: that is what makes
+    //     a fixed name ("never twice") hold — a double press cannot queue the same e-mail twice.
+    //   • Only the auction admin may READ the outbox (one document, or a list of them).
+    //   • Every field is checked against SCHEMA §2–§3: which kinds exist, which fields each kind may carry (and
+    //     no others — so a page can never pre-fill a field the server writes, like `st`, `res` or `text`), the
+    //     size and shape of each field, the shape of the document's name, and who may write which kind.
+    //
+    // PRICE: ONE document read per create (at most). The `by` value picks exactly one of three paths before any
+    // read happens: a colleague's create reads vacations/loginEmails (isRegisteredUser() and the "is this the
+    // colleague named in `by`" check read the SAME document, and repeated lookups of one document in one request
+    // are cached — the same saving the bid rules above rely on); the admin's reads vacations/adminAccess
+    // (isAdmin); the schedule admin's reads dailysched/adminAccess (isSchedAdmin). An admin read of the outbox
+    // costs the same one read.
+    //
+    // WHAT THESE RULES CANNOT CHECK (the server checks these; SCHEMA §3.1 and §5):
+    //   • the inside of each alert line (`k`, `wk`, `from`, `to`, `bid`, …) — the rules only count the lines (1–60);
+    //   • that the address key at the end of a results or message name really is the key of `to` — the rules
+    //     check the key's SHAPE only (lower-case letters, digits and single underscores, no underscore at either end);
+    //   • that a retry's root (`of`) exists, is of a kind the writer may retry, and was not sent;
+    //   • that `aid` / `ph` are the CURRENT auction id and phase, that `to` / `old` belong to `u`, or what a body says.
+    match /mailOutbox/{id} {
+
+      // The common fields every kind carries (SCHEMA §2):
+      //   kind — one of the ten kinds;  u — the person's initials, 1–8 of A–Z a–z 0–9 . _ -;
+      //   at — must be the server's own clock (the page writes serverTimestamp(), so a page cannot back-date or
+      //   forward-date a request);  q — always true ("waiting for the server", SCHEMA §2 and §5.1);
+      //   aid — when present, 1–40 of A–Z a–z 0–9 _ - (never "." or "@"); a value not known yet is LEFT OUT, and a
+      //   null is refused (it is not a string);  ph — when present, a whole number 0–60 (null refused: not a whole
+      //   number); `ph` is REQUIRED on an alert (moFieldsOk).  (`by` is checked in moWriterOk.)
+      function moCommonOk(d) {
+        return d.kind is string
+          && d.kind in ['alert', 'confirm', 'kpnote', 'welcome', 'results', 'reminder', 'message', 'whitelist', 'calendar', 'retry']
+          && d.u is string && d.u.matches('[A-Za-z0-9._-]{1,8}')
+          && d.by is string
+          && d.at == request.time
+          && d.q == true
+          && (!('aid' in d) || (d.aid is string && d.aid.matches('[A-Za-z0-9_-]{1,40}')))
+          && (!('ph' in d) || (d.ph is int && d.ph >= 0 && d.ph <= 60));
+      }
+      // A body: text of 1 to 20,000 characters (SCHEMA §3, every kind that carries one).
+      function moBodyOk(b) { return b is string && b.size() >= 1 && b.size() <= 20000; }
+      // An address (`to`, and the old KP address `old`): ONE address, at most 254 characters — exactly one @, with
+      // something on each side, and no comma, semicolon, angle bracket or white space anywhere (so never a list of
+      // addresses, and never "Name <a@b>"). [:space:] is the pattern language's own name for every white-space character.
+      function moAddrOk(a) {
+        return a is string && a.size() <= 254 && a.matches('[^@,;<>[:space:]]+@[^@,;<>[:space:]]+');
+      }
+      // The E-mail Log kind (`subj`): the subject cut to 40 characters — 1 to 40 characters.
+      function moSubjOk(s) { return s is string && s.size() >= 1 && s.size() <= 40; }
+
+      // Exactly the fields each kind may carry — the required ones must all be there, and nothing else may be
+      // (keys().hasOnly). Every kind carries `q`. Every kind except `calendar` may also carry `aid` and `ph`; `calendar` carries neither
+      // (SCHEMA §2: `aid` is absent on calendar; the schedule page has no auction phase to give).
+      function moFieldsOk(d) {
+        return moCommonOk(d) && (
+             (d.kind == 'alert'                                                         // ph REQUIRED: the server drops a stale phase
+               && d.keys().hasAll(['kind', 'u', 'by', 'at', 'q', 'ph', 'lines'])
+               && d.keys().hasOnly(['kind', 'u', 'by', 'at', 'q', 'aid', 'ph', 'lines'])
+               && d.lines is list && d.lines.size() >= 1 && d.lines.size() <= 60)       // 1–60 lines; their insides: the server
+          || (d.kind == 'confirm'
+               && d.keys().hasAll(['kind', 'u', 'by', 'at', 'q', 'body'])
+               && d.keys().hasOnly(['kind', 'u', 'by', 'at', 'q', 'aid', 'ph', 'body'])
+               && moBodyOk(d.body))
+          || (d.kind == 'kpnote'
+               && d.keys().hasAll(['kind', 'u', 'by', 'at', 'q', 'old'])
+               && d.keys().hasOnly(['kind', 'u', 'by', 'at', 'q', 'aid', 'ph', 'old'])
+               && moAddrOk(d.old))                                                      // the server writes the text itself
+          || (d.kind == 'welcome'
+               && d.keys().hasAll(['kind', 'u', 'by', 'at', 'q', 'to', 'body'])
+               && d.keys().hasOnly(['kind', 'u', 'by', 'at', 'q', 'aid', 'ph', 'to', 'body'])
+               && moAddrOk(d.to) && moBodyOk(d.body))
+          || (d.kind == 'results'                                                       // aid and ph are REQUIRED: the name holds them
+               && d.keys().hasAll(['kind', 'u', 'by', 'at', 'q', 'aid', 'ph', 'to', 'body', 'subj'])
+               && d.keys().hasOnly(['kind', 'u', 'by', 'at', 'q', 'aid', 'ph', 'to', 'body', 'subj'])
+               && moAddrOk(d.to) && moBodyOk(d.body) && moSubjOk(d.subj))
+          || (d.kind in ['message', 'whitelist']
+               && d.keys().hasAll(['kind', 'u', 'by', 'at', 'q', 'to', 'body', 'subj'])
+               && d.keys().hasOnly(['kind', 'u', 'by', 'at', 'q', 'aid', 'ph', 'to', 'body', 'subj'])
+               && moAddrOk(d.to) && moBodyOk(d.body) && moSubjOk(d.subj))
+          || (d.kind == 'reminder'
+               && d.keys().hasAll(['kind', 'u', 'by', 'at', 'q', 'body', 'subj'])
+               && d.keys().hasOnly(['kind', 'u', 'by', 'at', 'q', 'aid', 'ph', 'body', 'subj'])
+               && moBodyOk(d.body) && moSubjOk(d.subj))
+          || (d.kind == 'calendar'                                                      // no text: the server builds it
+               && d.keys().hasAll(['kind', 'u', 'by', 'at', 'q'])
+               && d.keys().hasOnly(['kind', 'u', 'by', 'at', 'q']))
+          || (d.kind == 'retry'
+               && d.keys().hasAll(['kind', 'u', 'by', 'at', 'q', 'of'])
+               && d.keys().hasOnly(['kind', 'u', 'by', 'at', 'q', 'aid', 'ph', 'of'])
+               && d.of is string)
+        );
+      }
+
+      // The document's NAME (SCHEMA §3). Every name: at most 200 characters of A–Z a–z 0–9 _ . @ -.
+      // <rand> and <press> = 16–40 random letters/digits made by the page; <ak> = an address key's shape
+      // (lower-case letters and digits in runs joined by single underscores — what _wlKey makes).
+      // Where a name repeats a field (u, aid, ph), the name is checked against that field. `u` may hold a "."
+      // which a pattern reads as "any character", so a name with a dot in its initials is checked a little
+      // loosely there (harmless: the name is still unique to that writer's press).
+      function moIdOk(d) {
+        return id.size() <= 200 && id.matches('[A-Za-z0-9_.@-]+') && (
+             (d.kind == 'alert'     && id.matches('a_[A-Za-z0-9]{16,40}'))
+          || (d.kind == 'confirm'   && id.matches('c_[A-Za-z0-9]{16,40}'))
+          || (d.kind == 'kpnote'    && id.matches('k_' + d.u + '_[A-Za-z0-9]{16,40}'))
+          || (d.kind == 'welcome'   && id.matches('w_[A-Za-z0-9]{16,40}'))
+          // results: r_<aid>_<ph>_<ak>. The name must BEGIN with "r_" + this document's aid + "_" + its phase + "_"
+          // and end in an address-key shape. The rules cannot work out the address key from `to`, so only its
+          // shape is checked (the server sends to `to` only, and only if it is on the person's roster, SCHEMA §5.8).
+          // aid is spliced into the pattern, so it must be 1–40 of A–Z a–z 0–9 _ - (no "." or "@": a pattern would
+          // misread a "." as "any character") — the same rule moCommonOk applies to every kind (SCHEMA §2).
+          || (d.kind == 'results'   && d.aid.matches('[A-Za-z0-9_-]{1,40}')
+                                    && id.matches('r_' + d.aid + '_' + string(d.ph) + '_[a-z0-9]+(_[a-z0-9]+)*'))
+          || (d.kind == 'reminder'  && id.matches('rem_[A-Za-z0-9]{16,40}_' + d.u))
+          // message: m_<mid>_<ak>; <mid> is the admin page's message id, "m" + 6–24 of a–z 0–9 (_msgIdOk, admin 8406).
+          || (d.kind == 'message'   && id.matches('m_m[a-z0-9]{6,24}_[a-z0-9]+(_[a-z0-9]+)*'))
+          || (d.kind == 'whitelist' && id.matches('wl_[A-Za-z0-9]{16,40}_' + d.u))
+          || (d.kind == 'calendar'  && id.matches('cal_[A-Za-z0-9]{16,40}_' + d.u))
+          // retry: <root name>__<n>, n 2–9, and `of` must be exactly that root name. The root must be a name of one
+          // of the other kinds (never itself a retry). Whether the root exists and was not sent: the server.
+          || (d.kind == 'retry'
+                && d.of.matches('(a|c|k|w|r|rem|m|wl|cal)_[A-Za-z0-9_.@-]+')
+                && !d.of.matches('.*__[0-9]+')
+                && id in [d.of + '__2', d.of + '__3', d.of + '__4', d.of + '__5',
+                          d.of + '__6', d.of + '__7', d.of + '__8', d.of + '__9'])
+        );
+      }
+
+      // WHO may write WHICH kind (SCHEMA §3 table). `by` names the writer, and the writer must really be them:
+      //   by "admin" — the auction admin (isAdmin): alert, kpnote, welcome, results, reminder, message, whitelist,
+      //                and a retry of any kind;
+      //   by "sched" — the schedule admin (isSchedAdmin): calendar, and a retry of a calendar request (cal_…);
+      //   by <initials> — a colleague on the roster, signed in as the address the roster lists for those initials
+      //                (vacations/loginEmails[by] == their verified Google address): an alert about anyone; and a
+      //                confirm, kpnote or welcome about THEMSELVES only (u == by).
+      // Anonymous sessions, unverified accounts and strangers fail every path (each helper needs a verified e-mail).
+      function moWriterOk(d) {
+        return (d.by == 'admin'
+                  && d.kind in ['alert', 'kpnote', 'welcome', 'results', 'reminder', 'message', 'whitelist', 'retry']
+                  && isAdmin())
+          || (d.by == 'sched'
+                  && (d.kind == 'calendar' || (d.kind == 'retry' && d.of.matches('cal_.*')))
+                  && isSchedAdmin())
+          || (!(d.by in ['admin', 'sched'])
+                  && d.by.matches('[A-Za-z0-9._-]{1,8}')
+                  && (d.kind == 'alert' || (d.kind in ['confirm', 'kpnote', 'welcome'] && d.u == d.by))
+                  && isRegisteredUser()   // a verified sign-in on the roster — reads vacations/loginEmails …
+                  && get(/databases/$(database)/documents/vacations/loginEmails).data.get(d.by, '')
+                       == request.auth.token.email.lower());   // … and this reads the SAME document: no extra cost
+      }
+
+      // ── who may READ: the auction admin only (the E-mail Log, Not sent, Send again). ──
+      allow get, list: if isAdmin();
+
+      // ── who may CREATE: a well-formed request, from a writer allowed that kind. ──
+      // (No update and no delete rule exists on purpose: SCHEMA §1, PLAN-AMENDMENT-3 §3.5 "the admin has NO delete".)
+      allow create: if moFieldsOk(request.resource.data)
+                    && moIdOk(request.resource.data)
+                    && moWriterOk(request.resource.data);
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
