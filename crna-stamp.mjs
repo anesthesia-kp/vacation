@@ -1,16 +1,23 @@
 #!/usr/bin/env node
-// crna-stamp.mjs — generates the CRNA Vacation Auction from the MD pages.
+// crna-stamp.mjs — generates the TESTING SITE from the MD pages.
+//
+// [testing site · DECISIONS §317, §319–§322, 31 Oct 2026] The copy this script makes is the
+// owner's TESTING SITE: served at /vacation/testing/ (staff) and /vacation/testing/admin/,
+// wired to the separate Firebase project crna-vacation, with a thin red band on both pages.
+// The script, its config file (crna-config.json) and the "crna" prefix on browser-storage
+// names keep their old names on purpose (§321 Q1): nobody sees them, and every guard below
+// is written against them. Everything below that says "CRNA" means this copy.
 //
 // THE RULE (owner, 17 Aug 2026): "I want all the code to come from my main vacation repo
 // so that the 2 sites remain identical other than users." This script is how that stays
-// TRUE rather than intended: crna/index.html and crna/admin/index.html are GENERATED from
+// TRUE rather than intended: testing/index.html and testing/admin/index.html are GENERATED from
 // index.html and admin/index.html with a fixed, named set of transforms — and nothing
-// else. Never hand-edit a crna/ file; edit the MD page and re-run:
+// else. Never hand-edit a testing/ file; edit the MD page and re-run:
 //
 //     node crna-stamp.mjs
 //
 // tests/test-crna-stamp.mjs regenerates the same output and fails the battery if the
-// committed crna/ files don't match — so an MD build that forgets to re-stamp goes red.
+// committed testing/ files don't match — so an MD build that forgets to re-stamp goes red.
 //
 // THE TRANSFORMS, and why each exists:
 //   1. FIREBASE CONFIG — swapped for the CRNA project's (from crna-config.json).
@@ -19,13 +26,12 @@
 //      origin (anesthesia-kp.github.io), so localStorage/sessionStorage are SHARED:
 //      unrenamed, a CRNA visit would poison the MD page's cached auction config and
 //      vice versa. Every key is renamed; a canary pass proves none survived.
-//   3. LABELS — the owner's exact spec (17 Aug): staff page gets "CRNA" on its own line
-//      below the auction title, above the Department line, same size as that line;
-//      admin dashboard title reads "Dashboard CRNA Vacation Auction — 2027";
-//      both <title> tags carry CRNA so browser tabs are tellable apart.
-//   4. CROSS-LINKS — the staff↔admin portal links point at /vacation/crna/… so nobody
-//      hops from a CRNA page into the MD admin without noticing.
-//   5. versions.json — a crna/ copy, same build numbers (identical code = same builds).
+//   3. LABELS — the owner's approved wording (§321): tab titles "Testing Site — Vacation
+//      Auction" / "… Admin", the admin heading "Dashboard Testing Site — <year>", and the
+//      thin red band "🧪 TESTING SITE — not the real auction" at the top of both pages.
+//   4. CROSS-LINKS — the admin page's link to the staff page points at /vacation/testing/…
+//      so nobody hops from the testing site into the real one without noticing.
+//   5. versions.json — a testing/ copy, same build numbers (identical code = same builds).
 //      The stale-build gate works unchanged (both pages fetch it relatively).
 //
 //   NOT transformed, deliberately: LEAD_ADMIN_EMAIL (dr.vacation.goddess@gmail.com stays
@@ -47,10 +53,10 @@ if (!existsSync(CFG_PATH)) {
 }
 const CFG = JSON.parse(readFileSync(CFG_PATH, 'utf8'));
 // [26 Aug 2026 · owner ruling, DECISIONS §118] While the CRNA sites are SUSPENDED nothing is
-// stamped: crna/ is deliberately absent from the repo so GitHub Pages serves 404 for both
+// stamped: testing/ is deliberately absent from the repo so GitHub Pages serves 404 for both
 // addresses. Revival recipe: TODO.md (CRNA-SUSPENDED). Exit 0 — a suspended stamp is not an error.
 if (CFG.suspended === true) {
-  console.log('⏸ CRNA suspended (crna-config.json "suspended": true) — nothing stamped, crna/ stays absent.');
+  console.log('⏸ CRNA suspended (crna-config.json "suspended": true) — nothing stamped, testing/ stays absent.');
   process.exit(0);
 }
 const FB = CFG.firebase || {};
@@ -58,7 +64,7 @@ const REQUIRED = ['apiKey', 'authDomain', 'projectId', 'storageBucket', 'messagi
 const placeholder = REQUIRED.some(k => !FB[k] || String(FB[k]).includes('REPLACE_ME'));
 if (placeholder) {
   console.log('⚠️  crna-config.json still holds REPLACE_ME values — stamping anyway for the');
-  console.log('   working tree, but DO NOT PUSH crna/ until the real Firebase config is in.');
+  console.log('   working tree, but DO NOT PUSH testing/ until the real Firebase config is in.');
 }
 
 let MD_APPCHECK = null;
@@ -107,7 +113,7 @@ for (const k of REQUIRED) {
   const to = CFG.appCheckSiteKey || 'REPLACE_ME_appCheckSiteKey';
   if (to.startsWith('REPLACE_ME')) {
     console.log('\u26a0\ufe0f  crna-config.json has no appCheckSiteKey — stamping a placeholder.');
-    console.log('   DO NOT PUSH crna/ until the real CRNA reCAPTCHA site key is in.');
+    console.log('   DO NOT PUSH testing/ until the real CRNA reCAPTCHA site key is in.');
   }
   rep('staff', '"' + MD_APPCHECK + '"', '"' + to + '"', 1);
   rep('admin', '"' + MD_APPCHECK + '"', '"' + to + '"', 1);
@@ -125,6 +131,9 @@ const KEYS = [
   ["'acReloadedFor'", 2, 2, "'crnaAcReloadedFor'"],
   ['"vrl-"', 2, 2, '"crna-vrl-"'],
   ["'rbgate-'", 1, 1, "'crna-rbgate-'"],
+  // [testing site · 31 Oct 2026] two names added to the MD pages since August
+  ["'reportsView'", 0, 2, "'crnaReportsView'"],   // admin: the capacity report's view
+  ["'vacVisit'", 1, 0, "'crnaVacVisit'"],         // staff: VISIT_LS, the visit record
 ];
 for (const [lit, ns, na, to] of KEYS) {
   if (ns) rep('staff', lit, to, ns);
@@ -135,18 +144,45 @@ for (const [lit, ns, na, to] of KEYS) {
 // [build 274 · C7] The MD pages now carry their own labels (owner's deferred "MD site
 // label"), so these rules SWAP MD → CRNA instead of inserting from unlabeled pages.
 // [227 · §296] The staff page carries no MD label line (owner, 26 Oct 2026), so there is no header-sub line to swap here.
+// [testing site · §321] the owner's approved wording (PLAN §4).
 rep('staff', '<title>MD Vacation Auction — Department of Anesthesia</title>',
-             '<title>CRNA Vacation Auction — Department of Anesthesia</title>', 1);
+             '<title>Testing Site — Vacation Auction</title>', 1);
 rep('admin', '<div class="page-title" style="margin:0">Dashboard MD Vacation Auction — <span id="acYearHdr">2027</span></div>',
-             '<div class="page-title" style="margin:0">Dashboard CRNA Vacation Auction — <span id="acYearHdr">2027</span></div>', 1);
+             '<div class="page-title" style="margin:0">Dashboard Testing Site — <span id="acYearHdr">2027</span></div>', 1);
 rep('admin', '<title>MD Vacation Auction Admin</title>',
-             '<title>CRNA Vacation Auction Admin</title>', 1);
+             '<title>Testing Site — Vacation Auction Admin</title>', 1);
+
+// ── 3b · THE THIN RED BAND (owner, 31 Oct 2026, §321: "make it a thin red band") ──
+// One line at the very top of both pages, so the testing site is never mistaken for the real
+// one. It is drawn by the html element itself (html::before), NOT inside the page's body: the
+// staff page scales its whole body by 1.15 on wide screens (body{zoom:1.15}), which would
+// stretch a band placed in the body. The html element makes room for it (padding-top), so
+// the page's own content starts below it. It is drawn above EVERYTHING (the highest z-index):
+// the sign-in screen is a full-screen layer, and a band drawn under it would vanish exactly
+// where it matters (render check, 31 Oct 2026). At the top of the page it can therefore lie
+// over the top 16px of a full-screen box or sheet — but only to the eye: it never takes a
+// tap or click (pointer-events:none), so whatever is under it still works. It scrolls away
+// with the page. System font: nothing to load.
+const BAND = '<style id="testing-band">html{padding-top:16px!important}' +
+  'html::before{content:"\\1F9EA  TESTING SITE \\2014  not the real auction";' +
+  'position:absolute;top:0;left:0;right:0;height:16px;z-index:2147483647;' +
+  'background:#b3261e;color:#ffffff;font:700 10.5px/16px system-ui,-apple-system,sans-serif;' +
+  'letter-spacing:.08em;text-align:center;white-space:nowrap;overflow:hidden;pointer-events:none}</style>';
+rep('staff', '<body>', '<body>\n' + BAND, 1);
+rep('admin', '<body>\n<!-- [build 227 · CONNECTION INTEGRITY]', '<body>\n' + BAND + '\n<!-- [build 227 · CONNECTION INTEGRITY]', 1);
+
+// ── 3c · RELATIVE FILE ADDRESSES (testing site, 31 Oct 2026) ──
+// The copy is served one folder below the MD page, so a relative address would look for its
+// file inside testing/. Each points one folder up, at the MD site's own file.
+rep('staff', 'url(fonts/', 'url(../fonts/', 2);                          // the two font files
+rep('staff', "'img/destinations/'", "'../img/destinations/'", 1);         // the destination pictures
+rep('admin', 'url(../fonts/', 'url(../../fonts/', 4);                    // the two font files, twice
 
 // ── 4 · Cross-links between the two CRNA pages ──
-rep('staff', 'https://anesthesia-kp.github.io/vacation/admin/?portal=1',
-             'https://anesthesia-kp.github.io/vacation/crna/admin/?portal=1', 1);
+// [testing site · 31 Oct 2026] the staff page carries no link to the admin page (so there is
+// nothing to swap there — the link guard below still refuses any MD link that appears).
 rep('admin', 'https://anesthesia-kp.github.io/vacation/?portal=1',
-             'https://anesthesia-kp.github.io/vacation/crna/?portal=1', 1);
+             'https://anesthesia-kp.github.io/vacation/testing/?portal=1', 1);
 
 // ── 2b · BAKED-IN DATA: the MD roster is hardcoded as `names`' starting value in BOTH
 // pages. On the MD site the database overwrites it instantly; on the CRNA site an empty
@@ -188,7 +224,7 @@ for (const page of ['staff', 'admin']) {
 // So PIN the variable-keyed count per page: a future MD build that adds a storage key
 // through a const deviates from the pin and ABORTS the stamp, forcing the new key into
 // the rename table (and this pin bumped) deliberately — never silently.
-const VARKEY_PIN = { staff: 9, admin: 2 }; // counted at MD builds 156/290
+const VARKEY_PIN = { staff: 11, admin: 2 }; // counted at MD builds 156/290; staff 9 → 11 at 235 (VISIT_LS, renamed in the table above)
 for (const page of ['staff', 'admin']) {
   const total   = (src[page].match(/(?:localStorage|sessionStorage)\.(?:getItem|setItem|removeItem)\(/g) || []).length;
   const literal = (src[page].match(/(?:localStorage|sessionStorage)\.(?:getItem|setItem|removeItem)\(\s*['"]/g) || []).length;
@@ -203,7 +239,7 @@ for (const page of ['staff', 'admin']) {
 // any new or renamed variable inside a storage call aborts the stamp until it is added
 // here AND handled in the rename table deliberately. (The two sites share one web origin,
 // so a shared un-renamed key silently mixes MD and CRNA state.)
-const VARKEY_NAMES = { staff: ['REMEMBER_KEY', 'k'], admin: ['k'] }; // read from MD builds 158/294
+const VARKEY_NAMES = { staff: ['REMEMBER_KEY', 'VISIT_LS', 'k'], admin: ['k'] }; // read from MD builds 158/294; VISIT_LS added at staff 235
 for (const page of ['staff', 'admin']) {
   const seen = [...new Set([...src[page].matchAll(/(?:localStorage|sessionStorage)\.(?:getItem|setItem|removeItem)\(\s*([A-Za-z_$][\w$]*)/g)].map(m => m[1]))].sort();
   const pin = [...VARKEY_NAMES[page]].sort();
@@ -215,7 +251,7 @@ for (const page of ['staff', 'admin']) {
 // not belong there" — the Daily Schedule is an MD tool; revisit if/when a CRNA schedule
 // exists, tracked in TODO). Both entries in the admin's Other Systems card are removed;
 // the guard below then refuses ANY /schedule/ link that ever tries to ride back in.
-rep('admin', '      <a href="https://anesthesia-kp.github.io/schedule/?portal=1" target="_blank" rel="noopener">📅 User Scheduling →</a>\n', '', 1);
+rep('admin', '      <a href="https://anesthesia-kp.github.io/schedule/?portal=1" target="_blank" rel="noopener">User Scheduling →</a>\n', '', 1);
 {
   const i = src.admin.indexOf('<a id="otherSysSchedAdmin"');
   if (i < 0) fail('scheduling-admin link anchor not found');
@@ -224,33 +260,50 @@ rep('admin', '      <a href="https://anesthesia-kp.github.io/schedule/?portal=1"
 }
 
 // ── GENERIC LINK GUARD: no CRNA page may link to an MD auction page. Any absolute
-// /vacation/ URL in the CRNA output must be /vacation/crna/… — a future MD build that
+// /vacation/ URL in the testing-site output must be /vacation/testing/… — a future MD build that
 // adds a new self-link cannot silently point CRNAs at the MD site.
 for (const page of ['staff', 'admin']) {
   const links = src[page].match(/https:\/\/anesthesia-kp\.github\.io\/vacation\/[^"'\s)]*/g) || [];
   for (const u of links) {
-    if (!u.startsWith('https://anesthesia-kp.github.io/vacation/crna')) fail(`generic link guard: CRNA ${page} links to the MD site: ${u} — add a transform.`);
+    if (!u.startsWith('https://anesthesia-kp.github.io/vacation/testing/')) fail(`generic link guard: testing-site ${page} links outside /vacation/testing/: ${u} — add a transform.`);
   }
+  // [testing site · review, 31 Oct 2026] also refuse every OTHER spelling of a /vacation address
+  // that could open the real site: protocol-relative or with no trailing slash, and root-relative
+  // ("/vacation/…" as a quoted address). Only /vacation/testing/ may appear.
+  const anyHost = src[page].match(/anesthesia-kp\.github\.io\/vacation(?!\/testing\/)[^"'`\s)]*/g) || [];
+  if (anyHost.length) fail(`generic link guard: testing-site ${page} has an address into the real site: ${anyHost[0]} — add a transform.`);
+  const rootRel = src[page].match(/["'`(=]\/vacation(?!\/testing\/)[\/?#"'`)]/g) || [];
+  if (rootRel.length) fail(`generic link guard: testing-site ${page} has a root-relative /vacation address: ${rootRel[0]} — add a transform.`);
   if (/href="https:\/\/anesthesia-kp\.github\.io\/schedule\//.test(src[page]))
     fail(`generic link guard: CRNA ${page} links to the Daily Schedule — removed by owner ruling 18 Aug; add a transform if this is ever reversed deliberately.`);
 }
 
 // ── CANARY: nothing MD-only may survive in the CRNA output ──
-const FORBIDDEN = [MD_FB.projectId, MD_FB.appId, MD_FB.authDomain, MD_APPCHECK,
+const FORBIDDEN = [MD_FB.projectId, MD_FB.appId, MD_FB.authDomain, MD_FB.apiKey, MD_FB.messagingSenderId, MD_APPCHECK,
   "'auctionConfigV1'", '"vk_lastUser"', "'adminRemembered'", "'insightsView'",
-  "'acReloadedFor'", '"vrl-"', "'rbgate-'"];
+  "'acReloadedFor'", '"vrl-"', "'rbgate-'", "'reportsView'", "'vacVisit'"];
 for (const bad of FORBIDDEN.filter(Boolean)) {
   for (const page of ['staff', 'admin']) {
     if (src[page].includes(bad)) fail(`canary: MD-only token ${bad} survived in crna ${page}`);
   }
 }
 
+// ── SHARED-ORIGIN HAZARDS (testing site · review, 31 Oct 2026): both sites live on one web
+// origin, so anything that reaches ALL of the origin's storage, or a name every page on it
+// shares, must not appear — it could wipe or read the real site's data. None appear in the MD
+// pages today (checked 31 Oct 2026); a future MD build that adds one stops the stamp here.
+for (const page of ['staff', 'admin']) {
+  const hz = src[page].match(/(?:localStorage|sessionStorage)\s*\.\s*(?:clear|key)\s*\(|(?:localStorage|sessionStorage)\s*\[|BroadcastChannel|serviceWorker|locks\.request|document\.cookie|indexedDB\.open/g) || [];
+  if (hz.length) fail(`shared-origin guard: testing-site ${page} uses ${hz[0]} — it reaches the real site's browser data too; handle it deliberately.`);
+}
+
 // ── write ──
-mkdirSync(join(here, 'crna', 'admin'), { recursive: true });
-writeFileSync(join(here, 'crna', 'index.html'), src.staff);
-writeFileSync(join(here, 'crna', 'admin', 'index.html'), src.admin);
-writeFileSync(join(here, 'crna', 'versions.json'), JSON.stringify(versions));
-console.log('✅ stamped crna/index.html (build ' + versions.index + '), crna/admin/index.html (build ' + versions.admin + '), crna/versions.json');
+// [testing site · §320] the output folder is testing/ (served at /vacation/testing/).
+mkdirSync(join(here, 'testing', 'admin'), { recursive: true });
+writeFileSync(join(here, 'testing', 'index.html'), src.staff);
+writeFileSync(join(here, 'testing', 'admin', 'index.html'), src.admin);
+writeFileSync(join(here, 'testing', 'versions.json'), JSON.stringify(versions));
+console.log('✅ stamped testing/index.html (build ' + versions.index + '), testing/admin/index.html (build ' + versions.admin + '), testing/versions.json');
 console.log(placeholder ? '⚠️  WITH PLACEHOLDER FIREBASE CONFIG — not pushable yet.' : 'firebase project: ' + FB.projectId);
 
 export const stampedFor = { versions, placeholder };
