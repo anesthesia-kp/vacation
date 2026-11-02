@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 401;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 402;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -780,7 +780,7 @@ thead th{color:var(--t2)}
       <!-- [401 · §317] the outbox, as the mail server reports it (_moPaint fills the counts and the list; Send again = moSendAgain) -->
       <div class="card">
           <div class="trow" id="moWaitRow" style="align-items:center">
-            <div><div class="trow-label">Waiting to send — <span id="moWaitN" style="font-family:var(--mono)">—</span></div><div class="trow-desc">E-mails the server sends within the minute. Bidding alerts wait 3 minutes first.</div></div>
+            <div><div class="trow-label">Waiting to send — <span id="moWaitN" style="font-family:var(--mono)">—</span></div><div class="trow-desc">E-mails the server sends within the minute. Bidding alerts wait 90 seconds first.</div></div>
           </div>
           <div class="trow" id="moNotSentRow" style="align-items:flex-start;margin-top:10px;padding-top:12px;border-top:1px solid var(--b1)">
             <div style="flex:1;min-width:0"><div class="trow-label">Not sent — <span id="moNotSentN" style="font-family:var(--mono)">—</span></div><div class="trow-desc">E-mails the server could not deliver after 3 tries.</div><div id="moNotSentList" style="margin-top:6px"></div></div>
@@ -1656,7 +1656,7 @@ function _loginEmailOwner(email,exceptUser){
 // [399 · §313] The manual "Sync login map" button and its handler are removed; the map is synced by maybeSyncEmailToUser on every login change.
 const welcomeLogRef = doc(db,"vacations","welcomeLog"); // {sent:{<addrKey>:true}} — addresses already welcomed THIS cycle (cleared by Reset Auction)
 const loginLogRef   = doc(db,"vacations","loginLog");   // [330 · §189] {INITIALS:{at,phase,round}} — each user's LAST sign-in, written by the staff site (own key only); admin-read; cleared by Reset Auction and by User Activity's Clear · [364 · §260] plus v:{<key>:<code>} inside each key — the visits; trimmed here (_visitTrim)
-const adminMessagesRef = doc(db,"vacations","adminMessages"); // [377 · §276] {drafts:{id:{body,all,to,at,by}}, sent:{id:{body,all,to,at,by,status,page,beat,done,ok,fail}}} — admin-only, read on demand
+const adminMessagesRef = doc(db,"vacations","adminMessages"); // [377 · §276] {drafts:{id:{body,all,to,at,by}}, sent:{id:{body,all,to,addrs,at,by}}} (addrs [402]: [{u,a}] — the addresses kept at the send; a record from before the server carries status,page,beat,done,ok,fail) — admin-only, read on demand
 const mailLogRef    = doc(db,"vacations","mailLog");    // [330 · §189] {INITIALS:{at,to,kind,ok,err}} — each user's LAST e-mail and whether it sent, written beside every send on both pages; admin-read; cleared with loginLog
 // [build 268 · BL] Bid Lowerings — sanctioned per-phase bid DECREASES (mistake-fixing).
 // Current-window usage: {USER:{used:n}} — user-writable own-key-only (isBidDoc rules gates:
@@ -5594,7 +5594,7 @@ window.toggleEmailNotifs=async function(){
   }
   openConfirm({
     title:'Turn projection-change alert e-mails OFF?',
-    body:`<div>While off, no bidding alerts are sent — changes in that time, and alerts still in their 3 minutes, are never e-mailed, even after alerts go back on. They are listed in the E-mail Log as Not sent — off.</div>
+    body:`<div>While off, no bidding alerts are sent — changes in that time, and alerts still waiting to be sent, are never e-mailed, even after alerts go back on. They are listed in the E-mail Log as Not sent — off.</div>
           <div class="cmodal-warn" style="margin-top:8px">During live bidding, someone could miss their re-bid chance unknowingly.</div>`,
     okText:'Turn alerts OFF', danger:true,
     onConfirm:async()=>{
@@ -8084,7 +8084,9 @@ function emailCycleKey(){
 // then writes one outbox request per address, m_<id>_<address key>, carrying the finished "Hi <name>," text. The rules refuse a name that
 // exists, so nothing is ever sent twice. The Sent list reads each message's requests from the live outbox view (A1's _moDocs);
 // "Send to the rest" writes a numbered retry for each request the server could not deliver (never one "not confirmed" — F.5).
-// A record written before the server (it carries `status`) is shown read-only.
+// [402 · B2, review V2-1] The sent record keeps the message's address list as it was at the send (addrs: [{u,a}], in the same one write);
+// the Sent list and "Send to the rest" compare with THAT list only — a person or address added later never gets it (AMENDMENT-1 §2).
+// A record written before the server (it carries `status`), or one with no kept list (written by 401), is shown read-only.
 const MSG_MAX_CHARS=5000, MSG_KEEP_SENT=100, MSG_MAX_DRAFTS=30, MSG_KIND='Admin message';
 let _msgData={drafts:{},sent:{}}, _msgLoaded=false, _msgLoadErr='';
 let _msgEd={id:null, body:'', all:true, pick:[]};
@@ -8095,6 +8097,10 @@ function _msgObj(o){ return (o&&typeof o==='object'&&!Array.isArray(o))?o:{}; }
 function _msgTargets(all,pick){ const ros=names.slice(); if(all) return ros; const s=new Set(Array.isArray(pick)?pick:[]); return ros.filter(u=>s.has(u)); }
 function _msgCounts(users){ let people=0, mails=0; const none=[]; for(const u of users){ const r=recipientsFor(u); if(r.length){ people++; mails+=r.length; } else none.push(u); } return {people,mails,none}; }
 function _msgText(u,body){ return 'Hi '+((typeof greetName==='function')?greetName(u):u)+',\n\n'+String(body||'').trim(); } // [391 · §296] the full name (usernamesData, initials when none is on file) · [393 · §297] item 8: "Hi" and the first name (greetName)
+// [402] The addresses a message goes to, worked out ONCE at the send: each address on file of each person in `to`, each address once.
+function _msgAddrList(to){ const out=[]; const seen=new Set(); for(const u of (Array.isArray(to)?to:[])){ for(const a of recipientsFor(u)){ if(!seen.has(a)){ seen.add(a); out.push({u,a}); } } } return out; }
+// [402] A sent record's kept address list, or null when it has none (a record written by 401 or before the server: read-only).
+function _msgKept(r){ if(!r||typeof r!=='object'||!Array.isArray(r.addrs)) return null; return r.addrs.filter(k=>k&&typeof k==='object'&&typeof k.u==='string'&&typeof k.a==='string'&&k.a.includes('@')); }
 function _msgOwed(to){ const out=[]; const seen=new Set(); for(const u of (Array.isArray(to)?to:[])){ for(const a of recipientsFor(u)){ if(!seen.has(a)){ seen.add(a); out.push(a); } } } return out; }
 function _msgWhen(t){ const n=Number(t); return n?new Date(n).toLocaleString([], {month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'}):'—'; }
 function _msgToLabel(all,to){ const t=Array.isArray(to)?to:[]; if(all) return 'Everyone'+(t.length?' ('+t.length+')':''); if(!t.length) return 'nobody picked'; return t.slice(0,8).join(', ')+(t.length>8?' +'+(t.length-8)+' more':''); }
@@ -8115,25 +8121,27 @@ function _msgCurrent(r){
   const ms=(typeof c.toMillis==='function')?c.toMillis():(typeof c.seconds==='number')?c.seconds*1000:Number(c);
   return !(ms>0)||Number(r.at||0)>=ms;
 }
-// "i of N sent · k not sent · w waiting". N = every address the message owes — each address on file of each person in its recorded `to`,
-// compared with its requests (the full expected-list compare, as results; §328): an address with NO request counts as not sent and
-// "Send to the rest" writes it (missing); a request not delivered, or held "off", is retried (retry). A delivered one is never asked again.
+// "i of N sent · k not sent · w waiting". [402] N = the addresses KEPT in the sent record at the send (addrs), each compared with its
+// request: an address with NO request counts as not sent and "Send to the rest" writes it (missing); a request not delivered, or held
+// "off", is retried (retry). A delivered one is never asked again. An address added since the send is not in the list: never counted,
+// never sent. A kept address no longer on file for its person (the person left the roster, or the address was replaced) still counts —
+// it was on the list at the send — but is never written or retried: the server would drop it as "not on the roster" (SCHEMA §8).
+// A record with no kept list (written by 401): its requests are counted as they are, and nothing is offered (read-only).
 function _msgStats(mid){
   const st={n:0, sent:0, notsent:0, waiting:0, retry:[], missing:[]};
-  const roots=_msgRoots(mid);
-  for(const id of roots){
-    const s=_outRootState(id,(_outboxDoc(id)||{}).to); st.n++;
-    if(s.s==='sent') st.sent++; else if(s.s==='waiting') st.waiting++; else { st.notsent++; if(s.retry) st.retry.push(id); }
-  }
   const rec=(typeof _msgData!=='undefined'&&_msgData&&_msgData.sent)?_msgData.sent[mid]:null;
-  if(rec&&_msgCurrent(rec)&&typeof _moArrived!=='undefined'&&_moArrived){
-    const have=new Set(roots), seen=new Set();
-    for(const u of (Array.isArray(rec.to)?rec.to:[])) for(const a of recipientsFor(u)){
-      if(seen.has(a)) continue; seen.add(a);
-      const id='m_'+mid+'_'+_wlKey(a);
-      if(have.has(id)||_outboxDoc(id)) continue;
-      st.missing.push({u,a,id}); st.n++; st.notsent++;
-    }
+  const kept=_msgKept(rec);
+  if(!kept){
+    for(const id of _msgRoots(mid)){ const s=_outRootState(id,(_outboxDoc(id)||{}).to); st.n++; if(s.s==='sent') st.sent++; else if(s.s==='waiting') st.waiting++; else st.notsent++; }
+    return st;
+  }
+  const cur=!!rec&&_msgCurrent(rec)&&typeof _moArrived!=='undefined'&&_moArrived, done=new Set();
+  for(const k of kept){
+    const id='m_'+mid+'_'+_wlKey(k.a); if(done.has(id)) continue; done.add(id);
+    const onFile=names.includes(k.u)&&recipientsFor(k.u).includes(k.a), s=_outRootState(id,k.a);
+    if(s.s==='missing'){ if(!cur) continue; st.n++; st.notsent++; if(onFile) st.missing.push({u:k.u,a:k.a,id}); continue; }
+    st.n++;
+    if(s.s==='sent') st.sent++; else if(s.s==='waiting') st.waiting++; else { st.notsent++; if(s.retry&&onFile) st.retry.push(id); }
   }
   return st;
 }
@@ -8210,7 +8218,7 @@ function _msgPaintLists(loading){
         line=(r.status==='sent'?'<span style="color:var(--green);font-weight:600">✓ Sent</span>':'<span style="color:var(--red);font-weight:600">Partly sent</span>')+` · ${p.done} of ${p.owed} e-mail${p.owed===1?'':'s'} delivered`;
       } else { const st=_msgStats(id);
         line=st.n?esc(_msgStatsLine(st)):''; // no request in the live view (an earlier auction's message): no count to show
-        if((st.retry.length||st.missing.length)&&!st.waiting) rest=`<button ${btn} data-id="${id}" onclick="msgSendRest(this)">Send to the rest</button>`;
+        if(_msgKept(r)&&(st.retry.length||st.missing.length)&&!st.waiting) rest=`<button ${btn} data-id="${id}" onclick="msgSendRest(this)">Send to the rest</button>`;
       }
       return `<div style="${row}"><div style="font-size:11px;color:var(--t3)">${esc(_msgWhen(r.at))}${r.by?' · by '+esc(r.by):''} · to ${esc(_msgToLabel(r.all,r.to))}</div>
       ${line?`<div style="font-size:12px;margin:4px 0">${line}</div>`:''}
@@ -8303,7 +8311,8 @@ window.msgSendRest=function(el){
   const id=el&&el.getAttribute('data-id'); const r=_msgIdOk(id)&&_msgData.sent[id]; if(!r) return;
   if(!_feedsHealthyOrExplain('Send message')) return;
   if(window._resultsSendInFlight){ toast('A send is already running — let it finish before sending again.','warn'); return; }
-  const _st=('status' in _msgObj(r))?null:_msgStats(id), left=_st?(_st.retry.length+_st.missing.length):0; // a record written before the server is read-only
+  if(('status' in _msgObj(r))||!_msgKept(_msgObj(r))) return; // [402] a record written before the server, or with no kept address list (401), is read-only
+  const _st=_msgStats(id), left=_st.retry.length+_st.missing.length;
   if(!left){ toast('Nothing left to send: every address on file was reached or is not confirmed.','ok'); return; }
   openConfirm({title:'Send to the rest?',
     body:`<div>Sends to the <strong>${left}</strong> address${left===1?'':'es'} not yet reached. Already-reached and unconfirmed addresses are skipped.</div>`,
@@ -8324,24 +8333,22 @@ async function _msgRun(body,to,all,fromDraft,mid){
     let d; try{ const s=await getDoc(adminMessagesRef); d=s.exists()?s.data():{}; }
     catch(e){ toast('Could not start the send — nothing was sent. ('+((e&&e.message)||e)+')','err'); return; }
     const sent=_msgObj(d.sent), drafts=_msgObj(d.drafts);
-    if(sent[mid]){ const r=_msgObj(sent[mid]); body=String(r.body||''); to=Array.isArray(r.to)?r.to:[]; } // the message is fixed once: its own text
+    let kept;
+    if(sent[mid]){ const r=_msgObj(sent[mid]); body=String(r.body||''); to=Array.isArray(r.to)?r.to:[]; kept=_msgKept(r)||[]; } // the message is fixed once: its own text and its own kept addresses — a record with none (401) is read-only: nothing written [402 · review B2 L1]
     else{
-      const upd={sent:{[mid]:{body, all:!!all, to, at:Date.now(), by:String(_adminLabel()||'')}}};
+      kept=_msgAddrList(to); // [402] the addresses at the send, kept in the record (the same one write)
+      const upd={sent:{[mid]:{body, all:!!all, to, addrs:kept, at:Date.now(), by:String(_adminLabel()||'')}}};
       const old=Object.keys(sent).sort((x,y)=>(_msgObj(sent[x]).at||0)-(_msgObj(sent[y]).at||0));
       for(let i=0;i<old.length+1-MSG_KEEP_SENT;i++) upd.sent[old[i]]=deleteField(); // the oldest by date beyond 100
       if(_msgIdOk(fromDraft)&&drafts[fromDraft]) upd.drafts={[fromDraft]:deleteField()};
       try{ await setDoc(adminMessagesRef,upd,{merge:true}); }
       catch(e){ toast('Could not start the send — nothing was sent. ('+((e&&e.message)||e)+')','err'); return; }
     }
-    const seen=new Set();
-    for(const u of to){
-      for(const a of recipientsFor(u)){
-        if(seen.has(a)) continue; seen.add(a);
-        const id='m_'+mid+'_'+_wlKey(a);
-        if(_outboxDoc(id)){ ids.push(id); continue; } // written by an earlier press of this message
-        const r=await _outWrite(id,{kind:'message',u,by:'admin',aid,to:a,body:_msgText(u,body),subj:MSG_KIND});
-        if(r==='error'){ bad++; badWho.push(u); } else ids.push(id);
-      }
+    for(const {u,a} of kept){
+      const id='m_'+mid+'_'+_wlKey(a);
+      if(_outboxDoc(id)){ ids.push(id); continue; } // written by an earlier press of this message
+      const r=await _outWrite(id,{kind:'message',u,by:'admin',aid,to:a,body:_msgText(u,body),subj:MSG_KIND});
+      if(r==='error'){ bad++; badWho.push(u); } else ids.push(id);
     }
     if(!bad){ _msgEd={id:null, body:'', all:true, pick:[]}; _msgPaintCompose(); }
     _msgSending=ids.length?{mid, ids, retried:{}, bad, badWho, aid}:null;
@@ -8500,7 +8507,7 @@ ${bullets([
   `As an occasional reminder if you have not yet bid in an open phase`,
   `As a confirmation whenever you change your alert choices`
 ])}
-Alert e-mails are sent within 5 minutes of a change.
+Alert e-mails are sent within a few minutes of a change.
 
 Choose which alerts you get under E-mail alerts at the top of the site. Results, reminders and messages from the admin are always sent.
 
@@ -13927,7 +13934,7 @@ window.addUser=async function(){
   const inp=document.getElementById("newUserInput");
   const val=inp.value.trim().toUpperCase();
   if(!val){toast("Enter initials","err");return;}
-  if(!/^[A-Za-z0-9._-]{1,8}$/.test(val)){toast("Initials — up to 8 letters or numbers (. _ - also allowed).","err");return;} // [401 · §327] what the mail contract carries (rules moCommonOk)
+  if(!/^[A-Za-z0-9_-]{1,8}$/.test(val)){toast("Initials — up to 8 letters or numbers (_ - also allowed).","err");return;} // [402 · §330] no "." — initials are used inside field paths, where a dot splits the path (within the mail contract, rules moCommonOk)
   if(names.includes(val)){toast(val+" already exists","err");return;}
   // [399 · §305] PLAN §5: every box is checked, in the boxes' order (initials, full name, FTE, login e-mail, KP e-mail), BEFORE
   // anything is written — so a person is never half made. Every box but the KP e-mail is required.
@@ -15540,6 +15547,7 @@ window.renderCloudBackups=async function(){
 // [399 · §312] 7.6 and 7.7 reworded (owner ruling DECISIONS §312).
 // [401 · §316–§325] Now from tests/docs/server-mail-plan/build-b/text/rules-text.json: 2.10 (W22), 3.11 (W24), 7.8 (W25 as
 // ruled in DECISIONS §325). 175 items, [12,39,11,16,13,26,8,50].
+// [402 · §330] 7.8 (W25 as ruled in DECISIONS §330) from tests/docs/server-mail-plan/build-b2/text/rules-text.json; every other item as above.
 // Each item: n (its number), kind (new / live / term), html (its approved words), and for a live line its label, the words shown
 // when the setting gives nothing (whenEmpty) and, for the timer mode, the name of each value.
 const RULES_TEXT={sub:"How the auction works: every setting, the decision engine, and the rules staff see. Current values are read each time this page opens.",sections:[
@@ -15680,7 +15688,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"7.5","kind":"new","html":"On the board staff see each projection, the \"Competition week\" label and the Minimum new bid. They never see the admin's decisions before results are sent. Under Blinded bidding they see no one else's initials."},
 {"n":"7.6","kind":"new","html":"On a locked week's card, once results are sent, a bid that won shows <b>Won in<\/b> and the phase's name; any other bid shows as an ordinary locked week."},
 {"n":"7.7","kind":"new","html":"<b>KP e-mail under E-mail alerts<\/b> (☰ menu) — shown only while \"Ask users for their KP e-mail at login\" is on. It is an on / off switch. Off stops every copy to that address, and the person is not asked for one at sign-in. On asks for the address and checks it as the sign-in question does; from Phase 1 on, an address not yet welcomed gets the welcome e-mail. At Done, the confirmation e-mail lists the KP e-mail with the alert choices; when it is turned off or replaced, the address that was on file gets one note saying so. It is the same KP e-mail the Users page shows."},
-{"n":"7.8","kind":"new","html":"<b>Bidding alert e-mails<\/b> are sent within 5 minutes of a change. Every change for a person in the 3 minutes after the first goes in one e-mail, each line with the time it happened; a projection that changed and changed back sends nothing."}
+{"n":"7.8","kind":"new","html":"<b>Bidding alert e-mails<\/b> are sent within a few minutes of a change. Every change for a person in the 90 seconds after the first goes in one e-mail, each line with the time it happened; a projection that changed and changed back sends nothing."}
 ]},
 {n:"8",title:"Glossary",items:[
 {"n":"8.1","kind":"term","html":"The admin's decision that a person gets the week. Possible only once bidding is closed.","term":"Approve"},
