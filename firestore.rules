@@ -279,8 +279,8 @@ service cloud.firestore {
     }
     // ── [383 · §287, owner 17 Oct 2026] AUCTION SETUP — settings locked for the WHOLE auction ──
     // adminSettings.setupLock: ON only when exactly true, read AS STORED (resource), so one write
-    // can never switch it off and change a setting at once. It may change only before the auction
-    // has begun (auctionUnderway, rehearsals count). With it ON and begun, the keys of setOnceKeys()
+    // can never switch it off and change a setting at once. Once the auction has begun (auctionUnderway,
+    // rehearsals count) it changes only in a write of setupLock alone, as a boolean [403 · G.3 · §333]. With it ON and begun, the keys of setOnceKeys()
     // change only through a ONE-setting unlock, adminSettings.setupUnlock {key, at, by}, written
     // with at == request.time, younger than setupUnlockMinutes(), in a write that touches no other
     // locked key and REMOVES the unlock (it re-locks by itself). Rehearsal Mode may always go OFF,
@@ -331,7 +331,10 @@ service cloud.firestore {
              in setOnceKeys().concat(['simulatorEnabled']);
     }
     function setupGateOk() {
-      return (!touchesKeys(['setupLock']) || !auctionUnderway())
+      return (!touchesKeys(['setupLock']) || !auctionUnderway()
+              || (request.method != 'delete' && resource != null // [403 · G.3 · §333] once begun: a write of setupLock ALONE, as a boolean (ON or OFF)
+                  && request.resource.data.get('setupLock', null) is bool
+                  && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['setupLock'])))
         && (!setupLockOn()
             || !(touchesKeys(setOnceKeys()) || rehearsalOnWrite())
             || !auctionUnderway()

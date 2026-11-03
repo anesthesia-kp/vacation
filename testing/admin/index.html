@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 402;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 403;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -652,7 +652,9 @@ thead th{color:var(--t2)}
         <div class="page-sub">Smart Lock Control is the minimum FTE a week needs to stay open. Below it, Smart Lock locks the week. Default 0.4.</div>
       </div>
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
-        <button class="btn btn-primary" onclick="saveAllSlots()">Save All Weeks</button>
+        <span style="display:inline-flex;align-items:center;gap:6px"><input type="number" id="slotsSetStd" class="inp" style="width:64px;padding:3px 6px" step="0.1" min="0"><button class="btn btn-primary" onclick="setAllSlots('std')">Set All Standard Weeks</button></span>
+        <span style="display:inline-flex;align-items:center;gap:6px"><input type="number" id="slotsSetSum" class="inp" style="width:64px;padding:3px 6px" step="0.1" min="0"><button class="btn btn-primary" onclick="setAllSlots('summer')">Set All Summer Weeks</button></span>
+        <span style="display:inline-flex;align-items:center;gap:6px"><input type="number" id="slotsSetHd" class="inp" style="width:64px;padding:3px 6px" step="0.1" min="0"><button class="btn btn-primary" onclick="setAllSlots('hd')">Set All High-Demand Weeks</button></span>
         <span style="display:inline-flex;align-items:center;gap:6px;padding-left:14px;border-left:1px solid var(--b1)">
           <label style="font-size:12px;color:var(--t2);font-weight:600" for="slcGlobal">Global Smart Lock Control:</label>
           <input type="number" id="slcGlobal" class="inp" style="width:72px;padding:3px 6px" step="0.1" min="-1" max="1" placeholder="0.4" title="One value applied to every week's Smart Lock Control (−1.0 to 1.0)">
@@ -661,7 +663,7 @@ thead th{color:var(--t2)}
         <span id="slotsStatus" style="font-size:12px;color:var(--t2)"></span>
       </div>
       <div class="tbl-box" style="overflow-x:auto;max-height:640px;overflow-y:auto">
-        <table style="width:auto;border-collapse:collapse"><thead><tr><th style="padding:5px 8px">Week</th><th style="padding:5px 8px">FTE Available</th><th style="padding:5px 8px">Smart Lock Control</th><th style="padding:5px 6px"></th></tr></thead><tbody id="slotsBody"></tbody></table>
+        <table style="width:auto;border-collapse:collapse"><thead><tr><th style="padding:5px 8px">Week</th><th style="padding:5px 8px">FTE Available</th><th style="padding:5px 8px" title="Available = capacity minus approved winners; pending bids not counted">Available</th><th style="padding:5px 8px">Smart Lock Control</th><th style="padding:5px 6px"></th></tr></thead><tbody id="slotsBody"></tbody></table>
       </div>
     </div>
 
@@ -972,7 +974,7 @@ thead th{color:var(--t2)}
         <div class="trow">
           <div>
             <div class="trow-label">Lock these settings once the auction begins</div>
-            <div class="trow-desc">When on, the settings above "Changeable between phases" lock when Phase 1 begins, until Reset Auction.</div>
+            <div class="trow-desc">When on, the settings above "Changeable between phases", except Allowed lowerings, lock when Phase 1 begins, until the lock is turned off or Reset Auction.</div>
             <div id="setupLockNow" class="trow-desc" style="margin-top:4px;font-weight:700"></div>
           </div>
           <div class="tog" id="setupLockTog" onclick="toggleSetupLock()"></div>
@@ -1033,6 +1035,24 @@ thead th{color:var(--t2)}
             <div id="strictLvlState" class="trow-desc" style="margin-top:4px;font-weight:700"></div>
           </div>
           <select class="sel" id="strictLvlSel" aria-label="Strict applies to" style="flex-shrink:0;max-width:150px" onchange="setStrictLevel(this.value)"><option value="10">Every numbered bid</option><option value="9">9 or stronger</option><option value="8">8 or stronger</option><option value="7">7 or stronger</option><option value="6">6 or stronger</option><option value="5">5 or stronger</option><option value="4">4 or stronger</option><option value="3">3 or stronger</option><option value="2">2 or stronger</option><option value="1">1 or stronger</option></select>
+        </div>
+      </div>
+      <!-- [403 · admin2 · F.3] ALLOWED LOWERINGS PER PHASE and its "Usage by user" — moved here, directly below Competition weeks, from Archived
+           settings: the same markup, ids, handlers, stored keys and locks (renderBidLowerings / saveBidLowerings, adminSettings.bidLowerings). -->
+      <div class="card">
+        <div class="card-title">Allowed lowerings per phase</div>
+        <div class="trow-desc" style="margin-bottom:8px">For Loose rules: how many times a person may make a bid weaker in each phase. Unlimited = no limit. Locked while a phase is running.</div>
+        <div id="blConfigRow" style="display:flex;gap:14px;flex-wrap:wrap;align-items:end"></div>
+        <div id="blLockNote" style="font-size:11.5px;color:var(--yellow);display:none;margin-top:6px">Locked while a phase is running — editable between phases, once results are sent.</div>
+        <div id="blRulePreview" style="font-size:11.5px;color:var(--t2);margin-top:8px"></div>
+      </div>
+      <!-- [385 · §292, owner 1:25 PM answer 4] the Bid Lowerings page's "Usage by user" card, byte for byte, below the allowances; folded on load like
+           every card on this page (initControlsCollapsibles) and drawn by renderBidLowerings, unchanged -->
+      <div class="card">
+        <div class="card-title">Usage by user</div>
+        <div class="trow-desc" style="margin-bottom:8px">Lowerings each person has used.</div>
+        <div class="tbl-box tbl-in" style="overflow-x:auto;max-height:480px;overflow-y:auto">
+          <table><thead id="blUsageHead"></thead><tbody id="blUsageBody"></tbody></table>
         </div>
       </div>
       <!-- BID NUMBERS [390 · §295, owner 26 Oct 2026] — one stored value, adminSettings.topBid: the highest bid number, a whole number 10 to 16
@@ -1139,31 +1159,14 @@ thead th{color:var(--t2)}
            pinned in code: the stored settings rule as before; never saved = Priority Lock ON, lowerings Unlimited. Bidders see the lock /
            lowering wording only while lowerings are limited in some phase or the lock is OFF (staff _blTextsOn). Neither is a row of the
            guided review any more (SETUP_ROWS / SETUP_PHASE_ROWS); Priority Lock is still a set-once key (SET_ONCE_KEYS, firestore.rules). -->
-      <div class="page-head" id="setupArchivedHead" style="margin:28px 0 14px"><div class="page-title" style="font-size:16px">Archived settings</div><div class="page-sub">Retired — the competition-week rules do this job. Leave at the defaults (Priority Lock ON, lowerings Unlimited).</div></div>
+      <div class="page-head" id="setupArchivedHead" style="margin:28px 0 14px"><div class="page-title" style="font-size:16px">Archived settings</div><div class="page-sub">Not used while the competition-week rules are in force. For a Loose-rules auction, limit weaker bids with Allowed lowerings per phase, under Competition weeks.</div><!-- [403 · admin2 · F.2] W7 --></div>
       <div class="card">
         <div class="card-title">Priority Lock</div>
         <div class="trow">
           <div>
-            <div class="trow-label">Priority Lock (bids only increase)</div>
-            <div class="trow-desc">When ON, a weaker bid counts against the lowerings allowed below (Unlimited = no limit). When OFF, bids can be lowered freely.</div>
+            <div class="trow-desc">Fixed ON: a weaker bid counts as a lowering, limited by Allowed lowerings per phase. OFF would quietly make the competition-week rules stricter.</div>
           </div>
-          <div class="tog" id="prioLockToggle" onclick="togglePrioLock()"></div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-title">Allowed lowerings per phase</div>
-        <div class="trow-desc" style="margin-bottom:8px">Per person, per phase. Locked while a phase is running.</div>
-        <div id="blConfigRow" style="display:flex;gap:14px;flex-wrap:wrap;align-items:end"></div>
-        <div id="blLockNote" style="font-size:11.5px;color:var(--yellow);display:none;margin-top:6px">Locked while a phase is running — editable between phases, once results are sent.</div>
-        <div id="blRulePreview" style="font-size:11.5px;color:var(--t2);margin-top:8px"></div>
-      </div>
-      <!-- [385 · §292, owner 1:25 PM answer 4] the Bid Lowerings page's "Usage by user" card, byte for byte, below the allowances; folded on load like
-           every card on this page (initControlsCollapsibles) and drawn by renderBidLowerings, unchanged -->
-      <div class="card">
-        <div class="card-title">Usage by user</div>
-        <div class="trow-desc" style="margin-bottom:8px">Lowerings each person has used.</div>
-        <div class="tbl-box tbl-in" style="overflow-x:auto;max-height:480px;overflow-y:auto">
-          <table><thead id="blUsageHead"></thead><tbody id="blUsageBody"></tbody></table>
+          <div class="tog on" id="prioLockToggle" aria-disabled="true" title="Fixed ON" style="opacity:.55;cursor:not-allowed"></div><!-- [403 · admin2 · F.1] fixed ON: no click; the stored value is not read or written here -->
         </div>
       </div>
     </div>
@@ -2260,7 +2263,7 @@ function _resState(ph){
     for(const a of rc){
       const id=aid?_resId(aid,ph,a):'', st=aid?_outRootState(id,a):{s:'missing',n:0,retry:false};
       if(st.s!=='missing') out.any=true;
-      if(st.s==='notsent'&&st.gone){ out.gone++; out.rows.push({u, to:a, id, s:'gone', n:st.n}); continue; }
+      if(st.s==='notsent'&&(st.gone||st.n>=9)){ out.gone++; out.rows.push({u, to:a, id, s:'gone', n:st.n}); continue; } // [403 · §333 #0] n>=9: all eight Send-again numbers used — done for publishing; it stays in Not sent and the pill stays lit
       out.total++; out[st.s]++; if(st.retry) out.retry.push(id); if(st.s==='notsent'&&st.unsure) out.unsure++;
       out.rows.push({u, to:a, id, s:st.s, n:st.n});
     }
@@ -2548,7 +2551,7 @@ function _moNotSentRows(cur){
     if(!_moResendable(d)) return;
     const chain=[d]; let free=0;
     for(let n=2;n<=9;n++){ const x=_moGet(id+'__'+n)||cur.get(id+'__'+n); if(x) chain.push(x); else if(!free) free=n; }
-    if(chain.some(x=>x!==d&&(x.q===true||x.st==='dropped'))) return; // a Send again waiting, or one the server refused
+    if(chain.some(x=>x!==d&&(x.q===true||(x.st==='dropped'&&chain.length<9)))) return; // a Send again waiting, or one the server refused - [403 fix · P2] except when all eight numbers are used: it stays listed, with no Send again
     const got=new Set(); for(const x of chain) for(const a of Object.keys(x.res||{})) if(x.res[a]&&x.res[a].ok===true) got.add(a);
     const addrs=d.st==='off'?[String(d.to||'').toLowerCase()].filter(Boolean):Object.keys(d.res||{});
     const owed=addrs.filter(a=>!got.has(a));
@@ -5287,7 +5290,7 @@ function syncControls(){
   const kp=document.getElementById("kpPromptToggle");
   if(kp) kp.className="tog"+(adminSettings.kpEmailPromptEnabled!==false?" on":"");
   const pl=document.getElementById("prioLockToggle");
-  if(pl) pl.className="tog"+(adminSettings.priorityLockEnabled!==false?" on":"");
+  if(pl) pl.className="tog on"; // [403 · admin2 · F.1] shown fixed ON whatever is stored
   if(typeof _syncTimerModeRadios==='function') _syncTimerModeRadios(); // [build 274 · V3]
   // Simulator master switch: red-when-armed toggle, armed banner, and run buttons disabled while OFF.
   const simOn=adminSettings.simulatorEnabled===true;
@@ -6239,9 +6242,9 @@ window.clearEverything=function(){
               // begins — but bidding is still gated by phase1Started, so unlocking here
               // does NOT let anyone bid before Begin Phase 1.
               setDoc(locksRef,{globalLock:false,weeks:{}}),
-              // Timer back to zero/off; Begin Phase 1 re-arms it to a fresh 48h.
+              // Timer back to zero/off, its length the one Begin Phase 1 arms [403 · admin2 · H.1]; Begin re-arms it.
               // [AUDIT #2] Plain setDoc (no merge) — this also drops any biddingClosed flag.
-              setDoc(timerRef,{enabled:false,lastChange:null,durationHours:48,biddingClosed:false}),
+              setDoc(timerRef,{enabled:false,lastChange:null,durationHours:_phaseArmHours(Date.now()),biddingClosed:false}),
               // Change log + resetAt fence → Popcornometer and the "changes in
               // last 12h" counters read 0 on BOTH sites after a full reset.
               setDoc(changesRef,{log:[],resetAt:Date.now()}),
@@ -6303,7 +6306,7 @@ function _phaseGapNow(){
 }
 function cfgUnlockedNow(){ return !phase1Started()||_phaseGapNow(); }
 // ── [383 · §287, owner 17 Oct 2026] AUCTION SETUP: the settings locked for the WHOLE auction, the Setup page, ONE review per phase start ──
-// adminSettings.setupLock: ON only when exactly true; it may change only before Phase 1 (phase1Started = rules auctionUnderway, rehearsals
+// adminSettings.setupLock: ON only when exactly true; it may change at any time, once begun in a write of setupLock alone [403 · G] (phase1Started = rules auctionUnderway, rehearsals
 // count). With it ON and the auction begun, SET_ONCE_KEYS (and Rehearsal Mode ON) are locked from Begin Phase 1 until Reset Auction - the
 // between-phases window does not apply to them. The bail-out: ONE setting unlocked for ONE change, adminSettings.setupUnlock {key, at, by},
 // for SETUP_UNLOCK_MS; the save of that setting removes it in the SAME write (re-locks by itself); the server refuses a locked-key write
@@ -6312,7 +6315,7 @@ function cfgUnlockedNow(){ return !phase1Started()||_phaseGapNow(); }
 // ten minutes are IDENTICAL to firestore.rules setOnceKeys() / setupUnlockMinutes() (a pin test keeps them equal).
 const SET_ONCE_KEYS=['auctionConfig','bidFloors','bidRuleSet','strictThreshold','comboBids','priorityLockEnabled','blindedBidding','topBid','phasePlan']; // [395 · E2] the Phases card, locked by the setup lock like the bid numbers · [390 · §295] the bid numbers, locked by the setup lock like the combination bids
 const SETUP_UNLOCK_MS=600000; // ten minutes = rules setupUnlockMinutes()
-const SETUP_LOCKED_TEXT='Locked for the whole auction (the setup lock is ON) — it can change again only after Reset Auction.';
+const SETUP_LOCKED_TEXT='Locked by the setup lock until the lock is turned off or Reset Auction.';
 // [385 · §292] The Priority Lock row left for Archived settings: still in SET_ONCE_KEYS (locked by the setup lock), no review row; its lock line
 // and "Unlock to edit…" come from SETUP_ARCHIVED_ROWS below (owner 1:25 PM, answer 5).
 // The Setup page's 9 locked rows ([390 · §295] Bid numbers added; [395 · E2] Phases added, after it), in the review's order: key, name, sentence (the approved test page), the element its card holds (the lock
@@ -6322,7 +6325,7 @@ const SETUP_ROWS=[{k:'auctionConfig',n:'Auction calendar',d:'Sets the year’s w
 const SETUP_PHASE_ROWS=[{n:'FTE overage',d:'How far over capacity a week can go before bids show as Under Review.',c:['setup','reviewThresholdSlider']},{n:'NP bids this phase',d:'Whether people may place NP bids in the phase about to begin.',c:['setup','npPhaseToggles']},{n:'Cumulative bid caps',d:'How many weeks a person may have won by the end of each phase.',c:['setup','cap1']},{n:'Timer rules',d:'How long the timer runs, how far each bid resets it, and the opening window when one is set.',c:['controls','timerRulesWrap']},{n:'Projection-change e-mails',d:'E-mails people when another bid changes whether they are winning.',c:['maillog','emailNotifsToggle']},{n:'Locked weeks on the staff board',d:'Where weeks that are not open appear on the staff board: in their month, or gathered at the bottom.',c:['controls','lipPhaseToggles']}]; // one line: the test harness reads top-level constants line by line · [385 · §292] the 'Bid lowerings allowed' row left (Archived settings)
 // [385 · §292, owner 1:25 PM answer 5] The archived locked rows: the lock line, "Unlock to edit…" and Begin Phase 1's count read these with SETUP_ROWS;
 // the guided review does NOT (SETUP_ROWS only). The row is 384's own SETUP_ROWS entry for Priority Lock, unchanged.
-const SETUP_ARCHIVED_ROWS=[{k:'priorityLockEnabled',n:'Priority Lock',d:'A bid on a week can only stay the same or get stronger.',a:'prioLockToggle',p:'setup'}]; // one line: the test harness reads top-level constants line by line
+// [403 · admin2 · F.1] SETUP_ARCHIVED_ROWS removed: Priority Lock is fixed ON (its readers all ask typeof first).
 let _setupKeptRehearsal=false, _suReview=null, _suUnlockTimer=null, _suSeen=null, _suBackEl=null, _suBackKind=null, _rmBack=null, _suChain=0;
 function _setupLockOn(){ try{ return !!(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.setupLock===true); }catch(_){ return false; } }
 function _setupLockedNow(){ return _setupLockOn()&&phase1Started(); }
@@ -6373,14 +6376,14 @@ function renderSetupPage(){
     const on=_setupLockOn(), begun=phase1Started(), locked=on&&begun;
     const bn=document.getElementById('setupBanner');
     if(bn){
-      bn.innerHTML=locked?'Locked for duration of auction. In an emergency, use Unlock to edit on one setting.'
+      bn.innerHTML=locked?'Locked until the lock is turned off or Reset Auction. In an emergency, use Unlock to edit on one setting.'
         :(begun?'The lock is off: these settings can change between phases.':'Set these before Phase 1. With the lock on, they cannot change once Phase 1 begins.');
       bn.style.cssText='border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.5;margin-bottom:12px;'+(locked?'background:rgba(54,105,74,.08);border:1px solid rgba(54,105,74,.3);color:#2b5540':'background:rgba(111,106,96,.08);border:1px solid rgba(111,106,96,.3);color:#8a6414');
     }
     const tg=document.getElementById('setupLockTog');
-    if(tg){ tg.className='tog'+(on?' on':''); tg.style.opacity=begun?'.55':''; tg.style.cursor=begun?'not-allowed':''; }
+    if(tg){ tg.className='tog'+(on?' on':''); tg.style.opacity=''; tg.style.cursor=''; } // [403 · admin2 · G] changeable at any time
     const nw=document.getElementById('setupLockNow');
-    if(nw) nw.textContent='Now: '+(begun?(on?'on — locked until Reset Auction':'off — can no longer be changed in this auction'):(on?'on':'off'));
+    if(nw) nw.textContent='Now: '+(on?'on':'off'); // [403 · admin2 · G, W9b]
     const rn=document.getElementById('setupRehearsalNow');
     if(rn) rn.textContent='Now: '+(adminSettings.simulatorEnabled===true?'On':'Off');
     let soonest=null; const _suA=new Set(); // [398 · §303 A2] the Edit buttons that already carry a lock line
@@ -6408,16 +6411,41 @@ function renderSetupPage(){
     if(soonest!==null&&soonest>0) _suUnlockTimer=setTimeout(()=>{ _suUnlockTimer=null; try{ syncControls(); }catch(_){} },soonest+250); // the unlock runs out: repaint (the row locks again)
   }catch(_){}
 }
-// The switch. Before Phase 1 only (the server refuses it once the auction has begun); one tap, one merge write, one Change Log row.
+// The switch [403 · admin2 · G]. Before Phase 1: one tap, one merge write, one Change Log row. Once the auction has begun: two confirms, then the same.
 async function toggleSetupLock(){
   if(!_feedsHealthyOrExplain('Changing the setup lock')){ syncControls(); return; }
   if(typeof _phasesReady!=='undefined'&&!_phasesReady){ toast('Still loading the auction state — try again in a few seconds.','warn'); return; }
-  if(phase1Started()){ toast('The setup lock can no longer be changed in this auction — it can change again only after Reset Auction.','err'); syncControls(); return; }
   const next=!_setupLockOn();
+  if(phase1Started()){ _setupLockAsk(next); return; } // [403 · admin2 · G, §333] after Phase 1 begins: two confirms
+  await _setupLockWrite(next);
+}
+// [403 · admin2 · G, W9] the first, red confirm
+function _setupLockAsk(next){
+  openConfirm({ title:'Change the setup lock?',
+    body:'<div>The auction is under way. '+(next?'ON locks the setup settings until Reset Auction.':'OFF lets the setup settings change between phases.')+'</div>',
+    okText:'Continue', danger:true, onConfirm:()=>_setupLockAsk2(next), onCancel:()=>{ try{ syncControls(); }catch(_){} } });
+}
+// the second: the typed-UNLOCK step (its OK enabled only once UNLOCK is typed, any capitals - _suTyped)
+function _setupLockAsk2(next){
+  const enable=()=>{ const b=document.getElementById('cmOk'); if(b) b.disabled=false; };
+  openConfirm({ title:'Confirm again — the auction is under way',
+    body:'<div class="cmodal-danger">Logged in the Change Log with your initials and time.</div>'
+      +'<div style="margin-top:12px;font-size:12.5px;color:var(--t1)">Type <b>UNLOCK</b> to continue:</div><input type="text" class="inp" id="suTyped" autocomplete="off" autocapitalize="characters" oninput="_suTyped(this)" style="width:100%;margin-top:8px">',
+    okText:next?'Turn the lock ON':'Turn the lock OFF', danger:true,
+    onConfirm:()=>{ enable(); const el=document.getElementById('suTyped'); const t=String((el&&el.value)||'').trim().toLowerCase(); if(t!=='unlock'){ toast('Not changed — you must type UNLOCK in the box to confirm','warn'); syncControls(); return; } return _setupLockWrite(next); },
+    onCancel:()=>{ enable(); try{ syncControls(); }catch(_){} } });
+  const b=document.getElementById('cmOk'); if(b) b.disabled=true;
+}
+// The one write: {setupLock:<bool>} merged and NOTHING else (once the auction is under way the rules allow only that); the Change Log row
+// is its own write after it. Asked again here: the feeds, and that the switch still shows the other way (a dialog can sit open).
+async function _setupLockWrite(next){
+  if(!_feedsHealthyOrExplain('Changing the setup lock')){ syncControls(); return; }
+  if(_setupLockOn()===next){ syncControls(); return; }
+  const begun=phase1Started();
   try{ await setDoc(adminRef,{setupLock:next},{merge:true}); }
   catch(e){ toast('Setup lock NOT saved — nothing changed ('+(e?.message||e)+'). Try again.','err'); syncControls(); return; }
-  try{ await adminLog('ALL','ALL',next?'admin-setup-lock-on':'admin-setup-lock-off'); }catch(_){}
-  toast(next?'Setup lock ON — these settings lock when Phase 1 begins':'Setup lock OFF','ok');
+  try{ await adminLog('ALL','ALL',next?'admin-setup-lock-on':'admin-setup-lock-off',undefined,begun?{by:_setupWho()}:undefined); }catch(_){}
+  toast(next?(begun?'Setup lock ON':'Setup lock ON — these settings lock when Phase 1 begins'):'Setup lock OFF','ok');
 }
 window.toggleSetupLock=toggleSetupLock;
 // The bail-out (owner 1:30 / 1:35 / 5:54 PM): two dialogs with warnings, the typed word UNLOCK, then ONE setting unlocked for ONE change.
@@ -7273,12 +7301,15 @@ function renderNextStep(){
       if(rs&&rs.waiting>0){
         html=box(`${phaseName(cur)} results: sending (${rs.sent} of ${rs.total} sent).`,'');
       } else if(rs&&rs.any&&rs.allSent){
-        html=box(`Every ${phaseName(cur)} results e-mail is sent.`,btn('Publish '+phaseName(cur)+' results','publishPhaseResultsNow('+cur+')','btn-success'));
+        const _nsIds=new Set((typeof _moNotSentRows==='function'&&typeof _moCur==='function')?_moNotSentRows(_moCur()).filter(r=>r.free===0).map(r=>r.id):[]); // [403 fix2] counted as the Not sent list shows them
+        const _ex=rs.rows.filter(r=>r.s==='gone'&&r.n>=9&&_nsIds.has(r.id)).length; // [403 fix · P2] all eight Send-again numbers used: the existing W10 button beside Publish
+        html=box(_ex?`${phaseName(cur)} results: ${_ex} e-mail${_ex!==1?'s':''} not sent after eight tries.`:`Every ${phaseName(cur)} results e-mail is sent.`, // [403 fix2 · §333 10:29 PM]
+          btn('Publish '+phaseName(cur)+' results','publishPhaseResultsNow('+cur+')','btn-success')+(_ex?'&nbsp;'+btn(_ex+' e-mail'+(_ex!==1?'s':'')+' not sent','mqDashGoQueue()','btn-ghost'):''));
       } else if(rs&&rs.any){
         // "Send again" only when a press writes something (a missing request, or a retry); requests "not confirmed" / "interrupted" are
         // sent again one by one in E-mail Info's Not sent (F.5) — the button there carries the dashboard pill's words (W10).
         html=box(_resNotSentLine(cur,rs),(rs.missing>0||rs.retry.length>0)?btn('Send again','sendPhaseResultsEmails()','btn-success')
-          :rs.unsure>0?btn(rs.unsure+' e-mail'+(rs.unsure!==1?'s':'')+' not sent','mqDashGoQueue()','btn-ghost'):'');
+          :rs.notsent>0?btn(rs.notsent+' e-mail'+(rs.notsent!==1?'s':'')+' not sent','mqDashGoQueue()','btn-ghost'):''); // [403 · §333 #0] every dead end, not only "not confirmed" / "interrupted"
       } else {
       // [394 · E1] An RVA Round is a phase of its own: its results go out by the one phase sender.
       html=box(`${phaseName(cur)} is complete, but users have NOT been e-mailed their results yet.`,
@@ -7825,11 +7856,13 @@ async function _commitBeginPhase(next){
 // the starting-reset mark); otherwise the normal starting reset from the timer rules.
 // [AUDIT 2026-07-25 #2] biddingClosed:false rides in the SAME merge as the arm, so a phase can
 // never open with the server-side bidding gate still shut.
+// [403 · admin2 · H.1] The length a phase start arms: the opening window's days when one is set, else the first reset from the Timer Rules.
+function _phaseArmHours(n){ const ow=getTimerRules().openingWindow; return ow?ow.days*24:timerResetHours(n,n); }
 async function _armPhaseTimer(next){
   const _ow=getTimerRules().openingWindow;
   const _n=Date.now();
   try{
-    await _withTimeout(setDoc(timerRef,{enabled:true,biddingClosed:false,durationHours:_ow?_ow.days*24:timerResetHours(_n,_n),lastChange:_n},{merge:true}),15000,'arming the phase timer');
+    await _withTimeout(setDoc(timerRef,{enabled:true,biddingClosed:false,durationHours:_phaseArmHours(_n),lastChange:_n},{merge:true}),15000,'arming the phase timer');
     const s=await _withTimeout(getDoc(timerRef),15000,'verifying the phase timer');
     const d=s.exists()?s.data():{};
     const ok=(d.enabled===true&&d.biddingClosed===false&&typeof d.lastChange==='number'&&d.lastChange>=_n);
@@ -8402,13 +8435,7 @@ window._msgText=_msgText; window._msgTargets=_msgTargets; window._msgCounts=_msg
 let welcomeLogData={};
 onSnapshot(welcomeLogRef, snap=>{ welcomeLogData=snap.exists()?snap.data():{}; });
 function _wlKey(email){ return String(email||"").trim().toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_|_$/g,""); }
-function _amMaxBids(){
-  const raw=adminSettings?.maxBidsPerPhase;
-  if(raw===undefined||raw===null||raw===''||raw==='none') return null;
-  const n=parseInt(raw,10);
-  if(isNaN(n)||n<1||n>10) return null;
-  return n;
-}
+// [403 · admin2 · H.2] an unused helper (it read maxBidsPerPhase; nothing called it) removed
 function _emBold(s){
   return [...s].map(ch=>{
     const c=ch.codePointAt(0);
@@ -12095,8 +12122,7 @@ function systemActionText(e){
   if(t==='admin-topbid'){ const c=Number(e.choice); return (Number.isInteger(c)&&c>=10&&c<=16)?('Bid numbers changed to: <strong>1 to '+c+'</strong>'):'Bid numbers changed'; } // [390 · §295]
   if(t==='admin-phaseplan'){ const m=/^([123])\|(all|hd)$/.exec(String(e.choice||'')); return m?('Phases changed to: <strong>'+m[1]+' Fall phase'+(m[1]!=='1'?'s':'')+' · Phase 1: '+(m[2]==='all'?'every week':'high-demand weeks only')+'</strong>'):'Phases changed'; } // [395 · E2]
   if(t==='admin-fte-bulk') return 'Admin bulk-set an FTE value';
-  if(t==='admin-setup-lock-on') return 'Admin turned the setup lock <strong>ON</strong>'; // [383 · §287]
-  if(t==='admin-setup-lock-off') return 'Admin turned the setup lock <strong>OFF</strong>'; // [383 · §287]
+  if(t==='admin-setup-lock-on'||t==='admin-setup-lock-off') return 'Admin turned the setup lock <strong>'+(t==='admin-setup-lock-on'?'ON':'OFF')+'</strong>'+((typeof e.by==='string'&&e.by)?' ('+esc(e.by)+')':''); // [383 · §287] · [403 · admin2 · G] the initials, when the row carries them
   if(t==='admin-setup-unlock'){ const r=(typeof _setupRow==='function')?_setupRow(String(e.choice||'')):null; return 'Admin unlocked <strong>'+esc(r?r.n:'a setting')+'</strong> for one change'+((typeof e.by==='string'&&e.by)?' ('+esc(e.by)+')':''); } // [383 · §287]
   if(t==='admin-phase-begin'){ const c=String(e.choice||''), m=/^p4r(\d+)$/.exec(c), lbl=m?('Phase 4: Round '+m[1]):(/^p\d{1,2}$/.test(c)?phaseName(c.slice(1)):'A phase'); // [383 · §287] · [394 · E1] a row written before 394 for a Round (p4rN) keeps its name
     if(e.review==='none'||!(Number(e.reviewedAt)>=0&&e.reviewedAt!==undefined)) return esc(lbl)+' begun without the settings review';
@@ -12523,7 +12549,7 @@ function _timerResetLine(){
   const to=pushed?('to end at '+fmtHour12(r.quietEnd)):('to '+stageH+'h');
   const raw=(typeof adminSettings!=='undefined'&&adminSettings)?adminSettings.timerResetMode:undefined;
   const mi=parseInt(raw,10); const mode=(mi===2)?2:1; // [221 / 385 · §292] timer mode 3 removed: a stored 3 reads as mode 1
-  if(mode===2) return 'Some bid changes reset the timer '+to+' (see Timer Rules).'; // [228 / 392 · §297] item 42, as ruled in the fix round (review L1)
+  if(mode===2) return 'Certain bid changes reset the timer '+to+' (see Timer Rules).'; // [228 / 392 · §297] item 42, as ruled in the fix round (review L1)
   return 'Any bid change resets the timer '+to+'.';
 }
 function updatePhaseOpen(){
@@ -13715,7 +13741,8 @@ function _mlogPaint(){
     +'</div>'
     +'<div style="margin-top:8px;font-size:12.5px"><strong>Showing '+v.filtered.length+' of '+v.all.length+'</strong> recorded e-mail'+(v.all.length!==1?'s':'')
     +' · '+(failed?'<span class="pill p-red">'+failed+' failed</span>':'<span class="pill p-green">0 failed</span>')
-    +' <span style="color:var(--t3);font-size:11.5px">· newest first</span></div>';
+    +' <span style="color:var(--t3);font-size:11.5px">· newest first</span>'
+    +' <button class="btn" style="margin-left:6px;padding:2px 10px;font-size:11.5px;background:rgba(31,35,41,.15);color:var(--blue);border:1px solid rgba(31,35,41,.3)" onclick="renderMailLog()">Refresh</button></div>'; // [403 · §333] C: re-reads the log (renderMailLog = paint + _moLogLoad; _moLogBusy ignores a second tap while reading)
   body.innerHTML=v.filtered.map(e=>'<tr>'
     +'<td style="white-space:nowrap" title="'+esc(_mlogWhenLong(e.at))+'">'+esc(_activityWhen(e.at))+'</td>'
     +'<td style="white-space:nowrap;color:var(--t2)">'+esc(e.phase)+'</td>'
@@ -14126,28 +14153,8 @@ window.deleteAllUsers=function(){
   });
 };
 
-// ── Priority Lock Toggle ──
-window.togglePrioLock=async function(){
-  // [SWEEP D6 · build 230] Same bare-toggle class as the already-confirmed global lock, so it
-  // gets the same treatment. Policy-not-data (stored locks survive the off-window and are still
-  // recorded), but bids placed below a committed floor while it's off are LEGAL writes that
-  // re-enabling cannot unwind.
-  if((typeof _setupLocks==='function')&&_setupLocks('priorityLockEnabled')){ toast(SETUP_LOCKED_TEXT,'err'); return; } // [383 · §287]
-  const cur=adminSettings.priorityLockEnabled!==false;
-  openConfirm({
-    title:cur?'Disable the priority-lock rule?':'Enable the priority-lock rule?',
-    body:cur
-      ? `<div class="cmodal-warn" style="margin-top:8px">Bids placed below a committed floor while it's off stay legal, even after you turn it back on. Stored locks are kept.</div>`
-      : `<div class="cmodal-info" style="margin-top:8px">All stored locks are enforced again at once.</div>`,
-    okText:cur?'Disable':'Enable', danger:cur,
-    onConfirm:async()=>{
-      if((typeof _setupLocks==='function')&&_setupLocks('priorityLockEnabled')){ toast(SETUP_LOCKED_TEXT,'err'); return; } // [383 · §287] asked again at the write
-      try{ await setDoc(adminRef,{priorityLockEnabled:!cur,...((typeof _setupSaveExtra==='function')?_setupSaveExtra('priorityLockEnabled'):{})},{merge:true}); }
-      catch(e){ const _m=(typeof _setupDenied==='function')&&_setupDenied(e); if(_m){ toast(_m,'err'); return; } throw e; } // [383 · §287] lock OFF: thrown on, as in 382
-      toast(!cur?"Priority lock enabled":"Priority lock disabled",!cur?"ok":"warn");
-    }
-  });
-};
+// ── Priority Lock: fixed ON [403 · admin2 · F.1, §333] — the switch has no click; this writes nothing, whatever is stored ──
+window.togglePrioLock=function(){ try{ syncControls(); }catch(_){} };
 
 // ── FTE: the bulk tools of the Users page [399 · §310] · [400 · §315] A2: no editing switch — FTE is fixed once Phase 1 begins ──
 // [FTE 25 Jul 2026] Bulk-set every user who has no SAVED FTE. Their boxes have been
@@ -14208,22 +14215,25 @@ function renderSlotsPanel(){
   const tb=document.getElementById("slotsBody"); if(!tb) return;
   if(tb.contains(document.activeElement)) return; // H-7: don't clobber the admin's in-progress edit when a user's bid fires a snapshot
   const missing=new Set(weeksMissingCapacity());
+  const capRows={}; _capacityWeekRows().forEach(r=>{ capRows[r.wk]=r; }); // [403 · §333] the Available column = the Capacity page's rows, its colours (renderCapacityPage)
   tb.innerHTML=mondays.map(d=>{
     const wk=dateKey(d);
     const unsaved=missing.has(wk);
     // Unsaved weeks show the SUGGESTED value (old defaults) in the input, but
     // their live capacity is 0 until Save is pressed.
     const val=unsaved?getDefaultSlots(wk):getSlots(wk);
+    const cr=capRows[wk], cc=(cr&&_capacityWeekOpen(cr))?'#36694a':'#4a1911';
     return `<tr${unsaved?' style="background:rgba(111,106,96,.07)"':''}>
       <td class="mono" style="white-space:nowrap;padding:3px 8px;font-size:12px">${wLabel(d)} <span style="color:var(--t2);font-size:10px;font-weight:400">${wRange(d)}</span></td>
       <td style="padding:3px 8px"><input type="number" id="slot_${wk}" class="inp" style="width:72px;padding:3px 6px" value="${val}" step="0.1" min="0">${unsaved?' <span class="pill p-yellow" title="Live capacity is 0 until saved">NOT SAVED — capacity 0</span>':''}</td>
+      <td style="padding:3px 8px;text-align:center;font-weight:600;color:${cc}">${cr?esc(cr.avail):''}</td>
       <td style="padding:3px 8px"><input type="number" id="slc_${wk}" class="inp" style="width:72px;padding:3px 6px" value="${getSlc(wk)}" step="0.1" min="-1" max="1" title="Week locks when remaining FTE drops below this; opens at or above it"></td>
       <td style="padding:3px 6px"><button class="btn btn-success" style="padding:3px 8px;font-size:11px" onclick="saveOneSlot('${_jsq(wk)}')">Save</button></td>
     </tr>`;
   }).join('');
   const st=document.getElementById("slotsStatus");
   if(st) st.innerHTML=missing.size
-    ? `<span style="color:var(--yellow);font-weight:700">${missing.size} week${missing.size!==1?'s have':' has'} no saved capacity (live capacity 0). The inputs show suggested values — press "Save All Weeks" to apply them.</span>`
+    ? `<span style="color:var(--yellow);font-weight:700">${missing.size} week${missing.size!==1?'s have':' has'} no saved FTE Available (capacity 0) — use the row's Save or a Set All button.</span>`
     : `<span style="color:var(--green)">✓ Every week has an admin-saved capacity.</span>`;
 }
 
@@ -14252,7 +14262,7 @@ window.saveOneSlot=async function(wk){
   if(!r.ok){toast("Enter an FTE availability of 0 or higher","err");return;}
   const c=readSlcInput(wk);
   if(!c.ok){toast("Enter a Smart Lock Control between -1.0 and 1.0","err");return;}
-  // [SWEEP D13 · build 230 — user ruled yes] Same diff-confirm as Save All Weeks (D4). The panel
+  // [SWEEP D13 · build 230 — user ruled yes] A diff-confirm. The panel
   // deliberately refuses to refresh while the cursor is in the table, so a per-week Save is the
   // click most likely to write a stale value the admin isn't really looking at. A no-op save is
   // refused; a real change is named old→new before it re-decides the week's winners. An UNSAVED
@@ -14278,8 +14288,7 @@ window.saveOneSlot=async function(wk){
     },
     // [build 232 · audit] Cancel reverts the inputs to what is actually stored, like every other
     // confirm-on-change in this file. The panel's H-7 guard suppresses redraws while the cursor
-    // is in the table, so a cancelled edit would otherwise sit on screen looking saved — and be
-    // silently swept into a later "Save All Weeks" as a change the admin never intended.
+    // is in the table, so a cancelled edit would otherwise sit on screen looking saved.
     onCancel:()=>{
       const _s=document.getElementById('slot_'+wk); if(_s) _s.value=_unsaved?getDefaultSlots(wk):_oldSlot;
       const _c=document.getElementById('slc_'+wk); if(_c) _c.value=_oldSlc;
@@ -14309,46 +14318,33 @@ window.applyGlobalSlc=async function(){
   });
 };
 
-window.saveAllSlots=async function(){
-  const updates={}; const slcUpdates={};
-  let bad=0, badSlc=0;
-  mondays.forEach(d=>{
-    const wk=dateKey(d);
-    const r=readSlotInput(wk);
-    if(!r.ok){bad++;return;}
-    updates[wk]=r.value;
-    const c=readSlcInput(wk);
-    if(!c.ok){badSlc++;return;}
-    slcUpdates[wk]=c.value;
-  });
-  if(bad){toast(`${bad} week(s) have invalid availability — every week needs a number 0 or higher`,"err");return;}
-  if(badSlc){toast(`${badSlc} week(s) have an invalid Smart Lock Control — must be -1.0 to 1.0`,"err");return;}
-  // [SWEEP D4 · 30 Jul 2026] This wrote all 52 capacities and all 52 Smart Lock Controls from
-  // whatever the DOM held, on one click, with no confirmation — re-deciding who wins across the
-  // whole calendar. (applyGlobalSlc, which writes strictly less, has always confirmed.) It now says
-  // exactly what would change, and a no-op save is refused rather than rewriting 104 fields for
-  // nothing — renderSlotsPanel deliberately refuses to refresh while the cursor is in the table, so
-  // a blind bulk write is the one operation most likely to save a stale value.
-  const _chSlots=Object.keys(updates).filter(wk=>Math.abs(Number(updates[wk])-Number(getSlots(wk)))>1e-9);
-  const _chSlc=Object.keys(slcUpdates).filter(wk=>Math.abs(Number(slcUpdates[wk])-Number(getSlc(wk)))>1e-9);
-  // [319 · D-b] one engine run for all 52 weeks; list every week the new cap would put below its approved total
-  const _apAll=(_chSlots.length&&typeof computeApprovals==='function'&&typeof weekLedger==='function')?computeApprovals():null;
-  const _belowAll=_apAll?_chSlots.filter(wk=>Number(updates[wk])<weekLedger(wk,_apAll).approvedFte).map(wk=>wLabel(wkDate(wk))+': '+weekLedger(wk,_apAll).approvedFte+' approved vs '+updates[wk]+' new cap'):[];
-  if(!_chSlots.length&&!_chSlc.length){ toast('Nothing to save — every week already matches what is stored.','ok'); return; }
-  const _wkList=a=>a.slice(0,6).map(wk=>wLabel(wkDate(wk))).join(', ')+(a.length>6?' and '+(a.length-6)+' more':'');
+// [403 · §333] Set All Standard / Summer / High-Demand Weeks: one number for every week of that kind, written to vacations/slots only
+// (never Smart Lock Control). High-demand = HIGH_DEMAND_WEEKS (the calendar's ticks and the summer weeks ticked high-demand); summer =
+// the summer range less those; standard = every other week — together every week of the year once. Before Phase 1 a plain confirm;
+// once Phase 1 has begun a red one with the row Save's warnings.
+function _slotsKindWeeks(kind){
+  return mondays.filter(d=>{ const wk=dateKey(d), hd=HIGH_DEMAND_WEEKS.has(wk), su=d>=AC_SUMMER_START&&d<=AC_SUMMER_END;
+    return kind==='hd'?hd:kind==='summer'?(su&&!hd):(!su&&!hd); }).map(d=>dateKey(d));
+}
+const SLOTS_KINDS={std:['slotsSetStd','standard'],summer:['slotsSetSum','summer'],hd:['slotsSetHd','high-demand']};
+window.setAllSlots=async function(kind){
+  const k=SLOTS_KINDS[kind]; if(!k) return;
+  const el=document.getElementById(k[0]), raw=(el?.value||'').trim(), n=parseFloat(raw);
+  if(raw===''||isNaN(n)||n<0){ toast("Enter an FTE availability of 0 or higher","err"); return; }
+  const v=Math.round(n*10)/10, wks=_slotsKindWeeks(kind), live=phase1Started();
+  const ap=live?computeApprovals():null;
+  const below=ap?wks.filter(wk=>v<weekLedger(wk,ap).approvedFte).map(wk=>wLabel(wkDate(wk))+': '+weekLedger(wk,ap).approvedFte+' approved vs '+v+' new cap'):[];
   openConfirm({
-    title:'Save all 52 weeks?',
-    body:`<ul style="margin:10px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">
-            ${_chSlots.length?`<li><strong>${_chSlots.length}</strong> week${_chSlots.length!==1?'s':''} change availability: ${esc(_wkList(_chSlots))}</li>`:'<li>No availability changes</li>'}
-            ${_chSlc.length?`<li><strong>${_chSlc.length}</strong> week${_chSlc.length!==1?'s':''} change Smart Lock Control: ${esc(_wkList(_chSlc))}</li>`:'<li>No Smart Lock Control changes</li>'}
-            ${_belowAll.length?`<li class="cmodal-danger">Capacity drops below what is already approved — ${esc(_belowAll.join('; '))}</li>`:''}
-          </ul>
-          <div class="cmodal-warn" style="margin-top:6px">Availability changes re-decide those weeks' winners immediately.</div>`,
-    okText:'Save these changes', danger:true,
+    title:'Set FTE Available for '+k[1]+' weeks',
+    body:(kind==='hd'?`<div>${esc(wks.map(_p1WkLabel).join(', '))}</div>`:'')
+      +(below.length?`<div class="cmodal-danger">Capacity drops below what is already approved — ${esc(below.join('; '))}</div>`:'')
+      +(live?`<div class="cmodal-warn" style="margin-top:6px">Availability changes re-decide those weeks' winners immediately.</div>`:''),
+    okText:'Set '+wks.length+' weeks to '+v, danger:live,
     onConfirm:async()=>{
+      const updates={}; wks.forEach(wk=>{ updates[wk]=v; });
       await setDoc(slotsRef,updates,{merge:true});
-      await setDoc(slcRef,slcUpdates,{merge:true});
-      toast(`Saved ${_chSlots.length} availability and ${_chSlc.length} smart-lock change${(_chSlots.length+_chSlc.length)!==1?'s':''}`,"ok");
+      wks.forEach(wk=>{ const inp=document.getElementById('slot_'+wk); if(inp) inp.value=v; });
+      toast(`FTE Available set to ${v} for ${wks.length} ${k[1]} weeks`,'ok');
     }
   });
 };
@@ -14988,8 +14984,8 @@ async function _doFullRestore(f){
     const _ppC=v=>{ const n=(typeof phasePlanNormalize==='function')?phasePlanNormalize(v):null; return n?(n.fall+'|'+n.p1All):'3|false'; }; // [395 · E2] the Phases setting compared as the pages read it (phasePlanNormalize): absent and junk are 3 Fall phases, high-demand only
     const _tbC=v=>(typeof v==='number'&&Number.isInteger(v)&&v>=10&&v<=16)?String(v):'10'; // [390 · §295] the bid numbers compared as the pages read them (topBidNormalize): absent and junk are 10
     const _cfgDiff=FROZEN_CONFIG_KEYS.filter(k=>(k==='bidRuleSet')?(_rsC(_bk[k])!==_rsC(_live[k])):(k==='comboBids')?(_cbC(_bk[k])!==_cbC(_live[k])):(k==='strictThreshold')?(_slC(_bk[k])!==_slC(_live[k])):(k==='topBid')?(_tbC(_bk[k])!==_tbC(_live[k])):(k==='phasePlan')?(_ppC(_bk[k])!==_ppC(_live[k])):(_cfgCanon(_bk[k])!==_cfgCanon(_live[k]))); // [380 · §282] every other key exactly as before · [382 · §286] strictThreshold normalised
-    { const _suC=v=>v===true; if(_suC(_bk.setupLock)!==_suC(_live.setupLock)) _cfgDiff.push('setupLock'); // [383 · §287] the setup lock (missing = OFF) changes only before Phase 1
-      if(_suC(_live.setupLock)){ if((_bk.priorityLockEnabled!==false)!==(_live.priorityLockEnabled!==false)) _cfgDiff.push('priorityLockEnabled'); if((_bk.blindedBidding===true)!==(_live.blindedBidding===true)) _cfgDiff.push('blindedBidding'); } } // ...and with it ON these two are locked too (Rehearsal Mode: the restore always writes it OFF, which is always allowed)
+    { const _suC=v=>v===true; // [403 fix · P4] setupLock is not compared: a restore always keeps the live one
+      if(_suC(_live.setupLock)){ /* [403 fix2 · §333] Priority Lock not compared: a restore never writes it */ if((_bk.blindedBidding===true)!==(_live.blindedBidding===true)) _cfgDiff.push('blindedBidding'); } } // ...and with it ON these two are locked too (Rehearsal Mode: the restore always writes it OFF, which is always allowed)
     if(_cfgDiff.length){
       toast('Restore ABORTED — this backup was made under a different auction setup ('
         +_cfgDiff.join(', ')+') and the auction is already underway. Restoring it would mix two '
@@ -15040,9 +15036,9 @@ async function _doFullRestore(f){
       if(k==='adminSettings'&&v&&typeof v==='object'){ const _ls=((typeof adminSettings!=='undefined'&&adminSettings)||{}).strictThreshold, _bs=v.strictThreshold, _sn=x=>(typeof x==='number'&&Number.isInteger(x)&&x>=1&&x<=9)?String(x):'every'; if(_ls!==_bs&&_sn(_ls)===_sn(_bs)){ v={...v}; if(_ls===undefined) delete v.strictThreshold; else v.strictThreshold=_ls; } } // [382 · §286] as 381's F2: equal once normalised (absent, 10, junk) - the LIVE value is written, so the frozen key is not touched (a backup that equals live is written unchanged)
       if(k==='adminSettings'&&v&&typeof v==='object'){ const _lt=((typeof adminSettings!=='undefined'&&adminSettings)||{}).topBid, _bt=v.topBid, _tn=x=>(typeof x==='number'&&Number.isInteger(x)&&x>=10&&x<=16)?String(x):'10'; if(_lt!==_bt&&_tn(_lt)===_tn(_bt)){ v={...v}; if(_lt===undefined) delete v.topBid; else v.topBid=_lt; } } // [390 · §295] as 382's: equal once normalised (absent, 10, junk) - the LIVE value is written, so the frozen key is not touched (a backup that equals live is written unchanged)
       if(k==='adminSettings'&&v&&typeof v==='object'){ const _lp=((typeof adminSettings!=='undefined'&&adminSettings)||{}).phasePlan, _bp=v.phasePlan, _pn=x=>{ const n=(typeof phasePlanNormalize==='function')?phasePlanNormalize(x):null; return n?(n.fall+'|'+n.p1All):'3|false'; }; if(_cfgCanon(_lp)!==_cfgCanon(_bp)&&_pn(_lp)===_pn(_bp)){ v={...v}; if(_lp===undefined) delete v.phasePlan; else v.phasePlan=_lp; } } // [395 · E2] as the bid numbers': equal once normalised - the LIVE value is written, so the frozen key is not touched
-      if(k==='adminSettings'&&v&&typeof v==='object'){ const _la=((typeof adminSettings!=='undefined'&&adminSettings)||{}); const _keep=(x,f)=>{ if(_la[x]!==v[x]&&f(_la[x])===f(v[x])){ v={...v}; if(_la[x]===undefined) delete v[x]; else v[x]=_la[x]; } }; // [383 · §287] the live raw value where both mean the same, so the key is not touched
-        _keep('setupLock',x=>x===true);
-        if(_la.setupLock===true&&typeof phase1Started==='function'&&phase1Started()){ _keep('priorityLockEnabled',x=>x!==false); _keep('blindedBidding',x=>x===true); }
+      if(k==='adminSettings'&&(v=(v&&typeof v==='object')?v:{})){ const _la=((typeof adminSettings!=='undefined'&&adminSettings)||{}); const _keep=(x,f)=>{ if(_la[x]!==v[x]&&f(_la[x])===f(v[x])){ v={...v}; if(_la[x]===undefined) delete v[x]; else v[x]=_la[x]; } }; // [383 · §287] the live raw value where both mean the same, so the key is not touched
+        _keep('setupLock',()=>true); _keep('priorityLockEnabled',()=>true); // [403 fix · P1, P4] always the LIVE value, whatever the backup holds (Priority Lock is fixed ON; the setup lock is never restored)
+        if(_la.setupLock===true&&typeof phase1Started==='function'&&phase1Started()){ _keep('blindedBidding',x=>x===true); }
         if(Object.prototype.hasOwnProperty.call(v,'setupReview')||Object.prototype.hasOwnProperty.call(v,'setupUnlock')){ v={...v}; delete v.setupReview; delete v.setupUnlock; } } // the review mark and any unlock are dropped: a restore ends an unlock and asks for a fresh review
       // [401 · §317] phases keeps the LIVE mail id and gets a fresh cut-off (the mail server drops any alert written before it; the
       // E-mail Log starts from it); the old results lease goes.
@@ -15567,7 +15563,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 ]},
 {n:"2",title:"Settings explained",items:[
 {"n":"2.1","kind":"new","html":"<b>When settings can change.<\/b> \"Locked while a phase is running\" means the setting can change before Phase 1, and between phases once that phase's results are sent. Each RVA round counts as a phase."},
-{"n":"2.2","kind":"new","html":"<b>Setup lock.<\/b> With \"Lock these settings once the auction begins\" on, the settings marked <i>setup lock<\/i> below stay fixed from Begin Phase 1 until Reset Auction. In an emergency, Unlock to edit opens one setting for one change."},
+{"n":"2.2","kind":"new","html":"<b>Setup lock.<\/b> With \"Lock these settings once the auction begins\" on, the settings marked <i>setup lock<\/i> below stay fixed from Begin Phase 1 until the lock is turned off or Reset Auction. In an emergency, Unlock to edit opens one setting for one change."},
 {"n":"2.3","kind":"new","html":"<b>Bidding Timer<\/b> — turns the timer on or off for everyone. Off: bidding stays open until the admin closes it."},
 {"n":"2.4","kind":"new","html":"<b>Global Lock<\/b> — freezes all bidding: no one can add, change or remove a bid. Individually locked weeks stay locked when it is turned off."},
 {"n":"2.5","kind":"new","html":"<b>Lock All · Unlock All · Lock All Except High Demand · one week<\/b> — a locked week takes no new bids, changes or removals; its projection stands. During a high-demand-only Phase 1, unlocking any other week asks first."},
@@ -15579,7 +15575,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.11","kind":"new","html":"<b>Welcome e-mails<\/b> — sent once to each person when Phase 1 begins, or at first sign-in if added later. Default on."},
 {"n":"2.12","kind":"new","html":"<b>Ask users for their KP e-mail at login<\/b> — asks anyone with no KP e-mail on file for one, not someone who answered No thanks or whose KP e-mail is off, and lets each person turn their KP e-mail off and on under E-mail alerts (7.7). Off: no one is asked and that option is hidden; KP e-mails on file still get every e-mail. Default on."},
 {"n":"2.13","kind":"new","html":"<b>Quota reset day<\/b> — the e-mail service's billing day, for the usage meter. No effect on bidding."},
-{"n":"2.14","kind":"new","html":"<b>Lock these settings once the auction begins<\/b> — the setup lock (see above). Default off. Can change only before Phase 1."},
+{"n":"2.14","kind":"new","html":"<b>Lock these settings once the auction begins<\/b> — the setup lock (see above). Default off. Can be turned on or off at any time; once Phase 1 has begun it asks twice, the second time with UNLOCK typed."},
 {"n":"2.15","kind":"new","html":"<b>Calendar and Phases<\/b> — the year, the summer range and the high-demand weeks: Thanksgiving, Christmas and New Year's, 0–3 Spring Break weeks and 0–1 Ski Week (each can be unticked), and any summer weeks ticked. Its pop-up starts with Phases. Decides which weeks get which floor, and which weeks Phase 1 opens. Locked while a phase is running; the year is fixed once Phase 1 begins. Setup lock."},
 {"n":"2.16","kind":"new","html":"<b>Bid Floors by Week Category<\/b> — the weakest bid allowed on high-demand weeks and on summer weeks (3 to 10, or no floor; defaults 4 and no floor). A summer week marked high-demand takes the summer floor. A bid below it cannot be placed or approved. Any number blocks NP. Locked while a phase is running. Setup lock."},
 {"n":"2.17","kind":"new","html":"<b>Competition weeks<\/b> — off = Loose, on = Strict (section 5). Default Loose. Locked while a phase is running. Setup lock."},
@@ -15591,15 +15587,15 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.24","kind":"new","html":"<b>NP Bids by Phase<\/b> — the phases where NP bids may be placed (default Phases 3 and 4). An NP bid counts only if NP was allowed in the phase it was placed. Locked while a phase is running."},
 {"n":"2.25","kind":"new","html":"<b>Cumulative Bid Caps<\/b> — the most weeks a person may hold through each phase: weeks won earlier plus bids placed this phase. One value for all RVA rounds; a later cap cannot be lower than an earlier one. Locked while a phase is running."},
 {"n":"2.26","kind":"new","html":"<b>FTE Overage Amount<\/b> — how far over a week's FTE available a bid can go and be Under Review instead of Losing. 0 to 2; default 0.5. Locked while a phase is running."},
-{"n":"2.27","kind":"new","html":"<b>Priority Lock<\/b> — on (default): a weaker re-bid counts against the lowerings allowed below. Off: bids can be lowered freely. Setup lock."},
-{"n":"2.28","kind":"new","html":"<b>Allowed lowerings per phase<\/b> — how many weaker re-bids each person may make per phase (default Unlimited). At the defaults these two add no rule; the competition-week rules apply either way. Locked while a phase is running."},
+{"n":"2.27","kind":"new","html":"<b>Priority Lock<\/b> — fixed on: a weaker re-bid counts as a lowering, limited by Allowed lowerings per phase. It cannot be turned off."},
+{"n":"2.28","kind":"new","html":"<b>Allowed lowerings per phase<\/b> (under Competition weeks) — for Loose rules: how many weaker re-bids each person may make per phase (default Unlimited, which adds no rule). Locked while a phase is running."},
 {"n":"2.29","kind":"new","html":"<b>Backups &amp; Restore<\/b> — cloud and local copies of the whole auction. No effect on decisions."},
 {"n":"2.30","kind":"new","html":"<b>Timer Rules<\/b> — how long the timer resets to, shortening as the phase goes on; overnight protection; the opening window (section 3). Can be saved at any time."},
 {"n":"2.31","kind":"new","html":"<b>Timer Reset Mode<\/b> — which bid changes restart the timer: 1 every bid (default), 2 only changes that affect others (section 3). Can be changed at any time."},
 {"n":"2.32","kind":"new","html":"<b>Destination of the Day<\/b> — the photo on the staff sign-in screen. Default on. No effect on bidding."},
 {"n":"2.33","kind":"new","html":"<b>Locked weeks on the staff board<\/b> — per phase: locked weeks stay in their month in grey, or gather at the bottom. Defaults: Phase 1 at the bottom, later phases in their month. Display only."},
 {"n":"2.34","kind":"new","html":"<b>Reset Auction<\/b> — deletes every bid, decision, remembered bid, lock, withheld number and all phase history. Settings, users, FTE and FTE available stay. Offers a backup first."},
-{"n":"2.35","kind":"new","html":"<b>FTE Available (per week)<\/b> — the week's room, filled strongest bid first (section 6). A week with no saved value has 0 and cannot be won."},
+{"n":"2.35","kind":"new","html":"<b>FTE Available (per week)<\/b> — the week's room, filled strongest bid first (section 6). Each row's Save sets one week. Set All Standard Weeks, Set All Summer Weeks and Set All High-Demand Weeks set every week of that kind at once; a summer week ticked high-demand counts as high-demand. Available = FTE available minus approved winners, as on the Capacity page. A week with no saved value has 0 and cannot be won."},
 {"n":"2.36","kind":"new","html":"<b>Smart Lock Control<\/b> (per week, or Apply to All Weeks) — the least remaining FTE a week needs to stay open when Smart Lock runs; −1.0 to 1.0, default 0.4. Remaining = FTE available minus earlier winners and approved bids. No effect on the projection."},
 {"n":"2.37","kind":"new","html":"<b>Rehearsal Mode<\/b> — unlocks Run Simulation, Auto-Approve/Deny and the testing skip buttons for backups and results. Not a sandbox: real bids, real e-mails. Default off. After Phase 1 begins it asks first, and cannot be turned on at all if the setup lock is on."},
 {"n":"2.38","kind":"new","html":"<b>Run Simulation<\/b> — tops each person up to \"Bids per user\" (1–10, default 3) with random bids; their own bids count and are never changed. Skips locked weeks; cannot run under Global Lock."},
@@ -15725,10 +15721,10 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"8.32","kind":"term","html":"One bidding period with its own bids, decisions and results. Each RVA round is a phase of its own.","term":"Phase"},
 {"n":"8.33","kind":"term","html":"The engine's live answer to who gets each week: Winning, Under Review or Losing. Decisions never change it.","term":"Projection"},
 {"n":"8.34","kind":"term","html":"With a short reset, the timer is not allowed to run out overnight (default 9 PM to 9 AM Pacific).","term":"Quiet hours"},
-{"n":"8.35","kind":"term","html":"A person's own reference bid on a week this phase: the bid they last placed there (with Priority Lock off, their strongest), kept after they remove it. \"Weaker\" is measured against it. Cleared when a phase completes. Not the same as a bid floor.","term":"Remembered bid"},
+{"n":"8.35","kind":"term","html":"A person's own reference bid on a week this phase: the bid they last placed there, kept after they remove it. \"Weaker\" is measured against it. Cleared when a phase completes. Not the same as a bid floor.","term":"Remembered bid"},
 {"n":"8.36","kind":"term","html":"The admin has e-mailed a completed phase's results. Staff then see their outcomes.","term":"Results sent"},
 {"n":"8.37","kind":"term","html":"The last phase, run as rounds through the year. Each round opens chosen months and is its own phase.","term":"Rolling Vacation Auction (RVA)"},
-{"n":"8.38","kind":"term","html":"When on, keeps the core Auction Setup settings fixed from Begin Phase 1 until Reset Auction.","term":"Setup lock"},
+{"n":"8.38","kind":"term","html":"When on, keeps the core Auction Setup settings fixed from Begin Phase 1 until it is turned off or Reset Auction.","term":"Setup lock"},
 {"n":"8.39","kind":"term","html":"Locks open weeks whose remaining FTE is below their Smart Lock Control and unlocks locked weeks at or above it — only high-demand weeks during a high-demand-only Phase 1.","term":"Smart Lock"},
 {"n":"8.40","kind":"term","html":"Per week, the least remaining FTE needed to stay open when Smart Lock runs. Default 0.4.","term":"Smart Lock Control"},
 {"n":"8.41","kind":"term","html":"The ranking of every bid: 1/2/3 › 1/2 › 1 › 2/3 › 2 › … › 10 › 11 … 16 › NP.","term":"Strength order"},
