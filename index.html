@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 240;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 241;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -3886,6 +3886,7 @@ function _whyTap(b){
     if(open) p.removeAttribute('hidden'); else p.setAttribute('hidden','');
     if(!b.getAttribute('data-label')) b.setAttribute('data-label',b.textContent);
     b.setAttribute('aria-expanded',open?'true':'false'); b.textContent=open?'Hide':b.getAttribute('data-label');
+    if(open&&typeof p.scrollIntoView==='function'){ let _sm=true; try{ _sm=!(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches); }catch(_){} try{ p.scrollIntoView({block:'nearest',behavior:_sm?'smooth':'auto'}); }catch(_){ try{ p.scrollIntoView(false); }catch(__){} } } // [241 · §345] the answer is brought into view when it opens
     return true;
   }catch(_){ return false; }
 }
@@ -3893,7 +3894,7 @@ function _whyClick(ev){ try{ const t=ev&&ev.target, b=(t&&typeof t.closest==='fu
 document.addEventListener('click',_whyClick);
 // [405 · §343, his 9:36 PM "all as recommended"] THE BID BOX'S REASON LINES R1–R11 and the fallback - the words after "N — ", word for word.
 // R1 week · R2 won · R3 held · R4 floor · R5 np · R6 low · R7 in · R8 left · R9 down · R10 moved · R11 combo ("uses 3, which is on Week 9") · the fallback (the check could not tell)
-const NA_WHY={week:(w,n)=>"on your other week"+(n===1?"":"s")+" ("+w+"). To use one here, change that week's bid first.", won:(w,ph)=>"won "+w+" in "+ph+", so it can't be used again.", held:"taken back by the admin for this auction.", floor:(k,f)=>"this "+k+" week needs "+f+" or better.", np:ph=>"not allowed in "+ph+".", low:b=>"weaker than your last bid here ("+b+"), and you have no lowerings left.", in:b=>"weaker than this competition week's minimum new bid of "+b+".", left:b=>"weaker than the last bid that was on this week ("+b+").", down:b=>"your bid here can only be weakened to a bid that still wins and is no weaker than the lowest other winning bid ("+b+").", down0:b=>"your "+b+" is the weakest winning bid on this competition week, so it can't be weakened.", tip:"your bid would make this a competition week, so it must match or beat the weakest winning or under-review bid here.", moved:w=>"a bid moved here can't be lowered this "+w+".", combo:(n,c)=>"uses "+n+", which "+c+".", unknown:"not available right now."};
+const NA_WHY={week:(w,n)=>"on your other week"+(n===1?"":"s")+" ("+w+"). To use one here, change that week's bid first.", won:(w,ph)=>"won "+w+" in "+ph+", so it can't be used again.", held:"taken back by the admin for this auction.", floor:(k,f)=>"this "+k+" week needs "+f+" or better.", np:ph=>"not allowed in "+ph+".", low:b=>"weaker than your last bid here ("+b+"), and you have no lowerings left.", in:b=>"weaker than this competition week's minimum new bid of "+b+".", left:b=>"weaker than the last bid that was on this week ("+b+").", down:b=>"your bid here can only be weakened to a bid that still wins and is no weaker than the lowest winning bid ("+b+").", down0:b=>"your "+b+" is the weakest winning bid on this competition week, so it can't be weakened.", tip:"your bid would make this a competition week, so it must match or beat the weakest winning or under-review bid here.", moved:w=>"a bid moved here can't be lowered this "+w+".", combo:(n,c)=>"uses "+n+", which "+c+".", unknown:"not available right now."};
 const NA_WHY_ORDER=['week','won','held','floor','np','low','in','left','down','moved','combo','unknown'];
 // The numbers of one line in ladder order: three or more whole numbers in a row are a run ("6–10, NP").
 function _naNums(ls){
@@ -3936,8 +3937,9 @@ function _naWhyLines(off,why){
       else if(rec&&rec.r==='ww'){
         if((rec.why==='in'||rec.why==='left')&&minB()!==null){ add(rec.why,'',lbl,NA_WHY[rec.why](bidLbl(minB()))); continue; }
         if(rec.why==='in'&&minB()===null&&typeof _wwWouldTip==='function'&&_wwWouldTip(user,wk)){ add('in','tip',lbl,NA_WHY.tip); continue; } // [405 · §344 S1] the bid would make it a competition week
-        if(rec.why==='down'&&lowO()!==null){ add('down','',lbl,NA_WHY.down(bidLbl(lowO()))); continue; }
-        if(rec.why==='down'&&lowO()===null){ const _lv=isVisibleBid(user,wk)?data[user][wk]:undefined; if(_lv!==undefined&&_lv!==null&&getOutcome(wk,user,computeApprovals(data))==='win'){ add('down','0',lbl,NA_WHY.down0(bidLbl(_lv))); continue; } } // [405 · §344 S2, his 7:26 AM words] the only winning bid here: it is the weakest, so it can't be weakened (no live winning bid: the fallback)
+        if(rec.why==='down'){ const _lv=isVisibleBid(user,wk)?data[user][wk]:undefined, _own=_lv!==undefined&&_lv!==null&&getOutcome(wk,user,computeApprovals(data))==='win';
+          if(_own&&(lowO()===null||priorityScore(_lv)>=priorityScore(lowO()))){ add('down','0',lbl,NA_WHY.down0(bidLbl(_lv))); continue; } // [405 · §344 S2] · [241 · §345 item 1] the person's own winning bid is the weakest winning bid here (alone, tied, or with stronger bids around it): it can't be weakened
+          if(lowO()!==null&&_lv!==undefined&&_lv!==null){ add('down','',lbl,NA_WHY.down(bidLbl(lowO()))); continue; } } // R9: someone else holds the lowest winning bid. [241 · blind review] Only with a live bid here: re-bidding after a remove, the new bid can push a winner out, so the board as it stands does not give the limit - the fallback
         if(rec.why==='moved'){ add('moved','',lbl,NA_WHY.moved(_strictWord())); continue; }
       }
     }catch(_){}
