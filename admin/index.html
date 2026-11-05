@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 404;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 405;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -726,6 +726,17 @@ thead th{color:var(--t2)}
           <button class="btn btn-primary" onclick="addUser()">Add</button>
         </div>
         <div class="page-sub" style="margin-top:6px">Every field is required except the KP e-mail. FTE isn't shared with the Daily Schedule.</div>
+      </div>
+      <div class="card"><!-- [405 · §342 · plan A1] Add several users: closed on load; the fold of Timer Rules / Backups (title row, .chev Show / Hide) -->
+        <div class="card-title" id="batchAddHead" onclick="toggleBatchAdd()" style="cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none"><span>Add several users</span><span id="baChevron" class="chev">▸ Show</span></div>
+        <div id="batchAddWrap" style="display:none">
+          <textarea id="batchAddText" class="inp" rows="6" autocomplete="off" spellcheck="false" oninput="batchAddEdited()" placeholder="One person per line: initials, full name, FTE, login e-mail, KP e-mail" style="display:block;width:100%;box-sizing:border-box;margin-top:10px;font:inherit;font-size:13px;line-height:1.45;resize:vertical"></textarea>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+            <button class="btn btn-ghost" onclick="batchAddPreview()">Preview</button>
+            <button class="btn btn-primary" id="batchAddGo" style="display:none" onclick="batchAddCommit()"></button>
+          </div>
+          <div id="batchAddOut" style="margin-top:10px"></div>
+        </div>
       </div>
       <div class="card">
         <div class="card-title">All Users (<span id="userCount">0</span>)<span id="fteTotal" style="font-weight:400;color:var(--t2)"></span></div>
@@ -1746,6 +1757,17 @@ function _normKpEmail(raw){
   if(!dom.includes('.')) return null;             // domain without a dot
   if(local.startsWith('.')||local.endsWith('.')||dom.startsWith('.')||dom.endsWith('.')) return null; // leading/trailing dot
   return v;
+}
+// [405 · §342 · plan A2] THE LOGIN E-MAIL CHECK — GMAIL.COM ONLY (B7, his 8:17 PM: "Sorry, B7 gmail only"). ONE function, used by Add User,
+// each row's Save (adminSaveUserRow — only when the login e-mail is entered or changed) and Add several users. Trimmed, lower-cased, no
+// spaces, exactly one "@", the part after it exactly gmail.com, something before it. Returns the address, or null to refuse. An address
+// already stored is never re-checked (no caller passes one).
+function _gmailLogin(raw){
+  const v=String(raw==null?'':raw).trim().toLowerCase();
+  if(!v||/\s/.test(v)) return null;
+  const at=v.indexOf('@');
+  if(at<1||v.indexOf('@',at+1)!==-1) return null;
+  return v.slice(at+1)==='gmail.com'?v:null;
 }
 let _phasesReady=false; // [build 222] set by the phases snapshot; gates ARMING rehearsal on a fresh load
 // [build 242] Dashboard load-order guard. Each is set true the first time its snapshot reports
@@ -11766,12 +11788,12 @@ window.adminSaveUserRow=async function(I){
   const probs=[];
   if(!nameV) probs.push('enter a full name');
   if(!loginV) probs.push('enter a login e-mail');
-  else if(chL&&!loginV.includes('@')) probs.push('the login e-mail must be a valid address');
+  else if(chL&&loginV!==String(loginEmailsData?.[I]||'').trim().toLowerCase()&&!_gmailLogin(loginV)) probs.push('the login e-mail must be a Gmail address (name@gmail.com)'); // [405 · §342 · plan A2] only a login entered or changed: a stored one is never re-checked
   let fteRaw=null, fteV=null;
   if(chF){ fteRaw=parseFloat(bF.value); if(isNaN(fteRaw)||fteRaw<FTE_MIN||fteRaw>1) probs.push('FTE must be between '+FTE_MIN+' and 1'); else fteV=Math.round(fteRaw*10)/10; } // the 0.1 grid
   const kpV=(chK&&kpRaw)?_normKpEmail(kpRaw):null;
   if(chK&&kpRaw&&!kpV) probs.push('the KP e-mail is not a valid address (leave it blank to turn KP e-mail off)');
-  if(probs.length){ toast('Not saved — '+I+': '+probs.join('; ')+'. Nothing was written.','err'); return; }
+  if(probs.length){ toast((probs.length===1&&/Gmail address/.test(probs[0]))?'NOT saved — '+probs[0]+'.':'Not saved — '+I+': '+probs.join('; ')+'. Nothing was written.','err'); return; } // [405 · §342 · plan A2] alone: the plan's words
   // (b) what is stored right now
   const sName=String(usernamesData?.[I]??''), sLogin=String(loginEmailsData?.[I]||'').trim().toLowerCase(), sKp=String(emailsData?.[I]||'').trim().toLowerCase();
   const sFteRaw=fteData?.[I], sFteNone=(sFteRaw===undefined||sFteRaw===null||sFteRaw==='');
@@ -13821,50 +13843,72 @@ function renderUserPanel(){
   const count=document.getElementById("userCount"); if(count)count.textContent=names.length;
 }
 
-window.addUser=async function(){
-  const inp=document.getElementById("newUserInput");
-  const val=inp.value.trim().toUpperCase();
-  if(!val){toast("Enter initials","err");return;}
-  if(!/^[A-Za-z0-9_-]{1,8}$/.test(val)){toast("Initials — up to 8 letters or numbers (_ - also allowed).","err");return;} // [402 · §330] no "." — initials are used inside field paths, where a dot splits the path (within the mail contract, rules moCommonOk)
-  if(names.includes(val)){toast(val+" already exists","err");return;}
+// [405 · §342 · plan A1/A2] ADD USER'S CHECKS, in its order — ONE function, run by Add User (addUser) and by Add several users (each line, at
+// Preview and again at "Add N users"), so the two can never drift. It reads the page's current data (names, fteData, loginEmails, phases).
+// Returns {code, msg} (msg = Add User's own words) for a refusal, or {v:{val,fullName,fte,loginEmail,kp}} when every check passes; code
+// 'prior' (a prior winner's initials at another FTE) carries v and {wonWk, kept} for Add User's pop-up. inList(kind, value) — Add several
+// users only — says a value is on more than one line of the list ('initials' after the roster check, 'login' after another person's login).
+function _addUserCheck(val,fullName,fteStr,loginEmail,email2,inList){
+  if(!val) return {code:'noInitials',msg:"Enter initials"};
+  if(!/^[A-Za-z0-9_-]{1,8}$/.test(val)) return {code:'badInitials',msg:"Initials — up to 8 letters or numbers (_ - also allowed)."}; // [402 · §330] no "." — initials are used inside field paths, where a dot splits the path (within the mail contract, rules moCommonOk)
+  if(names.includes(val)) return {code:'onRoster',msg:val+" already exists"};
+  if(inList&&inList('initials',val)) return {code:'listInitials'};
   // [399 · §305] PLAN §5: every box is checked, in the boxes' order (initials, full name, FTE, login e-mail, KP e-mail), BEFORE
   // anything is written — so a person is never half made. Every box but the KP e-mail is required.
-  const fullName=(document.getElementById("newUserFullName")?.value||'').trim();
-  if(!fullName){toast("Enter a full name for "+val,"err");return;} // W3
-  // [FTE 25 Jul 2026] FTE is now REQUIRED — no silent 1.0 for a blank field. Same rule as
-  // week capacity: only admin-entered values count, so a new user can't join the roster
-  // without one (which would otherwise block the next Begin Phase).
-  const fteEl=document.getElementById("newUserFte");
-  if(!fteEl || fteEl.value.trim()===""){toast("Enter an FTE for "+val+" — there is no default","err");return;}
-  const parsed=parseFloat(fteEl.value);
-  if(isNaN(parsed)||parsed<FTE_MIN||parsed>1){toast("FTE must be between "+FTE_MIN+" and 1","err");return;}
+  if(!fullName) return {code:'noName',msg:"Enter a full name for "+val}; // W3
+  // [FTE 25 Jul 2026] FTE is REQUIRED — no silent 1.0 for a blank field: a new user can't join the roster without one.
+  if(fteStr==="") return {code:'noFte',msg:"Enter an FTE for "+val+" — there is no default"};
+  const parsed=parseFloat(fteStr);
+  if(isNaN(parsed)||parsed<FTE_MIN||parsed>1) return {code:'badFte',msg:"FTE must be between "+FTE_MIN+" and 1"};
   const fte=Math.round(parsed*10)/10;   // 0.1 grid, same as the row Save [AUDIT #10]
-  // Login e-mail lower-cased so the security rules' case-sensitive match works.
-  const loginEmail=(document.getElementById("newUserLoginEmail")?.value||'').trim().toLowerCase();
-  const email2=(document.getElementById("newUserEmail2")?.value||'').trim();
-  if(!loginEmail){toast("Enter a login e-mail for "+val,"err");return;} // W4
-  if(!loginEmail.includes('@')){toast("Login e-mail must be a valid address","err");return;}
+  if(!loginEmail) return {code:'noLogin',msg:"Enter a login e-mail for "+val}; // W4
+  if(!_gmailLogin(loginEmail)) return {code:'notGmail',msg:"NOT added — the login e-mail must be a Gmail address (name@gmail.com)."}; // [405 · §342 · plan A2]
   // [build 225 · DUPLICATE-LOGIN-EMAIL CRITICAL] same refusal as the row Save (adminSaveUserRow)
   const _lh=_loginEmailOwner(loginEmail,val);
-  if(_lh){ toast('NOT added — '+loginEmail+' is already the login e-mail for '+_lh+'. Two users can never share a Google login.','err'); return; }
+  if(_lh) return {code:'loginTaken',owner:_lh,msg:'NOT added — '+loginEmail+' is already the login e-mail for '+_lh+'. Two users can never share a Google login.'};
+  if(inList&&inList('login',loginEmail)) return {code:'listLogin'};
   // [build 270 · M3] the same _normKpEmail hygiene as the row Save; a refused KP address refuses the whole Add (W5)
-  const _kp2=email2?_normKpEmail(email2):null;
-  if(email2&&!_kp2){toast("NOT added — that KP e-mail is not a valid address. Fix it, or leave the box blank.","err");return;}
-  // [AUDIT 2026-07-26 medium] Initials collision with a departed PRIOR WINNER. removeUser keeps
-  // a prior winner's FTE entry (H1/H11) so their completed-phase wins keep consuming the right
-  // capacity. If a NEW hire is added with those same initials, this write would overwrite that
-  // kept FTE with the new person's value — retroactively revaluing the old person's locked-in
-  // wins (an under-value silently OVER-allocates every later phase's weeks). Warn and confirm.
+  const kp=email2?_normKpEmail(email2):null;
+  if(email2&&!kp) return {code:'badKp',msg:"NOT added — that KP e-mail is not a valid address. Fix it, or leave the box blank."};
   // [400 · §315 fix round] L4: from Phase 1 on a SAVED FTE is fixed — re-adding initials whose FTE is still on file (a departed prior winner keeps theirs)
   // with a DIFFERENT FTE is refused before anything is written; the same FTE re-adds them (it writes the value already stored).
   { const _sv=fteData[val], _svN=Number(_sv);
     if(((typeof phase1Started!=='function')||phase1Started())&&_sv!==undefined&&_sv!==null&&_sv!==''&&!isNaN(_svN)&&_svN>=FTE_MIN&&_svN<=1&&Math.abs(_svN-fte)>1e-9){
-      toast('NOT added — '+val+' already has a saved FTE of '+_svN+', which is fixed from Phase 1 on. Enter '+_svN+' to re-add the same person, or use different initials.','err'); return; } }
-  if(!_addUserBypass){
-    const _cp=phasesData.completedPhases||{};
+      return {code:'fteFixed',kept:_svN,msg:'NOT added — '+val+' already has a saved FTE of '+_svN+', which is fixed from Phase 1 on. Enter '+_svN+' to re-add the same person, or use different initials.'}; } }
+  const v={val,fullName,fte,loginEmail,kp};
+  // [AUDIT 2026-07-26 medium] Initials collision with a departed PRIOR WINNER. removeUser keeps a prior winner's FTE entry (H1/H11) so their
+  // completed-phase wins keep consuming the right capacity; a NEW hire with those initials would overwrite that kept FTE — Add User asks first.
+  { const _cp=phasesData.completedPhases||{};
     const _wonWk=[]; for(const ph in _cp){ const ap=_cp[ph]?.approvals||{}; for(const wk in ap){ if(Array.isArray(ap[wk])&&ap[wk].includes(val)&&!_wonWk.includes(wk)) _wonWk.push(wk); } }
     const _keptFte=fteData[val];
-    if(_wonWk.length && _keptFte!==undefined && Math.abs(Number(_keptFte)-fte)>1e-9){
+    if(_wonWk.length && _keptFte!==undefined && Math.abs(Number(_keptFte)-fte)>1e-9) return {code:'prior',wonWk:_wonWk,kept:_keptFte,v}; }
+  return {v};
+}
+// [405 · §342 · plan A1] ADD USER'S FIVE WRITES for one person, into the caller's batch — shared by Add User and Add several users.
+// [400 · §315 11:35] roster entry, FTE, full name, login e-mail and KP e-mail land together or not at all. Each is a merge write of this
+// person's one key, so no other key of the shared documents changes (full name, login e-mail and KP e-mail are shared with the Daily
+// Schedule; FTE is this site's own). A merge set with arrayUnion also makes the roster document if it is absent. No KP address → no KP write.
+function _addUserWrites(b,val,fte,fullName,loginEmail,kp){
+  b.set(userListRef,{users:arrayUnion(val)},{merge:true});
+  b.set(fteRef,{[val]:fte},{merge:true});
+  b.set(usernamesRef,{[val]:fullName},{merge:true});
+  b.set(loginEmailsRef,{[val]:loginEmail},{merge:true});
+  if(kp) b.set(emailsRef,{[val]:kp},{merge:true});
+}
+window.addUser=async function(){
+  const inp=document.getElementById("newUserInput");
+  const val=inp.value.trim().toUpperCase();
+  const fullName=(document.getElementById("newUserFullName")?.value||'').trim();
+  const fteEl=document.getElementById("newUserFte");
+  // Login e-mail lower-cased so the security rules' case-sensitive match works.
+  const loginEmail=(document.getElementById("newUserLoginEmail")?.value||'').trim().toLowerCase();
+  const email2=(document.getElementById("newUserEmail2")?.value||'').trim();
+  const r=_addUserCheck(val,fullName,fteEl?fteEl.value.trim():'',loginEmail,email2); // [405 · §342 · plan A1/A2] every check, in order, before any write
+  if(r.code&&r.code!=='prior'){ toast(r.msg,'err'); return; }
+  const fte=r.v.fte;
+  if(!_addUserBypass){
+    const _wonWk=r.code==='prior'?r.wonWk:[], _keptFte=r.kept; // [405 · §342 · plan A1] found by _addUserCheck; the pop-up below is unchanged
+    if(_wonWk.length){
       openConfirm({
         title:'Initials reuse a prior winner',
         body:`<div><strong>${esc(val)}</strong> already has ${_wonWk.length} locked-in win${_wonWk.length!==1?'s':''} from a completed phase, at FTE <strong>${_keptFte}</strong>.</div>
@@ -13875,17 +13919,8 @@ window.addUser=async function(){
       return;
     }
   }
-  // [400 · §315 11:35] the person is added in ONE batch — roster entry, FTE, full name, login e-mail and KP e-mail land together or
-  // not at all ([400 · §315 11:10] item 4 for the first two; his 11:35 AM ruling for the rest). Each is a merge write of this person's one key, so no
-  // other key of the shared documents changes (full name, login e-mail and KP e-mail are shared with the Daily Schedule; FTE is this site's own).
-  // A merge set with arrayUnion also makes the roster document if it is absent. A blank KP box writes nothing (asked at sign-in) — [build 270 · M3]
-  // the KP address is the one normalised and checked above.
   { const b=writeBatch(db);
-    b.set(userListRef,{users:arrayUnion(val)},{merge:true});
-    b.set(fteRef,{[val]:fte},{merge:true});
-    b.set(usernamesRef,{[val]:fullName},{merge:true});
-    b.set(loginEmailsRef,{[val]:loginEmail},{merge:true});
-    if(_kp2) b.set(emailsRef,{[val]:_kp2},{merge:true});
+    _addUserWrites(b,val,fte,fullName,loginEmail,r.v.kp); // [405 · §342 · plan A1] the five writes, shared with Add several users
     try{ await b.commit(); }catch(e){ toast('NOT added — the write was rejected ('+(e?.code||e?.message||e)+'). Nothing was written.','err'); return; } }
   if(loginEmail) await maybeSyncEmailToUser(); // after the batch, as before: the sign-in map, so the person can bid at once
   ['newUserInput','newUserFullName','newUserLoginEmail','newUserEmail2'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
@@ -13894,6 +13929,145 @@ window.addUser=async function(){
   // logs in for the first time: their Google address and (if set here) their KP address
   // are both welcomed then, and the KP prompt is skipped because it's already on file.
   toast("Added "+val+(fullName?" ("+fullName+")":"")+" · FTE "+fte,"ok"); // [400 · §315 11:10] item 4: the roster and the FTE land together, so there is no "FTE failed" case
+};
+
+// ── [405 · §342 · plan A1] ADD SEVERAL USERS (B1–B6) ────────────────────────────────────────────────────────────────────────────
+// A folded card under Add User: a text box (one person per line), Preview, and — once a preview has accepted lines — "Add N users".
+// Each line is read by SHAPE (B4): split on commas, tabs or runs of spaces (a non-breaking space or a trailing comma is a separator too); an
+// address ending kp.org (any sub-domain) = KP e-mail; any other address = login e-mail; a plain number = FTE (Add User's 0.4–1 check, 0.1
+// grid); a word of 1–8 capitals / digits / _ - = initials; the remaining words, in order = full name. Two of one kind refuse the line.
+// Missing initials are PROPOSED (B2) and shown "(proposed)"; written only with Add N users. Every line then runs Add User's own checks
+// (_addUserCheck, in its order) plus the list's own (a value on more than one line); a prior winner's initials at another FTE are refused
+// here (Add User asks about that one person). Preview writes nothing; editing the box clears it. Add N users confirms, runs every check
+// again on the page's current data, then writes ONE batch with Add User's five writes per person (_addUserWrites) — all or none (B5) —
+// then maybeSyncEmailToUser() once. The added lines leave the box; refused lines stay. More than 100 people (500 writes, Firestore's
+// batch limit) are refused at Preview.
+const BA_MAX=100;
+let _baPrev=null;   // the preview on show: {text, rows} — cleared by any edit of the box
+let _baBusy=false;  // set while Add N users is writing
+const BA_TWO={login:'two login e-mails',kp:'two KP e-mails',fte:'two FTE numbers',ini:'two initials'};
+function _baReadLine(raw){
+  const f={ini:null,name:'',fte:null,login:null,kp:null,two:null}, words=[];
+  for(const t of String(raw).split(/[\s,]+/).filter(Boolean)){
+    let k=null, v=t;
+    if(t.includes('@')){ v=t.toLowerCase(); const d=v.slice(v.lastIndexOf('@')+1); k=(d==='kp.org'||d.endsWith('.kp.org'))?'kp':'login'; }
+    else if(/^(\d+(\.\d*)?|\.\d+)$/.test(t)) k='fte';
+    else if(/^[A-Z0-9_-]{1,8}$/.test(t)) k='ini';
+    if(!k){ words.push(t); continue; }
+    if(f[k]!==null){ if(!f.two) f.two=k; continue; }
+    f[k]=v;
+  }
+  f.name=words.join(' ');
+  return f;
+}
+// B2: first letter of the first name + first letter of the last name; if taken, first letter + the last name's first two; then those + 2, 3…
+function _baPropose(name,taken){
+  const w=String(name).normalize('NFD').split(' ').map(x=>x.replace(/[^A-Za-z]/g,'').toUpperCase()).filter(Boolean);
+  if(w.length<2) return null; // one word: no first-and-last pair to propose from — the line must carry its initials
+  const a=w[0][0], last=w[w.length-1], one=a+last[0], two=a+last.slice(0,2);
+  if(!taken.has(one)) return one;
+  if(!taken.has(two)) return two;
+  for(let n=2;n<1000;n++){ const c=two+n; if(c.length<=8&&!taken.has(c)) return c; }
+  return null;
+}
+function _baWhy(r,f,val){
+  switch(r.code){
+    case 'onRoster': return val+' is already a user. Change them in All Users.';
+    case 'listInitials': return val+' is on more than one line.';
+    case 'badInitials': return 'the initials must be up to 8 letters or numbers.';
+    case 'noName': return 'no full name.';
+    case 'noFte': return 'no FTE.';
+    case 'badFte': return 'the FTE must be between '+FTE_MIN+' and 1.';
+    case 'noLogin': return 'no login e-mail.';
+    case 'notGmail': return 'the login e-mail must be a Gmail address.';
+    case 'loginTaken': return f.login+' is already the login e-mail for '+r.owner+'.';
+    case 'listLogin': return f.login+' is on more than one line.';
+    case 'badKp': return 'the KP e-mail is not a valid address.';
+    case 'fteFixed': return val+' already has a saved FTE of '+r.kept+', which is fixed from Phase 1 on.';
+    case 'prior': return val+' won a week in a completed phase. Add this person with Add User.';
+    default: return 'not available right now.';
+  }
+}
+// Reads every line and runs every check on the page's data as it is NOW. pinned (Add N users only): the initials the preview showed, per
+// line, so a proposal is never re-made behind the admin's back — a proposed one taken since is refused, not replaced.
+function _baRun(text,pinned){
+  const lines=String(text).split('\n').map(x=>x.replace(/\r$/,'')).filter(x=>x.trim());
+  if(lines.length>BA_MAX) return {over:lines.length};
+  const fs=lines.map(_baReadLine);
+  const taken=new Set(names); for(const f of fs) if(f.ini) taken.add(f.ini);
+  for(const k in (fteData||{})) taken.add(k); { const _cp=phasesData.completedPhases||{}; for(const ph in _cp){ const ap=_cp[ph]?.approvals||{}; for(const wk in ap) if(Array.isArray(ap[wk])) ap[wk].forEach(x=>taken.add(x)); } } // [405 · review fix R2] a proposal never lands on initials a departed person still holds (a kept FTE, a completed-phase win)
+  const rows=fs.map((f,k)=>{
+    let val=f.ini, proposed=false;
+    if(!val&&!f.two&&f.name){ val=pinned?pinned[k]:_baPropose(f.name,taken); proposed=true; if(val&&!pinned) taken.add(val); }
+    return {line:lines[k],f,val:val||'',proposed};
+  });
+  const count=(key)=>{ const m=new Map(); for(const r of rows){ const v=key(r); if(v) m.set(v,(m.get(v)||0)+1); } return m; };
+  const nIni=count(r=>!r.f.two&&r.val), nLog=count(r=>!r.f.two&&r.f.login);
+  const inList=(kind,v)=>(kind==='initials'?nIni:nLog).get(v)>1;
+  for(const r of rows){
+    if(r.f.two){ r.why=BA_TWO[r.f.two]+' on this line.'; continue; }
+    if(!r.val){ r.why=r.f.name?'no initials — put them on the line.':'no full name.'; continue; }
+    const c=_addUserCheck(r.val,r.f.name,r.f.fte===null?'':r.f.fte,r.f.login||'',r.f.kp||'',inList);
+    if(c.code) r.why=_baWhy(c,r.f,r.val); else r.ok=c.v;
+  }
+  return {rows};
+}
+function _baPaint(P){
+  const out=document.getElementById('batchAddOut'), go=document.getElementById('batchAddGo');
+  const n=P?P.rows.filter(r=>r.ok).length:0;
+  if(go){ go.style.display=n?'':'none'; go.textContent='Add '+n+' user'+(n!==1?'s':''); }
+  if(!out) return;
+  if(!P){ out.innerHTML=''; return; }
+  const cell=v=>'<td>'+(v===null||v===undefined||v===''?'':esc(v))+'</td>';
+  out.innerHTML='<div class="tbl-box tbl-in" style="overflow-x:auto"><table><thead><tr><th>Initials</th><th>Full name</th><th>FTE</th><th>Login e-mail</th><th>KP e-mail</th><th></th></tr></thead><tbody id="batchAddRows">'
+    +P.rows.map(r=>'<tr>'+cell(r.val?(r.val+(r.proposed?' (proposed)':'')):'')+cell(r.f.name)+cell(r.f.fte)+cell(r.f.login)+cell(r.f.kp)
+      +'<td'+(r.ok?'':' style="color:var(--red)"')+'>'+(r.ok?'Will be added':esc('Not added — '+r.why))+'</td></tr>').join('')
+    +'</tbody></table></div>';
+}
+window.toggleBatchAdd=function(){
+  const w=document.getElementById('batchAddWrap'), c=document.getElementById('baChevron');
+  if(!w) return;
+  const show=w.style.display==='none';
+  w.style.display=show?'':'none';
+  if(c) c.textContent=show?'▾ Hide':'▸ Show';
+};
+window.batchAddEdited=function(){ _baPrev=null; _baPaint(null); };
+window.batchAddPreview=function(){
+  const box=document.getElementById('batchAddText'); if(!box) return;
+  const text=box.value, R=_baRun(text);
+  if(R.over){ _baPrev=null; _baPaint(null); toast('Add at most '+BA_MAX+' people at a time.','err'); return; }
+  if(!R.rows.length){ _baPrev=null; _baPaint(null); return; } // an empty box: nothing to show
+  _baPrev={text,rows:R.rows};
+  _baPaint(_baPrev);
+};
+window.batchAddCommit=function(){
+  const P=_baPrev, box=document.getElementById('batchAddText');
+  if(!P||!box||box.value!==P.text||_baBusy) return;
+  const ok=P.rows.filter(r=>r.ok); if(!ok.length) return;
+  const n=ok.length;
+  openConfirm({
+    title:'Add '+n+' user'+(n!==1?'s':'')+'?',
+    body:ok.map(r=>'<div><strong>'+esc(r.ok.val)+'</strong> — '+esc(r.ok.fullName)+' · FTE '+r.ok.fte+' · '+esc(r.ok.loginEmail)+(r.ok.kp?' · '+esc(r.ok.kp):'')+'</div>').join(''),
+    okText:'OK',
+    onConfirm:async()=>{
+      if(_baPrev!==P||box.value!==P.text||_baBusy) return;
+      _baBusy=true;
+      try{
+        // every check again, on the page's data as it is now, with the initials the preview showed
+        const R=_baRun(P.text,P.rows.map(r=>r.val));
+        const same=!R.over&&R.rows.length===P.rows.length&&R.rows.every((r,k)=>!!r.ok===!!P.rows[k].ok);
+        if(!same){ _baPrev=R.over?null:{text:P.text,rows:R.rows}; _baPaint(_baPrev); toast('Nothing was added — the users changed since the preview. Look at the preview again.','err'); return; }
+        const add=R.rows.filter(r=>r.ok);
+        const b=writeBatch(db);
+        for(const r of add) _addUserWrites(b,r.ok.val,r.ok.fte,r.ok.fullName,r.ok.loginEmail,r.ok.kp);
+        try{ await b.commit(); }catch(e){ toast('Nothing was added — the save was refused ('+(e?.code||e?.message||e)+'). Try again.','err'); return; }
+        await maybeSyncEmailToUser(); // once, after the batch: the sign-in map, so every added person can bid at once
+        box.value=R.rows.filter(r=>!r.ok).map(r=>r.line).join('\n'); // the refused lines stay, to fix
+        _baPrev=null; _baPaint(null);
+        toast('Added '+add.length+' user'+(add.length!==1?'s':'')+'.','ok');
+      } finally { _baBusy=false; }
+    }
+  });
 };
 
 window.removeUser=function(u){
@@ -15433,6 +15607,7 @@ window.renderCloudBackups=async function(){
 // [402 · §330] 7.8 (W25 as ruled in DECISIONS §330) from tests/docs/server-mail-plan/build-b2/text/rules-text.json; every other item as above.
 // [404 · §334 I] 2.1, 2.2, 2.15–2.19, 2.21, 2.22, 2.24, 2.27–2.29, 2.34, 2.37, 4.7, 4.15, 6.20, 8.3, 8.35 rewritten; 2.14 and 8.38 removed (173 items,
 // [12,38,11,16,13,26,8,49]); the words: build/A2/rules-text.json.
+// [405 · §342 · plan A3] 2.40 "Users": "Add several users takes one person per line…" and "The login e-mail must be a Gmail address." added (PLAN.md A3).
 // Each item: n (its number), kind (new / live / term), html (its approved words), and for a live line its label, the words shown
 // when the setting gives nothing (whenEmpty) and, for the timer mode, the name of each value.
 const RULES_TEXT={sub:"How the auction works: every setting, the decision engine, and the rules staff see. Current values are read each time this page opens.",sections:[
@@ -15488,7 +15663,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.37","kind":"new","html":"<b>Rehearsal Mode<\/b> — unlocks Run Simulation, Auto-Approve/Deny and the testing skip buttons for backups and results. Not a sandbox: real bids, real e-mails. Default off. After Phase 1 begins it asks first."},
 {"n":"2.38","kind":"new","html":"<b>Run Simulation<\/b> — tops each person up to \"Bids per user\" (1–10, default 3) with random bids; their own bids count and are never changed. Skips locked weeks; cannot run under Global Lock."},
 {"n":"2.39","kind":"new","html":"<b>Auto-Approve/Deny Results<\/b> — writes real decisions: approves Winning and single Under Review bids, settles each tie at random (approving while the week stays within FTE available plus the overage), denies the rest."},
-{"n":"2.40","kind":"new","html":"<b>Users<\/b> — each person has initials, a full name, an FTE, a Google login e-mail and, if they want one, a KP e-mail. Initials cannot change. Adding a person needs every field but the KP e-mail. Each row has one Save: it refuses a blank full name or login e-mail, and changes FTE only before Phase 1 begins. Two people can never share a login e-mail. A KP e-mail saved blank is off: that person is not asked for one. When a KP e-mail is turned off or replaced, the address that was on file gets one note saying so."}
+{"n":"2.40","kind":"new","html":"<b>Users<\/b> — each person has initials, a full name, an FTE, a Google login e-mail and, if they want one, a KP e-mail. Initials cannot change. Adding a person needs every field but the KP e-mail. Add several users takes one person per line, fields in any order; a preview shows who will be added and why any line is not, and the people are added together or not at all. Each row has one Save: it refuses a blank full name or login e-mail, and changes FTE only before Phase 1 begins. Two people can never share a login e-mail. The login e-mail must be a Gmail address. A KP e-mail saved blank is off: that person is not asked for one. When a KP e-mail is turned off or replaced, the address that was on file gets one note saying so."}
 ]},
 {n:"3",title:"Timer",items:[
 {"n":"3.1","kind":"new","html":"The timer decides when a phase's bidding ends. At 0, bidding closes for everyone."},
