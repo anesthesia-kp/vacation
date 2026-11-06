@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 406;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 407;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -2888,19 +2888,22 @@ function comboLadder(){ return comboLadderVals().filter(v=>v!=='NP').map(v=>v.in
 // beyond the name. phaseName = the ONE name of a phase on this page; settingSlot = the key a per-phase setting is stored under
 // (an RVA Round reads the RVA's one slot, 4). Stored keys do not change.
 const RVA_MAX_ROUNDS=25;
-// ── [231 · E2, DECISIONS §298] THE PHASES SETTING — ONE stored key, adminSettings.phasePlan = {fall: 1|2|3, p1All: true|false} ──────
+// ── [231 · E2, DECISIONS §298] THE PHASES SETTING — ONE stored key, adminSettings.phasePlan = {fall: 1|2|3, p1All: true|false, rva: true|false} ──────
 // TWIN: this block is the same, character for character, on the admin page. Read LIVE from adminSettings (the topBid pattern): never
-// saved or anything else = 3 Fall phases with a high-demand-only Phase 1. N = F + 1 phases in all (the RVA is Phase F + 1).
-function phasePlanNormalize(raw){ return (Object.prototype.toString.call(raw)==='[object Object]'&&Number.isInteger(raw.fall)&&raw.fall>=1&&raw.fall<=3&&typeof raw.p1All==='boolean')?{fall:raw.fall,p1All:raw.p1All}:null; }
-function phasePlan(){ try{ const v=phasePlanNormalize((typeof adminSettings!=='undefined'&&adminSettings)?adminSettings.phasePlan:null); return v===null?{fall:3,p1All:false}:v; }catch(_){ return {fall:3,p1All:false}; } }
+// saved or anything else = 3 Fall phases with a high-demand-only Phase 1 and an RVA. N = F + 1 phases in all with the RVA (Phase F + 1), F without it.
+function phasePlanNormalize(raw){ return (Object.prototype.toString.call(raw)==='[object Object]'&&Number.isInteger(raw.fall)&&raw.fall>=1&&raw.fall<=3&&typeof raw.p1All==='boolean')?{fall:raw.fall,p1All:raw.p1All,rva:raw.rva!==false}:null; }
+function phasePlan(){ try{ const v=phasePlanNormalize((typeof adminSettings!=='undefined'&&adminSettings)?adminSettings.phasePlan:null); return v===null?{fall:3,p1All:false,rva:true}:v; }catch(_){ return {fall:3,p1All:false,rva:true}; } }
 function fallPhases(){ return phasePlan().fall; }
 function p1AllWeeks(){ return phasePlan().p1All; }
+function rvaOn(){ return phasePlan().rva; } // [407 · §350] a Rolling Vacation Auction after the Fall phases: never saved, or anything but false = Yes
+function lastPhase(){ return fallPhases()+(rvaOn()?RVA_MAX_ROUNDS:0); } // [407 · §350] the last phase that can begin: the last Round, or with no RVA the last Fall phase
 function phasesRuleLine(){
-  const F=fallPhases(), N=F+1;
-  if(p1AllWeeks()) return 'The auction has '+N+' phases. All weeks are open from Phase 1.';
+  const F=fallPhases(), N=F+(rvaOn()?1:0), H='The auction has '+N+' phase'+(N!==1?'s':'')+'.'; // [407 · §350] no RVA: F phases
+  if(p1AllWeeks()) return H+' All weeks are open from Phase 1.';
   const L=(typeof hdWeeksText==='function')?hdWeeksText():'', next=(F>=2)?'Phase 2.':'the Rolling Vacation Auction.'; // [398 · §302] W39–W41 (typeof = sandbox convention)
-  if(!L) return 'The auction has '+N+' phases. Phase 1 is for high-demand weeks only, and none are set. All weeks open in '+next;
-  return 'The auction has '+N+' phases. Phase 1 is for the high-demand weeks only: '+L+'. All other weeks open in '+next;
+  const none=(F<2&&!rvaOn())?'Other weeks are not auctioned.':''; // [407 · §351 W3] 1 Fall phase, high-demand Phase 1, no RVA: nothing opens after Phase 1
+  if(!L) return H+' Phase 1 is for high-demand weeks only, and none are set. '+(none||'All weeks open in '+next);
+  return H+' Phase 1 is for the high-demand weeks only: '+L+'. '+(none||'All other weeks open in '+next);
 }
 // [398 · §302] The high-demand weeks by name, each name once in date order with its weeks' Sunday dates ("Mar 21"), the last joined
 // by "and": the ticked holiday weeks under their names, the summer weeks ticked high-demand as "Summer". Empty when there are none.
@@ -2920,9 +2923,12 @@ function settingSlot(p){ const n=Number(p); return n>fallPhases()?4:n; }
 // The phase NUMBER as the rule lines and refusals say it: an RVA Round is "Phase " + (F+1) there (owner, 28 Oct 2026 10:08 AM).
 function phaseShort(p){ const n=Number(p), F=fallPhases(); return 'Phase '+(n>F?F+1:n); }
 // [395 · E2] Does stored slot p (1-4) run in this auction? 1 … F, and 4 (the RVA's). Slots 2 and 3 above F are hidden and never read.
-function _slotRuns(p){ p=Number(p); return p===4||(p>=1&&p<=fallPhases()); }
+function _slotRuns(p){ p=Number(p); return p===4?rvaOn():(p>=1&&p<=fallPhases()); } // [407 · §350] slot 4 runs only with an RVA
 // [395 · E2] A per-phase map about to be written: a slot that does not run keeps its stored raw value (or stays absent) - left alone.
-function _slotKeep(stored,obj){ const m=(stored&&typeof stored==='object')?stored:{}, o=Object.assign({},obj); [2,3].forEach(k=>{ if(_slotRuns(k)) return; const raw=m[k]!==undefined?m[k]:m[String(k)]; if(raw===undefined) delete o[k]; else o[k]=raw; }); return o; }
+function _slotKeep(stored,obj){ const m=(stored&&typeof stored==='object')?stored:{}, o=Object.assign({},obj); [2,3,4].forEach(k=>{ if(_slotRuns(k)) return; /* [407] 4: no RVA */ const raw=m[k]!==undefined?m[k]:m[String(k)]; if(raw===undefined) delete o[k]; else o[k]=raw; }); return o; }
+// [407 · §350] Is the auction over at phase cur - can no phase begin after it? ■ Finish the auction written (finishedAt), or, with no Rolling
+// Vacation Auction, the last Fall phase. Nothing is written for the second: it is read from the phase plan.
+function _auctionOver(cur){ return !!phasesData.finishedAt||(!rvaOn()&&Number(cur)>=fallPhases()); }
 // ── [226 · §295, owner 26 Oct 2026] BID NUMBERS — the highest bid number the admin allows (twin: admin 390, the same lines) ──────────
 // One setting, adminSettings.topBid: a whole number 10 to 16 (12 = bid numbers 1 to 12). Never saved, or anything else = 10. Read LIVE.
 // Only a whole number above 10 is this test's business; every other bid (1-10, NP, a combination) passes here.
@@ -3161,7 +3167,8 @@ function _acReadDraftFromDom(){ // [398 · §302] every control the builder draw
   let f=null, a=null;
   for(const r of document.querySelectorAll('#cmBody input[name="ppFall"]')) if(r.checked) f=Number(r.value);
   for(const r of document.querySelectorAll('#cmBody input[name="ppP1"]')) if(r.checked) a=r.value;
-  if(f!==null&&a!==null&&!phase1Started()) d.phases=phasePlanNormalize({fall:f,p1All:a==='all'})||d.phases;
+  let _rv=null; for(const r of document.querySelectorAll('#cmBody input[name="ppRva"]')) if(r.checked) _rv=r.value; // [407 · §350]
+  if(f!==null&&a!==null&&_rv!==null&&!phase1Started()) d.phases=phasePlanNormalize({fall:f,p1All:a==='all',rva:_rv!=='no'})||d.phases;
   for(const [k] of AC_HOL3){ const s=g('acHol_'+k), c=g('acHolOn_'+k); if(s) d.hol[k].idx=num(s)||d.hol[k].idx; if(c) d.hol[k].on=!!c.checked; }
   for(const [key,id,max] of [['spring','acSpring',3],['ski','acSki',1]]){
     const arr=d[key], on=d[key+'On']=Array.isArray(d[key+'On'])?d[key+'On']:[]; // [398 · §304] the ticks, in step with the weeks (none: ticked)
@@ -3197,10 +3204,11 @@ window.openAuctionCalendarEditor=function(){
 };
 let _acZeroHdOk=false; // [build 268 · HDCB] one-shot ack for the empty-Phase-1 warning
 let _acGapImpactOk=false; // [build 268 · GAP] one-shot ack for the stranded-bids warning
+let _acTrapOk=false; // [407 · §350 (2)] one-shot ack for the phases trap warning: cleared at the write and at every Not saved
 async function saveAuctionCalendar(){
   _acReadDraftFromDom();
   const d=_acDraft;
-  const reopen=msg=>{ toast(msg,'warn'); setTimeout(()=>{ openConfirm({title:'Calendar and Phases',body:_acEditorBody(),okText:'Save',onConfirm:saveAuctionCalendar,onCancel:()=>{_acDraft=null;}}); },350); };
+  const reopen=msg=>{ _acTrapOk=false; toast(msg,'warn'); setTimeout(()=>{ openConfirm({title:'Calendar and Phases',body:_acEditorBody(),okText:'Save',onConfirm:saveAuctionCalendar,onCancel:()=>{_acDraft=null;}}); },350); };
   if(!cfgUnlockedNow()){ toast('Locked while a phase is running — editable between phases, once results are sent','warn'); return; } // [build 268 · GAP]
   if(!d) return;
   // [build 268 · GAP] The YEAR may never change mid-auction — every bid is keyed to the
@@ -3210,13 +3218,22 @@ async function saveAuctionCalendar(){
   // [398 · review F4] Changed = the draft's choice differs from the phases the pop-up opened with (phases0), not from the stored value: a
   // pop-up opened before another tab changed the phases never writes its stale copy back.
   const _ppNow=phasePlan(), _ppD=phasePlanNormalize(d.phases), _pp0=phasePlanNormalize(d.phases0)||_ppNow;
-  const _ppCh=!phase1Started()&&!!_ppD&&(_ppD.fall!==_pp0.fall||_ppD.p1All!==_pp0.p1All), _pp=_ppCh?_ppD:_ppNow;
+  const _ppCh=!phase1Started()&&!!_ppD&&(_ppD.fall!==_pp0.fall||_ppD.p1All!==_pp0.p1All||_ppD.rva!==_pp0.rva), _pp=_ppCh?_ppD:_ppNow;
   const sunds=getSundays(d.year), n=sunds.length, inYear=i=>i>=1&&i<=n;
   // [398 · §302] Every Spring Break / Ski Week week chosen; every week of sections 2-4 a different week; the summer range in order.
   const secIdx=AC_HOL3.map(([k])=>d.hol[k].idx).concat(d.spring,d.ski);
   if(!secIdx.every(inYear)) return reopen('Choose a week for each Spring Break and Ski Week.');
   if(new Set(secIdx).size!==secIdx.length) return reopen('Two holidays are set to the same week — each must be a different week.');
   if(d.summerStartIdx>d.summerEndIdx) return reopen('The first summer week is after the last.');
+  // [407 · §350 (2), §351 W4] The phases trap: warned, then allowed. Asked before the empty-Phase-1 check; the one-shot clears at the write.
+  if(!phase1Started()&&_ppTrap(_pp)&&!_acTrapOk){
+    openConfirm({ title:'Calendar and Phases',
+      body:'<div class="cmodal-warn">'+PP_TRAP_TEXT+'</div><div style="margin-top:8px">Save anyway?</div>',
+      okText:'Save anyway',
+      onConfirm:()=>{ _acTrapOk=true; saveAuctionCalendar(); },
+      onCancel:()=>{ reopen('Not saved'); } });
+    return;
+  }
   // [build 268 · HDCB] No high-demand week = an EMPTY Phase 1. Allowed (owner ruling 15 Aug) but never silently: a dedicated confirm spells
   // out the consequence before the save. [398 · §302] Judged on the draft's Phase 1 choice (Phase 1 on every week is never empty).
   if(_acHdCount(Object.assign({},d,{phases:_pp}))===0&&!_acZeroHdOk&&!_pp.p1All){
@@ -3273,10 +3290,11 @@ async function saveAuctionCalendar(){
   if(_ppCh&&!_feedsHealthyOrExplain('Changing the phases')) return; // [398 · §302] the phases change only from a page whose data has all arrived
   // [398 · §302] A merge write keeps a stored field the new value leaves out, inside auctionConfig too: with no summer pick, the stored list is removed.
   const _acW=summerHd.length?cfg:Object.assign({},cfg,{summerHd:deleteField()});
+  _acTrapOk=false; // [407] the trap warning's one-shot: used
   try{
-    await setDoc(adminRef,{auctionConfig:_acW,...(_ppCh?{phasePlan:{fall:_pp.fall,p1All:_pp.p1All}}:{})},{merge:true}); // [398 · §302] ONE write: the phases with it only when they changed
+    await setDoc(adminRef,{auctionConfig:_acW,...(_ppCh?{phasePlan:{fall:_pp.fall,p1All:_pp.p1All,rva:_pp.rva}}:{})},{merge:true}); // [398 · §302] ONE write: the phases with it only when they changed
     _acDraft=null;
-    if(_ppCh){ try{ await adminLog('ALL','ALL','admin-phaseplan',undefined,{choice:_pp.fall+'|'+(_pp.p1All?'all':'hd'),by:_setupWho()}); }catch(_){} } // [398 · §302] the Phases Change Log row · [404 · §334 A1 · K-Q3] the initials
+    if(_ppCh){ try{ await adminLog('ALL','ALL','admin-phaseplan',undefined,{choice:_pp.fall+'|'+(_pp.p1All?'all':'hd')+'|'+(_pp.rva?'yes':'no'),by:_setupWho()}); }catch(_){} } // [398 · §302] the Phases Change Log row · [404 · §334 A1 · K-Q3] the initials
     _cfgLog('Calendar and Phases',''); // [404 · §334 A1 · K-Q3] the calendar's own row
     toast(_ppCh?'Auction calendar and phases saved — pages will reload with the new calendar':'Auction calendar saved — pages will reload with the new calendar','ok');
     // The reload itself happens through _acCheckRemote when our own snapshot echoes back —
@@ -6344,7 +6362,7 @@ function renderRunLocks(){
 // k = the stored key (and the name old Change Log rows read through _setupRow), n = name, d = sentence, v = what _srValue shows (k when absent),
 // a = an element of the setting's card (where "Change it" goes: _suOpenCard finds the card by this id on whatever page it sits), p = its page today.
 // Allowed lowerings is skipped while Strict is on (_srRows). Rehearsal Mode's "Change it" goes to the Simulator page.
-const SETUP_ROWS=[{k:'auctionConfig',n:'Calendar and Phases',d:'The year’s weeks, which weeks are high demand, the summer range the floors use, how many Fall phases run before the Rolling Vacation Auction, and whether Phase 1 opens every week.',v:'calendarPhases',a:'acEditBtn',p:'setup'},{k:'topBid',n:'Bid numbers',d:'How many bid numbers each person holds.',a:'topBidEditBtn',p:'setup'},{k:'comboBids',n:'Combination bids',d:'Which combination bids people may use.',a:'comboToggles',p:'setup'},{k:'npAllowedPhases',n:'NP bids',d:'Whether people may place NP bids in each phase.',v:'NP bids this phase',a:'npPhaseToggles',p:'setup'},{k:'bidFloors',n:'Bid floors',d:'The weakest bid allowed on each kind of week.',a:'bfHd',p:'setup'},{k:'maxBidsCumulative',n:'Cumulative bid caps',d:'How many weeks a person may have won by the end of each phase.',v:'Cumulative bid caps',a:'cap1',p:'setup'},{k:'reviewThreshold',n:'FTE overage',d:'How far over capacity a week can go before bids show as Under Review.',v:'FTE overage',a:'reviewThresholdSlider',p:'setup'},{k:'bidRuleSet',n:'Strict / Loose',d:'Strict: a winning bid on a competition week can only be moved, not removed. Loose: any bid can be removed.',a:'ruleSetTog',p:'setup'},{k:'strictThreshold',n:'Strict applies to',d:'Under Strict, a winning bid weaker than this can still be removed.',a:'strictLvlSel',p:'setup'},{k:'bidLowerings',n:'Allowed lowerings',d:'How many times a person may make a bid weaker in each phase. Unlimited = no limit.',a:'blConfigRow',p:'setup'},{k:'timerRules',n:'Timer rules',d:'How long the timer runs, how far each bid resets it, and the opening window when one is set.',v:'Timer rules',a:'timerRulesWrap',p:'setup'},{k:'timerResetMode',n:'Timer reset mode',d:'Which bid changes restart the timer.',a:'timerModeRows',p:'setup'},{k:'emailNotifsEnabled',n:'Projection-change e-mails',d:'E-mails people when another bid changes whether they are winning.',v:'Projection-change e-mails',a:'emailNotifsToggle',p:'setup'},{k:'welcomeEmailsEnabled',n:'Welcome e-mails',d:'Sent once to each person when Phase 1 begins, or at first sign-in if added later.',a:'welcomeEmailsToggle',p:'setup'},{k:'blindedBidding',n:'Blinded bidding',d:'When on, people see bids without the bidders’ initials.',a:'blindTog',p:'setup'},{k:'lockedInPlace',n:'Locked weeks on the staff board',d:'Where weeks that are not open appear on the staff board: in their month, or gathered at the bottom.',v:'Locked weeks on the staff board',a:'lipPhaseToggles',p:'setup'},{k:'simulatorEnabled',n:'Rehearsal Mode',d:'Unlocks the simulator and the skip buttons. Must be off for a real auction.',a:'simulatorToggle',p:'simulator'}]; // one line: the test harness reads top-level constants line by line · [404 · §334 A1 · A] the full list, in the Settings page's order
+const SETUP_ROWS=[{k:'auctionConfig',n:'Calendar and Phases',d:'The year’s weeks, which weeks are high demand, the summer range the floors use, how many Fall phases run, whether Phase 1 opens every week, and whether a Rolling Vacation Auction follows them.',v:'calendarPhases',a:'acEditBtn',p:'setup'},{k:'topBid',n:'Bid numbers',d:'How many bid numbers each person holds.',a:'topBidEditBtn',p:'setup'},{k:'comboBids',n:'Combination bids',d:'Which combination bids people may use.',a:'comboToggles',p:'setup'},{k:'npAllowedPhases',n:'NP bids',d:'Whether people may place NP bids in each phase.',v:'NP bids this phase',a:'npPhaseToggles',p:'setup'},{k:'bidFloors',n:'Bid floors',d:'The weakest bid allowed on each kind of week.',a:'bfHd',p:'setup'},{k:'maxBidsCumulative',n:'Cumulative bid caps',d:'How many weeks a person may have won by the end of each phase.',v:'Cumulative bid caps',a:'cap1',p:'setup'},{k:'reviewThreshold',n:'FTE overage',d:'How far over capacity a week can go before bids show as Under Review.',v:'FTE overage',a:'reviewThresholdSlider',p:'setup'},{k:'bidRuleSet',n:'Strict / Loose',d:'Strict: a winning bid on a competition week can only be moved, not removed. Loose: any bid can be removed.',a:'ruleSetTog',p:'setup'},{k:'strictThreshold',n:'Strict applies to',d:'Under Strict, a winning bid weaker than this can still be removed.',a:'strictLvlSel',p:'setup'},{k:'bidLowerings',n:'Allowed lowerings',d:'How many times a person may make a bid weaker in each phase. Unlimited = no limit.',a:'blConfigRow',p:'setup'},{k:'timerRules',n:'Timer rules',d:'How long the timer runs, how far each bid resets it, and the opening window when one is set.',v:'Timer rules',a:'timerRulesWrap',p:'setup'},{k:'timerResetMode',n:'Timer reset mode',d:'Which bid changes restart the timer.',a:'timerModeRows',p:'setup'},{k:'emailNotifsEnabled',n:'Projection-change e-mails',d:'E-mails people when another bid changes whether they are winning.',v:'Projection-change e-mails',a:'emailNotifsToggle',p:'setup'},{k:'welcomeEmailsEnabled',n:'Welcome e-mails',d:'Sent once to each person when Phase 1 begins, or at first sign-in if added later.',a:'welcomeEmailsToggle',p:'setup'},{k:'blindedBidding',n:'Blinded bidding',d:'When on, people see bids without the bidders’ initials.',a:'blindTog',p:'setup'},{k:'lockedInPlace',n:'Locked weeks on the staff board',d:'Where weeks that are not open appear on the staff board: in their month, or gathered at the bottom.',v:'Locked weeks on the staff board',a:'lipPhaseToggles',p:'setup'},{k:'simulatorEnabled',n:'Rehearsal Mode',d:'Unlocks the simulator and the skip buttons. Must be off for a real auction.',a:'simulatorToggle',p:'simulator'}]; // one line: the test harness reads top-level constants line by line · [404 · §334 A1 · A] the full list, in the Settings page's order
 // The 6 between-phases rows (the approved test page), in order; c = where "Change it" goes. [385 · §292] "Bid lowerings allowed" left (Archived settings).
 const SETUP_PHASE_ROWS=[{n:'FTE overage',d:'How far over capacity a week can go before bids show as Under Review.',c:['setup','reviewThresholdSlider']},{n:'NP bids this phase',d:'Whether people may place NP bids in the phase about to begin.',c:['setup','npPhaseToggles']},{n:'Cumulative bid caps',d:'How many weeks a person may have won by the end of each phase.',c:['setup','cap1']},{n:'Timer rules',d:'How long the timer runs, how far each bid resets it, and the opening window when one is set.',c:['setup','timerRulesWrap']},{n:'Projection-change e-mails',d:'E-mails people when another bid changes whether they are winning.',c:['setup','emailNotifsToggle']},{n:'Locked weeks on the staff board',d:'Where weeks that are not open appear on the staff board: in their month, or gathered at the bottom.',c:['setup','lipPhaseToggles']}]; // one line: the test harness reads top-level constants line by line · [385 · §292] the 'Bid lowerings allowed' row left (Archived settings)
 let _setupKeptRehearsal=false, _suReview=null, _suBackEl=null, _suBackKind=null, _rmBack=null, _suChain=0;
@@ -6394,7 +6412,7 @@ function _setupStartStillNext(key){
   try{
     const k=String(key), cur=Number(phasesData.currentPhase||1), done=phasesData.completedPhases||{};
     if(k==='p1') return !phase1Started();
-    const n=Number(k.slice(1)); return n>=2&&n<=fallPhases()+RVA_MAX_ROUNDS&&!phasesData.finishedAt&&phase1Started()&&cur===n-1&&!!done[n-1];
+    const n=Number(k.slice(1)); return n>=2&&n<=lastPhase()&&!phasesData.finishedAt&&phase1Started()&&cur===n-1&&!!done[n-1];
   }catch(_){ return false; }
 }
 // The remembered review and its way back, forgotten: at every successful begin, at "Begin without review", at Reset (lanes 2 + 3).
@@ -6722,9 +6740,9 @@ function npAllowedForPhase(ph){
 window.npAllowedForPhase=npAllowedForPhase;
 // Exact NP availability from the admin's settings — shared wording with the user site.
 // Is a running cap set in any phase? (npPhasesDescription's last clause names it.) [fix round, review lane 3 L1]
-function _anyCumCap(){ return [1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||p===4).some(p=>_cumCap(p)!==null); } // [231 · E2] only the slots that run
+function _anyCumCap(){ return [1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||(p===4&&(typeof rvaOn!=='function'||rvaOn()))).some(p=>_cumCap(p)!==null); } // [231 · E2] only the slots that run
 function npPhasesDescription(){
-  const _sl=[1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||p===4), on=_sl.filter(p=>npAllowedForPhase(p)); // [231 · E2] only the slots that run
+  const _sl=[1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||(p===4&&(typeof rvaOn!=='function'||rvaOn()))), on=_sl.filter(p=>npAllowedForPhase(p)); // [231 · E2] only the slots that run
   const tail=', with no limit on how many can be used'+((typeof _anyCumCap!=='function'||_anyCumCap())?' (the running cap still applies)':'')+'.'; // [220 · 384 · fix round, review lane 3 L1] no cap in any phase: no cap clause (its line is hidden, plan §11e) · [229 / 393 · §297] item 195 (owner, 7:58 PM)
   if(on.length===_sl.length) return 'NP bids can be used in any phase'+tail;
   if(!on.length) return 'NP bids are not allowed in any phase';
@@ -6734,11 +6752,11 @@ function npPhasesDescription(){
 window.npPhasesDescription=npPhasesDescription;
 // [225 · §295] NP off in EVERY phase: no NP rules line, no "plus NP", no NP chip, on the page and in the welcome e-mail
 // (owner, 19 Oct 2026; ruled 26 Oct 2026, Q1 / Q2 yes). NP on in any phase: everything word for word as before.
-function _npAnyPhase(){ return [1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||p===4).some(p=>npAllowedForPhase(p)); } // [231 · E2] only the slots that run
+function _npAnyPhase(){ return [1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||(p===4&&(typeof rvaOn!=='function'||rvaOn()))).some(p=>npAllowedForPhase(p)); } // [231 · E2] only the slots that run
 // [226 · §295] W1: the highest number follows topBid() (typeof = sandbox convention: suites extract this function with _npAnyPhase alone).
 function bidNumbersLine(){ const _n=(typeof topBid==='function')?topBid():10; return _npAnyPhase()?'You hold bid numbers 1 to '+_n+', plus NP — 1 is the strongest bid and NP the weakest':'You hold bid numbers 1 to '+_n+' — 1 is the strongest bid'; }
 // [230 · E1] The Rules & Reminders line (and the welcome e-mail's) that names the Rolling Vacation Auction - owner, 28 Oct 2026 10:16 AM.
-function rvaRuleLine(){ return 'Phase '+((typeof fallPhases==='function'?fallPhases():3)+1)+' is the Rolling Vacation Auction that has rounds periodically throughout '+((typeof AC_YEAR!=='undefined')?AC_YEAR:2027)+'. Each round functions as its own phase.'; }
+function rvaRuleLine(){ if(typeof rvaOn==='function'&&!rvaOn()) return ''; /* [407 · §350] no RVA: no line (the staff page hides it, the welcome e-mail drops it) */ return 'Phase '+((typeof fallPhases==='function'?fallPhases():3)+1)+' is the Rolling Vacation Auction that has rounds periodically throughout '+((typeof AC_YEAR!=='undefined')?AC_YEAR:2027)+'. Each round functions as its own phase.'; }
 window._npAnyPhase=_npAnyPhase; window.bidNumbersLine=bidNumbersLine;
 function renderNpToggles(){
   const el=document.getElementById('npPhaseToggles'); if(!el) return;
@@ -6970,7 +6988,11 @@ window.openTopBidEditor=function(){
 // and set in section 1 of that card's builder (the radios of _phasePlanEditorBody), saved in the calendar's one merge write (saveAuctionCalendar,
 // with the admin-phaseplan Change Log row). FIXED once Phase 1 begins (changing it mid-auction would renumber phases already run): the builder
 // then shows it without radios and never writes it.
-function phasePlanText(v){ const p=v||phasePlan(); return p.fall+' Fall phase'+(p.fall!==1?'s':'')+' · Phase 1: '+(p.p1All?'every week':'high-demand weeks only'); }
+// [407 · §350 (2), §351 W4] 1 Fall phase, Phase 1 on the high-demand weeks only and no Rolling Vacation Auction: the other weeks are never
+// auctioned. Warned in the editor and before the save; saving is still allowed.
+const PP_TRAP_TEXT='With 1 Fall phase, Phase 1 for high-demand weeks only and no Rolling Vacation Auction, the other weeks are never auctioned.';
+function _ppTrap(p){ return !!p&&p.fall===1&&p.p1All===false&&p.rva===false; }
+function phasePlanText(v){ const p=v||phasePlan(); return p.fall+' Fall phase'+(p.fall!==1?'s':'')+' · Phase 1: '+(p.p1All?'every week':'high-demand weeks only')+' · Rolling Vacation Auction: '+(p.rva===false?'No':'Yes'); } // [407 · §351 W2]
 function renderPhasePlanCard(){
   const st=document.getElementById('phasePlanState');
   if(st) st.textContent='Now: '+phasePlanText(); // [404 · §334 A1 · E] fixed once Phase 1 begins: shown so inside the editor only
@@ -6979,7 +7001,9 @@ function _phasePlanEditorBody(cur){
   const R=(name,val,on,txt)=>'<label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px;padding:5px 0"><input type="radio" name="'+name+'" value="'+val+'"'+(on?' checked':'')+' style="width:18px;height:18px;margin:0;flex:none">'+txt+'</label>';
   const H=t=>'<div style="font-size:12px;color:var(--t2);font-weight:700;margin-top:6px">'+t+'</div>';
   return '<div style="display:flex;flex-direction:column">'+H('Fall phases')+[1,2,3].map(n=>R('ppFall',n,cur.fall===n,String(n))).join('')
-    +H('Phase 1 weeks')+R('ppP1','hd',!cur.p1All,'High-demand weeks only')+R('ppP1','all',cur.p1All,'Every week')+'</div>';
+    +H('Phase 1 weeks')+R('ppP1','hd',!cur.p1All,'High-demand weeks only')+R('ppP1','all',cur.p1All,'Every week')
+    +H('Rolling Vacation Auction')+R('ppRva','yes',cur.rva!==false,'Yes — rounds after the Fall phases')+R('ppRva','no',cur.rva===false,'No — the auction ends after the Fall phases') // [407 · §351 W1]
+    +(_ppTrap(cur)?'<div class="cmodal-warn" style="margin-top:6px">'+PP_TRAP_TEXT+'</div>':'')+'</div>'; // [407 · §351 W4] live, as the choices change
 }
 // The Add box offers the allowed combinations too, after NP (owner, 16 Oct 2026: "Admin add box can add combos"). Rebuilt only when they differ.
 function renderAddPriorityOpts(){
@@ -7148,8 +7172,8 @@ function renderNextStep(){
         // [build 220] skip is a rehearsal-only tool; the button only renders in Rehearsal Mode
         + (adminSettings.simulatorEnabled===true?'&nbsp;'+btn('Skip sending (testing)','skipPhaseResults('+cur+')','btn-ghost'):''));
       }
-    } else if(phasesData.finishedAt){
-      html=box(`${phaseName(cur)} is complete and results are sent — the auction is finished.`,'');
+    } else if(_auctionOver(cur)){ // [407 · §350] finished, or no RVA after the last Fall phase
+      html=box(`${phaseName(cur)} results are sent — the auction is complete.`,''); // [407 · §351 W5]
     } else if(isRvaPhase(cur)){
       // [394 · E1] After a Round's results: ▶ Begin the next Round and ■ Finish the auction; after the last Round, only Finish.
       html=(cur<fallPhases()+RVA_MAX_ROUNDS)
@@ -7201,7 +7225,7 @@ function renderNextStep(){
 // "Round r complete" after Round r's results; "Auction complete" once finished (or after the last Round).
 function _phaseDoneLine(cur){
   if(!(phasesData.resultsSent||{})[cur]) return '✓ Complete · results not sent yet';
-  if(phasesData.finishedAt||cur>=fallPhases()+RVA_MAX_ROUNDS) return '✓ Auction complete';
+  if(phasesData.finishedAt||cur>=lastPhase()) return '✓ Auction complete'; // [407 · §350] no RVA: the last Fall phase
   if(cur===fallPhases()) return '✓ Fall auction complete';
   if(isRvaPhase(cur)) return '✓ Round '+rvaRound(cur)+' complete';
   return '✓ Complete · Phase '+(cur+1)+' next';
@@ -7310,7 +7334,7 @@ window.completePhase=function(){
     body:`<div>Mark <strong>${phaseName(cur)}</strong> complete?</div>
           <ul style="margin:10px 0 8px 18px;color:var(--t2);font-size:13px;line-height:1.65">
             <li>Approved wins lock in.</li>
-            ${cur<fallPhases()+RVA_MAX_ROUNDS?`<li><strong>All ${mondays.length} weeks lock</strong> until the next phase begins.</li>
+            ${cur<lastPhase()?`<li><strong>All ${mondays.length} weeks lock</strong> until the next phase begins.</li>
             <li>Approved bid numbers can't be reused; denied ones go back to their owners.</li>`:`<li><strong>All ${mondays.length} weeks lock</strong> — no bid changes from here on.</li>
             <li><strong>Final phase:</strong> once results are sent, the auction is complete.</li>`}
           </ul>${_staleHtml}${_capWarnHtml()}`,
@@ -7479,7 +7503,7 @@ window.completePhase=function(){
       } else if(!lockOk){
         toast(phaseName(cur)+' completed, but auto-lock FAILED — click "Smart Lock and Unlock" now to lock all weeks.','warn');
       } else if(!lockClearOk){
-        toast(phaseName(cur)+' completed, but clearing last bids FAILED'+(cur<fallPhases()+RVA_MAX_ROUNDS?' — they are cleared again when the next phase begins.':'.'),'warn'); // [385 · §292] the Clear ALL page is removed; beginning the next phase clears them (its own belt-and-suspenders clear) · [FIX ROUND, lane 2 LOW-3] after Phase 4 nothing follows: the clause is left out
+        toast(phaseName(cur)+' completed, but clearing last bids FAILED'+(cur<lastPhase()?' — they are cleared again when the next phase begins.':'.'),'warn'); // [385 · §292] the Clear ALL page is removed; beginning the next phase clears them (its own belt-and-suspenders clear) · [FIX ROUND, lane 2 LOW-3] after Phase 4 nothing follows: the clause is left out
       } else {
         toast(phaseName(cur)+' completed, but resetting the activity counters FAILED — refresh, then open Change Log and press "↻ Retry log reset" before beginning the next phase.','warn');
       }
@@ -7528,7 +7552,7 @@ async function _commitBeginPhase(next){
   if(next>1&&Number(phasesData.currentPhase||1)!==next-1){ toast(phaseName(next-1)+' is no longer current — '+phaseName(next)+' was NOT begun.','err'); return false; }
   // [394 · E1] backstops of Begin's own refusals: the last Round, a finished auction, the storage guard
   if(next>fallPhases()+RVA_MAX_ROUNDS){ toast('Round '+RVA_MAX_ROUNDS+' is the last Round.','warn'); return false; }
-  if(isRvaPhase(next)&&phasesData.finishedAt){ toast('The auction is finished — no more Rounds can begin.','warn'); return false; }
+  if(isRvaPhase(next)&&_auctionOver(next-1)){ toast('Auction complete.','warn'); return false; } // [407 · §351 W6] finished, or no RVA
   if(isRvaPhase(next)&&!_rvaStorageOk()) return false;
   if(next===1&&phase1Started()){ toast('Phase 1 has already begun — Begin Phase 1 refused.','err'); return false; }
   if(next===1){
@@ -7746,7 +7770,7 @@ function _beginPhase1Confirm(){
          :_hdN===0?_zeroWarn+_shutList
          :`<div class="cmodal-warn" style="margin-top:10px"><strong>Phase 1 opens ONLY these ${_hdN} high-demand week${_hdN!==1?'s':''};</strong> the other ${_stdN} stay LOCKED:</div>
           <ul style="margin:8px 0 8px 18px;font-size:12px;color:var(--t2);line-height:1.7">${_sp.open.map(w=>`<li>${_p1WkLabel(w)}</li>`).join('')}</ul>
-          ${_shutList}${fallPhases()>=2?'<div class="cmodal-info">The rest open from Phase 2 on.</div>':'<div class="cmodal-info">The rest open in the Rolling Vacation Auction.</div>'}`)
+          ${_shutList}${fallPhases()>=2?'<div class="cmodal-info">The rest open from Phase 2 on.</div>':(rvaOn()?'<div class="cmodal-info">The rest open in the Rolling Vacation Auction.</div>':'<div class="cmodal-info">Other weeks are not auctioned.</div>')}`)
         +((typeof _welcomeBeginLine==='function')?_welcomeBeginLine():''), // [384 · §288 · plan §10e] the welcome e-mails this Begin sends: the count, or switched off
     okText:p1AllWeeks()?'Begin Phase 1':(_hdN===0?'Begin EMPTY Phase 1':'Lock standard weeks & Begin Phase 1'), // [395 · E2]
     danger:!p1AllWeeks()&&_hdN===0,
@@ -7873,7 +7897,7 @@ window.beginNextPhase=function(){
     });
     return;
   }
-  if(phasesData.finishedAt){ toast('The auction is finished — no more Rounds can begin.','warn'); return; } // [394 · E1]
+  if(_auctionOver(Number(phasesData.currentPhase||1))){ toast('Auction complete.','warn'); return; } // [394 · E1] · [407 · §351 W6] finished, or no RVA after the last Fall phase
   if(Number(phasesData.currentPhase||1)+1>fallPhases()+RVA_MAX_ROUNDS){ toast('Round '+RVA_MAX_ROUNDS+' is the last Round.','warn'); return; } // [394 · E1] the 25-Round cap
   if(isRvaPhase(Number(phasesData.currentPhase||1)+1)&&!_rvaStorageOk()) return; // [394 · E1] the storage guard: refused before the backup and every dialog
   if(!_bkBypass){ _backupThen('beginning '+phaseName(Number(phasesData.currentPhase||1)+1),function(){ _bkBypass=true; try{ window.beginNextPhase(); } finally { _bkBypass=false; } }); return; }
@@ -8315,7 +8339,7 @@ function _cumCap(phase){
 }
 // Simple-language description of the cumulative bid caps for the welcome e-mail.
 function cumulativeCapEmailText(){
-  const _sl=[1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||p===4), caps=_sl.map(_cumCap); // [231 · E2] Fall slots 1 … F, then the RVA's slot 4
+  const _sl=[1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||(p===4&&(typeof rvaOn!=='function'||rvaOn()))), caps=_sl.map(_cumCap); // [231 · E2] Fall slots 1 … F, then the RVA's slot 4
   if(caps.every(c=>c===null)) return ''; // [384 · §288 · plan §11e] no cap in any phase: no bullet in the welcome e-mail (twin of the staff page's cumulativeCapDescription)
   // [build 268 · COPY] Grouped collapse — as short as the settings allow, never shorter
   // than the truth: equal-cap runs merge into their LAST clause (for a CUMULATIVE cap the
@@ -8372,7 +8396,7 @@ Choose which alerts you get under E-mail alerts at the top of the site. Results,
 ${B('RULES AND REMINDERS OF THE AUCTION')}
 ${bullets([
   ((typeof phasesRuleLine==='function')?phasesRuleLine():`The auction has 4 phases. Phase 1 is for the high-demand weeks only: Ski Week (Feb 14), Spring Break (Mar 28, Apr 4), Thanksgiving (Nov 21), Christmas (Dec 19) and New Year's (Dec 26). All other weeks open in Phase 2.`), // [395 · E2] word for word as on the staff page (the fallback is for test sandboxes) · [398 · §302] W39 at the default calendar
-  ((typeof rvaRuleLine==='function')?rvaRuleLine():`Phase 4 is the Rolling Vacation Auction that has rounds periodically throughout 2027. Each round functions as its own phase.`), // [394 · E1] owner 28 Oct 2026 10:16 AM, word for word as on the staff page
+  ...[((typeof rvaRuleLine==='function')?rvaRuleLine():`Phase 4 is the Rolling Vacation Auction that has rounds periodically throughout 2027. Each round functions as its own phase.`)].filter(Boolean), // [407 · §350] no RVA: no line · [394 · E1] owner 28 Oct 2026 10:16 AM, word for word as on the staff page
   // [384 · §288] the alert list, the sentence above and this list: plan §11a / §11c / §11e, word for word as on the page · [392 · §297] the rule lines of Build C · [393 · §297] item 188
   ...capBullets,
   ((typeof bidNumbersLine==='function')?bidNumbersLine():`You hold bid numbers 1 to 10, plus NP — 1 is the strongest bid and NP the weakest`), // [225 · §295] word for word as on the staff page (the fallback is for test sandboxes)
@@ -8677,7 +8701,7 @@ window.sendPhaseResultsEmails=function(){
 window.finishAuction=function(){
   if(!_feedsHealthyOrExplain('Finish the auction')) return;
   const cur=Number(phasesData.currentPhase||1);
-  if(phasesData.finishedAt){ toast('The auction is already finished.','warn'); return; }
+  if(phasesData.finishedAt){ toast('Auction complete.','warn'); return; }
   if(!isRvaPhase(cur)||!(phasesData.completedPhases||{})[cur]||!(phasesData.resultsSent||{})[cur]){ toast('Finish the auction is offered once a Round\'s results are sent.','warn'); return; }
   openConfirm({
     title:'■ Finish the auction',
@@ -8688,7 +8712,7 @@ window.finishAuction=function(){
       if(Number(phasesData.currentPhase||1)!==cur||phasesData.finishedAt){ toast('The auction moved on while this dialog was open — nothing was changed.','err'); return; }
       try{ await setDoc(phasesRef,{finishedAt:serverTimestamp()},{merge:true}); }
       catch(e){ toast('Could not finish the auction — nothing was changed ('+(e?.message||e)+'). Try again.','err'); return; }
-      toast('The auction is finished.','ok');
+      toast('Auction complete.','ok'); // [407 · §351 W9]
     }
   });
 };
@@ -11994,7 +12018,7 @@ function _systemActionText0(e){
   if(t==='admin-strict-level'){ const c=(typeof e.choice==='string')?e.choice:''; if(c==='10') return 'Strict now applies to <strong>every numbered bid</strong>'; if(['1','2','3','4','5','6','7','8','9'].indexOf(c)>=0) return 'Strict now applies to <strong>bids of '+c+' or stronger</strong>'; return 'Strict level changed'; } // [382 · §286] W4
   if(t==='admin-combobids'){ const L=(typeof e.choice==='string')?e.choice.split('|').filter(x=>x).map(x=>String(x).split(',').join('/')):null; return L?('Combination bids changed to: <strong>'+esc(L.length?L.join(' · '):'none')+'</strong>'):'Combination bids changed'; } // [381 · §285]
   if(t==='admin-topbid'){ const c=Number(e.choice); return (Number.isInteger(c)&&c>=10&&c<=16)?('Bid numbers changed to: <strong>1 to '+c+'</strong>'):'Bid numbers changed'; } // [390 · §295]
-  if(t==='admin-phaseplan'){ const m=/^([123])\|(all|hd)$/.exec(String(e.choice||'')); return m?('Phases changed to: <strong>'+m[1]+' Fall phase'+(m[1]!=='1'?'s':'')+' · Phase 1: '+(m[2]==='all'?'every week':'high-demand weeks only')+'</strong>'):'Phases changed'; } // [395 · E2]
+  if(t==='admin-phaseplan'){ const m=/^([123])\|(all|hd)(?:\|(yes|no))?$/.exec(String(e.choice||'')); return m?('Phases changed to: <strong>'+m[1]+' Fall phase'+(m[1]!=='1'?'s':'')+' · Phase 1: '+(m[2]==='all'?'every week':'high-demand weeks only')+(m[3]?' · Rolling Vacation Auction: '+(m[3]==='no'?'No':'Yes'):'')+'</strong>'):'Phases changed'; } // [407 · §351 W2] // [395 · E2]
   if(t==='admin-fte-bulk') return 'Admin bulk-set an FTE value';
   if(t==='admin-setup-lock-on'||t==='admin-setup-lock-off') return 'Admin turned the setup lock <strong>'+(t==='admin-setup-lock-on'?'ON':'OFF')+'</strong>'+((typeof e.by==='string'&&e.by)?' ('+esc(e.by)+')':''); // [383 · §287] · [403 · admin2 · G] the initials, when the row carries them
   if(t==='admin-setup-unlock'){ const r=(typeof _setupRow==='function')?_setupRow(String(e.choice||'')):null; return 'Admin unlocked <strong>'+esc(r?r.n:'a setting')+'</strong> for one change'+((typeof e.by==='string'&&e.by)?' ('+esc(e.by)+')':''); } // [383 · §287]
@@ -12917,7 +12941,7 @@ window.reopenBidding=function(){
   // opens EVERY week with room, far more than a round wants. Route round reopens to a month
   // picker that unlocks ONLY the chosen months' still-biddable weeks; every other week stays locked.
   // [319 · P-5] A completed phase (an RVA Round included) is history: no button reaches this on one, the handler is global.
-  if((phasesData.completedPhases||{})[cur]){ toast(phaseName(cur)+' is complete — its bidding cannot be reopened'+((cur<fallPhases()+RVA_MAX_ROUNDS&&!phasesData.finishedAt)?'; begin '+phaseName(cur+1)+' when ready.':' — the auction is finished.'),'err'); return; }
+  if((phasesData.completedPhases||{})[cur]){ toast(phaseName(cur)+' is complete — its bidding cannot be reopened'+((cur<lastPhase()&&!phasesData.finishedAt)?'; begin '+phaseName(cur+1)+' when ready.':'. Auction complete.'),'err'); return; }
   if(isRvaPhase(cur)){ return window._reopenRoundMonths(); }
   // [build 254 · rolling Phase 4] Close Bidding locks ALL 52 weeks. Begin Phase used to be the
   // only step that re-ran Smart Lock — but rolling Phase 4 rounds REOPEN without a Begin, so a
@@ -13166,8 +13190,9 @@ function blAllowance(ph){
 // (no mention of a feature that is off); unlimited → no counting language.
 // TWIN NOTE: byte-identical on both sites (twin-compare pinned).
 function prioLockBullets(){
+  const _rv=(typeof rvaOn!=='function'||rvaOn()); // [407 · §350] does the RVA's slot 4 run (typeof = sandbox convention)
   const base="Bid priorities can only stay the same or get stronger — bid a 5 on a week, and any re-bid there must be 5 or better.";
-  const a=[1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||p===4).map(p=>blAllowance(p)); // [231 · E2] Fall slots 1 … F, then the RVA's slot 4 (last)
+  const a=[1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||(p===4&&(typeof rvaOn!=='function'||rvaOn()))).map(p=>blAllowance(p)); // [231 · E2] Fall slots 1 … F, then the RVA's slot 4 (last)
   if(a.every(x=>x===0)) return [base];
   // [build 274 · V1] Unlimited in EVERY phase: no counting language, no floor mechanics — and [220 · 384 · §288, plan §11e] no rule
   // line at all (his order, 18 Oct 2026: the "Ideally, bid priorities…" sentence is removed). The staff page then hides its line, the welcome
@@ -13176,8 +13201,8 @@ function prioLockBullets(){
   const seg=(label,x)=>x===Infinity?('freely '+label):(x===0?('not at all '+label):('up to '+(x===1?'1 time ':x+' times ')+label));
   if(a.every(x=>x===a[0])){
     return [base+(a[0]===Infinity
-      ?' To fix a mistake, you may lower a bid freely in any phase (and any round of Phase '+((typeof fallPhases==='function'?fallPhases():3)+1)+').'
-      :' To fix a mistake, you may lower a bid '+seg('per phase (and per round of Phase '+((typeof fallPhases==='function'?fallPhases():3)+1)+')',a[0]).replace(/ $/,'')+'.')]; // [230 · E1] the RVA's phase number
+      ?' To fix a mistake, you may lower a bid freely in any phase'+(_rv?' (and any round of Phase '+((typeof fallPhases==='function'?fallPhases():3)+1)+')':'')+'.'
+      :' To fix a mistake, you may lower a bid '+seg('per phase'+(_rv?' (and per round of Phase '+((typeof fallPhases==='function'?fallPhases():3)+1)+')':''),a[0]).replace(/ $/,'')+'.')]; // [230 · E1] the RVA's phase number
   }
   // [COPY-1 · owner, 19 Aug 2026] Adjacent phases that share an allowance merge into one
   // clause, and "up to" is said once instead of once per clause. Phase 4 always stays its
@@ -13185,13 +13210,13 @@ function prioLockBullets(){
   // something untrue. Falls back to the per-clause wording whenever any phase is 0 or
   // unlimited, because "not at all" and "freely" cannot sit under a shared "up to".
   const groups=[];
-  for(let i=0;i<a.length-1;i++){ // [231 · E2] the Fall phases (every entry but the RVA's, which is last)
+  for(let i=0;i<a.length-(_rv?1:0);i++){ // [231 · E2] the Fall phases (every entry but the RVA's, which is last) · [407] no RVA: every entry
     const last=groups[groups.length-1];
     if(last&&last.v===a[i]) last.ph.push(i+1); else groups.push({v:a[i],ph:[i+1]});
   }
   const phLabel=ph=>ph.length===1?('Phase '+ph[0]):('Phases '+ph.slice(0,-1).join(', ')+' and '+ph[ph.length-1]);
   const parts=groups.map(g=>({v:g.v,label:'in '+phLabel(g.ph)}));
-  parts.push({v:a[a.length-1],label:'in each round of Phase '+((typeof fallPhases==='function'?fallPhases():3)+1)}); // [230 · E1] the RVA's phase number
+  if(_rv) parts.push({v:a[a.length-1],label:'in each round of Phase '+((typeof fallPhases==='function'?fallPhases():3)+1)}); // [230 · E1] the RVA's phase number
   const times=x=>x===1?'1 time':x+' times';
   const join=list=>list.length<2?(list[0]||''):(list.slice(0,-1).join(', ')+', and '+list[list.length-1]);
   const simple=parts.every(p=>p.v!==0&&p.v!==Infinity);
@@ -13212,7 +13237,7 @@ function renderBidLowerings(){
   const m=adminSettings?.bidLowerings||{};
   const cur=p=>{ const raw=m[p]!==undefined?m[p]:m[String(p)]; if(raw==='unlimited'||raw===undefined) return 'unlimited'; const n=parseInt(raw,10); return (isNaN(n)||n<0)?'0':String(Math.min(9,n)); }; // [385 · §292] never saved = Unlimited, as blAllowance
   row.innerHTML=[1,2,3].map(p=>`<label style="display:${_slotRuns(p)?'flex':'none'};flex-direction:column;gap:3px;font-size:11.5px">Phase ${p}${_blSel('blW'+p,cur(p))}</label>`).join('')
-    +`<label style="display:flex;flex-direction:column;gap:3px;font-size:11.5px">Each Phase-${fallPhases()+1} round${_blSel('blW4',cur(4))}</label>`
+    +`<label style="display:${_slotRuns(4)?'flex':'none'};flex-direction:column;gap:3px;font-size:11.5px">Each Phase-${fallPhases()+1} round${_blSel('blW4',cur(4))}</label>` /* [407 · §350] no RVA: hidden */
     +`<button class="btn btn-primary" style="flex:unset" id="blSaveBtn" onclick="saveBidLowerings()"${locked?' disabled':''}>Save</button>`;
   const sb=document.getElementById('blSaveBtn'); if(sb) sb.title='';
   const ln=document.getElementById('blLockNote'); if(ln) ln.style.display=locked?'block':'none'; // [404 · §334 A1 · B2] "Off while Strict is on."
@@ -15647,7 +15672,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.17","kind":"new","html":"<b>Competition weeks<\/b> — off = Loose, on = Strict (section 5). Default Loose. Can change at any time. Turning Strict on sets Allowed lowerings per phase to Unlimited in every phase; turning it off leaves them Unlimited."},
 {"n":"2.18","kind":"new","html":"<b>Strict applies to<\/b> — how strong a winning bid must be for Strict to hold it: every numbered bid (default) or 9 … 1 or stronger. Can change at any time."},
 {"n":"2.19","kind":"new","html":"<b>Bid numbers<\/b> — how many numbers each person gets, 10 to 16 (default 10). Numbers above 10 rank below 10. Does not change the caps. Locked while a phase is running."},
-{"n":"2.20","kind":"new","html":"<b>Phases<\/b> — 1, 2 or 3 Fall phases before the Rolling Vacation Auction, and whether Phase 1 is high-demand weeks only or every week. Default 3, high-demand only. Fixed once Phase 1 begins."},
+{"n":"2.20","kind":"new","html":"<b>Phases<\/b> — 1, 2 or 3 Fall phases, whether Phase 1 is high-demand weeks only or every week, and whether a Rolling Vacation Auction follows them. Default 3, high-demand only, with a Rolling Vacation Auction. Without one, the auction is complete once the last Fall phase's results are sent. Fixed once Phase 1 begins."},
 {"n":"2.21","kind":"new","html":"<b>Combination bids<\/b> — which of 1/2/3, 1/2, 2/3, 3/4 and 4/5 may be used (default 1/2/3 and 1/2). A switched-off combination cannot be placed and does not compete. Locked while a phase is running."},
 {"n":"2.22","kind":"new","html":"<b>Blinded bidding<\/b> — hides other people's initials on the staff site; the admin still sees names. No effect on decisions. Default off."},
 {"n":"2.24","kind":"new","html":"<b>NP Bids by Phase<\/b> — the phases where NP bids may be placed (default Phases 3 and 4). An NP bid counts only if NP was allowed in the phase it was placed. Can change at any time."},
@@ -15816,7 +15841,7 @@ function _rulesWelcomePart(title){
   return j<0?rest:rest.slice(0,j);
 }
 const RULES_LIVE={
-  '1.3':()=>phasesRuleLine(), '1.4':()=>rvaRuleLine(), '1.5':()=>bidNumbersLine(), '1.6':()=>comboNowText(),
+  '1.3':()=>phasesRuleLine(), '1.4':()=>rvaRuleLine()||'This auction has no Rolling Vacation Auction.', '1.5':()=>bidNumbersLine(), '1.6':()=>comboNowText(),
   '1.7':()=>npPhasesDescription(), '1.8':()=>cumulativeCapEmailText(), '1.9':()=>bfRulesBullets(), '1.10':()=>getReviewThreshold(),
   '1.11':()=>_rulesSetName(), '1.12':()=>_timerModeCurrent(), '3.2':()=>timerRulesEmailText(), '3.3':()=>_timerModeCurrent(),
   '4.16':()=>_ruleNoWeakenText(), '5.1':()=>_rulesSetName(), '5.10':()=>_ruleCompSetLine(true,null),
