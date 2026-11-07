@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 407;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 408;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1715,6 +1715,39 @@ function _withCloseLayout(dotted){
     return Object.assign({},dotted,{closeLayout:{phase:cur,round:0,weeks:all.filter(pre),at:Date.now()}});
   }catch(_){ return dotted; }
 }
+// [408 · F1] THE RULES' COPY OF THE LOCKS. firestore.rules refuses a colleague's change to a locked week by reading two fields on
+// vacations/timer (the document every bid write already reads): lockAll (Global Lock) and lockedWeeks (the weeks locked now, a sorted
+// list - the rules cannot pick the true keys out of locks.weeks, where an unlock stores false). This page keeps them equal to
+// vacations/locks: whenever it sees either document it works out the copy from the locks and writes it only when the timer holds
+// something else. So every writer of the locks (each lock button, Smart Lock, Begin Phase, Reopen, a Round's months, Reset, Restore,
+// another admin's page, a tab closed half-way) is followed by the copy, from any admin page that is open or opens next.
+// Nothing else writes the two fields (a colleague cannot: timerWriteSane). No timer document = nothing to keep (Begin Phase creates it).
+function _lockMirrorOf(l){ // [408 · F1]
+  const w=(l&&l.weeks&&typeof l.weeks==='object')?l.weeks:{};
+  return {lockAll:!!(l&&l.globalLock), lockedWeeks:Object.keys(w).filter(k=>!!w[k]).sort()};
+}
+let _lmLocksIn=false, _lmTimerIn=false, _lmTimerExists=false; // [408 · F1] the locks feed has arrived · the timer feed has arrived · the timer document exists
+let _lmSending='', _lmRefused=''; // [408 · review] the copy being written now · the copy whose last write was refused
+function _syncLockMirror(){ // [408 · F1]
+  try{
+    if(!_lmLocksIn||!_lmTimerIn||!_lmTimerExists) return;
+    // [408 · review] A broken feed may hold an old locks or timer snapshot: write nothing until both are live again
+    // (each one's next live snapshot calls this function). Otherwise two pages would keep writing over each other.
+    if(_deadFeeds.has(locksRef.path)||_deadFeeds.has(timerRef.path)) return;
+    const want=_lockMirrorOf(locksData);
+    const have=Array.isArray(timerData.lockedWeeks)?timerData.lockedWeeks.slice().sort():[];
+    if((timerData.lockAll===true)===want.lockAll&&have.join('|')===want.lockedWeeks.join('|')) return;
+    // [408 · review] Each copy is sent once. A copy already on its way is not sent again, and a copy the server refused
+    // (an admin removed from Admin Access with this tab open) is not sent again until the locks change it.
+    const key=(want.lockAll?'1':'0')+'|'+want.lockedWeeks.join('|');
+    if(key===_lmSending||key===_lmRefused) return;
+    _lmSending=key;
+    setDoc(timerRef,want,{merge:true})
+      .then(()=>{ _lmRefused=''; }) // a write went through: this page may write again
+      .catch(e=>{ _lmRefused=key; console.error('lock copy write failed:',e); })
+      .finally(()=>{ if(_lmSending===key) _lmSending=''; });
+  }catch(_){}
+}
 
 // [build 274 · C7] No baked-in roster — the database is the only source. The old
 // hardcoded starting list served nothing since the database took over, and its ghost
@@ -2136,7 +2169,7 @@ document.getElementById("load").classList.add("hidden");
 onSnapshot(scheduleRef, snap=>{ scheduleData=normalizeUserWkMap(snap.exists()?snap.data():{}); _scheduleReady=true; refreshAll(); });
 onSnapshot(emailToUserRef, snap=>{ emailToUserData=snap.exists()?snap.data():{}; }); // [H-3] attached here (after authReady is defined)
 onSnapshot(signInMissesRef, snap=>{ signInMissesData=snap.exists()?snap.data():{}; if(typeof renderSignInMisses==='function') renderSignInMisses(); });
-onSnapshot(locksRef,    snap=>{ locksData=snap.exists()?snap.data():{globalLock:false,weeks:{}}; if(!locksData.weeks)locksData.weeks={}; syncTimer(); refreshAll(); });
+onSnapshot(locksRef,    snap=>{ locksData=snap.exists()?snap.data():{globalLock:false,weeks:{}}; if(!locksData.weeks)locksData.weeks={}; _lmLocksIn=true; _syncLockMirror(); syncTimer(); refreshAll(); }); // [408 · F1] the rules' copy of the locks
 onSnapshot(metaRef,     snap=>{ const d=snap.exists()?snap.data():{};  metaData=d; refreshAll(); });
 onSnapshot(changesRef,  snap=>{
   changesLog=snap.exists()?(snap.data().log||[]):[];
@@ -2338,7 +2371,7 @@ onSnapshot(phaseStagingRef, snap=>{
   refreshAll(); // staged snapshots drive the phase workflow (complete/send gates)
 });
 onSnapshot(adminRef,    snap=>{ adminSettings=snap.exists()?snap.data():{}; _acCheckRemote(adminSettings); _rbOnSnap(); syncControls(); refreshAll(); }); // [build 265 · B5] config check · [build 268 · GATE] stale-build gate + ratchet
-onSnapshot(timerRef,    snap=>{ timerData=snap.exists()?snap.data():{enabled:false,lastChange:null}; syncTimer(); startTick(); if(typeof _autoCloseOnExpiry==='function') _autoCloseOnExpiry(); refreshAll(); });
+onSnapshot(timerRef,    snap=>{ timerData=snap.exists()?snap.data():{enabled:false,lastChange:null}; _lmTimerIn=true; _lmTimerExists=snap.exists(); _syncLockMirror(); /* [408 · F1] the rules' copy of the locks */ syncTimer(); startTick(); if(typeof _autoCloseOnExpiry==='function') _autoCloseOnExpiry(); refreshAll(); });
 onSnapshot(worstBidsRef, snap=>{ 
   worstBidsData=snap.exists()?snap.data():{};
   { const p=document.getElementById('panel-lastbids'); if(p&&p.classList.contains('on')) renderLastBids(); } // [404 · §334 G] the Last Bids page, when shown
@@ -3157,7 +3190,7 @@ function _acEditorBody(){ // [398 · §302] the builder's sections, in his order
   if(n===53) h+='<div class="cmodal-info" style="margin-top:6px">'+d.year+' has 53 weeks; Week 53 is a standard week.</div>';
   h+='</div>';
   h+='<div id="acHdCount" style="font-size:12px;font-weight:700;color:var(--t1);margin-top:8px">'+_acCountText(d)+'</div>';
-  h+='<div class="cmodal-warn" style="margin-top:8px">Saving reloads both sites. Phases and the year are fixed once Phase 1 begins; the rest can change between phases, once results are sent.</div>';
+  h+='<div class="cmodal-warn" style="margin-top:8px">Save and Reload reloads both sites. Phases and the year are fixed once Phase 1 begins; the rest can change between phases, once results are sent.</div>';
   return h+'</div>';
 }
 function _acReadDraftFromDom(){ // [398 · §302] every control the builder draws, into the draft (a control not drawn leaves its part as it is)
@@ -3181,9 +3214,9 @@ function _acReadDraftFromDom(){ // [398 · §302] every control the builder draw
   if(ss) d.summerStartIdx=num(ss)||d.summerStartIdx;
   if(se) d.summerEndIdx=num(se)||d.summerEndIdx;
 }
-function _acRefreshEditor(){ const b=document.getElementById('cmBody'); if(!b) return; const t=b.scrollTop; b.innerHTML=_acEditorBody(); b.scrollTop=t; } // [398 · §302] redrawn from the draft, the place in the pop-up kept
+function _acRefreshEditor(){ const b=document.getElementById('cmBody'); if(!b) return; const t=b.scrollTop; b.innerHTML=_acEditorBody(); b.scrollTop=t; _acOkSync(); } // [398 · §302] redrawn from the draft, the place in the pop-up kept
 window._acRedraw=function(){ _acReadDraftFromDom(); _acRefreshEditor(); }; // [398 · §302] a week, a count or a phase choice changed
-window._acTick=function(){ _acReadDraftFromDom(); const c=document.getElementById('acHdCount'); if(c&&_acDraft) c.textContent=_acCountText(_acDraft); }; // [398 · §302] a tick: only the count line changes
+window._acTick=function(){ _acReadDraftFromDom(); const c=document.getElementById('acHdCount'); if(c&&_acDraft) c.textContent=_acCountText(_acDraft); _acOkSync(); }; // [398 · §302] a tick: only the count line changes
 window._acYearChanged=function(){ if(phase1Started()){ toast('The auction YEAR cannot change while an auction is underway — Reset Auction to start a new year','warn'); _acRefreshEditor(); return; } // [build 268 · GAP]
   _acReadDraftFromDom(); const d=_acDraft; if(!d) return;
   const y=Number(document.getElementById('acYearSel').value)||d.year;
@@ -3199,16 +3232,55 @@ window._acYearChanged=function(){ if(phase1Started()){ toast('The auction YEAR c
 window.openAuctionCalendarEditor=function(){
   if(!cfgUnlockedNow()){ toast('The auction calendar is locked while a phase is running — editable between phases, once results are sent','warn'); return; } // [build 268 · GAP]
   _acDraft=_acDraftFromAC();
-  openConfirm({ title:'Calendar and Phases', body:_acEditorBody(), okText:'Save', // [398 · §303 A2]
+  openConfirm({ title:'Calendar and Phases', body:_acEditorBody(), okText:_acOkText(), // [398 · §303 A2] · [408 · F4]
     onConfirm:saveAuctionCalendar, onCancel:()=>{ _acDraft=null; } });
 };
+// [408 · F4] The calendar Save stores, from the draft `d` and the phases `_pp` it saves with: the code Save ran inline, moved here unchanged so
+// the OK button's label asks the very same question. Its weeks must already be chosen (Save checks that first; the label catches a throw).
+function _acCfgOf(d,_pp){
+  const sunds=getSundays(d.year), n=sunds.length, inYear=i=>i>=1&&i<=n;
+  const wkOf=i=>dateKey(sunds[i-1]);
+  // [398 · §302] The weeks of sections 2-4, in the pop-up's order: the three holidays with their ticks; Spring Break and Ski Week with their
+  // ticks too [398 · §304] (the names, icons and colours of AC_DEFAULTS).
+  const sec=AC_HOL3.map(([k,l])=>({idx:d.hol[k].idx,label:l,on:!!d.hol[k].on}))
+    .concat(d.spring.map((i,j)=>({idx:i,label:'Spring Break',on:(d.springOn||[])[j]!==false})),d.ski.map((i,j)=>({idx:i,label:'Ski Week',on:(d.skiOn||[])[j]!==false}))); // [398 · §304]
+  const secWk=new Set(sec.map(s=>wkOf(s.idx)));
+  // Decorative federal holidays, computed from the year. One landing ON any week of sections 2-4 (ticked or not) becomes an informational
+  // NOTE on that week (dual label — e.g. "⛷️ Ski Week · 🏛️ Presidents' Day"), so no week ever carries two entries; the highDemand flag alone
+  // drives every rule. Others get their own non-HD entry.
+  const autosAll=_acAutoHolidays(d.year);
+  const notes={}; // wk -> 'emoji label · …'
+  for(const h of autosAll){ const wk=wkOf(h.idx);
+    if(secWk.has(wk)) notes[wk]=(notes[wk]?notes[wk]+' · ':'')+((h.emoji?h.emoji+' ':'')+h.label); }
+  const autos=autosAll.filter(h=>!secWk.has(wkOf(h.idx)));
+  // [398 · §302] The summer weeks ticked high-demand (inside the range, not a week of sections 2-4); none while Phase 1 is every week.
+  const summerHd=_pp.p1All?[]:[...d.summerHd].filter(i=>i>=d.summerStartIdx&&i<=d.summerEndIdx&&inYear(i)&&!secWk.has(wkOf(i))).sort((a,b)=>a-b).map(wkOf);
+  const cfg={year:d.year,summerStartWk:wkOf(d.summerStartIdx),summerEndWk:wkOf(d.summerEndIdx),
+    holidays:[
+      ...sec.map(s=>{ const wk=wkOf(s.idx), df=AC_DEFAULTS.holidays.find(h=>h.label===s.label)||null;
+        const e={wk,label:s.label,emoji:df?df.emoji:'',short:df?df.short:s.label,highDemand:s.on,color:_acColorFor(s.label)};
+        if(notes[wk]) e.note=notes[wk];
+        return e; }),
+      ...autos.map(h=>({wk:wkOf(h.idx),label:h.label,emoji:h.emoji,short:h.short,highDemand:false,color:null})),
+    ].sort((a,b)=>a.wk<b.wk?-1:1)};
+  if(summerHd.length) cfg.summerHd=summerHd; // [398 · §302] only when there is one: a calendar without summer picks saves exactly as before
+  return cfg;
+}
+// [408 · F4] "Save and Reload" while Save would store a calendar other than the one this page was built from (judged as _acCheckRemote
+// judges it: normalized, then compared as JSON), "Save" otherwise. A draft Save would refuse (a week not chosen) reads "Save and Reload".
+function _acWillReload(d){ try{ return JSON.stringify(_acNormalize(_acCfgOf(d,_acPhasesOf(d).pp)))!==JSON.stringify(AC); }catch(_){ return true; } }
+function _acOkText(){ return (_acDraft&&!_acWillReload(_acDraft))?'Save':'Save and Reload'; }
+function _acOkSync(){ const b=document.getElementById('cmOk'); if(b&&document.getElementById('acBld')) b.textContent=_acOkText(); }
+// [408 · F4] The phases Save saves with (Save's own two lines, moved): changed = the draft's choice differs from the phases the pop-up opened with.
+function _acPhasesOf(d){ const _ppNow=phasePlan(), _ppD=phasePlanNormalize(d.phases), _pp0=phasePlanNormalize(d.phases0)||_ppNow;
+  const _ppCh=!phase1Started()&&!!_ppD&&(_ppD.fall!==_pp0.fall||_ppD.p1All!==_pp0.p1All||_ppD.rva!==_pp0.rva); return {pp:_ppCh?_ppD:_ppNow,ch:_ppCh}; }
 let _acZeroHdOk=false; // [build 268 · HDCB] one-shot ack for the empty-Phase-1 warning
 let _acGapImpactOk=false; // [build 268 · GAP] one-shot ack for the stranded-bids warning
 let _acTrapOk=false; // [407 · §350 (2)] one-shot ack for the phases trap warning: cleared at the write and at every Not saved
 async function saveAuctionCalendar(){
   _acReadDraftFromDom();
   const d=_acDraft;
-  const reopen=msg=>{ _acTrapOk=false; toast(msg,'warn'); setTimeout(()=>{ openConfirm({title:'Calendar and Phases',body:_acEditorBody(),okText:'Save',onConfirm:saveAuctionCalendar,onCancel:()=>{_acDraft=null;}}); },350); };
+  const reopen=msg=>{ _acTrapOk=false; toast(msg,'warn'); setTimeout(()=>{ openConfirm({title:'Calendar and Phases',body:_acEditorBody(),okText:_acOkText(),onConfirm:saveAuctionCalendar,onCancel:()=>{_acDraft=null;}}); },350); };
   if(!cfgUnlockedNow()){ toast('Locked while a phase is running — editable between phases, once results are sent','warn'); return; } // [build 268 · GAP]
   if(!d) return;
   // [build 268 · GAP] The YEAR may never change mid-auction — every bid is keyed to the
@@ -3217,8 +3289,7 @@ async function saveAuctionCalendar(){
   // [398 · §302] The phases: written only when changed in this pop-up, before Phase 1; otherwise the stored ones (never written then).
   // [398 · review F4] Changed = the draft's choice differs from the phases the pop-up opened with (phases0), not from the stored value: a
   // pop-up opened before another tab changed the phases never writes its stale copy back.
-  const _ppNow=phasePlan(), _ppD=phasePlanNormalize(d.phases), _pp0=phasePlanNormalize(d.phases0)||_ppNow;
-  const _ppCh=!phase1Started()&&!!_ppD&&(_ppD.fall!==_pp0.fall||_ppD.p1All!==_pp0.p1All||_ppD.rva!==_pp0.rva), _pp=_ppCh?_ppD:_ppNow;
+  const {pp:_pp,ch:_ppCh}=_acPhasesOf(d); // [408 · F4] the two lines that were here, in a helper the button's label asks too
   const sunds=getSundays(d.year), n=sunds.length, inYear=i=>i>=1&&i<=n;
   // [398 · §302] Every Spring Break / Ski Week week chosen; every week of sections 2-4 a different week; the summer range in order.
   const secIdx=AC_HOL3.map(([k])=>d.hol[k].idx).concat(d.spring,d.ski);
@@ -3245,31 +3316,7 @@ async function saveAuctionCalendar(){
     return;
   }
   _acZeroHdOk=false;
-  const wkOf=i=>dateKey(sunds[i-1]);
-  // [398 · §302] The weeks of sections 2-4, in the pop-up's order: the three holidays with their ticks; Spring Break and Ski Week with their
-  // ticks too [398 · §304] (the names, icons and colours of AC_DEFAULTS).
-  const sec=AC_HOL3.map(([k,l])=>({idx:d.hol[k].idx,label:l,on:!!d.hol[k].on}))
-    .concat(d.spring.map((i,j)=>({idx:i,label:'Spring Break',on:(d.springOn||[])[j]!==false})),d.ski.map((i,j)=>({idx:i,label:'Ski Week',on:(d.skiOn||[])[j]!==false}))); // [398 · §304]
-  const secWk=new Set(sec.map(s=>wkOf(s.idx)));
-  // Decorative federal holidays, computed from the year. One landing ON any week of sections 2-4 (ticked or not) becomes an informational
-  // NOTE on that week (dual label — e.g. "⛷️ Ski Week · 🏛️ Presidents' Day"), so no week ever carries two entries; the highDemand flag alone
-  // drives every rule. Others get their own non-HD entry.
-  const autosAll=_acAutoHolidays(d.year);
-  const notes={}; // wk -> 'emoji label · …'
-  for(const h of autosAll){ const wk=wkOf(h.idx);
-    if(secWk.has(wk)) notes[wk]=(notes[wk]?notes[wk]+' · ':'')+((h.emoji?h.emoji+' ':'')+h.label); }
-  const autos=autosAll.filter(h=>!secWk.has(wkOf(h.idx)));
-  // [398 · §302] The summer weeks ticked high-demand (inside the range, not a week of sections 2-4); none while Phase 1 is every week.
-  const summerHd=_pp.p1All?[]:[...d.summerHd].filter(i=>i>=d.summerStartIdx&&i<=d.summerEndIdx&&inYear(i)&&!secWk.has(wkOf(i))).sort((a,b)=>a-b).map(wkOf);
-  const cfg={year:d.year,summerStartWk:wkOf(d.summerStartIdx),summerEndWk:wkOf(d.summerEndIdx),
-    holidays:[
-      ...sec.map(s=>{ const wk=wkOf(s.idx), df=AC_DEFAULTS.holidays.find(h=>h.label===s.label)||null;
-        const e={wk,label:s.label,emoji:df?df.emoji:'',short:df?df.short:s.label,highDemand:s.on,color:_acColorFor(s.label)};
-        if(notes[wk]) e.note=notes[wk];
-        return e; }),
-      ...autos.map(h=>({wk:wkOf(h.idx),label:h.label,emoji:h.emoji,short:h.short,highDemand:false,color:null})),
-    ].sort((a,b)=>a.wk<b.wk?-1:1)};
-  if(summerHd.length) cfg.summerHd=summerHd; // [398 · §302] only when there is one: a calendar without summer picks saves exactly as before
+  const cfg=_acCfgOf(d,_pp), summerHd=cfg.summerHd||[]; // [408 · F4] the calendar this Save stores (the button's label asks the same helper)
   if(!_acNormalize(cfg)){ return reopen('Config failed validation — nothing saved'); }
   // [build 268 · GAP] A between-phases reclassification can strand placed bids below the
   // (unchanged) floors — e.g. a week newly marked high-demand under an HD floor of 4.
@@ -3291,12 +3338,13 @@ async function saveAuctionCalendar(){
   // [398 · §302] A merge write keeps a stored field the new value leaves out, inside auctionConfig too: with no summer pick, the stored list is removed.
   const _acW=summerHd.length?cfg:Object.assign({},cfg,{summerHd:deleteField()});
   _acTrapOk=false; // [407] the trap warning's one-shot: used
+  const _acRl=JSON.stringify(_acNormalize(cfg))!==JSON.stringify(AC); // [408 · F4] the toast's reload half: _acCheckRemote's own test
   try{
     await setDoc(adminRef,{auctionConfig:_acW,...(_ppCh?{phasePlan:{fall:_pp.fall,p1All:_pp.p1All,rva:_pp.rva}}:{})},{merge:true}); // [398 · §302] ONE write: the phases with it only when they changed
     _acDraft=null;
     if(_ppCh){ try{ await adminLog('ALL','ALL','admin-phaseplan',undefined,{choice:_pp.fall+'|'+(_pp.p1All?'all':'hd')+'|'+(_pp.rva?'yes':'no'),by:_setupWho()}); }catch(_){} } // [398 · §302] the Phases Change Log row · [404 · §334 A1 · K-Q3] the initials
     _cfgLog('Calendar and Phases',''); // [404 · §334 A1 · K-Q3] the calendar's own row
-    toast(_ppCh?'Auction calendar and phases saved — pages will reload with the new calendar':'Auction calendar saved — pages will reload with the new calendar','ok');
+    toast(_acRl?(_ppCh?'Auction calendar and phases saved — pages will reload with the new calendar':'Auction calendar saved — pages will reload with the new calendar'):(_ppCh?'Phases saved':'Saved'),'ok'); // [408 · F4] as the button said
     // The reload itself happens through _acCheckRemote when our own snapshot echoes back —
     // one code path whether the change came from this tab, another admin, or a restore.
   }catch(err){ reopen(_cfgDeniedMsg(err,'the auction calendar')||('Save failed: '+(err?.message||err))); } // [build 268 · FRZ] plain-language server-denial
@@ -15635,6 +15683,7 @@ window.renderCloudBackups=async function(){
 // [402 · §330] 7.8 (W25 as ruled in DECISIONS §330) from tests/docs/server-mail-plan/build-b2/text/rules-text.json; every other item as above.
 // [404 · §334 I] 2.1, 2.2, 2.15–2.19, 2.21, 2.22, 2.24, 2.27–2.29, 2.34, 2.37, 4.7, 4.15, 6.20, 8.3, 8.35 rewritten; 2.14 and 8.38 removed (173 items,
 // [12,38,11,16,13,26,8,49]); the words: build/A2/rules-text.json.
+// [408 · F3 · W1] 3.12 added at the end of section 3 (Timer): the countdown notice, his words as ruled (PLAN.md ANSWERS W1). 174 items, [12,38,12,16,13,26,8,49].
 // [405 · §342 · plan A3] 2.40 "Users": "Add several users takes one person per line…" and "The login e-mail must be a Gmail address." added (PLAN.md A3).
 // Each item: n (its number), kind (new / live / term), html (its approved words), and for a live line its label, the words shown
 // when the setting gives nothing (whenEmpty) and, for the timer mode, the name of each value.
@@ -15704,7 +15753,8 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"3.8","kind":"new","html":"Bids the admin adds or changes also restart the timer: always in mode 1; in mode 2 only when they change someone else's projected outcome."},
 {"n":"3.9","kind":"new","html":"With the Bidding Timer off, bidding stays open until the admin closes it."},
 {"n":"3.10","kind":"new","html":"<b>Begin Phase 1<\/b> — when Phase 1 is every week, it opens every week. When Phase 1 is high-demand weeks only, it opens each high-demand week whose remaining FTE is at or above its Smart Lock Control and locks every other week. Reopen bidding and Unlock these follow the same rule while that phase runs."},
-{"n":"3.11","kind":"new","html":"At 0 the server closes bidding within a minute, whether or not an admin page is open. Turning the timer off does not reopen it; Reopen bidding does."}
+{"n":"3.11","kind":"new","html":"At 0 the server closes bidding within a minute, whether or not an admin page is open. Turning the timer off does not reopen it; Reopen bidding does."},
+{"n":"3.12","kind":"new","html":"A colleague using browser developer tools can push the timer back without placing a bid. If the timer jumps unexpectedly, Close Phase Bidding always ends the phase."}
 ]},
 {n:"4",title:"Competition weeks",items:[
 {"n":"4.1","kind":"new","html":"<b>What makes one.<\/b> At one moment in the phase, at least two people have a bid of this phase on the week, and their FTE plus the FTE of earlier winners is more than the week's capacity."},

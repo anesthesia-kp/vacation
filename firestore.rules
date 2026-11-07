@@ -307,6 +307,8 @@ service cloud.firestore {
     // explicit biddingClosed flag; admins bypass. (Value forgery within one's own key is
     // the same documented residual as bid values themselves — the append-only change log
     // and the Fair Play monitor are the cross-check.)
+    // [408 · F1] A colleague's change to a locked week is refused (locksOk), from the moment an admin page has copied the
+    // locks onto the timer doc (a second or so after a lock changes). With no copy there yet, nothing extra is refused.
     function isBidDoc(docId) {
       return docId in ['schedule', 'bestBids', 'bidTimes', 'bidPhase', 'bidLowerings'];
     }
@@ -371,8 +373,8 @@ service cloud.firestore {
     // Has the admin explicitly CLOSED bidding? [AUDIT 2026-07-25 #2]
     // Bid writes used to be gated by the timer alone, so with the timer switched OFF a
     // registered user could keep writing bids from devtools after "Close Phase Bidding" —
-    // while the admin was approving. Per-week locks can't be checked here (week keys sit
-    // inside nested maps that rules cannot diff), so the admin sets one explicit flag.
+    // while the admin was approving. Per-week locks and Global Lock are checked by locksOk()
+    // below [408 · F1]; this flag closes bidding for every week at once.
     // It lives on the TIMER doc on purpose: timerNotExpired() already fetches that
     // document and identical lookups are cached, so this gate costs ZERO extra
     // document-access calls — a bid write is already near Firestore's limit of 10.
@@ -381,6 +383,25 @@ service cloud.firestore {
     function biddingNotClosed() {
       return !exists(/databases/$(database)/documents/vacations/timer)
         || get(/databases/$(database)/documents/vacations/timer).data.get('biddingClosed', false) != true;
+    }
+    // [408 · F1] A LOCKED WEEK TAKES NO CHANGE FROM A COLLEAGUE. The admin page keeps a copy of the locks on the timer doc:
+    // lockAll (Global Lock) and lockedWeeks (the weeks locked now, a list). timerNotExpired() already fetches that document and
+    // identical lookups are cached, so this costs no extra document access; myInitials() is the lookup writesOnlyOwnKeys made.
+    // Refused: any colleague write to a bid doc under Global Lock, and any that adds, changes or removes a locked week in the
+    // caller's own map (map.diff compares values, so re-writing an unchanged locked week is not a change). Colleagues cannot write
+    // either field (timerWriteSane). No copy on the timer doc, or a list that is not a list, refuses nothing here. Admins bypass.
+    function myMapBefore() { return resource == null ? {} : resource.data.get(myInitials()[0], {}); }
+    function myMapAfter() { return request.resource.data.get(myInitials()[0], {}); }
+    function locksOk() {
+      return !exists(/databases/$(database)/documents/vacations/timer)
+        || (get(/databases/$(database)/documents/vacations/timer).data.get('lockAll', false) != true
+            && (!(get(/databases/$(database)/documents/vacations/timer).data.get('lockedWeeks', []) is list)
+                || get(/databases/$(database)/documents/vacations/timer).data.get('lockedWeeks', []).size() == 0
+                || !exists(/databases/$(database)/documents/vacations/emailToUser)
+                || myInitials().size() == 0
+                || (myMapBefore() is map && myMapAfter() is map
+                    && !myMapAfter().diff(myMapBefore()).affectedKeys()
+                          .hasAny(get(/databases/$(database)/documents/vacations/timer).data.get('lockedWeeks', [])))));
     }
     // User timer writes may only touch lastChange/durationHours with sane values.
     // [AUDIT 2026-07-25 #1] The old version bounded lastChange but left durationHours
@@ -398,6 +419,8 @@ service cloud.firestore {
     //      Legitimate user timer writes are bid-driven resets; the staff site skips the
     //      write whenever its reset would not extend the current deadline, so this rule
     //      matches the client exactly. Admins bypass this function and can still shorten.
+    //   [408 · F3] Not covered: a write that EXTENDS needs no bid behind it, so a colleague can
+    //   hold the countdown open by repeating one (at most 72 h each; see the timer clause below).
     function timerWriteSane() {
       return (resource == null
                 ? request.resource.data.keys().hasOnly(['lastChange', 'durationHours'])
@@ -455,11 +478,15 @@ service cloud.firestore {
                                   || request.resource.data.get('sent', {}).keys().hasAll(resource.data.get('sent', {}).keys())))))
                    // Bid docs: own keys only, and never after server-clock expiry.
                    || (isBidDoc(docId) && (isAdmin()
-                        || (isRegisteredUser() && writesOnlyOwnKeys() && ownMapBounded() && timerNotExpired() && biddingNotClosed())))
+                        || (isRegisteredUser() && writesOnlyOwnKeys() && ownMapBounded() && timerNotExpired() && biddingNotClosed() && locksOk()))) // [408 · F1] locksOk
                    // The timer itself: users may reset it via bids — but not once it has
                    // truly expired (a skewed clock could otherwise reopen bidding), and only
-                   // with a fresh, sane lastChange/duration (no forced-expiry or stalling
-                   // writes from devtools).
+                   // with a fresh, sane lastChange/duration (no forced-expiry or shortening
+                   // writes from devtools). [408 · F3] A colleague can repeat a countdown write
+                   // that extends the deadline (at most 72 h each), with no bid behind it: the
+                   // rules do not tie a countdown write to a bid. It is visible, and Close Phase
+                   // Bidding always ends it. A recorded residual (DECISIONS §356 F3; the admin
+                   // Rules page 3.12).
                    || (docId == 'timer' && (isAdmin() || (isRegisteredUser() && timerNotExpired() && timerWriteSane())))
                    // KP-address book: each user may edit only their OWN entry (an insider
                    // could otherwise silently redirect a competitor's outbid alerts).

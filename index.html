@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 243;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 244;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -723,7 +723,8 @@ body{zoom:1.15}
       </div>
       <button type="button" class="al-toggle" role="switch" aria-checked="false" aria-labelledby="alKpName" aria-describedby="alKpLine" id="alKpBtn" onclick="_alKpClick()" disabled></button><!-- [399 · §311] the alert switches' own switch: on = a KP e-mail on file -->
     </div>
-    <div class="al-gi-h">Notify if a week opens up</div><!-- [229 · §297] the alert's name -->
+    <div class="al-gi-h tp-narow"><span>Notify if a week opens up</span><button type="button" class="tp-why" data-why="alGiWhy" aria-expanded="false">What's this?</button></div><!-- [229 · §297] the alert's name · [244 · F6] "What's this?", the page's "Why?" pattern -->
+    <div class="tp-whybox" id="alGiWhy" hidden><p class="tp-one">Choose a week and the bid you'd place there. If that bid could later win or be under review, you'll be e-mailed. The alert lasts until the phase ends.</p><p class="tp-one" style="margin-top:8px">Examples:</p><ol class="tp-brief" style="padding-left:1.4em;margin-top:4px"><li><b>A full week</b> — your bid isn't enough to get in today.</li><li><b>A strong bid that may drop</b> — someone holds the week with a strong bid and may drop it later. If they do and your bid could then win or be under review, you'll be e-mailed and the timer restarts so you have time to bid.</li><li><b>One number, several weeks</b> — one bid can watch several weeks, such as a 3 on Weeks 24, 25 and 26. An alert holds no number: nothing is placed until you bid.</li><li><b>A competition week</b> — its “Minimum new bid” is stronger than you want to spend. Choose the bid you would spend.</li></ol></div>
     <div id="alGiList" onclick="_alListClick(event)"></div>
     <button type="button" class="al-add" id="alAdd" onclick="_alAddWeek()">+ Add a week</button>
     <div class="modal-buttons"><button type="button" class="btn-primary" onclick="_alDone()">Done</button></div>
@@ -3977,14 +3978,16 @@ function _swapOutText(user,wk,e){
   try{
     const cur=data[user][at], inc=data[user][other];
     if(e.why==='down'&&getOutcome(at,user,computeApprovals(data))==='win'&&_lwBidWins(data,user,at,inc)===false)
-      return 'Your '+bidLbl(cur)+' on '+_swapWeekName(at)+' is winning on a competition week. Swapping would put a '+bidLbl(inc)+' there, which would not win — and a winning bid on a competition week can only be weakened to a bid that still wins.';
+      return 'Your '+bidLbl(cur)+' on '+_swapWeekName(at)+' is winning on a competition week. Swapping would put a weaker bid there, which would not win — and a winning bid on a competition week can only be weakened to a bid that still wins.'; // [244 · F5] no number: the line can stand for several weeks
   }catch(_){}
-  return _swapWeekName(at)+': '+e.msg;
+  return (at===wk?'Swapping would put a weaker bid on '+_swapWeekName(at)+'. ':'')+e.msg; // [244 · F5] the left-out weeks lead the line (_swapOutPaint)
 }
 function _swapOutPaint(user,wk,out){
   const ws=(out||[]).slice().sort((x,y)=>(x.wk<y.wk?-1:(x.wk>y.wk?1:0))), n=ws.map(e=>String(weekMeta[e.wk]?weekMeta[e.wk].weekNum:e.wk));
   const label=n.length===1?"Why isn't Week "+n[0]+" here?":"Why aren't Weeks "+n.slice(0,-1).join(', ')+' and '+n[n.length-1]+" here?";
-  const lines=ws.map(e=>_swapOutText(user,wk,e));
+  const g=[], at=Object.create(null), and=a=>a.length===1?a[0]:a.slice(0,-1).join(', ')+' and '+a[a.length-1]; // [244 · F5] weeks with the same words share one line, led by those weeks
+  ws.forEach((e,i)=>{ const t=_swapOutText(user,wk,e); if(!(t in at)){ at[t]=g.length; g.push({t:t,n:[]}); } g[at[t]].n.push(n[i]); });
+  const lines=g.map(x=>(x.n.length===1?'Week ':'Weeks ')+and(x.n)+': '+x.t);
   return _whyPut('swapOutLink','swapOutWhy',[],lines.length===1?lines[0]:lines,label);
 }
 // [202 · §259, owner 10 Oct 2026: "usable bids appear too high sometimes and also block the new message we have about comp weeks"]
@@ -6536,6 +6539,7 @@ const AL_LATE='Not confirmed yet — it will save when your connection returns.'
 function openAlertsBox(){
   const user=getCurrentUser(); const m=document.getElementById('alertsModal'); if(!user||!m) return;
   _alBox.open=true; _alBox.visit={user:user,base:_alLoaded?_alEntry(user):null,pend:[],kp:(typeof _emLoadedOk!=='undefined'&&_emLoadedOk===true)?_alKpAddr(user):null}; // [235 · §315] S1: kp
+  try{ const p=document.getElementById('alGiWhy'), b=document.querySelector('#alertsModal .al-gi-h .tp-why'); if(p&&b&&!p.hasAttribute('hidden')) _whyTap(b); }catch(_){} // [244 · F6] "What's this?" closed at every opening
   _alBoxPaint(); m.classList.add('show');
 }
 window.openAlertsBox=openAlertsBox;
