@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 408;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 409;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -649,16 +649,18 @@ thead th{color:var(--t2)}
       <div class="page-head"><div class="page-title">Week Capacity</div><div class="page-sub">Set the capacity of each week.</div></div>
       <div class="card" style="margin-bottom:12px">
         <div class="card-title">Smart Lock Control — what it does</div>
-        <div class="page-sub">Smart Lock Control is the minimum FTE a week needs to stay open. Below it, Smart Lock locks the week. Default 0.4.</div>
+        <div class="page-sub">Smart Lock Control is the minimum available FTE a week needs to stay open for the next phase. Below this number, Smart Lock locks the week. Default: the last value applied, or lowest FTE staff.</div>
       </div>
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
         <span style="display:inline-flex;align-items:center;gap:6px"><input type="number" id="slotsSetStd" class="inp" style="width:64px;padding:3px 6px" step="0.1" min="0"><button class="btn btn-primary" onclick="setAllSlots('std')">Set All Standard Weeks</button></span>
         <span style="display:inline-flex;align-items:center;gap:6px"><input type="number" id="slotsSetSum" class="inp" style="width:64px;padding:3px 6px" step="0.1" min="0"><button class="btn btn-primary" onclick="setAllSlots('summer')">Set All Summer Weeks</button></span>
         <span style="display:inline-flex;align-items:center;gap:6px"><input type="number" id="slotsSetHd" class="inp" style="width:64px;padding:3px 6px" step="0.1" min="0"><button class="btn btn-primary" onclick="setAllSlots('hd')">Set All High-Demand Weeks</button></span>
+        <button class="btn btn-primary" id="roundDownBtn" onclick="roundDownCapacity()">Round down capacity</button>
         <span style="display:inline-flex;align-items:center;gap:6px;padding-left:14px;border-left:1px solid var(--b1)">
           <label style="font-size:12px;color:var(--t2);font-weight:600" for="slcGlobal">Global Smart Lock Control:</label>
-          <input type="number" id="slcGlobal" class="inp" style="width:72px;padding:3px 6px" step="0.1" min="-1" max="1" placeholder="0.4" title="One value applied to every week's Smart Lock Control (−1.0 to 1.0)">
+          <input type="number" id="slcGlobal" class="inp" style="width:72px;padding:3px 6px" step="0.1" min="-1" max="1" title="One value applied to every week's Smart Lock Control (−1.0 to 1.0)">
           <button class="btn" style="background:rgba(31,35,41,.12);color:var(--blue);border:1px solid rgba(31,35,41,.3)" onclick="applyGlobalSlc()">Apply to All Weeks</button>
+          <button class="btn btn-ghost" id="slcLowestBtn" style="display:none" onclick="useLowestFteSlc()"></button>
         </span>
         <span id="slotsStatus" style="font-size:12px;color:var(--t2)"></span>
       </div>
@@ -3488,15 +3490,38 @@ let slcData={};
 onSnapshot(slcRef, snap=>{ slcData=snap.exists()?snap.data():{}; refreshAll(); });
 // Smart Lock Control: the minimum remaining FTE a week needs to STAY OPEN when
 // Smart Lock runs. remaining >= control → open; remaining < control → locked.
-// Range -1..1 (0.1 steps). Initial value 0.4 for every week (admin-requested);
-// an explicit saved value always wins.
+// Range -1..1 (0.1 steps). [409 · §365] A week's own saved value wins; a week with none uses the
+// value last applied with Apply to All Weeks (adminSettings.slcGlobal, kept by Reset Auction), else
+// the lowest FTE on the roster now, else FTE_MIN (0.4).
+function _slcGlobalSaved(){
+  const v=adminSettings?adminSettings.slcGlobal:undefined;
+  if(typeof v!=='number'||isNaN(v)||v<-1||v>1) return null;
+  return Math.round(v*10)/10;
+}
+// [409 · §365] The lowest stored FTE among the roster's names, on the 0.1 grid; a blank, non-number
+// or out-of-range value (below FTE_MIN or above 1) is ignored. null when no one has a valid FTE.
+function _lowestRosterFte(){
+  let lo=null;
+  (Array.isArray(names)?names:[]).forEach(u=>{
+    const raw=fteData?fteData[u]:undefined;
+    if(typeof raw!=='number'&&typeof raw!=='string') return;
+    if(raw==='') return;
+    const v=Number(raw);
+    if(isNaN(v)||v<FTE_MIN-1e-9||v>1+1e-9) return;
+    const r=Math.round(v*10)/10;
+    if(lo===null||r<lo) lo=r;
+  });
+  return lo;
+}
 function getSlc(wk){
   const v=slcData?slcData[wk]:undefined;
   if(v!==undefined&&v!==null&&v!==''){
     const n=Number(v);
     if(!isNaN(n)&&n>=-1&&n<=1) return Math.round(n*10)/10;
   }
-  return 0.4;
+  const g=_slcGlobalSaved(); if(g!==null) return g;
+  const lo=_lowestRosterFte(); if(lo!==null) return lo;
+  return FTE_MIN;
 }
 function getSlots(wk){
   // ONLY admin-entered values count — the built-in default was removed
@@ -14324,6 +14349,7 @@ window.bulkSaveMissingFte=function(){
 // built-in starting value if never saved). Saving writes explicit numbers —
 // there is no blank/default concept in the UI.
 function renderSlotsPanel(){
+  _slotsControlsPaint(); // [409] the Global box, Use lowest FTE and Round down capacity's look
   const tb=document.getElementById("slotsBody"); if(!tb) return;
   if(tb.contains(document.activeElement)) return; // H-7: don't clobber the admin's in-progress edit when a user's bid fires a snapshot
   const missing=new Set(weeksMissingCapacity());
@@ -14423,10 +14449,85 @@ window.applyGlobalSlc=async function(){
     okText:'Set all to '+v,
     onConfirm: async ()=>{
       const updates={}; mondays.forEach(d=>{ updates[dateKey(d)]=v; });
-      await setDoc(slcRef,updates,{merge:true});
+      const _b=writeBatch(db); _b.set(slcRef,updates,{merge:true}); _b.set(adminRef,{slcGlobal:v},{merge:true}); await _b.commit(); // [409 · §365] the Global box remembers the value applied (not a frozen key)
       mondays.forEach(d=>{ const inp=document.getElementById('slc_'+dateKey(d)); if(inp) inp.value=v; });
+      if(el){ el.value=String(v); el.dataset.painted=String(v); }
       toast(`Smart Lock Control set to ${v} for all ${mondays.length} weeks`,'ok');
     }
+  });
+};
+
+// [409 · §365] The Global Smart Lock Control box shows the value last applied (blank when none). A value
+// the admin has typed or filled and not yet applied is left alone: the box is repainted only while it is
+// blank or still shows what was last painted, and never while it has the focus.
+function _slotsControlsPaint(){
+  const el=document.getElementById('slcGlobal');
+  if(el&&document.activeElement!==el&&(el.value===''||el.value===el.dataset.painted)){
+    const g=_slcGlobalSaved(), t=(g===null?'':String(g));
+    el.value=t; el.dataset.painted=t;
+  }
+  const lb=document.getElementById('slcLowestBtn');
+  if(lb){ const lo=_lowestRosterFte();
+    if(lo===null){ lb.style.display='none'; lb.textContent=''; }
+    else { lb.style.display=''; lb.textContent='Use lowest FTE ('+lo.toFixed(1)+')'; } }
+  const rb=document.getElementById('roundDownBtn');
+  if(rb){ const on=_phaseGapNow(); rb.style.opacity=on?'':'.45'; rb.setAttribute('aria-disabled',on?'false':'true'); }
+}
+// [409 · §365] Use lowest FTE only FILLS the Global box; Apply to All Weeks still saves.
+window.useLowestFteSlc=function(){
+  const lo=_lowestRosterFte(), el=document.getElementById('slcGlobal');
+  if(lo===null||!el) return;
+  el.value=lo.toFixed(1);
+};
+
+// [409 · §366] Round down capacity. Between phases only (_phaseGapNow). Weeks with more than 1.0 and less
+// than 2.0 FTE left (capacity minus decided winners); the people who could still win it are the roster's
+// names less the week's decided winners, each at their FTE; canWin = the largest sum of a group of them
+// (each person once) that fits in what is left. Listed when canWin < left; the new capacity removes only
+// the part nobody can win. Worked in tenths (integers) so no rounding drift.
+function _roundDownWeeks(){
+  const out=[], ap=computeApprovals(), roster=Array.isArray(names)?names:[];
+  mondays.forEach(d=>{
+    const wk=dateKey(d), left=Math.round(weekLedger(wk,ap).remainingApproved*10);
+    if(!(left>10&&left<20)) return;
+    const dec=decidedWinners(wk), fit=new Array(left+1).fill(false); fit[0]=true;
+    roster.forEach(u=>{ if(dec.has(u)) return; const f=Math.round(getUserFTE(u)*10); if(!(f>0)) return;
+      for(let x=left;x>=f;x--){ if(fit[x-f]) fit[x]=true; } });
+    let can=0; for(let x=left;x>=0;x--){ if(fit[x]){ can=x; break; } }
+    if(can<left){ const cap=Math.round(getSlots(wk)*10); out.push({wk:wk,oldCap:cap/10,newCap:(cap-(left-can))/10,left:left/10,can:can/10}); }
+  });
+  return out;
+}
+function _roundDownLine(r){ return _acFmtWkShort(r.wk)+': '+r.oldCap.toFixed(1)+' → '+r.newCap.toFixed(1)+' ('+r.left.toFixed(1)+' left → '+r.can.toFixed(1)+')'; }
+const ROUND_DOWN_GAP_TEXT="Round down capacity works between phases, once a phase's results are sent.";
+const ROUND_DOWN_NONE_TEXT='No week has capacity to round down.';
+function _roundDownInfo(text){ openConfirm({title:'Round down capacity',body:'<div>'+esc(text)+'</div>',okText:'OK',onConfirm:()=>{}}); }
+window.roundDownCapacity=function(){
+  if(!_feedsHealthyOrExplain('Round down capacity')) return;
+  if(!_phaseGapNow()){ _roundDownInfo(ROUND_DOWN_GAP_TEXT); return; }
+  const list=_roundDownWeeks();
+  if(!list.length){ _roundDownInfo(ROUND_DOWN_NONE_TEXT); return; }
+  const n=list.length;
+  openConfirm({
+    title:'Round down capacity?',
+    body:"<div>These weeks have between 1 and 2 FTE left, and part of it nobody on the roster can win outright. Lower each one's capacity to what can be won:</div>"
+      +'<div style="margin-top:8px">'+list.map(r=>'<div>'+esc(_roundDownLine(r))+'</div>').join('')+'</div>'
+      +'<div class="cmodal-info" style="margin-top:10px">A backup is saved first. Each change goes in the Change Log.</div>',
+    okText:'Round down '+n+' week'+(n===1?'':'s'),
+    onConfirm:()=>{ _backupThen('rounding down capacity',async()=>{
+      // Guards at the moment of action: still between phases, feeds healthy, and only the weeks whose answer is unchanged.
+      if(!_feedsHealthyOrExplain('Round down capacity')) return;
+      if(!_phaseGapNow()){ _roundDownInfo(ROUND_DOWN_GAP_TEXT); return; }
+      const was={}; list.forEach(r=>{ was[r.wk]=r; });
+      const keep=_roundDownWeeks().filter(r=>{ const w=was[r.wk]; return !!w&&w.oldCap===r.oldCap&&w.newCap===r.newCap; });
+      if(!keep.length){ _roundDownInfo(ROUND_DOWN_NONE_TEXT); return; }
+      const updates={}; keep.forEach(r=>{ updates[r.wk]=r.newCap; });
+      // The backup runs this without awaiting it, so a refused write is told here (openConfirm's safety net never sees it).
+      try{ await setDoc(slotsRef,updates,{merge:true}); }
+      catch(err){ console.error('Round down capacity failed:',err); toast('Action failed: '+(err?.message||err),'err'); return; }
+      await _cfgLog('Capacity rounded down',keep.map(r=>_acFmtWkShort(r.wk)+' '+r.oldCap.toFixed(1)+' → '+r.newCap.toFixed(1)).join('; '));
+      toast('Capacity rounded down on '+keep.length+' week'+(keep.length===1?'':'s'),'ok');
+    }); }
   });
 };
 
@@ -15736,11 +15837,12 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.33","kind":"new","html":"<b>Locked weeks on the staff board<\/b> — per phase: locked weeks stay in their month in grey, or gather at the bottom. Defaults: Phase 1 at the bottom, later phases in their month. Display only."},
 {"n":"2.34","kind":"new","html":"<b>Reset Auction<\/b> — deletes every bid, decision, last bid, lock, withheld number and all phase history. Settings, users, FTE and capacity stay. Offers a backup first."},
 {"n":"2.35","kind":"new","html":"<b>Capacity (per week)<\/b> — the week's room, filled strongest bid first (section 6). Each row's Save sets one week. Set All Standard Weeks, Set All Summer Weeks and Set All High-Demand Weeks set every week of that kind at once; a summer week ticked high-demand counts as high-demand. Available = capacity minus approved winners, as on the Capacity page. A week with no saved value has 0 and cannot be won."},
-{"n":"2.36","kind":"new","html":"<b>Smart Lock Control<\/b> (per week, or Apply to All Weeks) — the least remaining FTE a week needs to stay open when Smart Lock runs; −1.0 to 1.0, default 0.4. Remaining = capacity minus earlier winners and approved bids. No effect on the projection."},
+{"n":"2.36","kind":"new","html":"<b>Smart Lock Control<\/b> (per week, or Apply to All Weeks) — the least available FTE a week needs to stay open for the next phase when Smart Lock runs; −1.0 to 1.0. The Global box remembers the last value applied, also after Reset Auction; Use lowest FTE fills it with the lowest FTE staff. A week with no saved value uses the remembered value, or the lowest FTE staff when none has been applied. Remaining = capacity minus earlier winners and approved bids. No effect on the projection."},
 {"n":"2.37","kind":"new","html":"<b>Rehearsal Mode<\/b> — unlocks Run Simulation, Auto-Approve/Deny and the testing skip buttons for backups and results. Not a sandbox: real bids, real e-mails. Default off. After Phase 1 begins it asks first."},
 {"n":"2.38","kind":"new","html":"<b>Run Simulation<\/b> — tops each person up to \"Bids per user\" (1–10, default 3) with random bids; their own bids count and are never changed. Skips locked weeks; cannot run under Global Lock."},
 {"n":"2.39","kind":"new","html":"<b>Auto-Approve/Deny Results<\/b> — writes real decisions: approves Winning and single Under Review bids, settles each tie at random (approving while the week stays within its capacity plus the overage), denies the rest."},
-{"n":"2.40","kind":"new","html":"<b>Users<\/b> — each person has initials, a full name, an FTE, a Google login e-mail and, if they want one, a KP e-mail. Initials cannot change. Adding a person needs every field but the KP e-mail. Add several users takes one person per line, fields in any order; a preview shows who will be added and why any line is not, and the people are added together or not at all. Each row has one Save: it refuses a blank full name or login e-mail, and changes FTE only before Phase 1 begins. Two people can never share a login e-mail. The login e-mail must be a Gmail address. A KP e-mail saved blank is off: that person is not asked for one. When a KP e-mail is turned off or replaced, the address that was on file gets one note saying so."}
+{"n":"2.40","kind":"new","html":"<b>Users<\/b> — each person has initials, a full name, an FTE, a Google login e-mail and, if they want one, a KP e-mail. Initials cannot change. Adding a person needs every field but the KP e-mail. Add several users takes one person per line, fields in any order; a preview shows who will be added and why any line is not, and the people are added together or not at all. Each row has one Save: it refuses a blank full name or login e-mail, and changes FTE only before Phase 1 begins. Two people can never share a login e-mail. The login e-mail must be a Gmail address. A KP e-mail saved blank is off: that person is not asked for one. When a KP e-mail is turned off or replaced, the address that was on file gets one note saying so."},
+{"n":"2.41","kind":"new","html":"<b>Round down capacity<\/b> (Week Capacity, between phases) — for each week with more than 1.0 and less than 2.0 FTE left, lowers the capacity by the part that no group of people on the roster can win outright; a backup first, each change in the Change Log. No outright win changes."}
 ]},
 {n:"3",title:"Timer",items:[
 {"n":"3.1","kind":"new","html":"The timer decides when a phase's bidding ends. At 0, bidding closes for everyone."},
@@ -15866,7 +15968,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"8.36","kind":"term","html":"The admin has e-mailed a completed phase's results. Staff then see their outcomes.","term":"Results sent"},
 {"n":"8.37","kind":"term","html":"The last phase, run as rounds through the year. Each round opens chosen months and is its own phase.","term":"Rolling Vacation Auction (RVA)"},
 {"n":"8.39","kind":"term","html":"Locks open weeks whose remaining FTE is below their Smart Lock Control and unlocks locked weeks at or above it — only high-demand weeks during a high-demand-only Phase 1.","term":"Smart Lock"},
-{"n":"8.40","kind":"term","html":"Per week, the least remaining FTE needed to stay open when Smart Lock runs. Default 0.4.","term":"Smart Lock Control"},
+{"n":"8.40","kind":"term","html":"Per week, the least available FTE needed to stay open for the next phase when Smart Lock runs. Default: lowest FTE staff.","term":"Smart Lock Control"},
 {"n":"8.41","kind":"term","html":"The ranking of every bid: 1/2/3 › 1/2 › 1 › 2/3 › 2 › … › 10 › 11 … 16 › NP.","term":"Strength order"},
 {"n":"8.42","kind":"term","html":"The Competition weeks setting in which a winning bid on a competition week can only be moved, not removed.","term":"Strict"},
 {"n":"8.43","kind":"term","html":"\"Strict applies to\": every numbered bid, or N or stronger. Weaker winning bids are not held.","term":"Strict level"},
