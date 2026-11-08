@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 409;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 410;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -465,6 +465,7 @@ thead th{color:var(--t2)}
         <a onclick="nav('appdenials',this)">Approvals/Denials</a>
         <a onclick="nav('drawsreviews',this)">Under Review</a>
         <a onclick="nav('edits',this)">Edit Selections</a>
+        <a onclick="nav('splitweeks',this)">Split weeks</a><!-- [410 · split weeks · admin-page] Q9 -->
         <a onclick="nav('locks',this)">Lock Weeks</a>
         <a onclick="nav('lastbids',this)">Last Bids</a><!-- [404 · §334 G] -->
       </div></div>
@@ -696,6 +697,43 @@ thead th{color:var(--t2)}
       <div class="card"><div class="tbl-box tbl-in" style="overflow-x:auto"><table><thead><tr><th>User</th><th>Week</th><th>Last bid</th><th>Clear</th></tr></thead><tbody id="lastBidsBody"></tbody></table></div></div>
     </div>
 
+    <!-- SPLIT WEEKS [410 · split weeks · admin-page] (DECISIONS §368–§369; PLAN.md §5 and its ANSWERS) — the switch (adminSettings.splitWeeksOn,
+         missing = Off), the splits of vacations/splits for the phase chosen in the usual Phase drop-down, and Create a split (renderSplitWeeks,
+         toggleSplitWeeks, createSplit, removeSplit). Layout and words: the approved mock (tests/docs/split-weeks-plan/admin-mock.html, v5). -->
+    <div class="panel" id="panel-splitweeks">
+      <div class="page-head"><div class="page-title">Split weeks</div><div class="page-sub">Two people share a week. One bids for both, at their blended FTE.</div></div>
+      <div class="card">
+        <div class="card-title">Split weeks</div>
+        <div class="trow">
+          <div>
+            <div class="trow-label">Split weeks</div>
+            <div class="trow-desc">Staff can share weeks.</div>
+            <div class="trow-desc" id="swLockLine" style="display:none">Can be changed before Phase 1 and between phases.</div>
+          </div>
+          <div class="tog" id="swTog" onclick="toggleSplitWeeks()"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Splits</div>
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+          <label for="swPhase" style="font-size:11px;color:var(--t2)">Phase:</label>
+          <select id="swPhase" class="sel" onchange="renderSplitWeeks()"></select>
+        </div>
+        <div class="tbl-box tbl-in" style="overflow-x:auto"><table><thead id="swHead"></thead><tbody id="swBody"></tbody></table></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Create a split</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <select id="swWeek" class="sel" style="width:170px" aria-label="Week"></select>
+          <select id="swBidder" class="sel" style="width:100px" aria-label="Bidder"></select>
+          <select id="swPartner" class="sel" style="width:100px" aria-label="Partner"></select>
+          <select id="swSplit" class="sel" style="width:180px" aria-label="Split" onchange="_swHalves()"></select>
+          <select id="swHalf" class="sel" style="width:130px" aria-label="Bidder's half"></select>
+          <button class="btn btn-primary" onclick="createSplit()">Create</button>
+        </div>
+      </div>
+    </div>
+
     <!-- USERS -->
     <div class="panel" id="panel-users">
       <div class="page-head"><div class="page-title">Manage Users</div><div class="page-sub">Add or remove users. Changes apply to both scheduler and admin.</div></div>
@@ -866,6 +904,7 @@ thead th{color:var(--t2)}
           <option value="denied">Denied</option>
           <option value="revoked">Revoked</option>
           <option value="system">System (admin actions)</option>
+          <option value="split">Split weeks</option><!-- [410 · split weeks · admin-page] -->
         </select>
         <label style="font-size:11px;color:var(--t2);margin-left:10px">User:</label>
         <select id="cl_user" class="sel" onchange="setClFilter('user',this.value)"><option value="">All Users</option></select>
@@ -1656,6 +1695,7 @@ const phasesRef    = doc(db,"vacations","phases");
 const deniedRef    = doc(db,"vacations","denials");
 const bidPhaseRef  = doc(db,"vacations","bidPhase");
 const slotsRef     = doc(db,"vacations","slots"); // per-week FTE availability overrides {wk: number}
+const splitsRef = doc(db,"vacations","splits"); // [410 · split weeks, DECISIONS §368–§369] {"<wk>|<bidder>": {wk,b,p,sp,bh,ph,st,why,at,by}} — the shared weeks the admin records
 const mailQueueRef = doc(db,"vacations","mailQueue"); // outbox for projection-change alerts
 const changesArchiveRef = doc(db,"vacations","changesArchive"); // {phaseNum: [log entries]} — archived at phase completion
 // [AUDIT 2026-07-26 H6 REDESIGN] Completed-phase snapshots are staged here between Complete
@@ -2228,7 +2268,9 @@ function _resultsBodyFor(key,u,entry,schedSrc){ // [391 · §296] greets by the 
   const cur=Number(key);
   const approved=(entry.approved||[]).slice(), denied=(entry.denied||[]).slice();
   approved.sort(); denied.sort();
-  const appLines=approved.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
+  const appLines=approved.map(wk=>{const m=wkDate(wk); const _se=(typeof _splitWonIn==='function')?_splitWonIn(cur,u,wk):null; // [410 · split weeks, Q10]
+    if(_se&&_se.b!==u) return `  • ${wLabel(m)} — ${_splitHalfDays(_se.sp,3-Number(_se.bh))}, shared with ${displayName(_se.b)}`; // the partner placed no bid
+    return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`+(_se?` — ${_splitHalfDays(_se.sp,Number(_se.bh))}, shared with ${displayName(_se.p)}`:'');}).join('\n');
   const denLines=denied.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
   return `Hi ${((typeof greetName==='function')?greetName(u):u)},
 
@@ -2248,6 +2290,7 @@ function _resultsCtxOf(key){
   const summary={};
   for(const wk of Object.keys(arch.approvals||{})) for(const u of (Array.isArray(arch.approvals[wk])?arch.approvals[wk]:[])){ (summary[u]=summary[u]||{approved:[],denied:[]}).approved.push(wk); }
   for(const wk of Object.keys(arch.denials||{})) for(const u of (Array.isArray(arch.denials[wk])?arch.denials[wk]:[])){ (summary[u]=summary[u]||{approved:[],denied:[]}).denied.push(wk); }
+  if(typeof _splitResultsAdd==='function') _splitResultsAdd(summary,Number(k),arch.approvals||{}); // [410 · split weeks, Q10] the partner of a split won in this phase
   const label=phaseName(k);
   return {key:k, label, summary, users:Object.keys(summary), schedSrc:arch.schedule||scheduleData,
     subject:'Vacation Auction — '+phaseName(k)+' Results'};
@@ -2661,6 +2704,7 @@ window.nav = function(id, el) {
   if(id==='simulator') renderSimPanel();
   if(id==='appdenials') renderAppDenials();
   if(id==='lastbids') renderLastBids(); // [404 · §334 G]
+  if(id==='splitweeks') renderSplitWeeks(); // [410 · split weeks · admin-page]
   if(id==='drawsreviews') renderDrawsReviews();
   if(id==='changelog') renderChangelog();
   if(id==='users'&&typeof renderUsersCombined==='function') renderUsersCombined();
@@ -3408,6 +3452,130 @@ function groupByMonth(){ const g={}; mondays.forEach(d=>{ const k=mName(d); if(!
 // A parseable string becomes its number; garbage/blank falls to the same 1.0 arithmetic guard
 // as a missing entry (and usersMissingFte still flags it for the admin).
 function getUserFTE(u){ const raw=fteData[u]; if(raw===undefined||raw===null||raw==='') return 1.0; const v=Number(raw); return isNaN(v)?1.0:v; }
+// [410 · split weeks, DECISIONS §368–§369] One record of shared weeks: vacations/splits.
+let splitsData={};
+function _splitHalfDays(sp,h){ return sp==='T' ? (h===1?'Sun–Tue':'Wed–Sat') : (h===1?'Sun–Wed':'Thu–Sat'); }
+function _splitHalfWeight(sp,h){ return sp==='T' ? (h===1?0.4:0.6) : (h===1?0.6:0.4); }
+// Blended FTE: 0.6 × the 4-day holder's FTE + 0.4 × the 3-day holder's, rounded UP to 0.1 (FP-safe).
+function splitBlendFte(e){
+  const wb=_splitHalfWeight(e.sp,Number(e.bh)), wp=1-wb;
+  const x=wb*getUserFTE(e.b)+wp*getUserFTE(e.p);
+  return Math.ceil(Math.round(x*1000)/100-1e-9)/10;
+}
+// Splits in force for the phase being worked out (default: the current phase). `ph` = that phase.
+function splitsInForce(ph){
+  const cur=Number(ph||phasesData.currentPhase||1); const out=[];
+  for(const k in (splitsData||{})){ const e=splitsData[k]; if(!e||!e.wk||!e.b||!e.p) continue;
+    const eph=Number(e.ph);
+    if((e.st==='on'&&eph===cur)||(e.st==='won'&&eph<=cur)) out.push(e); }
+  return out;
+}
+function splitFor(u,wk,ph){ return splitsInForce(ph).find(e=>e.b===u&&e.wk===wk)||null; }          // u is the BIDDER
+function splitsAsPartner(u,wk,ph){ return splitsInForce(ph).filter(e=>e.p===u&&(wk==null||e.wk===wk)); }
+// The FTE person u's PLACE on week wk takes: the blend when u bids for a split in force there.
+function placeFte(u,wk,ph){ const e=splitFor(u,wk,ph); return e?splitBlendFte(e):getUserFTE(u); }
+// [410 · split weeks · admin-core] The record's listener — every view the slots and FTE listeners redraw follows it (refreshAll).
+onSnapshot(splitsRef, snap=>{ splitsData=snap.exists()?snap.data():{}; refreshAll(); });
+// [410 · split weeks] ADMIN ONLY. The splits that applied in a COMPLETED phase N — its frozen views (snapshotProjection, the frozen FTE
+// headers, a locked phase's reports): phase N's own entries that won or lost, and the earlier phases' wins still standing. Residual
+// (recorded): a split the admin removed later ('off', why 'admin') no longer shows in an old phase's frozen view.
+function splitsInForceAt(N){
+  const n=Number(N); const out=[];
+  for(const k in (splitsData||{})){ const e=splitsData[k]; if(!e||!e.wk||!e.b||!e.p) continue;
+    const eph=Number(e.ph);
+    if((eph===n&&(e.st==='won'||(e.st==='off'&&e.why==='lost')))||(eph<n&&e.st==='won')) out.push(e); }
+  return out;
+}
+// placeFte for a completed phase N (its splits as splitsInForceAt reads them).
+function placeFteAt(u,wk,N){ const e=splitsInForceAt(N).find(x=>x.b===u&&x.wk===wk)||null; return e?splitBlendFte(e):getUserFTE(u); }
+// [410 · split weeks, Q2] The partners of the splits on wk WON in an earlier phase — each is a prior winner of the week (getPriorPhaseWinners).
+function _splitWonPartners(wk){ const cur=Number(phasesData.currentPhase||1), out=new Set();
+  for(const e of splitsInForce(cur)){ if(e.st==='won'&&Number(e.ph)<cur&&e.wk===wk) out.add(e.p); }
+  return out; }
+// [410 · split weeks] Is u on wk's list of holders ONLY as the partner of a split won there (not a bidder of a split there, not approved
+// there in an earlier phase)? Such a partner holds no place of their own: the bidder's place (its blend) covers both. Twin of the staff
+// page's prior-FTE sum, which reads the approvals lists only.
+function _splitPartnerOnly(u,wk){
+  if(splitFor(u,wk)||!_splitWonPartners(wk).has(u)) return false;
+  const cur=Number(phasesData.currentPhase||1), cp=phasesData.completedPhases||{};
+  for(const ph of Object.keys(cp)){ if(Number(ph)>=cur) continue; const a=cp[ph]&&cp[ph].approvals?cp[ph].approvals[wk]:null; if(Array.isArray(a)&&a.includes(u)) return false; }
+  return true; }
+// The FTE a person on a week's list of HOLDERS takes in a sum: 0 for a won split's partner-only holder; anyone else placeFte (the blend
+// for a split's bidder, else the person's own FTE).
+function _holdFte(u,wk){ return _splitPartnerOnly(u,wk)?0:placeFte(u,wk); }
+// [410 · split weeks, PLAN §3] Bid-cap counts are worked in TENTHS (integers, no rounding drift): a whole week is 10; a split week, the
+// person's own share of it (6 or 4) — the bidder's half or the partner's.
+function _splitShareT(e,u){ const w=_splitHalfWeight(e.sp,Number(e.bh)); return Math.round((e.b===u?w:1-w)*10); }
+// What the weeks u won in earlier phases (`weeks`, each counted 10) count once the splits are read, as a correction in tenths: a won
+// week u bid for in a split counts u's share; u's share of every split u is the PARTNER of, won in an earlier phase, is added.
+function _splitPriorAdjT(u,weeks){ const cur=Number(phasesData.currentPhase||1); let t=0;
+  for(const wk of (weeks||[])){ const e=splitFor(u,wk); if(e) t+=_splitShareT(e,u)-10; }
+  for(const e of splitsInForce(cur)){ if(e.st==='won'&&Number(e.ph)<cur&&e.p===u) t+=_splitShareT(e,u); }
+  return t; }
+// u's current-phase bids toward the cap, in tenths: each live bid 10, or u's share where u bids for a split; plus u's share of every
+// split in force that u is the partner of whose bidder's bid is live. exceptWk (the week being edited) is left out.
+function _adminLiveCapT(u,exceptWk){ let t=0;
+  for(const w of _adminCountedWeeks(u,exceptWk)){ const e=splitFor(u,w); t+=e?_splitShareT(e,u):10; }
+  for(const e of splitsInForce()){ if(e.st==='on'&&e.p===u&&e.wk!==exceptWk&&scheduleData[e.b]&&scheduleData[e.b][e.wk]!==undefined&&isCurrentPhaseBidAdmin(e.b,e.wk)) t+=_splitShareT(e,u); }
+  return t; }
+// A week's holders added to a cap tally (tenths): each place 10, or for a split its two shares; a won split's partner is counted through
+// the bidder's place, never on their own.
+function _capAddT(map,u,wk){ const e=splitFor(u,wk);
+  if(_splitPartnerOnly(u,wk)) return;
+  map[u]=(map[u]||0)+(e?_splitShareT(e,u):10);
+  if(e) map[e.p]=(map[e.p]||0)+_splitShareT(e,e.p); }
+// [410 · split weeks, PLAN §1] Complete Phase: what the snapshot's write does to each split of phase ph still 'on' — 'won' when its
+// bidder is in that phase's approvals for the week (ap = the snapshot's approvals), else 'off' with why 'lost'. {key: fields}.
+function _splitMarksAt(ph,ap){ const out={}, n=Number(ph);
+  for(const k in (splitsData||{})){ const e=splitsData[k]; if(!e||!e.wk||!e.b||!e.p||e.st!=='on'||Number(e.ph)!==n) continue;
+    out[k]=(Array.isArray(ap&&ap[e.wk])&&ap[e.wk].includes(e.b))?{st:'won'}:{st:'off',why:'lost'}; }
+  return out; }
+// [410 · split weeks, ANSWERS Q10] The split WON in phase ph on wk that u is the bidder or the partner of, or null.
+function _splitWonIn(ph,u,wk){ const n=Number(ph); return splitsInForceAt(n).find(e=>Number(e.ph)===n&&e.st==='won'&&e.wk===wk&&(e.b===u||e.p===u))||null; }
+// The partner of a split won in phase ph gets that phase's results e-mail: the week is added to their approved list (ap = the phase's
+// frozen approvals; the bidder must be in them).
+function _splitResultsAdd(summary,ph,ap){ const n=Number(ph);
+  for(const e of splitsInForceAt(n)){ if(Number(e.ph)!==n||e.st!=='won') continue;
+    if(!(Array.isArray(ap&&ap[e.wk])&&ap[e.wk].includes(e.b))) continue;
+    const s=summary[e.p]||(summary[e.p]={approved:[],denied:[]}); if(s.approved.indexOf(e.wk)<0) s.approved.push(e.wk); }
+  return summary; }
+// The name a person is shown by (twin of the staff page's displayName): the name on file, else the initials.
+function displayName(initials){ return usernamesData[initials]||initials; }
+// [410 · split weeks, PLAN §6] REPORTS. A report scope's phase: "phN" -> N (a locked phase: its frozen splits), else null (the current splits).
+// [410 · split weeks · review] "All phases": a row is read with the splits of its OWN phase, as that phase's own scope reads it — an earlier phase (the row's
+// label, as _bidPhaseLabel prints it in the Phase column) its splitsInForceAt; the current phase the splits in force (null).
+function _splitRowPh(lbl){ const cur=Number(phasesData.currentPhase||1); for(let p=1;p<cur;p++){ if(String(_bidPhaseLabel(p))===String(lbl)) return p; } return null; }
+function _splitScopePh(scope){ const m=(typeof scope==='string')&&scope.match(/^ph(\d+)$/); return m?Number(m[1]):null; }
+// The split u BIDS for on wk as a report reads it (ph null: in force now; a number: splitsInForceAt(ph)), or null. wk must be a week key.
+function _splitRowOf(u,wk,ph){ if(typeof wk!=='string'||!wk) return null; return ((ph===null||ph===undefined)?splitsInForce():splitsInForceAt(ph)).find(e=>e.b===u&&e.wk===wk)||null; }
+// "AF Sun–Wed 0.6, BC Thu–Sat 0.4" — who has which days, and each share.
+function _splitDaysText(e){ const h=Number(e.bh), o=3-h; return e.b+' '+_splitHalfDays(e.sp,h)+' '+_splitHalfWeight(e.sp,h)+', '+e.p+' '+_splitHalfDays(e.sp,o)+' '+_splitHalfWeight(e.sp,o); }
+// "AF/BC · AF Sun–Wed 0.6, BC Thu–Sat 0.4" — a split row's bid cell in the User Summary.
+function _splitPairText(e){ return e.b+'/'+e.p+' · '+_splitDaysText(e); }
+// Phase Results' user cell as text (Excel / CSV): "AF/BC (0.7) · AF Sun–Wed 0.6, BC Thu–Sat 0.4" for a split's bidder, else fteName.
+function _prUserTxt(u,wk,ph){ const e=_splitRowOf(u,wk,ph); return e?fteName(u,wk,ph)+' · '+_splitDaysText(e):fteName(u); }
+// …and as the view / PDF draws it: unchanged for everyone but a split's bidder.
+function _prUserHtml(u,wk,ph){ const e=_splitRowOf(u,wk,ph);
+  if(!e) return `<strong>${u}</strong> <span style="color:#1f2329;font-size:11px">(${(+getUserFTE(u)).toFixed(1)})</span>`;
+  return `<strong>${esc(e.b)}/${esc(e.p)}</strong> <span style="color:#1f2329;font-size:11px">(${(+splitBlendFte(e)).toFixed(1)}) · ${esc(_splitDaysText(e))}</span>`; }
+// User Summary: a split's bidder row reads "<bid> · AF/BC · <days and shares>"; the partner gets the same week as a row of their own
+// (no bid number: the partner places none), with the bidder's projection and result. Rows are copies; the model is not changed.
+function _splitUserRows(byUser,groups,ph,all){ // [410 · split weeks · review] all: "All phases", each row its own phase's splits (_splitRowPh)
+  (groups||[]).forEach(g=>(g.bids||[]).forEach(b=>{ const e=_splitRowOf(b.user,g.wk,all?_splitRowPh(b.phase):ph); if(!e) return;
+    const mine=byUser[b.user]||[]; const i=mine.findIndex(x=>x.b===b&&x.g===g);
+    if(i>=0) mine[i]={g,b:Object.assign({},b,{bid:String(b.bid)+' · '+_splitPairText(e)})};
+    (byUser[e.p]=byUser[e.p]||[]).push({g,b:Object.assign({},b,{user:e.p,bid:_splitPairText(e)})}); }));
+  return byUser; }
+// A week's winners as the dashboard export lists them: a split's bidder as "AF/BC (0.7)"; the partner of a split won there is not
+// listed again (the pair is one place); everyone else as before.
+function _splitWinnersTxt(set,wk,ph){ const out=[];
+  for(const u of (set||[])){ if((ph===null||ph===undefined)&&_splitPartnerOnly(u,wk)) continue; out.push(_splitRowOf(u,wk,ph)?fteName(u,wk,ph):u); }
+  return out.join(', '); }
+// SEAM for the Split weeks page (admin-page lane): every recorded split, whatever its status, with its key — sorted by phase (latest
+// first), then week, then bidder. Nothing else is drawn or written here.
+function splitsList(){ const out=[];
+  for(const k in (splitsData||{})){ const e=splitsData[k]; if(!e||!e.wk||!e.b||!e.p) continue; out.push(Object.assign({key:k},e)); }
+  return out.sort((a,b)=>(Number(b.ph)-Number(a.ph))||String(a.wk).localeCompare(String(b.wk))||String(a.b).localeCompare(String(b.b))); }
 // Nobody in the department works below 0.4 FTE, so anything under it is a data-entry
 // error, not a real value — 0 especially (it would make a user consume no capacity and
 // therefore win every week they bid on). Enforced on entry AND re-checked here, so a
@@ -3556,6 +3724,7 @@ function getPriorPhaseWinners(wk){
     const arr=Array.isArray(phAp[wk])?phAp[wk]:[];
     arr.forEach(u=>out.add(u));
   }
+  if(typeof _splitWonPartners==='function') _splitWonPartners(wk).forEach(u=>out.add(u)); // [410 · split weeks, Q2] the partner of a won split holds the week too
   return out;
 }
 // [build 258] Human label for the OPEN bidding window - phaseName ("Phase 2", "Phase 4: Round 3"). [394 · E1] The admin copy keeps
@@ -3581,7 +3750,8 @@ function _hasOpenRoundBid(u){
 function _bidPhaseLabel(bidPh){ return phaseName(bidPh).replace(/^Phase /,'').replace(': Round ',':R'); }
 function getPriorPhaseFteWon(wk){
   let total=0;
-  for(const u of getPriorPhaseWinners(wk)) total+=getUserFTE(u);
+  const _hf=(typeof _holdFte==='function')?_holdFte:getUserFTE; // [410 · split weeks] a won split: the bidder's blend; its partner adds nothing (the blend covers both)
+  for(const u of getPriorPhaseWinners(wk)) total+=_hf(u,wk);
   return total;
 }
 function getUserBidPhaseAdmin(u,wk){
@@ -3671,7 +3841,8 @@ function weekLedger(wk, ap){
   const a=(ap||computeApprovals())[wk]||{winners:new Set(),fteWon:0};
   const cap=getSlots(wk);
   const decided=decidedWinners(wk);
-  let approved=0; decided.forEach(u=>{ approved+=getUserFTE(u); });
+  const _hf=(typeof _holdFte==='function')?_holdFte:getUserFTE; // [410 · split weeks] a split's bidder at the blend, a won split's partner 0
+  let approved=0; decided.forEach(u=>{ approved+=_hf(u,wk); });
   // [298 · §82d] The frozen projection still LISTS people the admin has denied (§77), and a
   // denied bid fills nothing. Before §77 the engine dropped them before fteWon was computed,
   // so committedFte must drop them here or every "how full is this week" caller counts a week
@@ -3679,7 +3850,7 @@ function weekLedger(wk, ap){
   // disagree with the pre-§77 number; with it, only the intended re-deal cases do.
   let _lden=[]; try{ _lden=Array.isArray(deniedData?.[wk])?deniedData[wk]:[]; }catch(_){ _lden=[]; } // sandbox convention
   const both=new Set(); (a.winners||new Set()).forEach(u=>{ if(_lden.indexOf(u)<0) both.add(u); }); decided.forEach(u=>both.add(u));
-  let committed=0; both.forEach(u=>{ committed+=getUserFTE(u); });
+  let committed=0; both.forEach(u=>{ committed+=_hf(u,wk); });
   const R=x=>Math.round(x*10)/10;
   return { cap, projectedFte:R(a.fteWon||0), approvedFte:R(approved), committedFte:R(committed),
            remainingFte:R(cap-R(committed)), remainingApproved:R(cap-R(approved)) };
@@ -3720,6 +3891,7 @@ function computeApprovals(ignoreAdmin){
     } }
     for(const u in _numWeeks){ for(const n in _numWeeks[u]){ if(_numWeeks[u][n].size>1){ for(const wk of _numWeeks[u][n]) _i2Disq.add(u+'|'+wk); } } }
   }
+  const _pf=(typeof placeFte==='function')?placeFte:getUserFTE; // [410 · split weeks] (typeof = sandbox convention)
   mondays.forEach(d=>{
     const wk=dateKey(d);
     const cap=getSlots(wk);
@@ -3750,7 +3922,7 @@ function computeApprovals(ignoreAdmin){
       // guard exists ONLY for extracted-code test sandboxes that assemble this function with
       // legacy scope — in the real page _bfEngineFilter always exists (same module).
       if(typeof _bfEngineFilter==='function' && !_bfEngineFilter(u,wk,p)) continue;
-      reqs.push({user:u,score:pScore(p),fte:getUserFTE(u)});
+      reqs.push({user:u,score:pScore(p),fte:_pf(u,wk)}); // [410 · split weeks] a split's bid takes the pair's blended FTE
     }
     reqs.sort((a,b)=>a.score-b.score);
     const winners=new Set(priorWinners),draws=new Set(),reviews=new Set();
@@ -3808,9 +3980,9 @@ function computeApprovals(ignoreAdmin){
     // appear here because they're already in `winners`.
     const allBidders=new Set([...priorWinners,...reqs.map(r=>r.user)]);
     const losers=new Set([...allBidders].filter(u=>!winners.has(u)&&!draws.has(u)&&!reviews.has(u)));
-    const fteDraws=[...draws].reduce((s,u)=>s+getUserFTE(u),0);
-    const fteReviews=[...reviews].reduce((s,u)=>s+getUserFTE(u),0);
-    const fteLosing=[...losers].reduce((s,u)=>s+getUserFTE(u),0);
+    const fteDraws=[...draws].reduce((s,u)=>s+_pf(u,wk),0);
+    const fteReviews=[...reviews].reduce((s,u)=>s+_pf(u,wk),0);
+    const fteLosing=[...losers].reduce((s,u)=>s+_pf(u,wk),0);
     out[wk]={winners,draws,reviews,losers,fteWon:Math.round(fteWon*10)/10,fteCap:cap,fteDraws:Math.round(fteDraws*10)/10,fteReviews:Math.round(fteReviews*10)/10,fteLosing:Math.round(fteLosing*10)/10,priorWinners};
   });
   return out;
@@ -4047,15 +4219,16 @@ function _unusedWinningBids(u,wk,nat){
     for(let n=1;n<=10;n++){ if(have.has(n)) cands.push(n); }
     }
     const prior=a.priorWinners||new Set();
+    const _pf=(typeof placeFte==='function')?placeFte:getUserFTE, _hf=(typeof _holdFte==='function')?_holdFte:getUserFTE; // [410 · split weeks]
     const others=[]; const seen=new Set();
     const add=x=>{
       if(x===u||prior.has(x)||seen.has(x)) return; seen.add(x);
       const p=scheduleData[x]?scheduleData[x][wk]:undefined; if(p===undefined) return;
-      others.push({score:pScore(p),fte:getUserFTE(x)});
+      others.push({score:pScore(p),fte:_pf(x,wk)});
     };
     [a.winners,a.draws,a.reviews,a.losers].forEach(set=>{ if(set) set.forEach(add); });
-    let priorFte=0; prior.forEach(x=>{ priorFte+=getUserFTE(x); });
-    const cap=getSlots(wk), T=getReviewThreshold(), myFte=getUserFTE(u);
+    let priorFte=0; prior.forEach(x=>{ priorFte+=_hf(x,wk); });
+    const cap=getSlots(wk), T=getReviewThreshold(), myFte=_pf(u,wk);
     const out=[];
     for(const c of cands){
       const s=pScore(c); if(!(s<ownScore)) continue;
@@ -4136,6 +4309,7 @@ function refreshAll(){
     if(isOn('appdenials')) renderAppDenials();
     if(isOn('drawsreviews')) renderDrawsReviews();
     if(isOn('lastbids')) renderLastBids(); // [404 · §334 G]
+    if(isOn('splitweeks')) renderSplitWeeks(); // [410 · split weeks · admin-page]
     if(isOn('changelog')) renderChangelog();
     if(isOn('users') && typeof renderUsersCombined==='function') renderUsersCombined();
     if(isOn('slots') && typeof renderSlotsPanel==='function') renderSlotsPanel();
@@ -4505,15 +4679,16 @@ function _fpBidEvents(list,fence){
 // The engine's projection for ONE replayed week. wkMap: user -> bid. priorSet: the people who hold the week from earlier
 // (an entry of theirs on that week is not a bid of this phase: they get no projection here and are never one of the "two").
 // PORTED LOGIC from computeApprovals (kept in lockstep by tests/test-366-bail.mjs, which runs both on the same boards).
-function _fpOutcomes(wkMap,cap,priorSet){
+function _fpOutcomes(wkMap,cap,priorSet,fteOf){
   const out={}, reqs=[];
-  let won=0; for(const u of priorSet) won+=getUserFTE(u);
+  const _f=fteOf||getUserFTE; // [410 · split weeks] fteOf: the week's own FTE per person (a split's bid at the blend)
+  let won=0; for(const u of priorSet) won+=_f(u);
   for(const u in wkMap){
     if(priorSet.has(u)) continue;
     const p=wkMap[u]; if(p===undefined||p===null) continue;
     out[u]='lose';
     if(!(p==="NP"||(Number.isInteger(p)&&p>=1&&p<=16)||(Array.isArray(p)&&p.length>=2&&p.length<=3&&p.every(x=>Number.isInteger(x)&&x>=1&&x<=10)))) continue;
-    reqs.push({user:u,score:pScore(p),fte:getUserFTE(u)});
+    reqs.push({user:u,score:pScore(p),fte:_f(u)});
   }
   reqs.sort((a,b)=>a.score-b.score);
   const T=getReviewThreshold();
@@ -4532,9 +4707,10 @@ function _fpOutcomes(wkMap,cap,priorSet){
   return out;
 }
 // The staff page's competition test on one replayed week: two people at the least, and together with the earlier winners more than fits.
-function _fpOver(wkMap,cap,priorSet){
-  let fte=0, k=0; for(const u of priorSet) fte+=getUserFTE(u);
-  for(const u in wkMap){ if(priorSet.has(u)||wkMap[u]===undefined||wkMap[u]===null) continue; fte+=getUserFTE(u); k++; }
+function _fpOver(wkMap,cap,priorSet,fteOf){
+  const _f=fteOf||getUserFTE; // [410 · split weeks] as _fpOutcomes (twin: the staff page's _wwContested, whose bids take placeFte)
+  let fte=0, k=0; for(const u of priorSet) fte+=_f(u);
+  for(const u in wkMap){ if(priorSet.has(u)||wkMap[u]===undefined||wkMap[u]===null) continue; fte+=_f(u); k++; }
   return k>=2&&Math.round((fte-cap)*10)/10>0;
 }
 // What a phase is measured against, and its pieces: [{round, multi, ev, capOf(wk), priorOf(wk)}]. One piece per phase (an RVA Round is a
@@ -4549,7 +4725,8 @@ function _fpPieces(phase,ev,isCurrent){
   const add=(map,ap)=>{ for(const wk of Object.keys(ap||{})){ if(Array.isArray(ap[wk])) for(const u of ap[wk]){ (map[wk]=map[wk]||new Set()).add(u); } } };
   for(const q of Object.keys(cp)){ if(Number(q)<Number(phase)) add(base,cp[q]&&cp[q].approvals); }
   const none=new Set();
-  return [{round:null,multi:false,ev,capOf,priorOf:wk=>base[wk]||none}];
+  const fteOf=(typeof placeFte!=='function')?(wk=>null):(isCurrent?(wk=>(u=>_holdFte(u,wk))):(wk=>(u=>placeFteAt(u,wk,Number(phase))))); // [410 · split weeks] whose splits value the replay
+  return [{round:null,multi:false,ev,capOf,priorOf:wk=>base[wk]||none,fteOf}];
 }
 // A log the auction could not have produced is not screened: the replay does work per person on a week, so thousands of invented
 // names would freeze the Dashboard (review, 11 Oct 2026). A real phase is some hundreds of entries by a few dozen people.
@@ -4592,6 +4769,7 @@ function _fpInfoRow(type,piece,e,u,wk,val,before,now){
 function _fpBailPiece(piece,isCurrent,bump,fair,info){ // [380 · §282] info: the information rows (may be absent - a three-argument caller)
   const _fpS=(typeof _fpStrict==='function')&&_fpStrict(); // [380 · §282, fix round 1] Strict rules of the report only when the rule set is exactly "strict"
   const ev=piece.ev, capOf=piece.capOf, priorOf=piece.priorOf;
+  const _fpF=wk=>(piece.fteOf?piece.fteOf(wk):null); // [410 · split weeks] the week's per-person FTE (null: the person's own, as 409)
   let board=Object.create(null);   // wk -> {user: bid}        the bids of this phase (round) on the week, right now in the replay
   let comp=Object.create(null);    // wk -> true                once the week has been a competition week
   let arr=Object.create(null);     // "user|wk" -> {ts,i,vals}  since this person's arrival on the week
@@ -4606,7 +4784,7 @@ function _fpBailPiece(piece,isCurrent,bump,fair,info){ // [380 · §282] info: t
   // leaving and being knocked out again by someone new is a need that arose AFTER the leave).
   let at=0;
   const endKnock=(x,w2)=>{ if(knocked[x]&&knocked[x][w2]){ knocked[x][w2].endI=at; delete knocked[x][w2]; } };
-  const offBoard=(w2,who)=>{ delete board[w2][who]; delete arr[who+'|'+w2]; const n2=_fpOutcomes(board[w2],capOf(w2),priorOf(w2)); last[w2]=n2; for(const x in n2){ if(n2[x]==='win') endKnock(x,w2); } };
+  const offBoard=(w2,who)=>{ delete board[w2][who]; delete arr[who+'|'+w2]; const n2=_fpOutcomes(board[w2],capOf(w2),priorOf(w2),_fpF(w2)); last[w2]=n2; for(const x in n2){ if(n2[x]==='win') endKnock(x,w2); } };
   for(let i=0;i<ev.length;i++){
     at=i;
     const e=ev[i], u=e.user, wk=e.weekKey;
@@ -4617,15 +4795,15 @@ function _fpBailPiece(piece,isCurrent,bump,fair,info){ // [380 · §282] info: t
       continue;   // 'back': nothing on the board can be changed with knowledge - _fpBailPass has put the caution on the report
     }
     const pr=priorOf(wk), cap=capOf(wk), bw=(board[wk]=board[wk]||{});
-    let before=last[wk]||_fpOutcomes(bw,cap,pr), now;
+    let before=last[wk]||_fpOutcomes(bw,cap,pr,_fpF(wk)), now;
     pre[i]=before[u];
     if(e.action==='removed'){
       const had=Object.prototype.hasOwnProperty.call(bw,u);
       const val=had?bw[u]:e.bidValue;                          // a removal with no arrival on record (a log entry can be lost): its own bid value speaks
       let isComp=comp[wk]===true;
-      if(!had&&val!==undefined&&val!==null){ const t=Object.assign({},bw); t[u]=val; before=_fpOutcomes(t,cap,pr); if(!isComp&&_fpOver(t,cap,pr)) isComp=true; }
+      if(!had&&val!==undefined&&val!==null){ const t=Object.assign({},bw); t[u]=val; before=_fpOutcomes(t,cap,pr,_fpF(wk)); if(!isComp&&_fpOver(t,cap,pr,_fpF(wk))) isComp=true; }
       delete bw[u];
-      now=_fpOutcomes(bw,cap,pr);
+      now=_fpOutcomes(bw,cap,pr,_fpF(wk));
       // The ADMIN taking a winning bid off is a knock-out by someone else (the person did nothing): remembered until they win there again.
       // [380 · §282, owner 15 Oct 2:10 PM "2-agree, doesn't count"] UNDER STRICT ONLY, rule 7: the admin taking a person's OWN bid off (the way out at
       // their request) is NOT their knock-out - otherwise it is an exit ticket for the rest of the phase. Under Standard this is 379's line.
@@ -4635,7 +4813,7 @@ function _fpBailPiece(piece,isCurrent,bump,fair,info){ // [380 · §282] info: t
         const a=arr[u+'|'+wk]||null, others=new Set();
         if(a){ for(let j=a.i+1;j<i;j++){ const x=ev[j]; if(x.weekKey===wk&&x.user!==u&&(x.action==='added'||x.action==='edited')) others.add(x.user); } }
         const mine=Object.create(null);                         // this person's other weeks at this moment: wk -> projection
-        for(const w2 in board){ if(w2!==wk&&Object.prototype.hasOwnProperty.call(board[w2],u)) mine[w2]=(last[w2]||_fpOutcomes(board[w2],capOf(w2),priorOf(w2)))[u]; }
+        for(const w2 in board){ if(w2!==wk&&Object.prototype.hasOwnProperty.call(board[w2],u)) mine[w2]=(last[w2]||_fpOutcomes(board[w2],capOf(w2),priorOf(w2),_fpF(w2)))[u]; }
         cands.push({i,e,u,wk,val,thin:!had,gained,a,others:others.size,mine,knocked:Object.assign(Object.create(null),knocked[u]||{})});
       }
       // [380 · §282, owner 16 Oct 2026 "2-yes"] INFORMATION ONLY, never counted: a tied or Under Review numbered bid taken off a competition week
@@ -4658,8 +4836,8 @@ function _fpBailPiece(piece,isCurrent,bump,fair,info){ // [380 · §282] info: t
         if(!swap) offBoard(w2,u); } }
       bw[u]=e.bidValue;
       const k=u+'|'+wk; if(!arr[k]) arr[k]={ts:e.ts,i,vals:[]}; arr[k].vals.push(e.bidValue);
-      if(!comp[wk]&&_fpOver(bw,cap,pr)) comp[wk]=true;
-      now=_fpOutcomes(bw,cap,pr);
+      if(!comp[wk]&&_fpOver(bw,cap,pr,_fpF(wk))) comp[wk]=true;
+      now=_fpOutcomes(bw,cap,pr,_fpF(wk));
     }
     last[wk]=now;
     // Knocked out = was winning, is not any more, and not by one's own act (the admin changing someone's bid is not that person's act).
@@ -5255,7 +5433,7 @@ function renderOverview(){
     //   'phN' where N < cur → historical snapshot from completedPhases[N]
     //   'all' → live ap[wk] but the per-user cards handle the multi-phase display
     let a, bidders, loserSet;
-    let historicalMode=false;
+    let historicalMode=false, _spPh=null; // [410 · split weeks] _spPh: the locked phase whose splits value the row
     // [317 · F2] A locked phase (an RVA Round included - it is a phase of its own) reads its archive. D3's rule:
     // `wantPh<curPhase` is FALSE when the current phase is itself complete.
     const _mmW=phaseFilter&&String(phaseFilter).match(/^ph(\d+)$/);
@@ -5265,7 +5443,7 @@ function renderOverview(){
       const wantPh=Number(_mmW[1]);
       const _closed=(wantPh<curPhase||!!(phasesData.completedPhases||{})[wantPh]);
       if(_closed){
-        historicalMode=true;
+        historicalMode=true; _spPh=wantNum;
         const phSnapRaw=(phasesData.completedPhases||{})[wantKey]; const phSnap=phSnapRaw||{};
         let phSched=phSnap.schedule||{};
         let phAp=phSnap.approvals||{};
@@ -5297,7 +5475,7 @@ function renderOverview(){
           if(phSnap.schedule&&inEarlierSnapshot(cpAll,wantKey,u,wk,v)) continue;
           if(!winners.has(u)) losersFromSnap.add(u);
         }
-        let fteWonHist=0; for(const u of winners) fteWonHist+=getUserFTE(u);
+        let fteWonHist=0; for(const u of winners) fteWonHist+=(typeof placeFteAt==='function'?placeFteAt(u,wk,wantNum):getUserFTE(u)); // [410 · split weeks]
         a={winners,draws:new Set(),reviews:new Set(),losers:losersFromSnap,fteWon:Math.round(fteWonHist*10)/10};
         bidders=[...winners,...losersFromSnap];
         loserSet=losersFromSnap;
@@ -5317,9 +5495,10 @@ function renderOverview(){
     const cap=getSlots(wk);
     const fw=Math.round((a.fteWon||0)*10)/10;
     const fr=Math.round((cap-fw)*10)/10;
-    const fd=[...( a.draws||new Set())].reduce((s,u)=>s+getUserFTE(u),0);
-    const fv=[...(a.reviews||new Set())].reduce((s,u)=>s+getUserFTE(u),0);
-    const fl=[...loserSet].reduce((s,u)=>s+getUserFTE(u),0);
+    const _ovF=(typeof placeFte!=='function')?getUserFTE:(_spPh!==null?(u=>placeFteAt(u,wk,_spPh)):(u=>placeFte(u,wk))); // [410 · split weeks]
+    const fd=[...( a.draws||new Set())].reduce((s,u)=>s+_ovF(u),0);
+    const fv=[...(a.reviews||new Set())].reduce((s,u)=>s+_ovF(u),0);
+    const fl=[...loserSet].reduce((s,u)=>s+_ovF(u),0);
     const isSummer=d>=AC_SUMMER_START&&d<=AC_SUMMER_END; // [build 265 · B5]
     // [303] Both markers: a holiday week inside the summer window is still a summer week, and the
     // dashboard grid should say so. High-demand weeks are exempt, matching bfFloorFor's precedence.
@@ -6164,7 +6343,8 @@ window._runSimulationNow=async function(){
     // reach. priorWonWeeks is exactly this user's prior-phase win count, so the room left
     // is cap - priorWins; the slider can only ever make the target SMALLER, never larger.
     const _simCap=_cumCap(cur);
-    const _capRoom=(_simCap===null)?Infinity:Math.max(0,_simCap-priorWonWeeks.size);
+    const _simUsedT=priorWonWeeks.size*10+((typeof _splitPriorAdjT==='function')?_splitPriorAdjT(user,[...priorWonWeeks]):0); // [410 · split weeks] shares, in tenths
+    const _capRoom=(_simCap===null)?Infinity:Math.max(0,Math.floor((_simCap*10-_simUsedT)/10)); // whole bids that fit (Q3)
     const _simTarget=Math.min(SIM_MAX_BIDS,_capRoom);
     const userBids={};
     for(const wk of weeks){
@@ -6358,6 +6538,7 @@ window.clearEverything=function(){
               // New auction → drop the per-phase archive so the Fair Play report
               // starts empty (it covers everything since the last auction reset).
               setDoc(changesArchiveRef,{}),
+              ...(typeof splitsRef!=='undefined'?[setDoc(splitsRef,{})]:[]), // [410 · split weeks · admin-page] a new auction starts with no splits (spread-guard = sandbox convention)
               // [400 · §315] A2: no FTE switch to re-lock (Phase 1 fixes FTE; Reset ends the auction, so FTE can be changed again).
               setDoc(adminRef,{...((typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.setupReview!==undefined)?{setupReview:deleteField()}:{})},{merge:true}), // [383 · §287] Reset clears the review mark (only when there is one: otherwise the 382 write) · [404 · §334 A1 · A] a stored setupLock / setupUnlock is left as it is, read by nothing
               // New auction cycle → clear the welcome-e-mail log so each user can
@@ -7463,8 +7644,9 @@ window.completePhase=function(){
           for(const ph of Object.keys(cpNow)){ const arr=cpNow[ph]?.approvals?.[wk]; if(Array.isArray(arr)) arr.forEach(u=>{cumSet.add(u); priorSet.add(u);}); }
           const a=apSnap[wk]; if(Array.isArray(a)) a.forEach(u=>cumSet.add(u));
           const ownSet=new Set([...(Array.isArray(a)?a:[])].filter(u=>!priorSet.has(u)));
-          let cf=0; cumSet.forEach(u=>{cf+=getUserFTE(u);});
-          let of=0; ownSet.forEach(u=>{of+=getUserFTE(u);});
+          const _pf=(typeof placeFte==='function')?placeFte:getUserFTE; // [410 · split weeks] a split's bidder at the blend
+          let cf=0; cumSet.forEach(u=>{cf+=_pf(u,wk);});
+          let of=0; ownSet.forEach(u=>{of+=_pf(u,wk);});
           const cap=getSlots(wk); const R=x=>Math.round(x*10)/10;
           fteHeadSnap[wk]={approved:R(cf), available:R(cap-cf), cap};
           fteHeadPhaseSnap[wk]={approved:R(of), available:R(cap-of), cap};
@@ -7491,7 +7673,16 @@ window.completePhase=function(){
           slc:slcSnap,                        // [393 · §297 Build D] D: each week's Smart Lock Control at completion (the settings review's "In Phase N")
           projections:serializeProjections() // pre-admin outcomes, kept for reports
       };
-      await setDoc(phaseStagingRef,{pendingPhaseSnapshots:{[cur]:_snapPayload}},{merge:true});
+      // [410 · split weeks, PLAN §1] In the SAME write as the snapshot: each split of this phase still 'on' becomes 'won' (its bidder is in
+      // this phase's approvals for the week) or 'off' / 'lost'. A phase with none writes the snapshot exactly as before.
+      const _spMark=(typeof _splitMarksAt==='function')?_splitMarksAt(cur,apSnap):{};
+      if(Object.keys(_spMark).length){
+        const _spB=writeBatch(db);
+        _spB.set(phaseStagingRef,{pendingPhaseSnapshots:{[cur]:_snapPayload}},{merge:true});
+        _spB.set(splitsRef,_spMark,{merge:true});
+        await _spB.commit();
+        for(const k of Object.keys(_spMark)) splitsData[k]=Object.assign({},splitsData[k],_spMark[k]); // local-first, as the snapshot below
+      } else await setDoc(phaseStagingRef,{pendingPhaseSnapshots:{[cur]:_snapPayload}},{merge:true});
       // Local-first so every immediate reader (gates, renderNextStep) sees it now.
       _stagedCompletedPhases={..._stagedCompletedPhases,[cur]:_snapPayload};
       _mergeCompletedPhasesView();
@@ -8677,6 +8868,7 @@ window.sendPhaseResultsEmails=function(){
       summary[u].denied.push(wk);
     }
   }
+  if(typeof _splitResultsAdd==='function') _splitResultsAdd(summary,cur,apSrc); // [410 · split weeks, Q10] the partner of a split won in this phase gets this phase's results
   const usersWithResults=Object.keys(summary);
   if(!usersWithResults.length){
     // [build 254] A completed phase with ZERO recorded decisions used to dead-end here: this
@@ -8897,13 +9089,14 @@ function snapshotProjection(phN){
       const arr=cp[n]?.approvals?.[wk];
       if(Array.isArray(arr)) arr.forEach(u=>priorWinners.add(u));
     }
-    let fteWon=0; priorWinners.forEach(u=>{fteWon+=getUserFTE(u);});
+    const _pfa=(typeof placeFteAt==='function')?(u=>placeFteAt(u,wk,phN)):getUserFTE; // [410 · split weeks] phase phN's splits
+    let fteWon=0; priorWinners.forEach(u=>{fteWon+=_pfa(u);});
     const reqs=[];
     for(const u in sched){
       if(priorWinners.has(u)) continue;
       const p=sched[u]?.[wk]; if(p===undefined) continue;
       if(inEarlierSnapshot(cp,phN,u,wk,p)) continue; // inherited dead bid, not phase-phN
-      reqs.push({user:u,score:pScore(p),fte:getUserFTE(u)});
+      reqs.push({user:u,score:pScore(p),fte:_pfa(u)});
     }
     if(!reqs.length) return;
     reqs.sort((a,b)=>a.score-b.score);
@@ -8967,7 +9160,8 @@ function finalFteForWeek(wk, apPre){ // L-6: accept precomputed approvals to avo
   // table below it.
   const _i2dH=Array.isArray(live)&&live.length?_i2DisqualifiedSet():null;
   if(Array.isArray(live)) live.forEach(u=>{ if(scheduleData[u]&&scheduleData[u][wk]!==undefined&&_isScorableBid(scheduleData[u][wk])&&!(_i2dH&&_i2dH.has(u+'|'+wk))) users.add(u); });
-  let fte=0; users.forEach(u=>{fte+=getUserFTE(u);});
+  const _hf=(typeof _holdFte==='function')?_holdFte:getUserFTE; // [410 · split weeks] a split's bidder at the blend, a won split's partner 0
+  let fte=0; users.forEach(u=>{fte+=_hf(u,wk);});
   const cap=getSlots(wk);
   return {approved:Math.round(fte*10)/10, available:Math.round((cap-fte)*10)/10, cap};
 }
@@ -8994,8 +9188,9 @@ function phaseFteHeader(phaseN, wk){
   }
   const ownSet=new Set([...cumSet].filter(u=>!priorSet.has(u)));
   const cap=getSlots(wk); const R=x=>Math.round(x*10)/10;
-  let cf=0; cumSet.forEach(u=>cf+=getUserFTE(u));
-  let of=0; ownSet.forEach(u=>of+=getUserFTE(u));
+  const _pfa=(typeof placeFteAt==='function')?(u=>placeFteAt(u,wk,phaseN)):getUserFTE; // [410 · split weeks] phase N's splits
+  let cf=0; cumSet.forEach(u=>cf+=_pfa(u));
+  let of=0; ownSet.forEach(u=>of+=_pfa(u));
   return {
     cum:  cumF || {approved:R(cf), available:R(cap-cf), cap},
     phase:phF  || {approved:R(of), available:R(cap-of), cap}
@@ -9022,7 +9217,8 @@ function perPhaseApprovedList(wk, uptoPhase, liveCurrent){
       let _den2=[]; try{ _den2=Array.isArray(deniedData?.[wk])?deniedData[wk]:[]; }catch(_){ _den2=[]; } // [298 · §77] denied bids are not "approved"; guarded for extracted sandboxes
       if(win && typeof win.forEach==='function') win.forEach(u=>{ if(_den2.indexOf(u)<0) users.add(u); });
       const prior=new Set(); for(let q=1;q<p;q++){ const a=cp[q]?.approvals?.[wk]; if(Array.isArray(a)) a.forEach(u=>prior.add(u)); }
-      let fte=0; users.forEach(u=>{ if(!prior.has(u)) fte+=getUserFTE(u); });
+      const _hf=(typeof _holdFte==='function')?_holdFte:getUserFTE; // [410 · split weeks]
+      let fte=0; users.forEach(u=>{ if(!prior.has(u)) fte+=_hf(u,wk); });
       approved=R(fte);
     } else {
       approved=phaseFteHeader(p, wk).phase.approved;
@@ -9263,7 +9459,7 @@ function wkHeadHtml(g){
   return `<div class="wk-head">Week ${g.wn} · ${g.date}${typeTag}<span class="fte">${cum}</span>${bp}</div>`;
 }
 // "AF (1.0)" — a user's initials with their FTE, shown next to names in every report.
-function fteName(u){ return `${u} (${(+getUserFTE(u)).toFixed(1)})`; }
+function fteName(u,wk,ph){ const e=(typeof _splitRowOf==='function')?_splitRowOf(u,wk,ph):null; if(e) return `${e.b}/${e.p} (${(+splitBlendFte(e)).toFixed(1)})`; return `${u} (${(+getUserFTE(u)).toFixed(1)})`; } // [410 · split weeks] wk: "AF/BC (0.7)" for a split's bidder on that week
 // Excel column widths sized to the LONGEST value in each column (+2 padding), never
 // narrower than `mins` (per-column floor) and capped at 70. `rows` must EXCLUDE merged
 // banner rows (their long text spans all columns and would wildly inflate column A).
@@ -9361,6 +9557,9 @@ window.exportPhaseResults=function(format,scopeOverride,activeOnly){
   // [347 · §229] activeOnly (the Reports page switch) drops the weeks with no bid in this scope. Filtered HERE,
   // once, so every format below reads the same list; the report says so in its stamp line.
   const groups=bidsByWeekModel(scope, true).filter(g=>!activeOnly||g.bids.length>0); // every week of the year, even empty ones — unless activeOnly
+  const _sph=(typeof _splitScopePh==='function')?_splitScopePh(scope):null; // [410 · split weeks] a locked phase reads its own splits
+  const _sphOf=bp=>(scope==='all'&&typeof _splitRowPh==='function')?_splitRowPh(bp):_sph; // [410 · split weeks · review] "All phases": each row its own phase's splits
+  const _prT=(typeof _prUserTxt==='function')?((u,wk,bp)=>_prUserTxt(u,wk,_sphOf(bp))):(u=>fteName(u)); // "AF/BC (0.7) · AF Sun–Wed 0.6, BC Thu–Sat 0.4"
   const onlyNote=activeOnly?' · weeks with bids only':'';
   const showPhaseCol=scope==='all';
   const now=new Date();
@@ -9419,8 +9618,8 @@ window.exportPhaseResults=function(format,scopeOverride,activeOnly){
         g.bids.forEach(b=>{
           const resTxt=b.decided?bwOutcomeLabel(b.outcome):'—';
           const resSty=b.decided?resultStyle(b.outcome):S_DASH;
-          const row=showPhaseCol?[fteName(b.user),String(b.bid),'P'+b.phase,projTxt(b.projected),resTxt]
-                                :[fteName(b.user),String(b.bid),projTxt(b.projected),resTxt];
+          const row=showPhaseCol?[_prT(b.user,g.wk,b.phase),String(b.bid),'P'+b.phase,projTxt(b.projected),resTxt]
+                                :[_prT(b.user,g.wk),String(b.bid),projTxt(b.projected),resTxt];
           const st=showPhaseCol?[S_USER,S_CELL,S_CELL,projStyle(b.projected),resSty]
                                :[S_USER,S_CELL,projStyle(b.projected),resSty];
           push(row,st);
@@ -9469,8 +9668,8 @@ window.exportPhaseResults=function(format,scopeOverride,activeOnly){
       }
       g.bids.forEach(b=>{
         const resTxt=b.decided?bwOutcomeLabel(b.outcome):'—';
-        const row=showPhaseCol?[g.wn,g.date,g.type||'',g.fte.approved,g.fte.available,fteName(b.user),String(b.bid),'P'+b.phase,projTxt(b.projected),resTxt]
-                              :[g.wn,g.date,g.type||'',g.fte.approved,g.fte.available,fteName(b.user),String(b.bid),projTxt(b.projected),resTxt];
+        const row=showPhaseCol?[g.wn,g.date,g.type||'',g.fte.approved,g.fte.available,_prT(b.user,g.wk,b.phase),String(b.bid),'P'+b.phase,projTxt(b.projected),resTxt]
+                              :[g.wn,g.date,g.type||'',g.fte.approved,g.fte.available,_prT(b.user,g.wk),String(b.bid),projTxt(b.projected),resTxt];
         dataRows.push(row);
       });
     });
@@ -9491,7 +9690,7 @@ window.exportPhaseResults=function(format,scopeOverride,activeOnly){
   const sections=groups.map(g=>{
     const nCol=showPhaseCol?5:4;
     const rows=g.bids.length
-      ? g.bids.map(b=>`<tr><td><strong>${b.user}</strong> <span style="color:#1f2329;font-size:11px">(${(+getUserFTE(b.user)).toFixed(1)})</span></td><td>${esc(b.bid)}</td>${showPhaseCol?`<td>P${b.phase}</td>`:''}<td>${projChipHtml(b.projected)}</td><td>${resultCellHtml(b)}</td></tr>`).join('')
+      ? g.bids.map(b=>`<tr><td>${(typeof _prUserHtml==='function')?_prUserHtml(b.user,g.wk,_sphOf(b.phase)):`<strong>${b.user}</strong> <span style="color:#1f2329;font-size:11px">(${(+getUserFTE(b.user)).toFixed(1)})</span>`}</td><td>${esc(b.bid)}</td>${showPhaseCol?`<td>P${b.phase}</td>`:''}<td>${projChipHtml(b.projected)}</td><td>${resultCellHtml(b)}</td></tr>`).join('')
       : `<tr><td colspan="${nCol}" style="color:#4a505a;font-size:12px">No bids this week.</td></tr>`;
     return `<div class="wk">${wkHeadHtml(g)}
       <table><thead><tr><th>User</th><th>Bid</th>${showPhaseCol?'<th>Phase</th>':''}<th>Projected</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table></div>`;
@@ -9524,6 +9723,7 @@ window.exportUserSummary=function(format,scopeOverride,activeOnly){
   // Re-pivot the by-week model into per-user rows.
   const byUser={};
   groups.forEach(g=>g.bids.forEach(b=>{ (byUser[b.user]=byUser[b.user]||[]).push({g,b}); }));
+  if(typeof _splitUserRows==='function') _splitUserRows(byUser,groups,_splitScopePh(scope),scope==='all'); // [410 · split weeks, PLAN §6] "AF/BC", the days and shares; the partner gets the week
   // [347 · §229] activeOnly drops the people with no bid in this scope — filtered once, for every format below.
   const allUsers=[...new Set([...(names||[]),...Object.keys(byUser)])].sort().filter(u=>!activeOnly||(byUser[u]||[]).length>0);
   const onlyNote=activeOnly?' · people with bids only':'';
@@ -9645,7 +9845,7 @@ function _capacityWeekRows(){
     }
     const la=approvalsData?approvalsData[wk]:undefined;
     if(Array.isArray(la)) la.forEach(function(u){ winners.add(u); });
-    let taken=0; winners.forEach(function(u){ taken+=getUserFTE(u); });
+    let taken=0; winners.forEach(function(u){ taken+=(typeof placeFte==='function'?placeFte(u,wk):getUserFTE(u)); }); // [410 · split weeks] a split's bidder at the blend
     const cap=getSlots(wk);
     rows.push({wk,wn:_wkNumByISO[wk]||'?',date:MS[d.getMonth()]+' '+d.getDate(),type:weekTypeLabel(wk,d),
       cap:R(cap),taken:R(taken),avail:R(cap-taken),winners:[...winners].sort()});
@@ -9691,7 +9891,7 @@ window.exportCapacityByWeek=function(format){
       push([]);
       push(cols,cols.map(function(){ return S_COLHEAD; }));
       rows.forEach(function(r){
-        push(['W'+r.wn,r.date,r.type||'',String(r.cap),String(r.taken),String(r.avail),r.winners.map(fteName).join(', ')],
+        push(['W'+r.wn,r.date,r.type||'',String(r.cap),String(r.taken),String(r.avail),r.winners.map(function(u){ return fteName(u,r.wk); }).join(', ')],
              [wkStyle(r),dateStyle(r),S_CELL,S_NUM,S_NUM,availStyle(r),S_CELL]);
       });
       const ws=XLSX.utils.aoa_to_sheet(aoa);
@@ -9714,7 +9914,7 @@ window.exportCapacityByWeek=function(format){
     const header=['Week #','Date','Type','Capacity','Taken (FTE)','Available','Approved winners'];
     const csvEsc=function(v){ const s=String(v); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
     const csv='# Vacation Auction — Available Capacity by Week — '+CAPACITY_DEF_TEXT+' — exported '+stamp+'\n'
-      +[header].concat(rows.map(function(r){ return ['W'+r.wn,r.date,r.type||'',r.cap,r.taken,r.avail,r.winners.map(fteName).join(', ')]; }))
+      +[header].concat(rows.map(function(r){ return ['W'+r.wn,r.date,r.type||'',r.cap,r.taken,r.avail,r.winners.map(function(u){ return fteName(u,r.wk); }).join(', ')]; }))
         .map(function(r){ return r.map(csvEsc).join(','); }).join('\n');
     const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=fname+'.csv'; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
     toast('Excel library unavailable — exported CSV instead','warn');
@@ -9736,7 +9936,7 @@ window.exportCapacityByWeek=function(format){
       return '<tr>'+wkCell(r)+dateCell(r)+'<td>'+(r.type||'')+'</td>'
         +'<td style="text-align:center">'+r.cap+'</td><td style="text-align:center">'+r.taken+'</td>'
         +availCell(r)
-        +'<td style="white-space:normal">'+(r.winners.length?r.winners.map(fteName).join(', '):'<span style="color:#4a505a">—</span>')+'</td></tr>';
+        +'<td style="white-space:normal">'+(r.winners.length?r.winners.map(function(u){ return fteName(u,r.wk); }).join(', '):'<span style="color:#4a505a">—</span>')+'</td></tr>';
     }).join('')
     +'</tbody></table></div>';
   const ok=openReportTab('Vacation Auction — Available Capacity by Week', 'Capacity',
@@ -9855,7 +10055,7 @@ function renderCapacityPage(){
       +'<td style="color:'+c+'">'+esc(r.date)+'</td><td>'+esc(r.type||'')+'</td>'
       +'<td style="text-align:center">'+esc(r.cap)+'</td><td style="text-align:center">'+esc(r.taken)+'</td>'
       +'<td style="text-align:center;font-weight:600;color:'+c+'">'+esc(r.avail)+'</td>'
-      +'<td style="white-space:normal">'+(r.winners.length?r.winners.map(function(u){ return esc(fteName(u)); }).join(', '):'<span style="color:var(--t3)">—</span>')+'</td></tr>';
+      +'<td style="white-space:normal">'+(r.winners.length?r.winners.map(function(u){ return esc(fteName(u,r.wk)); }).join(', '):'<span style="color:var(--t3)">—</span>')+'</td></tr>';
   }).join('')||'<tr><td colspan="7" style="color:var(--t3)">No weeks match this filter.</td></tr>';
 }
 window.renderCapacityPage=renderCapacityPage;
@@ -9891,7 +10091,7 @@ function buildDashboardRows(phaseFilter){
       const winners=new Set((Array.isArray(phAp[wk])?phAp[wk]:[]).filter(x=>!prevWin2.has(x)));
       const losers=new Set();
       for(const u in phSched){ const v=phSched[u]?.[wk]; if(v===undefined) continue; if(prevWin2.has(u)) continue; if(phSnap.schedule&&inEarlierSnapshot(cpAll2,wantKey,u,wk,v)) continue; if(!winners.has(u)) losers.add(u); }
-      let fteWonHist=0; for(const u of winners) fteWonHist+=getUserFTE(u);
+      let fteWonHist=0; for(const u of winners) fteWonHist+=(typeof placeFteAt==='function'?placeFteAt(u,wk,wantPh):getUserFTE(u)); // [410 · split weeks]
       a={winners,draws:new Set(),reviews:new Set(),fteWon:Math.round(fteWonHist*10)/10};
       loserSet=losers;
     } else {
@@ -9916,7 +10116,7 @@ function buildDashboardRows(phaseFilter){
     const byPhaseStr = _bp.map(x=>`P${_bidPhaseLabel(x.phase)}: ${x.approved}`).join('   -   ');
     return { wn:_wkNumByISO[wk]||'', date:`${MS[d.getMonth()]} ${d.getDate()}`, tag, cap,
       won:fw, rem:Math.round((cap-fw)*10)/10, byPhase:byPhaseStr,
-      winners:[...(a.winners||[])].join(', '),
+      winners:(typeof _splitWinnersTxt==='function')?_splitWinnersTxt(a.winners,wk,(m&&Number(m[1])<curPhase)?Number(m[1]):null):[...(a.winners||[])].join(', '), // [410 · split weeks]
       // [§147] ONE Under Review column; (tied) marks a tie a spin could settle.
       underReview:[[...(a.draws||[])].length?[...(a.draws||[])].join(', ')+' (tied)':'',[...(a.reviews||[])].join(', ')].filter(Boolean).join(' · '),
       losers:[...loserSet].join(', ') };
@@ -10215,7 +10415,7 @@ window.renderAppDenials=function(){
     return `<tr class="dr-row" id="drrow_${e.wk}_${e.user}" data-outcome="${e.outcome}"${needsDecision?' data-undecided="1"':''}>
       ${wkHtml}
       <td class="dr-user">${phaseBadge}${esc(e.user)}</td>
-      <td class="dr-bid">${esc(lbl)} · FTE ${getUserFTE(e.user)}</td>
+      <td class="dr-bid">${esc(lbl)} · FTE ${(typeof placeFte==='function')?(isHistorical?placeFteAt(e.user,e.wk,Number(e.phase)):placeFte(e.user,e.wk)):getUserFTE(e.user)}</td>
       <td><div class="dr-status">${
         // Undecided bids: the dashed projection pill alone (the solid chip would
         // just repeat it). The solid ✓ APPROVED / ✕ DENIED chip is ADDED once
@@ -10471,7 +10671,7 @@ function capBreaches(sim){
       const set=new Set();
       if(a.winners&&typeof a.winners.forEach==='function') a.winners.forEach(u=>{ if(den.indexOf(u)<0) set.add(u); });
       try{ if(typeof decidedWinners==='function') decidedWinners(wk).forEach(u=>set.add(u)); }catch(_){}
-      set.forEach(u=>{ won[u]=(won[u]||0)+1; });
+      set.forEach(u=>{ if(typeof _capAddT==='function') _capAddT(won,u,wk); else won[u]=(won[u]||0)+10; }); // [410 · split weeks] tenths: a split week counts each person's share
     });
     let simCounted=false;
     if(sim&&sim.user&&sim.wk){
@@ -10480,10 +10680,10 @@ function capBreaches(sim){
       const _saw=ap[sim.wk]&&ap[sim.wk].winners;
       let _dec=false; try{ _dec=(typeof decidedWinners==='function')&&decidedWinners(sim.wk).has(sim.user); }catch(_){}
       const _counted=(_saw&&_saw.has(sim.user)&&_sden.indexOf(sim.user)<0)||_dec;
-      if(!_counted){ won[sim.user]=(won[sim.user]||0)+1; simCounted=true; }
+      if(!_counted){ if(typeof _capAddT==='function') _capAddT(won,sim.user,sim.wk); else won[sim.user]=(won[sim.user]||0)+10; simCounted=true; }
     }
     for(const u of Object.keys(won)){
-      if(won[u]>cap) out.push('<strong>'+esc(u)+'</strong> would end '+phaseName(cur)+' with '+won[u]+' weeks (cap '+cap+')'
+      if(won[u]>cap*10) out.push('<strong>'+esc(u)+'</strong> would end '+phaseName(cur)+' with '+((won[u]%10)?(won[u]/10).toFixed(1):won[u]/10)+' weeks (cap '+cap+')'
         +(simCounted&&sim.user===u?' <em>(includes this approval)</em>':''));
     }
   }catch(e){ console.warn('capBreaches failed',e); }
@@ -10676,7 +10876,7 @@ window.adApprove=function(user,wk,currentOutcome){
     return;
   }
   const m=wkDate(wk);
-  const cap=getSlots(wk); const ufte=getUserFTE(user);
+  const cap=getSlots(wk); const ufte=(typeof placeFte==='function')?placeFte(user,wk):getUserFTE(user); // [410 · split weeks]
   // Over-cap warning uses the site's ONE deduplicated winner set (computeApprovals):
   // prior-phase locked-in winners + projected current-phase wins + admin-approved
   // users — each counted exactly ONCE. Draws and reviews consume nothing.
@@ -10728,7 +10928,7 @@ window.adApprove=function(user,wk,currentOutcome){
   });
 };
 
-window.adDeny=function(user,wk,currentOutcome){
+window.adDeny=function(user,wk,currentOutcome,done){ // [410 · split weeks · review] done: called once the denial is written (Split weeks' "Deny the bid")
   if(!_decisionsAllowedOrExplain('Deny')) return; // [299 · §79]
   const _ds=_decisionStamp(); // [285 · AUD-C4]
   const m=wkDate(wk);
@@ -10752,7 +10952,7 @@ window.adDeny=function(user,wk,currentOutcome){
     body:`<div>Deny for week of <strong>${wLabel(m)}</strong>?</div>
           ${_holdsApproval?`<div class="cmodal-warn" style="margin-top:8px"><strong>${user}</strong> is APPROVED for this week — this REMOVES that approval.</div>`:''}
           ${_wasTie?`<div class="cmodal-info" style="margin-top:8px">They were in a tie; they are told when phase results are sent.</div>`:''}
-          <div class="cmodal-warn" style="margin-top:8px">Their bid number returns for the next phase. They are e-mailed via "Send Phase Results".</div>${_rdy}${_fastOffer('deny',user,wk,currentOutcome,_warned)}`,
+          <div class="cmodal-warn" style="margin-top:8px">Their bid number returns for the next phase. They are e-mailed via "Send Phase Results".</div>${_rdy}${_fastOffer('deny',user,wk,currentOutcome,_warned||typeof done==='function')}`,
     okText:'Deny',danger:true,
     onConfirm:async()=>{
       if(!_decisionGuard(_ds,user,wk)) return; // [285 · AUD-C4]
@@ -10761,6 +10961,7 @@ window.adDeny=function(user,wk,currentOutcome){
       await adminLog(user,wk,'admin-deny',scheduleData[user]?.[wk]);
       toast('✕ '+user+' denied for '+wLabel(m),'warn');
       renderAppDenials();
+      if(typeof done==='function') await done(); // [410 · split weeks · review]
     }
   });
 };
@@ -11040,7 +11241,7 @@ async function _execSimulationApprovals(){
           // [300 · H-1] The loop recomputes after every write; on the frozen projection that
           // recompute was a no-op, so every member of a draw met the identical fit test and all
           // were approved. committedFte moves as approvals land, which is what the loop assumed.
-          if(Math.round((weekLedger(wk).committedFte+getUserFTE(u)-cap)*10)/10<=T){
+          if(Math.round((weekLedger(wk).committedFte+((typeof placeFte==='function')?placeFte(u,wk):getUserFTE(u))-cap)*10)/10<=T){ // [410 · split weeks]
             await _simApprove(wk,u,'✓ Tie winner: '+u+' for Wk '+(_wkNumByISO[wk]||wk));
           } else {
             await _simDeny(wk,u,'✕ Tie loser: '+u+' for Wk '+(_wkNumByISO[wk]||wk));
@@ -11281,13 +11482,13 @@ function _adminPriorUsedPriorities(u){
 }
 // Weeks this user WON in completed phases — the prior half of the cumulative cap.
 function _adminPriorApprovedCount(u){
-  let c=0; const cur=Number(phasesData.currentPhase||1); const cp=phasesData.completedPhases||{};
+  let c=0; const cur=Number(phasesData.currentPhase||1); const cp=phasesData.completedPhases||{}; const _w=[]; // [410 · split weeks] _w: the weeks won
   for(const ph of Object.keys(cp)){
     if(Number(ph)>=cur) continue;
     const ap=cp[ph]?.approvals||{};
-    for(const wk of Object.keys(ap)){ if(Array.isArray(ap[wk])&&ap[wk].includes(u)) c++; }
+    for(const wk of Object.keys(ap)){ if(Array.isArray(ap[wk])&&ap[wk].includes(u)){ c++; _w.push(wk); } }
   }
-  return c;
+  return (typeof _splitPriorAdjT==='function')?(c*10+_splitPriorAdjT(u,_w))/10:c; // [410 · split weeks] a split week counts each person's share
 }
 // Returns [] when a manual bid breaks nothing, else a list of plain-English problems.
 // `val` is the raw control value ("NP", "3", or "1,2,3"); isNew=true for an add.
@@ -11420,7 +11621,7 @@ function _bdWindowLine(){
 function _bdCompNow(wk){
   const prior=getPriorPhaseWinners(wk), m={};
   for(const u of Object.keys(scheduleData||{})){ const b=scheduleData[u]; if(b&&typeof b==='object'&&b[wk]!==undefined&&b[wk]!==null&&isCurrentPhaseBidAdmin(u,wk)) m[u]=b[wk]; }
-  return _fpOver(m,getSlots(wk),prior);
+  return _fpOver(m,getSlots(wk),prior,(typeof _holdFte==='function')?(u=>_holdFte(u,wk)):null); // [410 · split weeks] the open phase, as the staff page's _wwContested
 }
 // Twin of the staff _strictNHolds: with no level set every numbered bid; a score that is not a number is held (errs strict).
 function _bdStrictHolds(p){ const n=_bdLvl(); if(n===null) return true; let s; try{ s=pScore(p); }catch(_){ return true; } return !(typeof s==='number'&&isFinite(s))||s<=n+1; }
@@ -11473,10 +11674,14 @@ function adminBidIssues(u,wk,val,isNew){ // [393 · §297 Build D] A: the new li
     if(isNew){
       const cap=_cumCap(cur);
       if(cap!==null){
-        const used=_adminPriorApprovedCount(u)+_adminCountedWeeks(u,wk).length;
-        if(used>=cap) out.push('<strong>'+esc(u)+' is at the cumulative cap of '+cap+'</strong> ('+used+': earlier wins + current bids).');
+        // [410 · split weeks, PLAN §3, Q3] Shares, worked in tenths: refused when one more whole bid would go over the cap.
+        const _uT=Math.round(_adminPriorApprovedCount(u)*10)+((typeof _adminLiveCapT==='function')?_adminLiveCapT(u,wk):_adminCountedWeeks(u,wk).length*10);
+        const used=(_uT%10)?(_uT/10).toFixed(1):_uT/10;
+        if(_uT+10>cap*10) out.push('<strong>'+esc(u)+' is at the cumulative cap of '+cap+'</strong> ('+used+': earlier wins + current bids).');
       }
     }
+    // [410 · split weeks · review] 6.30: the partner of a split in force on this week places no bid there — the bidder bids for both.
+    if(typeof splitsAsPartner==='function') for(const e of splitsAsPartner(u,wk)) out.push(esc(u)+' shares this week with <strong>'+esc(e.b)+'</strong>, who bids for both of them.');
     if(typeof _bdIssueLines==='function') out.push(..._bdIssueLines(u,wk)); // [393 · §297 Build D] A: not started / closed, competition week
   }catch(e){ console.warn('adminBidIssues failed',e); }
   return out;
@@ -11702,7 +11907,7 @@ async function _adminDeleteBidAtomic(u,wk){
     return {ok:false,partial:false,err:String(e?.code||e?.message||e)};
   }
 }
-window.adminRemove=function(u,wk){
+window.adminRemove=function(u,wk,done){ // [410 · split weeks · review] done: called once the bid is removed (Split weeks' "Remove the bid too")
   // [292 · RA-H4] Same missing C-4 guard as confirmAdminCancel — and this button was
   // reachable with NO staleness for announced Phase-4 round winners (row lock fixed in
   // renderEditTable, same build).
@@ -11741,6 +11946,7 @@ window.adminRemove=function(u,wk){
       await adminLog(u,wk,'admin-remove',oldBid); toast(`Removed · last bid cleared`,"warn");
       queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
       _adminBidTimerReset(u,wk,_prev); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling) · [305 · §117] gated by the Timer Reset Mode
+      if(typeof done==='function') await done(); // [410 · split weeks · review]
     }
   });
 };
@@ -11992,6 +12198,129 @@ window.clearLastBid=function(u,wk){
     }
   });
 };
+// ── [410 · split weeks · admin-page] THE SPLIT WEEKS PAGE (Bids & decisions; DECISIONS §368–§369, PLAN.md §5 and its ANSWERS, mock v5) ──
+// The switch: adminSettings.splitWeeksOn (true = On; missing = Off), confirmed (_cfgAsk) and logged, changeable before Phase 1 and between
+// phases (cfgUnlockedNow). Off stops new splits; splits already made stay (Q8). The list: splitsList() for the phase chosen in the usual
+// Phase drop-down (populatePhaseFilter). Create and Remove write vacations/splits; an admin split action raises no alert e-mail and restarts
+// no countdown (Q7). Change Log: SYSTEM rows (week 'ALL', the week in `choice`), action 'split'.
+const SPLIT_LOCKED_TEXT='Can be changed before Phase 1 and between phases.';
+function _splitWkName(wk){ let n=0; try{ n=wNum(wkDate(wk)); }catch(_){ n=0; } return n?('Week '+n):String(wk||''); }
+function _splitStatusHtml(e){ if(e.st==='on') return 'In place'; if(e.st==='won') return '<span class="pill p-green">Won</span>'; return '<span style="color:var(--t2)">'+(e.why==='lost'?'Ended — bid lost':'Removed')+'</span>'; }
+// A drop-down's options, redrawn only when they differ (a snapshot never tears down an open drop-down); the choice is kept while still offered.
+function _swFill(id,first,opts){ const s=document.getElementById(id); if(!s) return; const prev=s.value;
+  const h='<option value="">'+esc(first)+'</option>'+opts.map(o=>'<option value="'+esc(String(o[0]))+'">'+esc(String(o[1]))+'</option>').join('');
+  if(s.dataset.sw!==h){ s.innerHTML=h; s.dataset.sw=h; if(opts.some(o=>String(o[0])===prev)) s.value=prev; } }
+function _swHalves(){ const s=document.getElementById('swSplit'), sp=(s&&s.value==='T')?'T':'W'; _swFill('swHalf',"Bidder's half",[[1,_splitHalfDays(sp,1)],[2,_splitHalfDays(sp,2)]]); }
+window._swHalves=_swHalves;
+function renderSplitWeeks(){
+  const tb=document.getElementById('swBody'); if(!tb) return;
+  const on=!!(adminSettings&&adminSettings.splitWeeksOn===true), locked=!cfgUnlockedNow();
+  const tg=document.getElementById('swTog'); if(tg){ tg.classList.toggle('on',on); tg.style.opacity=locked?'.55':''; }
+  const ln=document.getElementById('swLockLine'); if(ln) ln.style.display=locked?'':'none';
+  const sel=document.getElementById('swPhase'); populatePhaseFilter(sel);
+  const f=(sel&&sel.value)||'current', all=f==='all', m=String(f).match(/^ph(\d+)$/), want=m?Number(m[1]):Number(phasesData.currentPhase||1);
+  const rows=splitsList().filter(e=>all||Number(e.ph)===want);
+  const hd=document.getElementById('swHead'); if(hd) hd.innerHTML='<tr>'+(all?'<th>Phase</th>':'')+'<th>Week</th><th>Bidder</th><th>Partner</th><th>Days</th><th>Blended FTE</th><th>Status</th><th></th></tr>';
+  const td=x=>'<td style="white-space:nowrap">'+x+'</td>';
+  tb.innerHTML=rows.length?rows.map(e=>{ const h=Number(e.bh);
+    return '<tr>'+(all?td(esc(phaseName(e.ph))):'')+td(esc(wLabel(wkDate(e.wk))))+td(esc(e.b))+td(esc(e.p))
+      +td(esc(e.b+' '+_splitHalfDays(e.sp,h))+'<br>'+esc(e.p+' '+_splitHalfDays(e.sp,3-h)))+td(esc((+splitBlendFte(e)).toFixed(1)))+td(_splitStatusHtml(e))
+      +td((e.st==='on'||e.st==='won')?'<button class="btn btn-ghost" style="font-size:12px;padding:4px 12px" onclick="removeSplit(\''+_jsq(e.key)+'\')">Remove</button>':'')+'</tr>'; }).join('')
+    :'<tr><td colspan="'+(all?8:7)+'" style="text-align:center;color:var(--t2);padding:20px">No splits.</td></tr>';
+  _swFill('swWeek','Week',(mondays||[]).map(d=>[dateKey(d),wLabel(d)]));
+  const ppl=[...(names||[])].sort().map(n=>[n,n]); _swFill('swBidder','Bidder',ppl); _swFill('swPartner','Partner',ppl);
+  _swFill('swSplit','Split',[['W','Sun–Wed / Thu–Sat'],['T','Sun–Tue / Wed–Sat']]); _swHalves();
+}
+window.renderSplitWeeks=renderSplitWeeks; // the Phase drop-down's inline onchange needs it global
+window.toggleSplitWeeks=function(){
+  if(!cfgUnlockedNow()){ toast(SPLIT_LOCKED_TEXT,'err'); renderSplitWeeks(); return; }
+  const cur=!!(adminSettings&&adminSettings.splitWeeksOn===true), next=!cur;
+  _cfgAsk({ name:'Split weeks', change:cur?'On → Off':'Off → On', onCancel:()=>renderSplitWeeks(), onConfirm:async()=>{
+    if(!cfgUnlockedNow()){ toast(SPLIT_LOCKED_TEXT,'err'); renderSplitWeeks(); return; } // asked again at the click: a phase may have begun under the dialog
+    try{ await setDoc(adminRef,{splitWeeksOn:next},{merge:true}); }
+    catch(e){ toast('Could not save the Split weeks switch ('+(e.code||'error')+') — nothing changed.','err'); renderSplitWeeks(); return; }
+    try{ await adminLog('ALL','ALL',next?'admin-split-on':'admin-split-off',undefined,{by:_setupWho()}); }catch(_){}
+    toast(next?'Split weeks ON':'Split weeks OFF',next?'ok':'warn');
+  } });
+};
+// The splits in force on wk that u is in (as the bidder or the partner).
+function _splitsOfOn(u,wk){ return splitsInForce().filter(e=>e.wk===wk&&(e.b===u||e.p===u)); }
+// §369: a half-holder of a WON split may be the PARTNER in one more split on that week — the same split, the exact other half (so the new
+// bidder takes the half the partner already holds). The partner has one split in force there, and it is won.
+function _splitOtherHalfOk(wk,p,sp,bh){ const mine=_splitsOfOn(p,wk); if(mine.length!==1) return false; const e=mine[0];
+  if(e.st!=='won'||e.sp!==sp) return false; return Number(bh)===((e.b===p)?Number(e.bh):3-Number(e.bh)); }
+// Why Create cannot go ahead ('' = it can): A8's three refusals, and the cases the rules it rests on imply (the switch Off, Q8; a phase
+// complete; a week already won by either person).
+function _splitCreateRefusal(wk,b,p,sp,bh){
+  const cur=Number(phasesData.currentPhase||1);
+  if(!(adminSettings&&adminSettings.splitWeeksOn===true)) return 'Split weeks is Off. Turn it on to create a split.';
+  if((phasesData.completedPhases||{})[cur]) return phaseName(cur)+' is complete. Splits can be made once the next phase begins.';
+  if(b===p) return 'Pick two different people.';
+  if(_splitsOfOn(b,wk).length) return b+' already has a split on this week.';
+  const pHas=_splitsOfOn(p,wk).length>0;
+  if(pHas&&!_splitOtherHalfOk(wk,p,sp,bh)) return p+' already has a split on this week.';
+  if(scheduleData[p]&&scheduleData[p][wk]!==undefined&&isCurrentPhaseBidAdmin(p,wk)) return p+' has a bid on this week. Remove it first.';
+  const prior=getPriorPhaseWinners(wk);
+  if(prior.has(b)) return b+' won this week in an earlier phase.';
+  if(prior.has(p)&&!pHas) return p+' won this week in an earlier phase.';
+  return '';
+}
+// A6's "bid cap after": u's count with the split in place, in tenths, read through the page's own cap counters (the split is put in the
+// page's copy for the count and taken out again before returning).
+function _splitCapAfterT(e,u){ const k=e.wk+'|'+e.b, had=Object.prototype.hasOwnProperty.call(splitsData,k), was=splitsData[k];
+  splitsData[k]=e;
+  try{ return Math.round(_adminPriorApprovedCount(u)*10)+_adminLiveCapT(u); }
+  finally{ if(had) splitsData[k]=was; else delete splitsData[k]; } }
+function _splitCreateBody(e){
+  const h=Number(e.bh), cap=_cumCap(Number(phasesData.currentPhase||1));
+  const out='<div>'+esc(_splitWkName(e.wk)+' · '+e.b+' '+_splitHalfDays(e.sp,h)+', '+e.p+' '+_splitHalfDays(e.sp,3-h)+' · '+e.b+' bids · blended FTE '+(+splitBlendFte(e)).toFixed(1)+'.')+'</div>';
+  if(cap===null) return out; // no bid cap this phase: nothing to count against
+  const f=t=>(t%10)?(t/10).toFixed(1):String(t/10), tb=_splitCapAfterT(e,e.b), tp=_splitCapAfterT(e,e.p);
+  const over=[[e.b,tb],[e.p,tp]].filter(x=>x[1]>cap*10);
+  return out+'<div class="'+(over.length?'cmodal-warn':'cmodal-info')+'" style="margin-top:8px">'+esc('Bid cap after: '+e.b+' '+f(tb)+' of '+cap+' · '+e.p+' '+f(tp)+' of '+cap+'.')
+    +over.map(x=>'<br>'+esc(x[0]+' would be over the bid cap ('+f(x[1])+' of '+cap+').')).join('')+'</div>';
+}
+window.createSplit=function(){
+  const v=id=>{ const el=document.getElementById(id); return el?String(el.value||''):''; };
+  const wk=v('swWeek'), b=v('swBidder'), p=v('swPartner'), sp=v('swSplit'), bh=Number(v('swHalf'));
+  if(!wk||!b||!p||(sp!=='W'&&sp!=='T')||(bh!==1&&bh!==2)){ toast('Pick a week, a bidder, a partner, a split and the bidder\'s half.','err'); return; }
+  const why=_splitCreateRefusal(wk,b,p,sp,bh); if(why){ toast(why,'err'); return; }
+  const e={wk,b,p,sp,bh,ph:Number(phasesData.currentPhase||1),st:'on',at:new Date().toISOString(),by:_setupWho()};
+  openConfirm({ title:'Create split', body:_splitCreateBody(e), okText:'Confirm', onConfirm:async()=>{
+    const why2=_splitCreateRefusal(wk,b,p,sp,bh); if(why2){ toast(why2,'err'); return; } // asked again at the click: the board may have changed under the dialog
+    e.ph=Number(phasesData.currentPhase||1); e.at=new Date().toISOString();
+    const k=wk+'|'+b;
+    try{ await updateDoc(splitsRef,{[k]:e}); } // the whole entry at its key (an ended split's old fields go)
+    catch(err){ if(!(err&&err.code==='not-found')) throw err; await setDoc(splitsRef,{[k]:e},{merge:true}); } // the record's first split
+    splitsData[k]=e;
+    try{ await adminLog(b,'ALL','admin-split-create',undefined,{choice:wk,p,sp,bh,by:e.by}); }catch(_){}
+    toast('Split created','ok'); refreshAll();
+  } });
+};
+// Remove (the three boxes of mock v5, ANSWERS 10:59–11:04 PM). A split whose bid is live: keep the bid for the bidder alone, or cancel it —
+// while bidding is open the bid is removed as Edit Selections removes one (adminRemove); once bidding has closed it is denied as Approvals /
+// Denials denies one (adDeny). That action's own box opens first, and the split is marked off only once its write has succeeded: a Cancel
+// or a failed write there leaves the split and the bid as they were [410 · split weeks · review]. A split won in an earlier phase (or with no live bid): the bidder keeps the week — no completed win is undone.
+async function _splitOff(k){
+  const e=(splitsData||{})[k]; if(!e||(e.st!=='on'&&e.st!=='won')){ renderSplitWeeks(); return false; }
+  await updateDoc(splitsRef,{[k+'.st']:'off',[k+'.why']:'admin'});
+  splitsData[k]=Object.assign({},e,{st:'off',why:'admin'});
+  try{ await adminLog(e.b,'ALL','admin-split-remove',undefined,{choice:e.wk,p:e.p,sp:e.sp,bh:e.bh,by:_setupWho()}); }catch(_){}
+  toast('Split removed','ok'); refreshAll(); return true;
+}
+window.removeSplit=function(k){
+  const e=(splitsData||{})[k]; if(!e||(e.st!=='on'&&e.st!=='won')){ renderSplitWeeks(); return; }
+  const live=e.st==='on'&&!!scheduleData[e.b]&&scheduleData[e.b][e.wk]!==undefined&&isCurrentPhaseBidAdmin(e.b,e.wk);
+  if(!live){ openConfirm({ title:'Remove split', body:'<div>'+esc('Remove this split? '+_splitWkName(e.wk)+' stays '+e.b+'\'s alone, at '+e.b+'\'s FTE.')+'</div>', okText:'Remove', danger:true, onConfirm:()=>_splitOff(k) }); return; }
+  const open=biddingOpenOnServer();
+  openConfirm({ title:'Remove split', body:'<div>'+esc(_splitWkName(e.wk)+' · '+e.b+'/'+e.p+'. What happens to '+e.b+'\'s bid?')+'</div>', okText:'Keep '+e.b+'\'s bid', onConfirm:()=>_splitOff(k),
+    alt:{ text:open?'Remove the bid too':'Deny the bid', danger:true, onClick:async()=>{
+      const s=(splitsData||{})[k]; if(!s||s.st!=='on'){ renderSplitWeeks(); return; } // [410 · split weeks · review] ended meanwhile: no bid is touched
+      const done=()=>_splitOff(k); // marked off (and logged) only once the bid is removed or denied
+      if(open) return window.adminRemove(e.b,e.wk,done);
+      return window.adDeny(e.b,e.wk,getOutcome(e.wk,e.b,computeApprovals()),done);
+    } } });
+};
 // [REMOVED 25 Jul 2026] 'Remove ALL Bids & Locks' deleted at the admin's request — it was no
 // longer used, and it was the likeliest route to a confirmed CRITICAL: it preserved
 // approvals/denials, and Begin Phase 1 did not clear them, so rehearsal decisions could
@@ -12031,8 +12360,8 @@ function normalizeEntry(c){
   // [CL-1] A system action is not a bid verb. Give it its own action so the filter and the
   // pill can treat it as its own kind, and keep the raw type so the row can be worded.
   const system=isSystemEntry(c);
-  if(system) action='system';
-  return { actor, action, system, type:raw, user:c.user||'—', weekKey:c.weekKey, bidValue:c.bidValue, ts:c.ts, reason:c.reason, hours:c.hours, choice:c.choice, by:c.by, change:c.change, bl:c.bl, review:c.review, reviewedAt:c.reviewedAt, reviewedBy:c.reviewedBy, seen:c.seen, of:c.of, skipped:c.skipped }; /* [404 · §334 G] the initials reach the row */ /* [404 · FIX F1] the settings row's change and the Strict row's lowerings mark too · [404 · FIX F8] and a phase start's settings review (every field the row's sentence reads) */ // [350 · §232] the timer reset's length and choice survive normalization too — they were dropped here, so the row read "to  h (chosen length)" every time // [327 · §180] the hold reason survives normalization (found in the browser walk: it was dropped here)
+  if(system) action=/^admin-split-/.test(raw)?'split':'system'; // [410 · split weeks · admin-page] the split rows: their own kind (the filter, the pills)
+  return { actor, action, system, type:raw, user:c.user||'—', weekKey:c.weekKey, bidValue:c.bidValue, ts:c.ts, reason:c.reason, hours:c.hours, choice:c.choice, by:c.by, change:c.change, bl:c.bl, review:c.review, reviewedAt:c.reviewedAt, reviewedBy:c.reviewedBy, seen:c.seen, of:c.of, skipped:c.skipped, p:c.p, sp:c.sp, bh:c.bh }; /* [410 · split weeks · admin-page] a split row's partner and halves */ /* [404 · §334 G] the initials reach the row */ /* [404 · FIX F1] the settings row's change and the Strict row's lowerings mark too · [404 · FIX F8] and a phase start's settings review (every field the row's sentence reads) */ // [350 · §232] the timer reset's length and choice survive normalization too — they were dropped here, so the row read "to  h (chosen length)" every time // [327 · §180] the hold reason survives normalization (found in the browser walk: it was dropped here)
 }
 
 function fmtRelative(ts){
@@ -12102,6 +12431,10 @@ function _systemActionText0(e){
   if(t==='admin-hold') return 'Admin <strong>withheld</strong> bid number <strong>'+esc(String(e.bidValue??''))+'</strong> from <strong>'+who+'</strong>'+(e.reason?' — '+esc(e.reason):''); // [327 · §180]
   if(t==='admin-release') return 'Admin <strong>released</strong> bid number <strong>'+esc(String(e.bidValue??''))+'</strong> to <strong>'+who+'</strong>'+(e.reason?' — '+esc(e.reason):''); // [327 · §180]
   if(t==='admin-clear-last-bid'){ const w=String(e.choice||''); let wl=w; try{ if(w) wl=wLabel(wkDate(w)); }catch(_){ wl=w; } return 'Admin cleared <strong>'+who+'</strong>\'s last bid on <strong>'+esc(wl||'a week')+'</strong>'+((typeof e.by==='string'&&e.by)?' ('+esc(e.by)+')':''); } // [404 · §334 G]
+  if(t==='admin-split-create'||t==='admin-split-remove'){ const b=String(e.user||''), p=String(e.p||''), wn=(typeof _splitWkName==='function')?_splitWkName(String(e.choice||'')):String(e.choice||''), by2=(typeof e.by==='string'&&e.by)?' ('+esc(e.by)+')':''; // [410 · split weeks · admin-page] A9
+    if(t==='admin-split-remove') return 'Admin removed split: '+esc(wn)+' · '+esc(b+'/'+p)+by2;
+    const h=Number(e.bh); return 'Admin created split: '+esc(wn)+' · '+esc(b+'/'+p)+(((e.sp==='W'||e.sp==='T')&&(h===1||h===2)&&typeof _splitHalfDays==='function')?' ('+esc(b+' '+_splitHalfDays(e.sp,h)+', '+p+' '+_splitHalfDays(e.sp,3-h))+')':'')+by2; }
+  if(t==='admin-split-on'||t==='admin-split-off') return 'Admin turned Split weeks '+(t==='admin-split-on'?'ON':'OFF')+((typeof e.by==='string'&&e.by)?' ('+esc(e.by)+')':''); // [410 · split weeks · admin-page] A9
   const words=t.replace(/^admin-/,'').replace(/-/g,' ');
   return `Admin — ${esc(words||'system action')}`;
 }
@@ -12168,7 +12501,8 @@ function renderChangelog(){
       approved: {label:'APPROVED', bg:'rgba(54,105,74,.18)',  color:'#36694a'},
       denied:   {label:'DENIED',   bg:'rgba(92,31,21,.18)',  color:'#5c1f15'},
       revoked:  {label:'REVOKED',  bg:'rgba(138,74,34,.18)', color:'#8a4a22'},
-      system:   {label:'SYSTEM',   bg:'rgba(74,80,90,.18)',color:'#1f2329'}
+      system:   {label:'SYSTEM',   bg:'rgba(74,80,90,.18)',color:'#1f2329'},
+      split:    {label:'SPLIT',    bg:'rgba(78,94,54,.15)', color:'#4e5e36'} // [410 · split weeks · admin-page]
     };
     const m=map[a]||{label:a.toUpperCase(), bg:'rgba(74,80,90,.15)', color:'#1f2329'};
     return `<span class="cl-pill" style="background:${m.bg};color:${m.color}">${esc(m.label)}</span>`;
@@ -12194,7 +12528,7 @@ function renderChangelog(){
       if(e.system){
         return `<div class="cl-row">
         <div class="cl-time" title="${fmtAbsTime(e.ts)}">${fmtRelative(e.ts)}</div>
-        <div class="cl-pills">${actorPill(e)} ${actionPill('system')}</div>
+        <div class="cl-pills">${actorPill(e)} ${actionPill(e.action)}</div>
         <div class="cl-text">${systemActionText(e)}${/^admin-(hold|release)$/.test(String(e.type||''))?'':bidLabel(e.bidValue)}</div>
       </div>`;
       }
@@ -12239,7 +12573,7 @@ function _clEntryView(e){
   const bidTxt=(e.bidValue===undefined||e.bidValue===null)?'':String(Array.isArray(e.bidValue)?e.bidValue.join('/'):e.bidValue);
   if(e.system){
     const showBid=!/^admin-(hold|release)$/.test(String(e.type||''));
-    return { when:when, actor:'admin', action:'system', user:(e.user&&e.user!=='ALL'&&e.user!=='—')?e.user:'', week:'', bid:showBid?bidTxt:'',
+    return { when:when, actor:'admin', action:e.action, user:(e.user&&e.user!=='ALL'&&e.user!=='—')?e.user:'', week:'', bid:showBid?bidTxt:'',
       html:systemActionText(e)+(showBid&&bidTxt?' · '+esc(bidTxt):'') };
   }
   const wkStr=e.weekKey?(()=>{try{return wLabel(wkDate(e.weekKey));}catch(_){return e.weekKey;}})():'—';
@@ -12255,7 +12589,7 @@ function _clPlain(h){ return String(h).replace(/<[^>]*>/g,'').replace(/&lt;/g,'<
 // change log itself" is best — and, on a screenshot of the Change Log page, "this". So the export is drawn the way
 // that page is: a plain day heading, and for By and Action the SAME tinted pill (a light tint behind coloured text).
 // These are that page's own colours; a test holds the two copies together.
-const CL_ACTION_PILL={added:{bg:'rgba(54,105,74,.15)',color:'#36694a'},edited:{bg:'rgba(31,35,41,.15)',color:'#4e5e36'},removed:{bg:'rgba(92,31,21,.15)',color:'#5c1f15'},approved:{bg:'rgba(54,105,74,.18)',color:'#36694a'},denied:{bg:'rgba(92,31,21,.18)',color:'#5c1f15'},revoked:{bg:'rgba(138,74,34,.18)',color:'#8a4a22'},system:{bg:'rgba(74,80,90,.18)',color:'#1f2329'}};
+const CL_ACTION_PILL={added:{bg:'rgba(54,105,74,.15)',color:'#36694a'},edited:{bg:'rgba(31,35,41,.15)',color:'#4e5e36'},removed:{bg:'rgba(92,31,21,.15)',color:'#5c1f15'},approved:{bg:'rgba(54,105,74,.18)',color:'#36694a'},denied:{bg:'rgba(92,31,21,.18)',color:'#5c1f15'},revoked:{bg:'rgba(138,74,34,.18)',color:'#8a4a22'},system:{bg:'rgba(74,80,90,.18)',color:'#1f2329'},split:{bg:'rgba(78,94,54,.15)',color:'#4e5e36'}}; // [410 · split weeks · admin-page] the screen's split pill, the same colours
 const CL_ACTOR_PILL={admin:{bg:'rgba(32,97,115,.18)',color:'#1e3d46'},user:{bg:'rgba(138,100,20,.15)',color:'#2b2000'}};
 const CL_PILL_DEFAULT={bg:'rgba(74,80,90,.15)',color:'#1f2329'};
 // A tint is a see-through colour over white; a spreadsheet cell needs it as one solid colour.
@@ -14791,7 +15125,7 @@ window.renderDrawsReviews=function(){
     return `<tr class="dr-row">
       ${weekCol}
       <td class="dr-user">${esc(e.user)}</td>
-      <td class="dr-bid">${esc(lbl)} · FTE ${getUserFTE(e.user)}</td>
+      <td class="dr-bid">${esc(lbl)} · FTE ${(typeof placeFte==='function')?placeFte(e.user,e.wk):getUserFTE(e.user)}</td>
       <td><div class="dr-status">${tag}</div></td>
       <td><div class="dr-actions">${actions}</div></td>
       <td>${priorPhaseInlineHtml(e.user)}${(!_phaseDone)?unusedBidsInlineHtml(e.user,e.wk,nat):''}</td>
@@ -14848,7 +15182,7 @@ window.renderDrawsReviews=function(){
         const lbl=Array.isArray(b.priority)?b.priority.join('/'):b.priority;
         contextRows.push(`<tr class="dr-row" style="background:${bgcolor};opacity:.8">
           <td class="dr-user">${esc(b.user)}</td>
-          <td class="dr-bid">${esc(lbl)} · FTE ${getUserFTE(b.user)}</td>
+          <td class="dr-bid">${esc(lbl)} · FTE ${(typeof placeFte==='function')?placeFte(b.user,wk):getUserFTE(b.user)}</td>
           <td><div class="dr-status"><span class="pill ${color}" style="${o==='win'?'':'background:rgba(74,80,90,.2);color:var(--t2)'}">${label}</span></div></td>
           <td><span style="color:var(--t3);font-size:11px;font-style:italic">context only</span></td>
           <td>${priorPhaseInlineHtml(b.user)}</td>
@@ -14924,7 +15258,7 @@ window.confirmApprove=function(user,wk,type){
   // [300 · H-1] Byte-identical write to adApprove, so it must give byte-identical advice:
   // the same ledger, and no second count of someone already decided in.
   const _used=weekLedger(wk,ap).committedFte;
-  const ufte=getUserFTE(user);
+  const ufte=(typeof placeFte==='function')?placeFte(user,wk):getUserFTE(user); // [410 · split weeks]
   const _already=(ap[wk]?.winners?.has(user))||decidedWinners(wk).has(user);
   const newTotal=_already?_used:Math.round((_used+ufte)*10)/10;
   const overage=Math.round((newTotal-cap)*10)/10;
@@ -15186,7 +15520,7 @@ async function _doFullRestore(f){
   // typeof = sandbox convention.
   if(typeof _feedsHealthyOrExplain==='function'&&!_feedsHealthyOrExplain('Full Restore')) return;
   const d=f.data;
-  const map={schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesDecisions:changesDecisionsRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,slcMap:slcRef,signInMisses:signInMissesRef,slots:doc(db,'vacations','slots'),passcodes:doc(db,'vacations','passcodes'),...(typeof bidLoweringsRef!=='undefined'?{bidLowerings:bidLoweringsRef,bidLoweringsArchive:bidLoweringsArchiveRef}:{})}; // [build 268 · BL] spread-guard = extracted-code sandbox convention (production always has the refs; a pin test fails if removed)
+  const map={schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesDecisions:changesDecisionsRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,slcMap:slcRef,signInMisses:signInMissesRef,slots:doc(db,'vacations','slots'),passcodes:doc(db,'vacations','passcodes'),...(typeof bidLoweringsRef!=='undefined'?{bidLowerings:bidLoweringsRef,bidLoweringsArchive:bidLoweringsArchiveRef}:{}),...(typeof splitsRef!=='undefined'?{splits:splitsRef}:{})}; /* [410 · split weeks · admin-page] */ // [build 268 · BL] spread-guard = extracted-code sandbox convention (production always has the refs; a pin test fails if removed)
   // [AUDIT 2026-07-26 H13] PRE-FLIGHT: refuse a knowingly-partial restore. A backup with
   // FETCH-FAILED placeholders used to restore the other 24 docs and keep the LIVE value
   // for the broken one — e.g. a rolled-back `phases` next to today's `schedule`, an
@@ -15485,13 +15819,13 @@ function _backupThen(label,fn){
 // [384 · §288 · plan §3e] alertPrefs (each person's e-mail alert choices) is outside too, for the same reason: neither backed up, restored,
 // nor cleared by Reset Auction. A get-in alert lapses by itself at a phase close, a round start and a reset (it carries their stamp).
 function _backupDocMap(){
-  return {bidHolds:bidHoldsRef, /* [327 · §180] */ schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesDecisions:changesDecisionsRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,welcomeLog:welcomeLogRef,mailQueue:mailQueueRef,mailStats:mailStatsRef,slcMap:slcRef,adminAccess:adminAccessRef,passcodes:doc(db,'vacations','passcodes'),signInMisses:signInMissesRef,slots:doc(db,'vacations','slots'),bidLowerings:bidLoweringsRef,bidLoweringsArchive:bidLoweringsArchiveRef}; // [build 268 · BL] usage + history ARE auction state
+  return {bidHolds:bidHoldsRef, /* [327 · §180] */ schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesDecisions:changesDecisionsRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,welcomeLog:welcomeLogRef,mailQueue:mailQueueRef,mailStats:mailStatsRef,slcMap:slcRef,adminAccess:adminAccessRef,passcodes:doc(db,'vacations','passcodes'),signInMisses:signInMissesRef,slots:doc(db,'vacations','slots'),bidLowerings:bidLoweringsRef,bidLoweringsArchive:bidLoweringsArchiveRef,splits:splitsRef}; // [build 268 · BL] usage + history ARE auction state · [410 · split weeks · admin-page] the splits too
 }
 // [build 268 · BL] Documents born in build 268: ABSENT from every pre-268 backup. The H13
 // gate treats an absent key as unusable (build-215 rule) — correct for documents that have
 // always existed, but it would refuse EVERY older backup forever. For these two only,
 // absence restores as {} (the truthful pre-feature state: no usage had occurred).
-const RESTORE_ABSENT_OK_268=new Set(['bidLowerings','bidLoweringsArchive']); // [327 · RA-9 #1] bidHolds is backed up but NOT restored (kept current, like adminAccess) — see _doFullRestore
+const RESTORE_ABSENT_OK_268=new Set(['bidLowerings','bidLoweringsArchive','splits']); // [410 · split weeks · admin-page] splits: absent from every backup made before 410, restored as {} (no split had been made) // [327 · RA-9 #1] bidHolds is backed up but NOT restored (kept current, like adminAccess) — see _doFullRestore
 // Fetch every backed-up document once. Same semantics both pathways rely on:
 // exists → data, missing → null, fetch error → 'FETCH-FAILED: …' marker + fails count.
 //
@@ -15785,6 +16119,8 @@ window.renderCloudBackups=async function(){
 // [404 · §334 I] 2.1, 2.2, 2.15–2.19, 2.21, 2.22, 2.24, 2.27–2.29, 2.34, 2.37, 4.7, 4.15, 6.20, 8.3, 8.35 rewritten; 2.14 and 8.38 removed (173 items,
 // [12,38,11,16,13,26,8,49]); the words: build/A2/rules-text.json.
 // [408 · F3 · W1] 3.12 added at the end of section 3 (Timer): the countdown notice, his words as ruled (PLAN.md ANSWERS W1). 174 items, [12,38,12,16,13,26,8,49].
+// [410 · split weeks · admin-page] 2.42, 6.27–6.30, 7.9, 8.51 and 8.52 added (PLAN.md §10; 6.29 as ruled in its ANSWERS), from
+// tests/docs/split-weeks-plan/text/rules-text.json. 183 items, [12,40,12,16,13,30,9,51].
 // [405 · §342 · plan A3] 2.40 "Users": "Add several users takes one person per line…" and "The login e-mail must be a Gmail address." added (PLAN.md A3).
 // Each item: n (its number), kind (new / live / term), html (its approved words), and for a live line its label, the words shown
 // when the setting gives nothing (whenEmpty) and, for the timer mode, the name of each value.
@@ -15842,7 +16178,8 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.38","kind":"new","html":"<b>Run Simulation<\/b> — tops each person up to \"Bids per user\" (1–10, default 3) with random bids; their own bids count and are never changed. Skips locked weeks; cannot run under Global Lock."},
 {"n":"2.39","kind":"new","html":"<b>Auto-Approve/Deny Results<\/b> — writes real decisions: approves Winning and single Under Review bids, settles each tie at random (approving while the week stays within its capacity plus the overage), denies the rest."},
 {"n":"2.40","kind":"new","html":"<b>Users<\/b> — each person has initials, a full name, an FTE, a Google login e-mail and, if they want one, a KP e-mail. Initials cannot change. Adding a person needs every field but the KP e-mail. Add several users takes one person per line, fields in any order; a preview shows who will be added and why any line is not, and the people are added together or not at all. Each row has one Save: it refuses a blank full name or login e-mail, and changes FTE only before Phase 1 begins. Two people can never share a login e-mail. The login e-mail must be a Gmail address. A KP e-mail saved blank is off: that person is not asked for one. When a KP e-mail is turned off or replaced, the address that was on file gets one note saying so."},
-{"n":"2.41","kind":"new","html":"<b>Round down capacity<\/b> (Week Capacity, between phases) — for each week with more than 1.0 and less than 2.0 FTE left, lowers the capacity by the part that no group of people on the roster can win outright; a backup first, each change in the Change Log. No outright win changes."}
+{"n":"2.41","kind":"new","html":"<b>Round down capacity<\/b> (Week Capacity, between phases) — for each week with more than 1.0 and less than 2.0 FTE left, lowers the capacity by the part that no group of people on the roster can win outright; a backup first, each change in the Change Log. No outright win changes."},
+{"n":"2.42","kind":"new","html":"<b>Split weeks<\/b> (On / Off) — two people can share a week; one bids for both. Can be changed before Phase 1 and between phases. Off: no new splits; splits already made stay."}
 ]},
 {n:"3",title:"Timer",items:[
 {"n":"3.1","kind":"new","html":"The timer decides when a phase's bidding ends. At 0, bidding closes for everyone."},
@@ -15917,7 +16254,11 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"6.23","kind":"new","html":"<span class=\"ex\"><b>Example 1 — a clean week; a decision changes nothing<\/b><br>Phase 2. Capacity 3.0. PW won it in Phase 1. AF 1, BB 3, CC 5.<br>PW Winning (earlier winner, 1.0 used) · AF Winning · BB Winning (3.0 filled) · CC Losing.<br>The admin denies AF and approves CC: PW, AF, BB still Winning, CC still Losing.<\/span>"},
 {"n":"6.24","kind":"new","html":"<span class=\"ex\"><b>Example 2 — ties<\/b><br>(a) Capacity 1.0. AF 3, BB 3: each alone fits → both Under Review (tie).<br>(b) Capacity 1.5. AF 1, BB 4, CC 4, DD 6: AF Winning (0.5 left); BB + CC need 2.0, each alone over by 0.5 → both Under Review (tie); DD Losing.<br>(c) Capacity 1.0. AF 1, BB 4, CC 4: AF Winning (0 left); each tied bid over by 1.0 → both Losing.<\/span>"},
 {"n":"6.25","kind":"new","html":"<span class=\"ex\"><b>Example 3 — one bid over<\/b><br>AF 2, BB 4, CC 6. (a) Capacity 1.5: AF Winning; BB over by 0.5 → Under Review; CC Losing.<br>(b) Capacity 1.2: AF Winning; BB over by 0.8 → Losing; CC Losing.<br>(c) Capacity 1.5, FTE overage 0: AF Winning; BB Losing; CC Losing.<br>(d) Capacity 1.5. AF 1, BB 2, CC 3 at 0.5 FTE: AF Winning; BB Under Review; CC Losing — CC's 0.5 would fit in the 0.5 left, but the week settled at BB (step 6).<\/span>"},
-{"n":"6.26","kind":"new","html":"<span class=\"ex\"><b>Example 4 — combinations, numbers above 10, NP, a floor<\/b><br>(a) 1/2/3, 1/2 and 2/3 on; capacity 1.0. AF 1/2 vs BB 1 → AF Winning. CC 2/3 vs DD 2 → CC Winning.<br>(b) Bid numbers 1–12. AF 12 vs BB NP → AF Winning. CC 11 vs DD 10 → DD Winning.<br>(c) High-demand week, floor 4. AF 6, BB NP, CC 4 → CC Winning; AF and BB Losing (below the floor, they do not compete).<\/span>"}
+{"n":"6.26","kind":"new","html":"<span class=\"ex\"><b>Example 4 — combinations, numbers above 10, NP, a floor<\/b><br>(a) 1/2/3, 1/2 and 2/3 on; capacity 1.0. AF 1/2 vs BB 1 → AF Winning. CC 2/3 vs DD 2 → CC Winning.<br>(b) Bid numbers 1–12. AF 12 vs BB NP → AF Winning. CC 11 vs DD 10 → DD Winning.<br>(c) High-demand week, floor 4. AF 6, BB NP, CC 4 → CC Winning; AF and BB Losing (below the floor, they do not compete).<\/span>"},
+{"n":"6.27","kind":"new","html":"A split week's bid takes the pair's <b>blended FTE<\/b>: 0.6 × the FTE of whoever has the 4-day half + 0.4 × the other's, rounded up to 0.1."},
+{"n":"6.28","kind":"new","html":"Each person's half counts toward their own bid cap — 0.6 (Sun–Wed or Wed–Sat) or 0.4 (Thu–Sat or Sun–Tue) — while the bid is live and once it is won."},
+{"n":"6.29","kind":"new","html":"If the bid wins, each has their half. If it loses, neither has the week. Neither of them can bid on that week again. Either can take the other half in one more split, with someone else bidding. The admin can remove a split and either leave the bid with the bidder alone or cancel the bid. A split won in an earlier phase stays with the bidder."},
+{"n":"6.30","kind":"new","html":"The partner places no bid on that week and spends no bid number."}
 ]},
 {n:"7",title:"What staff see",items:[
 {"n":"7.1","kind":"new","html":"Staff read this list in Rules &amp; Reminders (☰ menu) and in their welcome e-mail. It follows the settings."},
@@ -15927,7 +16268,8 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"7.5","kind":"new","html":"On the board staff see each projection, the \"Competition week\" label and the Minimum new bid. They never see the admin's decisions before results are sent. Under Blinded bidding they see no one else's initials."},
 {"n":"7.6","kind":"new","html":"On a locked week's card, once results are sent, a bid that won shows <b>Won in<\/b> and the phase's name; any other bid shows as an ordinary locked week."},
 {"n":"7.7","kind":"new","html":"<b>KP e-mail under E-mail alerts<\/b> (☰ menu) — shown only while \"Ask users for their KP e-mail at login\" is on. It is an on / off switch. Off stops every copy to that address, and the person is not asked for one at sign-in. On asks for the address and checks it as the sign-in question does; from Phase 1 on, an address not yet welcomed gets the welcome e-mail. At Done, the confirmation e-mail lists the KP e-mail with the alert choices; when it is turned off or replaced, the address that was on file gets one note saying so. It is the same KP e-mail the Users page shows."},
-{"n":"7.8","kind":"new","html":"<b>Bidding alert e-mails<\/b> are sent within a few minutes of a change. Every change for a person in the 90 seconds after the first goes in one e-mail, each line with the time it happened; a projection that changed and changed back sends nothing."}
+{"n":"7.8","kind":"new","html":"<b>Bidding alert e-mails<\/b> are sent within a few minutes of a change. Every change for a person in the 90 seconds after the first goes in one e-mail, each line with the time it happened; a projection that changed and changed back sends nothing."},
+{"n":"7.9","kind":"new","html":"Staff see a split bid as both sets of initials, the bidder first (AF/BC); two silhouettes under Blinded bidding. Only the two people and the admin see who has which days."}
 ]},
 {n:"8",title:"Glossary",items:[
 {"n":"8.1","kind":"term","html":"The admin's decision that a person gets the week. Possible only once bidding is closed.","term":"Approve"},
@@ -15978,7 +16320,9 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"8.47","kind":"term","html":"Over the week's capacity by no more than the FTE overage, alone or as part of a tie. The admin decides.","term":"Under Review"},
 {"n":"8.48","kind":"term","html":"Picks one tied person at random. It records nothing; the admin then approves or denies.","term":"Wheel of Names"},
 {"n":"8.49","kind":"term","html":"Projected to get the week.","term":"Winning"},
-{"n":"8.50","kind":"term","html":"A bid number the admin has taken from one person on User Bids. Cleared by Reset Auction.","term":"Withheld number"}
+{"n":"8.50","kind":"term","html":"A bid number the admin has taken from one person on User Bids. Cleared by Reset Auction.","term":"Withheld number"},
+{"n":"8.51","kind":"term","html":"One week shared by two people: Sun–Wed / Thu–Sat or Sun–Tue / Wed–Sat.","term":"Split week"},
+{"n":"8.52","kind":"term","html":"The FTE a split week's bid takes (6.27).","term":"Blended FTE"}
 ]}
 ]};
 // The live lines: each value is the page's own text — the same functions the welcome e-mail and the setting cards use. Every one
