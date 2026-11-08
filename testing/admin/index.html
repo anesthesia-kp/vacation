@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 410;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 411;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -702,16 +702,8 @@ thead th{color:var(--t2)}
          toggleSplitWeeks, createSplit, removeSplit). Layout and words: the approved mock (tests/docs/split-weeks-plan/admin-mock.html, v5). -->
     <div class="panel" id="panel-splitweeks">
       <div class="page-head"><div class="page-title">Split weeks</div><div class="page-sub">Two people share a week. One bids for both, at their blended FTE.</div></div>
-      <div class="card">
-        <div class="card-title">Split weeks</div>
-        <div class="trow">
-          <div>
-            <div class="trow-label">Split weeks</div>
-            <div class="trow-desc">Staff can share weeks.</div>
-            <div class="trow-desc" id="swLockLine" style="display:none">Can be changed before Phase 1 and between phases.</div>
-          </div>
-          <div class="tog" id="swTog" onclick="toggleSplitWeeks()"></div>
-        </div>
+      <div class="card" id="swOffCard" style="display:none"><!-- [411 · split weeks, §371] the switch is in Settings -->
+        <div class="trow-desc">Split weeks is Off. <a href="#" onclick="_swGoSettings();return false">Turn it on in Settings.</a></div>
       </div>
       <div class="card">
         <div class="card-title">Splits</div>
@@ -729,6 +721,7 @@ thead th{color:var(--t2)}
           <select id="swPartner" class="sel" style="width:100px" aria-label="Partner"></select>
           <select id="swSplit" class="sel" style="width:180px" aria-label="Split" onchange="_swHalves()"></select>
           <select id="swHalf" class="sel" style="width:130px" aria-label="Bidder's half"></select>
+          <select id="swBid" class="sel" style="width:110px" aria-label="Bid"></select><!-- [411 · split weeks, §371] No bid = the split alone -->
           <button class="btn btn-primary" onclick="createSplit()">Create</button>
         </div>
       </div>
@@ -1052,6 +1045,18 @@ thead th{color:var(--t2)}
             <div class="trow-desc">Phases where NP bids are allowed. A change affects new bids only.</div>
           </div>
           <div id="npPhaseToggles" style="display:flex;gap:22px;flex-wrap:wrap"></div>
+        </div>
+      </div>
+      <!-- SPLIT WEEKS [411 · split weeks, §371] the switch (adminSettings.splitWeeksOn, missing = Off): toggleSplitWeeks, painted by
+           _swPaintSwitch (syncControls and renderSplitWeeks). The splits themselves are on the Split weeks page (Bids & decisions). -->
+      <div class="card">
+        <div class="card-title">Split weeks</div>
+        <div class="trow">
+          <div>
+            <div class="trow-label">Split weeks</div>
+            <div class="trow-desc">Staff can share weeks.</div>
+          </div>
+          <div class="tog" id="swTog" onclick="toggleSplitWeeks()"></div>
         </div>
       </div>
       <!-- BID FLOORS [build 266 · BF] — minimum bid strength per week category. One rule: a
@@ -5561,6 +5566,7 @@ function syncControls(){
   if(et) et.className="tog"+(adminSettings.emailNotifsEnabled!==false?" on":"");
   const dt=document.getElementById("destinationTog"); // [336 · §196] absent key = on
   if(dt) dt.className="tog"+(adminSettings.destinationOfDay!==false?" on":"");
+  try{ if(typeof _swPaintSwitch==='function') _swPaintSwitch(); }catch(_){} // [411 · split weeks, §371] the Split weeks card
   const bt=document.getElementById("blindTog"); // [365 · §261] only an explicit true is on
   if(bt) bt.className="tog"+(adminSettings.blindedBidding===true?" on":"");
   const rst=document.getElementById("ruleSetTog"); // [380 · §282] only the exact string "strict" is on
@@ -6591,11 +6597,11 @@ function _phaseGapNow(){
   return false;
 }
 function cfgUnlockedNow(){ return !phase1Started()||_phaseGapNow(); }
-// [404 · §334 A1 · E] The six cards that re-decide bids already placed - Calendar and Phases, Bid numbers, Combination bids, Bid Floors, Cumulative
+// [404 · §334 A1 · E] The six cards that re-decide bids already placed (and, [411 · §371 9:01 AM], Split weeks: seven) - Calendar and Phases, Bid numbers, Combination bids, Bid Floors, Cumulative
 // Bid Caps, FTE Overage - grey out ONLY while a phase is running (cfgUnlockedNow), with one line (the approved words) at the top of the card's
 // body; at any other time they look like every other card. Each card is found by an element it holds, so it is found on whatever page it sits.
 const RUN_LOCK_TEXT='Locked while a phase is running. Change it once the results are sent.';
-const RUN_LOCK_CARDS=['acEditBtn','topBidEditBtn','comboToggles','bfHd','cap1','reviewThresholdSlider'];
+const RUN_LOCK_CARDS=['acEditBtn','topBidEditBtn','comboToggles','bfHd','cap1','reviewThresholdSlider','swTog']; // [411 · split weeks, §371 9:01 AM] Split weeks, the seventh
 function renderRunLocks(){
   const locked=!cfgUnlockedNow();
   for(const id of RUN_LOCK_CARDS){
@@ -6616,7 +6622,7 @@ function renderRunLocks(){
 // k = the stored key (and the name old Change Log rows read through _setupRow), n = name, d = sentence, v = what _srValue shows (k when absent),
 // a = an element of the setting's card (where "Change it" goes: _suOpenCard finds the card by this id on whatever page it sits), p = its page today.
 // Allowed lowerings is skipped while Strict is on (_srRows). Rehearsal Mode's "Change it" goes to the Simulator page.
-const SETUP_ROWS=[{k:'auctionConfig',n:'Calendar and Phases',d:'The year’s weeks, which weeks are high demand, the summer range the floors use, how many Fall phases run, whether Phase 1 opens every week, and whether a Rolling Vacation Auction follows them.',v:'calendarPhases',a:'acEditBtn',p:'setup'},{k:'topBid',n:'Bid numbers',d:'How many bid numbers each person holds.',a:'topBidEditBtn',p:'setup'},{k:'comboBids',n:'Combination bids',d:'Which combination bids people may use.',a:'comboToggles',p:'setup'},{k:'npAllowedPhases',n:'NP bids',d:'Whether people may place NP bids in each phase.',v:'NP bids this phase',a:'npPhaseToggles',p:'setup'},{k:'bidFloors',n:'Bid floors',d:'The weakest bid allowed on each kind of week.',a:'bfHd',p:'setup'},{k:'maxBidsCumulative',n:'Cumulative bid caps',d:'How many weeks a person may have won by the end of each phase.',v:'Cumulative bid caps',a:'cap1',p:'setup'},{k:'reviewThreshold',n:'FTE overage',d:'How far over capacity a week can go before bids show as Under Review.',v:'FTE overage',a:'reviewThresholdSlider',p:'setup'},{k:'bidRuleSet',n:'Strict / Loose',d:'Strict: a winning bid on a competition week can only be moved, not removed. Loose: any bid can be removed.',a:'ruleSetTog',p:'setup'},{k:'strictThreshold',n:'Strict applies to',d:'Under Strict, a winning bid weaker than this can still be removed.',a:'strictLvlSel',p:'setup'},{k:'bidLowerings',n:'Allowed lowerings',d:'How many times a person may make a bid weaker in each phase. Unlimited = no limit.',a:'blConfigRow',p:'setup'},{k:'timerRules',n:'Timer rules',d:'How long the timer runs, how far each bid resets it, and the opening window when one is set.',v:'Timer rules',a:'timerRulesWrap',p:'setup'},{k:'timerResetMode',n:'Timer reset mode',d:'Which bid changes restart the timer.',a:'timerModeRows',p:'setup'},{k:'emailNotifsEnabled',n:'Projection-change e-mails',d:'E-mails people when another bid changes whether they are winning.',v:'Projection-change e-mails',a:'emailNotifsToggle',p:'setup'},{k:'welcomeEmailsEnabled',n:'Welcome e-mails',d:'Sent once to each person when Phase 1 begins, or at first sign-in if added later.',a:'welcomeEmailsToggle',p:'setup'},{k:'blindedBidding',n:'Blinded bidding',d:'When on, people see bids without the bidders’ initials.',a:'blindTog',p:'setup'},{k:'lockedInPlace',n:'Locked weeks on the staff board',d:'Where weeks that are not open appear on the staff board: in their month, or gathered at the bottom.',v:'Locked weeks on the staff board',a:'lipPhaseToggles',p:'setup'},{k:'simulatorEnabled',n:'Rehearsal Mode',d:'Unlocks the simulator and the skip buttons. Must be off for a real auction.',a:'simulatorToggle',p:'simulator'}]; // one line: the test harness reads top-level constants line by line · [404 · §334 A1 · A] the full list, in the Settings page's order
+const SETUP_ROWS=[{k:'auctionConfig',n:'Calendar and Phases',d:'The year’s weeks, which weeks are high demand, the summer range the floors use, how many Fall phases run, whether Phase 1 opens every week, and whether a Rolling Vacation Auction follows them.',v:'calendarPhases',a:'acEditBtn',p:'setup'},{k:'topBid',n:'Bid numbers',d:'How many bid numbers each person holds.',a:'topBidEditBtn',p:'setup'},{k:'comboBids',n:'Combination bids',d:'Which combination bids people may use.',a:'comboToggles',p:'setup'},{k:'npAllowedPhases',n:'NP bids',d:'Whether people may place NP bids in each phase.',v:'NP bids this phase',a:'npPhaseToggles',p:'setup'},{k:'splitWeeksOn',n:'Split weeks',d:'Whether two people may share a week, one bidding for both at their blended FTE.',a:'swTog',p:'setup'},{k:'bidFloors',n:'Bid floors',d:'The weakest bid allowed on each kind of week.',a:'bfHd',p:'setup'},{k:'maxBidsCumulative',n:'Cumulative bid caps',d:'How many weeks a person may have won by the end of each phase.',v:'Cumulative bid caps',a:'cap1',p:'setup'},{k:'reviewThreshold',n:'FTE overage',d:'How far over capacity a week can go before bids show as Under Review.',v:'FTE overage',a:'reviewThresholdSlider',p:'setup'},{k:'bidRuleSet',n:'Strict / Loose',d:'Strict: a winning bid on a competition week can only be moved, not removed. Loose: any bid can be removed.',a:'ruleSetTog',p:'setup'},{k:'strictThreshold',n:'Strict applies to',d:'Under Strict, a winning bid weaker than this can still be removed.',a:'strictLvlSel',p:'setup'},{k:'bidLowerings',n:'Allowed lowerings',d:'How many times a person may make a bid weaker in each phase. Unlimited = no limit.',a:'blConfigRow',p:'setup'},{k:'timerRules',n:'Timer rules',d:'How long the timer runs, how far each bid resets it, and the opening window when one is set.',v:'Timer rules',a:'timerRulesWrap',p:'setup'},{k:'timerResetMode',n:'Timer reset mode',d:'Which bid changes restart the timer.',a:'timerModeRows',p:'setup'},{k:'emailNotifsEnabled',n:'Projection-change e-mails',d:'E-mails people when another bid changes whether they are winning.',v:'Projection-change e-mails',a:'emailNotifsToggle',p:'setup'},{k:'welcomeEmailsEnabled',n:'Welcome e-mails',d:'Sent once to each person when Phase 1 begins, or at first sign-in if added later.',a:'welcomeEmailsToggle',p:'setup'},{k:'blindedBidding',n:'Blinded bidding',d:'When on, people see bids without the bidders’ initials.',a:'blindTog',p:'setup'},{k:'lockedInPlace',n:'Locked weeks on the staff board',d:'Where weeks that are not open appear on the staff board: in their month, or gathered at the bottom.',v:'Locked weeks on the staff board',a:'lipPhaseToggles',p:'setup'},{k:'simulatorEnabled',n:'Rehearsal Mode',d:'Unlocks the simulator and the skip buttons. Must be off for a real auction.',a:'simulatorToggle',p:'simulator'}]; // one line: the test harness reads top-level constants line by line · [404 · §334 A1 · A] the full list, in the Settings page's order
 // The 6 between-phases rows (the approved test page), in order; c = where "Change it" goes. [385 · §292] "Bid lowerings allowed" left (Archived settings).
 const SETUP_PHASE_ROWS=[{n:'FTE overage',d:'How far over capacity a week can go before bids show as Under Review.',c:['setup','reviewThresholdSlider']},{n:'NP bids this phase',d:'Whether people may place NP bids in the phase about to begin.',c:['setup','npPhaseToggles']},{n:'Cumulative bid caps',d:'How many weeks a person may have won by the end of each phase.',c:['setup','cap1']},{n:'Timer rules',d:'How long the timer runs, how far each bid resets it, and the opening window when one is set.',c:['setup','timerRulesWrap']},{n:'Projection-change e-mails',d:'E-mails people when another bid changes whether they are winning.',c:['setup','emailNotifsToggle']},{n:'Locked weeks on the staff board',d:'Where weeks that are not open appear on the staff board: in their month, or gathered at the bottom.',c:['setup','lipPhaseToggles']}]; // one line: the test harness reads top-level constants line by line · [385 · §292] the 'Bid lowerings allowed' row left (Archived settings)
 let _setupKeptRehearsal=false, _suReview=null, _suBackEl=null, _suBackKind=null, _rmBack=null, _suChain=0;
@@ -6806,6 +6812,7 @@ function _srValue(name){
     case 'bidFloors':{ const f=bfFloors(), s=v=>v==='none'?'no floor':v+' or better'; return L(['High demand weeks: '+s(f.highDemand),'Summer weeks: '+s(f.summer),'All other weeks: no floor']); }
     // [385 · §292] 'priorityLockEnabled' is no longer a review row (Archived settings)
     case 'blindedBidding': return yn(adminSettings.blindedBidding===true);
+    case 'splitWeeksOn': return yn(adminSettings.splitWeeksOn===true); // [411 · split weeks, §371]
     case 'simulatorEnabled': return yn(adminSettings.simulatorEnabled===true);
     case 'FTE overage': return esc((Math.round(getReviewThreshold()*10)/10)+' FTE');
     case 'NP bids this phase': return L([1,2,3,4].filter(_slotRuns).map(p=>P4[p-1]+': '+(npAllowedForPhase(p)?'allowed':'not allowed')));
@@ -11950,6 +11957,23 @@ window.adminRemove=function(u,wk,done){ // [410 · split weeks · review] done: 
     }
   });
 };
+// [411 · split weeks, §371] Add Bid's save, moved here unchanged (only its toast is the caller's) so Create a split places a bid by the very
+// same writes: the bid, its phase, the lock mark, leftover decisions cleared, the Change Log, the projection e-mails, the timer.
+async function _adminAddBidWrite(u,wk,pv,okMsg){
+  const _prev=snapshotSchedule();
+  if(!scheduleData[u])scheduleData[u]={};
+  scheduleData[u][wk]=pv==="NP"?"NP":pv.includes(",")?pv.split(",").map(Number):Number(pv);
+  await mergeFields(scheduleRef,{[u+'.'+wk]:scheduleData[u][wk]});
+  await mergeFields(bidPhaseRef,{[u+'.'+wk]:Number(phasesData.currentPhase||1)}).catch(()=>{});
+  await mergeFields(worstBidsRef,{[u+'.'+wk]:scheduleData[u][wk]}).catch(()=>{}); // [291 · ES-2] an admin-placed bid stamps the lock, like every staff-placed bid
+  // Clear any stale approval/denial for this user+week so the freshly added bid
+  // can actually compete instead of being frozen by a leftover LOSE.
+  await updateDoc(approvalsRef,{[wk]:arrayRemove(u)}).catch(()=>{});
+  await updateDoc(deniedRef,{[wk]:arrayRemove(u)}).catch(()=>{});
+  await adminLog(u,wk,'admin-add',scheduleData[u][wk]); toast(okMsg,"ok");
+  queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
+  _adminBidTimerReset(u,wk,_prev); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling) · [305 · §117] gated by the Timer Reset Mode
+}
 window.adminAddSelection=function(){
   // [404 · J-D1] The confirm asks again at the click: a dialog opened before Complete Round (or Complete Phase) and confirmed after it writes
   // nothing — the refusal the dialog's opening gives (an RVA round is a phase of its own; completedPhases holds the staged completion too).
@@ -12034,19 +12058,7 @@ window.adminAddSelection=function(){
         if(_f2&&_f2.kind==='combo'){ toast('That combination bid is switched off — nothing saved.','err'); try{ refreshAll(); }catch(_){ } return; } // [381 · §285] W8's words at the Add write-time re-check
         if(_f2&&_f2.kind==='topbid'){ toast('🚫 Bid number '+_f2.n+' is not available in this auction — nothing saved.','err'); try{ refreshAll(); }catch(_){ } return; } // [390 · §295] W5's words at the Add write-time re-check
         if(_f2){ toast('Not added — the value violates the week\'s floor or the NP-phase rule (§72: absolute). Nothing was written.','err'); try{ refreshAll(); }catch(_){ } return; } }
-      const _prev=snapshotSchedule();
-      if(!scheduleData[u])scheduleData[u]={};
-      scheduleData[u][wk]=pv==="NP"?"NP":pv.includes(",")?pv.split(",").map(Number):Number(pv);
-      await mergeFields(scheduleRef,{[u+'.'+wk]:scheduleData[u][wk]});
-      await mergeFields(bidPhaseRef,{[u+'.'+wk]:Number(phasesData.currentPhase||1)}).catch(()=>{});
-      await mergeFields(worstBidsRef,{[u+'.'+wk]:scheduleData[u][wk]}).catch(()=>{}); // [291 · ES-2] an admin-placed bid stamps the lock, like every staff-placed bid
-      // Clear any stale approval/denial for this user+week so the freshly added bid
-      // can actually compete instead of being frozen by a leftover LOSE.
-      await updateDoc(approvalsRef,{[wk]:arrayRemove(u)}).catch(()=>{});
-      await updateDoc(deniedRef,{[wk]:arrayRemove(u)}).catch(()=>{});
-      await adminLog(u,wk,'admin-add',scheduleData[u][wk]); toast(`Added`,"ok");
-      queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
-      _adminBidTimerReset(u,wk,_prev); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling) · [305 · §117] gated by the Timer Reset Mode
+      await _adminAddBidWrite(u,wk,pv,`Added`); // [411 · split weeks, §371] the save, shared with Create a split
     }
   });
 };
@@ -12212,11 +12224,16 @@ function _swFill(id,first,opts){ const s=document.getElementById(id); if(!s) ret
   if(s.dataset.sw!==h){ s.innerHTML=h; s.dataset.sw=h; if(opts.some(o=>String(o[0])===prev)) s.value=prev; } }
 function _swHalves(){ const s=document.getElementById('swSplit'), sp=(s&&s.value==='T')?'T':'W'; _swFill('swHalf',"Bidder's half",[[1,_splitHalfDays(sp,1)],[2,_splitHalfDays(sp,2)]]); }
 window._swHalves=_swHalves;
+// [411 · split weeks, §371] The switch (its card is in Settings, greyed while a phase runs by renderRunLocks) and the Split weeks page's Off line — painted by syncControls and renderSplitWeeks.
+function _swPaintSwitch(){
+  const on=!!(adminSettings&&adminSettings.splitWeeksOn===true); // greyed while a phase runs by renderRunLocks, as the other between-phases cards
+  const tg=document.getElementById('swTog'); if(tg) tg.classList.toggle('on',on);
+  const oc=document.getElementById('swOffCard'); if(oc) oc.style.display=on?'none':'';
+}
+window._swGoSettings=function(){ _suOpenCard('setup','swTog'); }; // the Off line's link: Settings, at the card
 function renderSplitWeeks(){
   const tb=document.getElementById('swBody'); if(!tb) return;
-  const on=!!(adminSettings&&adminSettings.splitWeeksOn===true), locked=!cfgUnlockedNow();
-  const tg=document.getElementById('swTog'); if(tg){ tg.classList.toggle('on',on); tg.style.opacity=locked?'.55':''; }
-  const ln=document.getElementById('swLockLine'); if(ln) ln.style.display=locked?'':'none';
+  _swPaintSwitch(); // [411 · split weeks, §371]
   const sel=document.getElementById('swPhase'); populatePhaseFilter(sel);
   const f=(sel&&sel.value)||'current', all=f==='all', m=String(f).match(/^ph(\d+)$/), want=m?Number(m[1]):Number(phasesData.currentPhase||1);
   const rows=splitsList().filter(e=>all||Number(e.ph)===want);
@@ -12230,6 +12247,7 @@ function renderSplitWeeks(){
   _swFill('swWeek','Week',(mondays||[]).map(d=>[dateKey(d),wLabel(d)]));
   const ppl=[...(names||[])].sort().map(n=>[n,n]); _swFill('swBidder','Bidder',ppl); _swFill('swPartner','Partner',ppl);
   _swFill('swSplit','Split',[['W','Sun–Wed / Thu–Sat'],['T','Sun–Tue / Wed–Sat']]); _swHalves();
+  _swFill('swBid','No bid',comboAdminList().map(v=>[v,comboLbl(v)])); // [411 · split weeks, §371] Add Bid's choices
 }
 window.renderSplitWeeks=renderSplitWeeks; // the Phase drop-down's inline onchange needs it global
 window.toggleSplitWeeks=function(){
@@ -12280,21 +12298,65 @@ function _splitCreateBody(e){
   return out+'<div class="'+(over.length?'cmodal-warn':'cmodal-info')+'" style="margin-top:8px">'+esc('Bid cap after: '+e.b+' '+f(tb)+' of '+cap+' · '+e.p+' '+f(tp)+' of '+cap+'.')
     +over.map(x=>'<br>'+esc(x[0]+' would be over the bid cap ('+f(x[1])+' of '+cap+').')).join('')+'</div>';
 }
+// [411 · split weeks, §371] Create may place the bidder's bid in the same step ("Bid"; No bid = the split alone, exactly as before). Every rule
+// a bid follows is checked BEFORE anything is written, with the split in place; any broken rule refuses the whole step, nothing saved (Q1).
+// The cap: the bidder by the staff page's own test (one more whole bid would go over — adminBidIssues' line), the partner by their half (Q2).
+// The overrides: a competition week (Q3, his 8:02 AM) — its existing line ("…Not checked here.") — and the last-bid limit (his 9:39 AM (b)):
+// each shows its line and the button reads "Create anyway", as Add Bid. The split is saved first, then the bid by Add Bid's own save (_adminAddBidWrite): a split without its bid is valid.
+function _swTxt(h){ const d=document.createElement('div'); d.innerHTML=String(h); const t=String(d.textContent||'').replace(/\s+/g,' ').trim(); return /[.!?]$/.test(t)?t:t+'.'; }
+function _splitBidRefusal(e,bid){
+  const u=e.b, wk=e.wk, v=String(bid);
+  if(scheduleData[u]&&scheduleData[u][wk]!==undefined) return isCurrentPhaseBidAdmin(u,wk)?(u+' already has a bid on this week.'):(u+' has a bid from an earlier phase on this week. Replace it on Edit Selections.');
+  const d=adminDupFatal(u,wk,v); if(d.length) return 'Bid '+d[0].n+' is already '+u+'\'s on '+wLabel(wkDate(d[0].wk))+' this phase.';
+  const h=_adminHoldFatal(u,v); if(h.length) return 'Bid number '+h.join(', ')+' is withheld from '+u+' on User Bids.';
+  const f=adminFloorFatal(u,wk,v);
+  if(f) return f.kind==='topbid'?('Bid number '+f.n+' is not used in this auction.'):f.kind==='combo'?'That combination bid is switched off.':f.kind==='np'?'NP is off this phase.':'The bid is below the week\'s bid floor.';
+  const comp=_bdCompLine(), k=e.wk+'|'+e.b, had=Object.prototype.hasOwnProperty.call(splitsData,k), was=splitsData[k];
+  let iss=[];
+  splitsData[k]=e; // the rules are read with the split in place (as _splitCapAfterT)
+  try{ iss=adminBidIssues(u,wk,v,true).filter(x=>x!==comp); }
+  finally{ if(had) splitsData[k]=was; else delete splitsData[k]; }
+  if(iss.length) return iss.map(_swTxt).join(' ');
+  const cap=_cumCap(Number(phasesData.currentPhase||1));
+  if(cap!==null){ const tp=Math.round(_adminPriorApprovedCount(e.p)*10)+_adminLiveCapT(e.p)+_splitShareT(e,e.p);
+    if(tp>cap*10) return e.p+' would be over the bid cap ('+((tp%10)?(tp/10).toFixed(1):String(tp/10))+' of '+cap+').'; }
+  return '';
+}
+// [411 · split weeks, §371 9:39 AM (b)] The last-bid limit (the staff bid box: a bid weaker than the person's last bid on the week this phase
+// uses one of their Allowed lowerings) — not checked here, as Add Bid: shown in the box with "Create anyway". null = nothing to show.
+function _splitLastBidLine(e,bid){
+  const lb=((worstBidsData||{})[e.b]||{})[e.wk]; if(lb===undefined||lb===null) return null;
+  const v=String(bid), p=v==='NP'?'NP':v.includes(',')?v.split(',').map(Number):Number(v);
+  let weaker=false; try{ weaker=pScore(p)>pScore(lb); }catch(_){ weaker=false; }
+  return weaker?(esc(e.b)+'\'s last bid on this week was '+esc(bidLblAdmin(lb))+'; a weaker bid uses a lowering. Not checked here.'):null;
+}
 window.createSplit=function(){
   const v=id=>{ const el=document.getElementById(id); return el?String(el.value||''):''; };
-  const wk=v('swWeek'), b=v('swBidder'), p=v('swPartner'), sp=v('swSplit'), bh=Number(v('swHalf'));
+  const wk=v('swWeek'), b=v('swBidder'), p=v('swPartner'), sp=v('swSplit'), bh=Number(v('swHalf')), bid=v('swBid');
   if(!wk||!b||!p||(sp!=='W'&&sp!=='T')||(bh!==1&&bh!==2)){ toast('Pick a week, a bidder, a partner, a split and the bidder\'s half.','err'); return; }
   const why=_splitCreateRefusal(wk,b,p,sp,bh); if(why){ toast(why,'err'); return; }
   const e={wk,b,p,sp,bh,ph:Number(phasesData.currentPhase||1),st:'on',at:new Date().toISOString(),by:_setupWho()};
-  openConfirm({ title:'Create split', body:_splitCreateBody(e), okText:'Confirm', onConfirm:async()=>{
+  const bw=bid?_splitBidRefusal(e,bid):''; if(bw){ toast('Not created — '+bw+' Nothing was saved.','err'); return; }
+  const comp=!!bid&&!!_bdCompNow(wk), ph0=e.ph; // [411 · §371 9:36 AM (4)] what the box was opened on, asked again at the click
+  const lbl=bid?_splitLastBidLine(e,bid):null, warn=comp||!!lbl, wl=[comp?_bdCompLine():null,lbl].filter(Boolean); // [411 · §371 9:39 AM (b)]
+  const bidHtml=!bid?'':'<div style="margin-top:8px">'+esc(b+'/'+p+' bids '+comboLbl(bid)+' on this week.')+'</div>'
+    +(warn?'<ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">'+wl.map(x=>'<li>'+x+'</li>').join('')+'</ul><div class="cmodal-danger">Admin entries skip all bidding checks — continue only if deliberate.</div>'+_bdFootHtml(b):'');
+  openConfirm({ title:'Create split', body:_splitCreateBody(e)+bidHtml, okText:warn?'Create anyway':'Confirm', danger:warn, onConfirm:async()=>{
     const why2=_splitCreateRefusal(wk,b,p,sp,bh); if(why2){ toast(why2,'err'); return; } // asked again at the click: the board may have changed under the dialog
     e.ph=Number(phasesData.currentPhase||1); e.at=new Date().toISOString();
+    if(bid){ const _no=w=>{ toast('Not created — '+w+' Nothing was saved.','err'); try{ refreshAll(); }catch(_){} };
+      if(Number(phasesData.currentPhase||1)!==ph0){ _no('the phase changed while the box was open.'); return; }
+      if(!comp&&_bdCompNow(wk)){ _no('this became a competition week while the box was open.'); return; }
+      const bw2=_splitBidRefusal(e,bid); if(bw2){ toast('Not created — '+bw2+' Nothing was saved.','err'); try{ refreshAll(); }catch(_){} return; } } // the bid's rules asked again too
     const k=wk+'|'+b;
     try{ await updateDoc(splitsRef,{[k]:e}); } // the whole entry at its key (an ended split's old fields go)
     catch(err){ if(!(err&&err.code==='not-found')) throw err; await setDoc(splitsRef,{[k]:e},{merge:true}); } // the record's first split
     splitsData[k]=e;
     try{ await adminLog(b,'ALL','admin-split-create',undefined,{choice:wk,p,sp,bh,by:e.by}); }catch(_){}
-    toast('Split created','ok'); refreshAll();
+    if(!bid){ toast('Split created','ok'); refreshAll(); return; }
+    try{ await _adminAddBidWrite(b,wk,bid,'Split created and bid placed'); }
+    catch(err){ toast('Split created, but the bid was not placed ('+((err&&err.code)||'error')+'). Place it on Edit Selections.','err'); }
+    refreshAll();
   } });
 };
 // Remove (the three boxes of mock v5, ANSWERS 10:59–11:04 PM). A split whose bid is live: keep the bid for the bidder alone, or cancel it —
@@ -16140,7 +16202,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"1.12","kind":"live","html":"","label":"Timer Reset Mode","names":{"1":"1 · Every bid","2":"2 · Only when it affects others"}}
 ]},
 {n:"2",title:"Settings explained",items:[
-{"n":"2.1","kind":"new","html":"<b>When settings can change.<\/b> Six settings are locked while a phase is running: Calendar and Phases, Bid numbers, Combination bids, Bid Floors by Week Category, Cumulative Bid Caps and FTE Overage Amount. They can change before Phase 1, and between phases once that phase's results are sent. Each RVA round counts as a phase. Every other setting can change at any time. The year and the phases plan are fixed once Phase 1 begins."},
+{"n":"2.1","kind":"new","html":"<b>When settings can change.<\/b> Seven settings are locked while a phase is running: Calendar and Phases, Bid numbers, Combination bids, Bid Floors by Week Category, Cumulative Bid Caps, FTE Overage Amount and Split weeks. They can change before Phase 1, and between phases once that phase's results are sent. Each RVA round counts as a phase. Every other setting can change at any time. The year and the phases plan are fixed once Phase 1 begins."},
 {"n":"2.2","kind":"new","html":"<b>Every change asks first.<\/b> Each settings change shows what changes (for example On → Off) and is saved only when confirmed; Cancel leaves the setting as it was. Each one is logged in the Change Log with the admin's initials. While bidding is open, a change to Competition weeks, Strict applies to, Allowed lowerings per phase or NP Bids by Phase changes the rules for everyone immediately."},
 {"n":"2.3","kind":"new","html":"<b>Bidding Timer<\/b> — turns the timer on or off for everyone. Off: bidding stays open until the admin closes it."},
 {"n":"2.4","kind":"new","html":"<b>Global Lock<\/b> — freezes all bidding: no one can add, change or remove a bid. Individually locked weeks stay locked when it is turned off."},
@@ -16204,7 +16266,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"4.6","kind":"new","html":"<b>Going down.<\/b> A weaker bid is allowed only if it would still be Winning (not tied, not Under Review) and is no weaker than the weakest other Winning bid of this phase there. So the weakest winning bid there (an only winner included) cannot weaken at all; any other winner can weaken as far as the weakest winning bid."},
 {"n":"4.7","kind":"new","html":"\"Weaker\" is measured against the bid the person holds there, or, with none, their last bid on the week. A same or stronger bid is never refused."},
 {"n":"4.8","kind":"new","html":"<b>Everyone left.<\/b> If nobody is on a competition week, a new bid must match or beat the last bid that was there. This applies to everyone, including people who left."},
-{"n":"4.9","kind":"new","html":"The admin is not held to these rules: Edit Selections warns when a change breaks them."},
+{"n":"4.9","kind":"new","html":"The admin is not held to these rules: Edit Selections and Create a split warn when a bid breaks them."},
 {"n":"4.10","kind":"new","html":"<span class=\"ex\"><b>Example A — coming in and going down<\/b><br>Capacity 2.0. AF 2, BB 5, CC 7. AF Winning, BB Winning, CC Losing. Three people over 2.0 → competition week. Minimum new bid: 5.<br>AF lowers 2 → 4: allowed. AF 2 → 5: allowed. AF 2 → 6: refused (weaker than BB's winning 5).<br>BB lowers 5 → 6: refused (BB's 5 is the weakest winning bid there, so BB cannot weaken).<br>DD (newcomer) bids 8: refused. DD bids 5: allowed → AF Winning, BB and DD Under Review (tie), CC Losing.<\/span>"},
 {"n":"4.11","kind":"new","html":"<span class=\"ex\"><b>Example B — the bid that makes one<\/b><br>Capacity 1.0. PW (0.5 FTE) won the week in Phase 1. AF bids 3: Under Review, alone, so not a competition week.<br>BB bids 6 or 4: refused — with BB's bid in place it would be a competition week, and AF's Under Review 3 sets the level. BB bids 3: allowed → AF and BB Under Review (tie); competition week, Minimum new bid 3.<\/span>"},
 {"n":"4.12","kind":"new","html":"<span class=\"ex\"><b>Example C — nothing winning there<\/b><br>Capacity 1.0, filled by PW's Phase 1 win. AF 3 and BB 5 both Losing; competition week. Minimum new bid: 3 (the strongest bid there). DD bids 4: refused. DD bids 3: allowed.<\/span>"},
@@ -16258,7 +16320,8 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"6.27","kind":"new","html":"A split week's bid takes the pair's <b>blended FTE<\/b>: 0.6 × the FTE of whoever has the 4-day half + 0.4 × the other's, rounded up to 0.1."},
 {"n":"6.28","kind":"new","html":"Each person's half counts toward their own bid cap — 0.6 (Sun–Wed or Wed–Sat) or 0.4 (Thu–Sat or Sun–Tue) — while the bid is live and once it is won."},
 {"n":"6.29","kind":"new","html":"If the bid wins, each has their half. If it loses, neither has the week. Neither of them can bid on that week again. Either can take the other half in one more split, with someone else bidding. The admin can remove a split and either leave the bid with the bidder alone or cancel the bid. A split won in an earlier phase stays with the bidder."},
-{"n":"6.30","kind":"new","html":"The partner places no bid on that week and spends no bid number."}
+{"n":"6.30","kind":"new","html":"The partner places no bid on that week and spends no bid number."},
+{"n":"6.31","kind":"new","html":"When the admin records a split, the admin can also place the bidder's bid on that week. That bid follows every rule a bid follows except the competition-week rules (4.9) and the last-bid limit."}
 ]},
 {n:"7",title:"What staff see",items:[
 {"n":"7.1","kind":"new","html":"Staff read this list in Rules &amp; Reminders (☰ menu) and in their welcome e-mail. It follows the settings."},

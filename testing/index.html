@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 245;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 246;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -676,7 +676,7 @@ body{zoom:1.15}
         <li id="ruleCompSet" style="display:none"></li><!-- [220 · §288] straight below it: the Strict line, Strict only (plan §11g) — filled and shown by _ruleCompSetSync; under Standard no line at all -->
         <li id="ruleBidFloors" style="display:none"></li><!-- [COPY-3] filled from the live floors at boot; hidden until then so no stale or invented floor text can flash, and it stays hidden when no floor is set -->
         <li id="ruleBlind" style="display:none">Bidder names are hidden: only your own bids show initials.</li><!-- [204 · §261] shown only while the admin's Blinded bidding switch is on (_blindSync) · [228 · §297] item 202 -->
-        <li id="ruleSplit" style="display:none">Split weeks: two people can share a week. One bids for both, at their blended FTE.</li><!-- [410 · split weeks] A10, shown only while adminSettings.splitWeeksOn is true (_splitRuleSync) -->
+        <li id="ruleSplit" style="display:none">Split weeks: two people can share a week. One bids for both, at their blended FTE. To share a week, open Split weeks in the menu.</li><!-- [410 · split weeks] A10, shown only while adminSettings.splitWeeksOn is true (_splitRuleSync) -->
         <!-- [220 · §288] the three strategy lines (plan §11e) and the bailing line (§11f item 1, §11g) were removed here -->
       </ul>
       <div style="margin-top:12px;color:#1f2329;font-weight:600">Timer Rules</div>
@@ -2019,6 +2019,12 @@ function _capNum(x){ const r=Math.round(Number(x)*10)/10; return Number.isIntege
 // THE WEEK CARD (PLAN §4, Q5). A split bid's row reads "AF/BC", the bidder first. The two people see both names (and the row bold, _splitOwnRow);
 // anyone else sees each through whoHtml - two marks under Blinded bidding. null = not a split row: the row as it always is.
 function _splitWho(u,wk,me){ const e=_spFor(u,wk); if(!e) return null; return (me===e.b||me===e.p)?escH(e.b)+'/'+escH(e.p):whoHtml(e.b,me)+'/'+whoHtml(e.p,me); }
+// [246 · split weeks, §370] The bidder of the split in place on wk that `me` is the partner of, when that bidder has a live bid there - the
+// partner's week card takes that bid's colour, as the bidder's own card does. null otherwise.
+function _splitPartnerBidder(me,wk){ if(typeof splitsData==='undefined') return null; const cur=Number(phasesData.currentPhase||1); // [246 · split weeks, §371 9:36 AM] the whole phase:
+  // in place, or won / lost at Complete Phase (the results not yet sent) - never a split the admin removed
+  const e=Object.values(splitsData||{}).find(x=>x&&x.p===me&&x.wk===wk&&Number(x.ph)===cur&&(x.st==='on'||x.st==='won'||(x.st==='off'&&x.why==='lost')));
+  return (e&&isVisibleBid(e.b,wk))?e.b:null; }
 function _splitOwnRow(u,wk,me){ const e=_spFor(u,wk); return !!(e&&typeof me==='string'&&me&&me===e.p); }
 // The won splits in force on wk that name u, as bidder or partner.
 function _splitsWonBy(u,wk){ return _spInForce().filter(e=>e.st==='won'&&e.wk===wk&&(e.b===u||e.p===u)); }
@@ -5948,7 +5954,8 @@ function _lockedCard(user,wk,ap){
   // [207 · §266 (12), owner 12 Oct 2026 3:40 PM] Until this phase's results are sent, the person's OWN bid on a locked week keeps its
   // projection's colour, as during bidding (green Winning, purple Under Review, red Losing). Once they are sent: won = the green
   // card above, not won = grey. Weeks without their bid stay grey. Only their own projection is read (getOutcome for `user`).
-  const proj=(!wonIn&&isVisibleBid(user,wk)&&!currentPhaseAnnounced())?uiOutcome(getOutcome(wk,user,ap)):null;
+  const _spB=(!wonIn&&!isVisibleBid(user,wk)&&typeof _splitPartnerBidder==='function')?_splitPartnerBidder(user,wk):null; // [246 · split weeks, §370] the partner: the bidder's colour
+  const proj=(!wonIn&&isVisibleBid(user,wk)&&!currentPhaseAnnounced())?uiOutcome(getOutcome(wk,user,ap)):((_spB&&!currentPhaseAnnounced())?uiOutcome(getOutcome(wk,_spB,ap)):null);
   const div=document.createElement("div"); div.className="week "+(wonIn?"outcome-win lk-won":(proj?"outcome-"+proj+" lk-proj":"lk-grey"));
   div.dataset.wk=wk; // anchor for scroll-to-week from My Bids & Projections
   const wn=document.createElement("div");
@@ -6027,6 +6034,8 @@ function renderCalendar(user,ap){
         div.style.cursor="not-allowed";
       } else if(isSel){
         div.classList.add("outcome-"+uiOutcome(getOutcome(wk,user,ap)));
+      } else if(typeof _splitPartnerBidder==='function'&&_splitPartnerBidder(user,wk)){ // [246 · split weeks, §370] the partner's card: the bidder's colour
+        div.classList.add("outcome-"+uiOutcome(getOutcome(wk,_splitPartnerBidder(user,wk),ap)));
       }
       // Week number label at top
       const wn=document.createElement("div");
@@ -6112,6 +6121,7 @@ function renderCalendar(user,ap){
             row.innerHTML=`<span style="font-weight:${nameWeight};color:${nameColor}">${((typeof _splitWho==='function')?_splitWho(b.user,wk,user):null)??((typeof whoHtml==='function')?whoHtml(b.user,user):escH(b.user))}</span>
               <span style="color:#4a505a">${escH(bidLbl(b.priority))}</span>
               <span style="font-weight:700;color:${outcomeColorUI(o)}">${outcomeShort(o)}</span>`;
+            if(!b.isMe&&_spOwn&&!isF&&!closed&&!priorWon) row.classList.add("own-row"); // [246 · split weeks, §370] the partner's row as bold as the bidder's; ✎ / ✕ stay the bidder's
             if(b.isMe&&!isF&&!closed&&!priorWon){ // [132/133] a won week's bid shows no ✎/✕ — it is a result, not a live bid
               row.classList.add("own-row"); // [204 · owner-found 10 Oct 2026] ✎ and ✕ stay on the bid's own line, on a phone too (the .own-row rules)
               const eb=document.createElement("button"); eb.className="edit-btn"; eb.textContent="✎";
