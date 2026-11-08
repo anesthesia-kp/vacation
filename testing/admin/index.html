@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 411;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 412;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -3468,9 +3468,9 @@ function splitBlendFte(e){
   return Math.ceil(Math.round(x*1000)/100-1e-9)/10;
 }
 // Splits in force for the phase being worked out (default: the current phase). `ph` = that phase.
-function splitsInForce(ph){
+function splitsInForce(ph){ // [412 · §371 review] each split read as its phase's result reads it (_splitDerived): between Complete and publish a lost split is out
   const cur=Number(ph||phasesData.currentPhase||1); const out=[];
-  for(const k in (splitsData||{})){ const e=splitsData[k]; if(!e||!e.wk||!e.b||!e.p) continue;
+  for(const k in (splitsData||{})){ const e=_splitDerived(splitsData[k]); if(!e||!e.wk||!e.b||!e.p) continue;
     const eph=Number(e.ph);
     if((e.st==='on'&&eph===cur)||(e.st==='won'&&eph<=cur)) out.push(e); }
   return out;
@@ -3484,9 +3484,19 @@ onSnapshot(splitsRef, snap=>{ splitsData=snap.exists()?snap.data():{}; refreshAl
 // [410 · split weeks] ADMIN ONLY. The splits that applied in a COMPLETED phase N — its frozen views (snapshotProjection, the frozen FTE
 // headers, a locked phase's reports): phase N's own entries that won or lost, and the earlier phases' wins still standing. Residual
 // (recorded): a split the admin removed later ('off', why 'admin') no longer shows in an old phase's frozen view.
+// [412 · split weeks, §371] A split as its phase's result reads it: one still 'on' of the CURRENT phase, once that phase is complete (its
+// snapshot staged or published), reads 'won' when its bidder is in that phase's approvals for the week, else 'off' / 'lost' — the rule publish writes
+// (_splitMarksAt). Anything else is returned as it is. A copy; splitsData is not changed. The marks themselves are written only when the
+// phase's results are published (staff can read the splits), so between Complete and publish every reader here works the result out.
+function _splitDerived(e){
+  if(!e||e.st!=='on'||Number(e.ph)!==Number(phasesData.currentPhase||1)) return e; // the window is always the current phase's
+  const s=((phasesData&&phasesData.completedPhases)||{})[Number(e.ph)]; if(!s) return e;
+  const ap=s.approvals, won=Array.isArray(ap&&ap[e.wk])&&ap[e.wk].includes(e.b);
+  return Object.assign({},e,won?{st:'won'}:{st:'off',why:'lost'});
+}
 function splitsInForceAt(N){
   const n=Number(N); const out=[];
-  for(const k in (splitsData||{})){ const e=splitsData[k]; if(!e||!e.wk||!e.b||!e.p) continue;
+  for(const k in (splitsData||{})){ const e=_splitDerived(splitsData[k]); if(!e||!e.wk||!e.b||!e.p) continue;
     const eph=Number(e.ph);
     if((eph===n&&(e.st==='won'||(e.st==='off'&&e.why==='lost')))||(eph<n&&e.st==='won')) out.push(e); }
   return out;
@@ -3529,12 +3539,23 @@ function _capAddT(map,u,wk){ const e=splitFor(u,wk);
   if(_splitPartnerOnly(u,wk)) return;
   map[u]=(map[u]||0)+(e?_splitShareT(e,u):10);
   if(e) map[e.p]=(map[e.p]||0)+_splitShareT(e,e.p); }
-// [410 · split weeks, PLAN §1] Complete Phase: what the snapshot's write does to each split of phase ph still 'on' — 'won' when its
-// bidder is in that phase's approvals for the week (ap = the snapshot's approvals), else 'off' with why 'lost'. {key: fields}.
-function _splitMarksAt(ph,ap){ const out={}, n=Number(ph);
-  for(const k in (splitsData||{})){ const e=splitsData[k]; if(!e||!e.wk||!e.b||!e.p||e.st!=='on'||Number(e.ph)!==n) continue;
+// [410 · split weeks, PLAN §1 · 412 · §371] What publishing phase ph's results does to each split of phase ph still 'on' — 'won' when its
+// bidder is in that phase's approvals for the week (ap = the snapshot's approvals), else 'off' with why 'lost'. {key: fields}. src = the
+// splits to read (the server's copy at publish); none given = this page's copy.
+function _splitMarksAt(ph,ap,src){ const out={}, n=Number(ph), d=src||splitsData||{};
+  for(const k in d){ const e=d[k]; if(!e||!e.wk||!e.b||!e.p||e.st!=='on'||Number(e.ph)!==n) continue;
     out[k]=(Array.isArray(ap&&ap[e.wk])&&ap[e.wk].includes(e.b))?{st:'won'}:{st:'off',why:'lost'}; }
   return out; }
+// [412 · split weeks, §371 9:57 AM] Publishing: the won / lost marks of every split of the phases being published (staged = {phase:
+// snapshot}), read from the splits on the SERVER at that moment (a split removed meanwhile stays removed). {} when there are none. A
+// failed read throws: the caller publishes nothing.
+async function _splitPublishMarks(staged){
+  const phs=Object.keys(staged||{}); if(!phs.length) return {};
+  let src=(typeof splitsData!=='undefined'&&splitsData)||{};
+  if(typeof getDocFromServer==='function'&&typeof splitsRef!=='undefined'){ const s=await getDocFromServer(splitsRef); src=s.exists()?(s.data()||{}):{}; }
+  const out={}; for(const ph of phs) Object.assign(out,_splitMarksAt(ph,(staged[ph]||{}).approvals,src));
+  return out;
+}
 // [410 · split weeks, ANSWERS Q10] The split WON in phase ph on wk that u is the bidder or the partner of, or null.
 function _splitWonIn(ph,u,wk){ const n=Number(ph); return splitsInForceAt(n).find(e=>Number(e.ph)===n&&e.st==='won'&&e.wk===wk&&(e.b===u||e.p===u))||null; }
 // The partner of a split won in phase ph gets that phase's results e-mail: the week is added to their approved list (ap = the phase's
@@ -7329,9 +7350,12 @@ async function _publishPhaseResults(fields,onlyPh){ // [401 · AMENDMENT-3 §3.3
   const _keep={}; for(const k of Object.keys(_staged)) if(!Object.prototype.hasOwnProperty.call(_pub,k)) _keep[k]=_staged[k];
   const hasStaged=Object.keys(_pub).length>0;
   const payload={...(fields||{})};
+  // [412 · split weeks, §371] Each published phase's split marks go in the SAME batch as its snapshot (read from the server first).
+  const _spMk=(hasStaged&&typeof _splitPublishMarks==='function')?await _splitPublishMarks(_pub):{};
   const b=writeBatch(db);
   if(hasStaged){
     payload.completedPhases={..._publishedCompletedPhases,..._pub};
+    if(Object.keys(_spMk).length) b.set(splitsRef,_spMk,{merge:true});
     // [build 251] Clear staging in the SAME batch — NON-merge replace (an empty-map merge clears
     // nothing; Firestore deep-merges maps). [269] What stays staged comes from the server read above. [401] Nothing else is kept on
     // it: what was e-mailed is in the outbox.
@@ -7339,6 +7363,7 @@ async function _publishPhaseResults(fields,onlyPh){ // [401 · AMENDMENT-3 §3.3
   }
   b.set(phasesRef,payload,{merge:true});
   await b.commit();
+  for(const k of Object.keys(_spMk)) splitsData[k]=Object.assign({},splitsData[k],_spMk[k]); // [412 · §371] local-first
 }
 // Testing-only: mark a completed phase's results as "sent" WITHOUT e-mailing anyone,
 // so the workflow can advance to Begin Next Phase during testing. This is the ONLY step
@@ -7680,16 +7705,9 @@ window.completePhase=function(){
           slc:slcSnap,                        // [393 · §297 Build D] D: each week's Smart Lock Control at completion (the settings review's "In Phase N")
           projections:serializeProjections() // pre-admin outcomes, kept for reports
       };
-      // [410 · split weeks, PLAN §1] In the SAME write as the snapshot: each split of this phase still 'on' becomes 'won' (its bidder is in
-      // this phase's approvals for the week) or 'off' / 'lost'. A phase with none writes the snapshot exactly as before.
-      const _spMark=(typeof _splitMarksAt==='function')?_splitMarksAt(cur,apSnap):{};
-      if(Object.keys(_spMark).length){
-        const _spB=writeBatch(db);
-        _spB.set(phaseStagingRef,{pendingPhaseSnapshots:{[cur]:_snapPayload}},{merge:true});
-        _spB.set(splitsRef,_spMark,{merge:true});
-        await _spB.commit();
-        for(const k of Object.keys(_spMark)) splitsData[k]=Object.assign({},splitsData[k],_spMark[k]); // local-first, as the snapshot below
-      } else await setDoc(phaseStagingRef,{pendingPhaseSnapshots:{[cur]:_snapPayload}},{merge:true});
+      // [412 · split weeks, §371] The splits are NOT marked here: staff can read them, so each split's won / lost mark is written when
+      // this phase's results are published (_splitPublishMarks); until then the admin page reads it from this snapshot (_splitDerived).
+      await setDoc(phaseStagingRef,{pendingPhaseSnapshots:{[cur]:_snapPayload}},{merge:true});
       // Local-first so every immediate reader (gates, renderNextStep) sees it now.
       _stagedCompletedPhases={..._stagedCompletedPhases,[cur]:_snapPayload};
       _mergeCompletedPhasesView();
@@ -7894,6 +7912,12 @@ async function _commitBeginPhase(next){
       toast(phaseName(next-1)+' has no completed-phase archive, published or staged — complete it first. '+phaseName(next)+' did NOT begin and nothing was changed.','err');
       return false;
     }
+    // [412 · split weeks, §371] The split marks of every phase published below, read from the server; unverifiable -> the phase does NOT begin.
+    let _spMk={};
+    if(Object.keys(_srvStaged).length&&typeof _splitPublishMarks==='function'){
+      try{ _spMk=await _splitPublishMarks(_srvStaged); }
+      catch(e){ toast('Could not check the server (connection problem) — '+phaseName(next)+' did NOT begin. Week locks may already have changed; check the Lock Weeks panel, then try again.','err'); return false; }
+    }
     const batch=writeBatch(db);
     const _phasePayload={currentPhase:next,phaseBeganAt:{...(phasesData.phaseBeganAt||{}),[next]:Date.now()}};
     // [H6] Publish any staged snapshot in the SAME batch as the advance — the staff
@@ -7901,6 +7925,7 @@ async function _commitBeginPhase(next){
     if(Object.keys(_srvStaged).length){ // [269] staged snapshot judged from the SERVER read (a stale-empty mirror can no longer wipe a real staged snapshot unpublished)
       _phasePayload.completedPhases={..._publishedCompletedPhases,..._srvStaged};
       batch.set(phaseStagingRef,{pendingPhaseSnapshots:{}}); // NON-merge replace (empty-map merge clears nothing) · [269] judged from the server read
+      if(Object.keys(_spMk).length) batch.set(splitsRef,_spMk,{merge:true}); // [412 · §371] the marks, with the snapshots they come from
     }
     batch.set(phasesRef,_phasePayload,{merge:true});
     batch.set(approvalsRef,{});
@@ -7947,6 +7972,7 @@ async function _commitBeginPhase(next){
     try{ await batch.commit(); }
     // [BATCH D · L2 · build 234] Same honest wording as the Phase-1 path.
     catch(e){ toast('Could not begin '+phaseName(next)+' — the phase did NOT start ('+(e?.message||e)+'). Week locks may already have changed; check the Lock Weeks panel, then try again.','err'); return false; }
+    for(const k of Object.keys(_spMk)) splitsData[k]=Object.assign({},splitsData[k],_spMk[k]); // [412 · §371] local-first
     if(_usedAnyway){ _clBeginAnyway=null; _clRetryFailed=false; toast(phaseName(next)+' has begun WITHOUT resetting '+phaseName(next-1)+'\'s change log, as you confirmed.','warn'); } // [360 · §256] used ONCE, and only now that the batch has gone through
   }
   // Beginning any phase resets the countdown to a fresh 48-hour window so
@@ -12217,7 +12243,7 @@ window.clearLastBid=function(u,wk){
 // no countdown (Q7). Change Log: SYSTEM rows (week 'ALL', the week in `choice`), action 'split'.
 const SPLIT_LOCKED_TEXT='Can be changed before Phase 1 and between phases.';
 function _splitWkName(wk){ let n=0; try{ n=wNum(wkDate(wk)); }catch(_){ n=0; } return n?('Week '+n):String(wk||''); }
-function _splitStatusHtml(e){ if(e.st==='on') return 'In place'; if(e.st==='won') return '<span class="pill p-green">Won</span>'; return '<span style="color:var(--t2)">'+(e.why==='lost'?'Ended — bid lost':'Removed')+'</span>'; }
+function _splitStatusHtml(e0){ const e=_splitDerived(e0); if(e.st==='on') return 'In place'; if(e.st==='won') return '<span class="pill p-green">Won</span>'; return '<span style="color:var(--t2)">'+(e.why==='lost'?'Ended — bid lost':'Removed')+'</span>'; }
 // A drop-down's options, redrawn only when they differ (a snapshot never tears down an open drop-down); the choice is kept while still offered.
 function _swFill(id,first,opts){ const s=document.getElementById(id); if(!s) return; const prev=s.value;
   const h='<option value="">'+esc(first)+'</option>'+opts.map(o=>'<option value="'+esc(String(o[0]))+'">'+esc(String(o[1]))+'</option>').join('');
@@ -12231,19 +12257,29 @@ function _swPaintSwitch(){
   const oc=document.getElementById('swOffCard'); if(oc) oc.style.display=on?'none':'';
 }
 window._swGoSettings=function(){ _suOpenCard('setup','swTog'); }; // the Off line's link: Settings, at the card
+// [412 · split weeks, §371 10:10 AM] The Bid cell: the bidder's bid on the week as the admin page writes bids — for a split of the current
+// phase the bidder's live bid (placed this phase), for an earlier phase's split the bid in that phase's record — or "No bid".
+function _splitBidCell(e){
+  const n=Number(e.ph); let v;
+  if(n===Number(phasesData.currentPhase||1)){ if(scheduleData[e.b]&&scheduleData[e.b][e.wk]!==undefined&&isCurrentPhaseBidAdmin(e.b,e.wk)) v=scheduleData[e.b][e.wk]; }
+  else { const s=((((phasesData.completedPhases||{})[n])||{}).schedule||{})[e.b]; if(s&&s[e.wk]!==undefined) v=s[e.wk]; }
+  return (v===undefined||v===null)?'No bid':bidLblAdmin(v);
+}
+// [412 · split weeks, §371] A split the admin can still remove: in place or won, as its phase's result reads it (_splitDerived).
+function _splitRemovable(e){ const d=_splitDerived(e); return !!d&&(d.st==='on'||d.st==='won'); }
 function renderSplitWeeks(){
   const tb=document.getElementById('swBody'); if(!tb) return;
   _swPaintSwitch(); // [411 · split weeks, §371]
   const sel=document.getElementById('swPhase'); populatePhaseFilter(sel);
   const f=(sel&&sel.value)||'current', all=f==='all', m=String(f).match(/^ph(\d+)$/), want=m?Number(m[1]):Number(phasesData.currentPhase||1);
   const rows=splitsList().filter(e=>all||Number(e.ph)===want);
-  const hd=document.getElementById('swHead'); if(hd) hd.innerHTML='<tr>'+(all?'<th>Phase</th>':'')+'<th>Week</th><th>Bidder</th><th>Partner</th><th>Days</th><th>Blended FTE</th><th>Status</th><th></th></tr>';
+  const hd=document.getElementById('swHead'); if(hd) hd.innerHTML='<tr>'+(all?'<th>Phase</th>':'')+'<th>Week</th><th>Bidder</th><th>Partner</th><th>Bid</th><th>Days</th><th>Blended FTE</th><th>Status</th><th></th></tr>';
   const td=x=>'<td style="white-space:nowrap">'+x+'</td>';
   tb.innerHTML=rows.length?rows.map(e=>{ const h=Number(e.bh);
-    return '<tr>'+(all?td(esc(phaseName(e.ph))):'')+td(esc(wLabel(wkDate(e.wk))))+td(esc(e.b))+td(esc(e.p))
+    return '<tr>'+(all?td(esc(phaseName(e.ph))):'')+td(esc(wLabel(wkDate(e.wk))))+td(esc(e.b))+td(esc(e.p))+td(esc(_splitBidCell(e)))
       +td(esc(e.b+' '+_splitHalfDays(e.sp,h))+'<br>'+esc(e.p+' '+_splitHalfDays(e.sp,3-h)))+td(esc((+splitBlendFte(e)).toFixed(1)))+td(_splitStatusHtml(e))
-      +td((e.st==='on'||e.st==='won')?'<button class="btn btn-ghost" style="font-size:12px;padding:4px 12px" onclick="removeSplit(\''+_jsq(e.key)+'\')">Remove</button>':'')+'</tr>'; }).join('')
-    :'<tr><td colspan="'+(all?8:7)+'" style="text-align:center;color:var(--t2);padding:20px">No splits.</td></tr>';
+      +td(_splitRemovable(e)?'<button class="btn btn-ghost" style="font-size:12px;padding:4px 12px" onclick="removeSplit(\''+_jsq(e.key)+'\')">Remove</button>':'')+'</tr>'; }).join('')
+    :'<tr><td colspan="'+(all?9:8)+'" style="text-align:center;color:var(--t2);padding:20px">No splits.</td></tr>';
   _swFill('swWeek','Week',(mondays||[]).map(d=>[dateKey(d),wLabel(d)]));
   const ppl=[...(names||[])].sort().map(n=>[n,n]); _swFill('swBidder','Bidder',ppl); _swFill('swPartner','Partner',ppl);
   _swFill('swSplit','Split',[['W','Sun–Wed / Thu–Sat'],['T','Sun–Tue / Wed–Sat']]); _swHalves();
@@ -12283,20 +12319,11 @@ function _splitCreateRefusal(wk,b,p,sp,bh){
   if(prior.has(p)&&!pHas) return p+' won this week in an earlier phase.';
   return '';
 }
-// A6's "bid cap after": u's count with the split in place, in tenths, read through the page's own cap counters (the split is put in the
-// page's copy for the count and taken out again before returning).
-function _splitCapAfterT(e,u){ const k=e.wk+'|'+e.b, had=Object.prototype.hasOwnProperty.call(splitsData,k), was=splitsData[k];
-  splitsData[k]=e;
-  try{ return Math.round(_adminPriorApprovedCount(u)*10)+_adminLiveCapT(u); }
-  finally{ if(had) splitsData[k]=was; else delete splitsData[k]; } }
+// [412 · split weeks, §371 10:09 AM] The Create box: one line — the week, who has which days, who bids, the blended FTE. The bid caps are
+// not shown here; a bid placed in the same step is still refused over a cap (_splitBidRefusal).
 function _splitCreateBody(e){
-  const h=Number(e.bh), cap=_cumCap(Number(phasesData.currentPhase||1));
-  const out='<div>'+esc(_splitWkName(e.wk)+' · '+e.b+' '+_splitHalfDays(e.sp,h)+', '+e.p+' '+_splitHalfDays(e.sp,3-h)+' · '+e.b+' bids · blended FTE '+(+splitBlendFte(e)).toFixed(1)+'.')+'</div>';
-  if(cap===null) return out; // no bid cap this phase: nothing to count against
-  const f=t=>(t%10)?(t/10).toFixed(1):String(t/10), tb=_splitCapAfterT(e,e.b), tp=_splitCapAfterT(e,e.p);
-  const over=[[e.b,tb],[e.p,tp]].filter(x=>x[1]>cap*10);
-  return out+'<div class="'+(over.length?'cmodal-warn':'cmodal-info')+'" style="margin-top:8px">'+esc('Bid cap after: '+e.b+' '+f(tb)+' of '+cap+' · '+e.p+' '+f(tp)+' of '+cap+'.')
-    +over.map(x=>'<br>'+esc(x[0]+' would be over the bid cap ('+f(x[1])+' of '+cap+').')).join('')+'</div>';
+  const h=Number(e.bh);
+  return '<div>'+esc(_splitWkName(e.wk)+' · '+e.b+' '+_splitHalfDays(e.sp,h)+', '+e.p+' '+_splitHalfDays(e.sp,3-h)+' · '+e.b+' bids · blended FTE '+(+splitBlendFte(e)).toFixed(1)+'.')+'</div>';
 }
 // [411 · split weeks, §371] Create may place the bidder's bid in the same step ("Bid"; No bid = the split alone, exactly as before). Every rule
 // a bid follows is checked BEFORE anything is written, with the split in place; any broken rule refuses the whole step, nothing saved (Q1).
@@ -12313,7 +12340,7 @@ function _splitBidRefusal(e,bid){
   if(f) return f.kind==='topbid'?('Bid number '+f.n+' is not used in this auction.'):f.kind==='combo'?'That combination bid is switched off.':f.kind==='np'?'NP is off this phase.':'The bid is below the week\'s bid floor.';
   const comp=_bdCompLine(), k=e.wk+'|'+e.b, had=Object.prototype.hasOwnProperty.call(splitsData,k), was=splitsData[k];
   let iss=[];
-  splitsData[k]=e; // the rules are read with the split in place (as _splitCapAfterT)
+  splitsData[k]=e; // the rules are read with the split in place
   try{ iss=adminBidIssues(u,wk,v,true).filter(x=>x!==comp); }
   finally{ if(had) splitsData[k]=was; else delete splitsData[k]; }
   if(iss.length) return iss.map(_swTxt).join(' ');
@@ -12371,8 +12398,8 @@ async function _splitOff(k){
   toast('Split removed','ok'); refreshAll(); return true;
 }
 window.removeSplit=function(k){
-  const e=(splitsData||{})[k]; if(!e||(e.st!=='on'&&e.st!=='won')){ renderSplitWeeks(); return; }
-  const live=e.st==='on'&&!!scheduleData[e.b]&&scheduleData[e.b][e.wk]!==undefined&&isCurrentPhaseBidAdmin(e.b,e.wk);
+  const e=(splitsData||{})[k]; if(!e||!_splitRemovable(e)){ renderSplitWeeks(); return; } // [412 · §371] as its phase's result reads it
+  const live=_splitDerived(e).st==='on'&&!!scheduleData[e.b]&&scheduleData[e.b][e.wk]!==undefined&&isCurrentPhaseBidAdmin(e.b,e.wk);
   if(!live){ openConfirm({ title:'Remove split', body:'<div>'+esc('Remove this split? '+_splitWkName(e.wk)+' stays '+e.b+'\'s alone, at '+e.b+'\'s FTE.')+'</div>', okText:'Remove', danger:true, onConfirm:()=>_splitOff(k) }); return; }
   const open=biddingOpenOnServer();
   openConfirm({ title:'Remove split', body:'<div>'+esc(_splitWkName(e.wk)+' · '+e.b+'/'+e.p+'. What happens to '+e.b+'\'s bid?')+'</div>', okText:'Keep '+e.b+'\'s bid', onConfirm:()=>_splitOff(k),
