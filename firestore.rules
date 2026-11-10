@@ -404,6 +404,60 @@ service cloud.firestore {
                     && !myMapAfter().diff(myMapBefore()).affectedKeys()
                           .hasAny(get(/databases/$(database)/documents/vacations/timer).data.get('lockedWeeks', [])))));
     }
+    // [415 · S2b · §376–§378] THE STAFF SPLIT RECORD: a colleague's write changes ONE entry, the one _w names ({b, wk}): top-level keys only _w and
+    // _w.b, inside _w.b's map only _w.wk; bidding open, the countdown not run out, the week not locked. Judged on the agreements AFTER this write
+    // (getAfter: a batch that writes a side and the record together is judged on both). 'on': the writer is the bidder, both sides approve
+    // exactly these terms, no cancel. 'off' (why 'staff'): the writer is either person, the entry before named the same partner, both sides
+    // carry the cancel. Lookups: loginEmails, emailToUser, timer (cached across these helpers) + splitAgreements. Residuals (recorded): the rules
+    // cannot see the bid caps or whether a bid is live.
+    function ssW() { return request.resource.data.get('_w', null); }
+    function ssBefore(b) { return resource == null ? {} : resource.data.get(b, {}); }
+    function ssSide(u, wk) { return getAfter(/databases/$(database)/documents/vacations/splitAgreements).data.get(u, {}).get(wk, {}); }
+    function ssSideIs(s, p, sp, mh, b, ph) {
+      return s.get('p', null) == p && s.get('sp', null) == sp && s.get('mh', null) == mh
+        && s.get('b', null) == b && s.get('ph', null) == ph && s.get('ok', false) == true;
+    }
+    function ssWeekOpen(wk) {
+      return !exists(/databases/$(database)/documents/vacations/timer)
+        || (get(/databases/$(database)/documents/vacations/timer).data.get('lockAll', false) != true
+            && (!(get(/databases/$(database)/documents/vacations/timer).data.get('lockedWeeks', []) is list)
+                || !(wk in get(/databases/$(database)/documents/vacations/timer).data.get('lockedWeeks', []))));
+    }
+    // [415 · S2b · §381 D · §383] The entry a colleague's 'on' replaces (the document before this write: resource, no extra lookup): none; one in place
+    // ('on' - a change); or one ended ('off' - by the two, by the bid's loss, or by the admin's Remove, which does not bar a new split, §383); never a won split ('won').
+    function ssOnOverOk(b, wk, e) {
+      return ssBefore(b).get(wk, null) == null
+        || (ssBefore(b).get(wk, null) is map
+            && ssBefore(b)[wk].get('st', null) in ['on', 'off']);
+    }
+    function staffSplitEntryOk(b, wk, e) {
+      return e.keys().hasOnly(['p', 'sp', 'bh', 'ph', 'st', 'why', 'at'])
+        && e.get('p', null) is string && e.p != b
+        && e.get('sp', null) in ['W', 'T'] && e.get('bh', null) in [1, 2] && e.get('ph', null) is int
+        && ((e.get('st', null) == 'on' && b in myInitials() && ssOnOverOk(b, wk, e) // [415 · S2b · §381 D]
+              && ssSideIs(ssSide(b, wk), e.p, e.sp, e.bh, b, e.ph)
+              && ssSideIs(ssSide(e.p, wk), b, e.sp, 3 - e.bh, b, e.ph)
+              && ssSide(b, wk).get('cx', false) != true && ssSide(e.p, wk).get('cx', false) != true)
+          || (e.get('st', null) == 'off' && e.get('why', null) == 'staff'
+              && (b in myInitials() || e.p in myInitials())
+              && ssBefore(b) is map && ssBefore(b).get(wk, {}).get('p', null) == e.p
+              && ssBefore(b).get(wk, {}).get('st', null) == 'on' // [415 · S2b · §381 D] only a split in effect is ended
+              && ssSide(b, wk).get('p', null) == e.p && ssSide(e.p, wk).get('p', null) == b
+              && ssSide(b, wk).get('ph', null) == e.ph && ssSide(e.p, wk).get('ph', null) == e.ph
+              && ssSide(b, wk).get('cx', false) == true && ssSide(e.p, wk).get('cx', false) == true));
+    }
+    function staffSplitWriteOk() {
+      return ssW() is map && ssW().keys().hasOnly(['b', 'wk'])
+        && ssW().get('b', null) is string && ssW().get('wk', null) is string
+        && (resource == null
+              ? request.resource.data.keys().hasOnly(['_w', ssW().b])
+              : request.resource.data.diff(resource.data).affectedKeys().hasOnly(['_w', ssW().b]))
+        && request.resource.data.get(ssW().b, null) is map && ssBefore(ssW().b) is map
+        && request.resource.data[ssW().b].diff(ssBefore(ssW().b)).affectedKeys().hasOnly([ssW().wk])
+        && request.resource.data[ssW().b].get(ssW().wk, null) is map
+        && biddingNotClosed() && timerNotExpired() && ssWeekOpen(ssW().wk)
+        && staffSplitEntryOk(ssW().b, ssW().wk, request.resource.data[ssW().b][ssW().wk]);
+    }
     // User timer writes may only touch lastChange/durationHours with sane values.
     // [AUDIT 2026-07-25 #1] The old version bounded lastChange but left durationHours
     // at "> 0 && <= 2160", so any registered bidder could write durationHours:0.001 and
@@ -453,7 +507,7 @@ service cloud.firestore {
       allow read: if isAdminReadDoc(docId) ? isAdmin()
                    : (isRelayDoc(docId) ? (isRegisteredUser() || isAdmin())
                    : (isPeopleDoc(docId) ? (isRegisteredUser() || isAdmin() || isSchedAdmin()) // [379 · §275]
-                   : ((isSensitiveDoc(docId) || isBidDataDoc(docId) || docId == 'alertPrefs' || docId == 'splits' || docId == 'splitRequests') ? (isRegisteredUser() || isAdmin()) : true))); // [379 · §275] was isVerifiedAccount() · [384 · §288] alertPrefs: a colleague or an admin · [413 · S2a · §373] splitRequests
+                   : ((isSensitiveDoc(docId) || isBidDataDoc(docId) || docId == 'alertPrefs' || docId == 'splits' || docId == 'splitRequests' || docId == 'splitAgreements' || docId == 'staffSplits') ? (isRegisteredUser() || isAdmin()) : true))); // [379 · §275] was isVerifiedAccount() · [384 · §288] alertPrefs: a colleague or an admin · [413 · S2a · §373] splitRequests · [415 · S2b · §376–§378] splitAgreements, staffSplits
       // welcomeLog records WHICH ADDRESSES have already been welcomed, keyed by the
       // address itself — so it is PII, and its READ is gated by isSensitiveDoc above
       // [RA-3, 20 Aug 2026; an earlier version of this comment claimed "no PII" and was
@@ -607,12 +661,17 @@ service cloud.firestore {
                    // (a recorded residual, the same as the bid maps'). Cost: emailToUser and timer are already fetched by those functions
                    // (identical lookups are cached); inPhaseGap adds the phases read only when bidding is closed. Read: a colleague or an admin (above).
                    || (docId == 'splitRequests' && (isAdmin() || (isRegisteredUser() && writesOnlyOwnKeys() && ownMapBounded() && (biddingNotClosed() || inPhaseGap()))))
+      // [415 · S2b · §376–§378] splitAgreements: each colleague writes only their own side (as splitRequests). staffSplits: the split recorded
+      // in the bidder's bid save - the admin, or a colleague whose write names its one week in _w and agrees with both sides (staffSplitWriteOk).
+      || (docId == 'splitAgreements' && (isAdmin() || (isRegisteredUser() && writesOnlyOwnKeys() && ownMapBounded() && (biddingNotClosed() || inPhaseGap()))))
+      || (docId == 'staffSplits' && (isAdmin() || (isRegisteredUser() && staffSplitWriteOk())))
                    || (!isAdminOnlyDoc(docId) && !isBidDoc(docId) && !isRelayDoc(docId)
                         && docId != 'timer' && docId != 'signInMisses' && docId != 'emails'
                         && docId != 'changes' && docId != 'whitelistConfirm' && docId != 'welcomeLog'
                         && docId != 'mailStats' && docId != 'loginLog' && docId != 'mailLog'
                         && docId != 'alertPrefs' // [384 · §288]
                         && docId != 'splitRequests' // [413 · S2a · §373]
+                        && docId != 'splitAgreements' && docId != 'staffSplits' // [415 · S2b · §376–§378]
                         && (isRegisteredUser() || isAdmin()));
     }
 

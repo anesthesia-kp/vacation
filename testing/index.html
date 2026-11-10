@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 248;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 249;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -449,6 +449,20 @@ select:focus{outline:none;border-color:#1f2329}
 #srPostBtn:disabled{opacity:.5;cursor:not-allowed}
 .sr-frozen{font-size:.88rem;color:#4a505a;line-height:1.45;margin-top:14px}
 #splitModal .modal-buttons{margin-top:16px}
+/* [249 · S2b · §376–§378] MY AGREEMENTS: cards in the rows' look, their lines one under another and their buttons on a line below them (they wrap at 320 px).
+   THE AGREEMENT FORM: a view of the box of its own - while it shows, the rest of the box is hidden (its own Cancel goes back). */
+.sa-card{flex-wrap:wrap}
+.sa-card .al-gi-t{flex:1 1 100%;overflow-wrap:anywhere}
+.sa-card .al-gi-b{flex-wrap:wrap}
+.sa-l{display:block}
+.sa-l:first-child{font-weight:700}
+#saStartBtn{width:100%;margin-top:2px}
+#saStartBtn:disabled,#saApprove:disabled{opacity:.5;cursor:not-allowed}
+#splitModal.sa-form-on .modal-content>:not(.modal-title):not(#saForm){display:none!important}
+.sa-ftitle{font-size:1rem;font-weight:700;color:#1f2329;margin:0 0 10px;outline:none}
+.sa-ftext{font-size:.88rem;color:#1f2329;margin:0 0 12px;overflow-wrap:anywhere}
+#saForm .priority-input{margin-bottom:12px}
+#saForm .sr-what{margin:10px 0 0}
 .sr-icon{position:absolute;top:6px;right:6px;z-index:1;flex:none;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:29px;height:29px;padding:0;margin:0;background:#f3f0e8;border:1.5px solid #8a8577;border-radius:8px;box-shadow:0 1px 2px rgba(31,35,41,.12);color:#1f2329;cursor:pointer;transition:none}
 .sr-icon:active{background:#e2ddd1;border-color:#1f2329}
 .week:has(.sr-icon) .al-bell{right:39px} /* [248 · §375] the 🔔 just left of the button: 6 + 29 + 4 px from the corner */
@@ -793,6 +807,11 @@ body{zoom:1.15}
     <p class="sr-what" id="srWhat">Share a week with someone. Post a request or respond to one. You both then approve an agreement here and one of you bids for the pair, at your blended FTE.</p>
     <div class="al-gi-h">Open requests</div>
     <div id="srOpenList"></div>
+    <div id="saWrap"><!-- [249 · S2b · §376–§378] MY AGREEMENTS (SPEC-S2b §3.4): the cards, painted by _saPaint; Start an agreement (stage 1 and 3) opens the form -->
+      <div class="al-gi-h">My agreements</div>
+      <div id="saList"></div>
+      <button type="button" class="btn-secondary" id="saStartBtn" onclick="_saOpenStart()">Start an agreement</button>
+    </div>
     <div id="srPostWrap">
       <div class="al-gi-h">Post a request</div>
       <form id="srPostForm" onsubmit="return false">
@@ -810,6 +829,30 @@ body{zoom:1.15}
         </div>
         <button type="button" class="btn-secondary" id="srPostBtn" onclick="_srPost()" disabled>Post request</button>
       </form>
+    </div>
+    <div id="saForm" hidden><!-- [249 · S2b · §376–§378] THE AGREEMENT FORM (SPEC-S2b §3.5, W4 + W5): painted by _saFormPaint; the week and the partner as text or as a list -->
+      <div class="sa-ftitle" id="saFormTitle" tabindex="-1">Split agreement</div>
+      <div class="sa-ftext" id="saWeekText"></div>
+      <select id="saWeek" class="priority-input" aria-label="Week" hidden></select>
+      <div class="modal-label" id="saPartnerL">Partner</div>
+      <div class="sa-ftext" id="saPartnerText"></div>
+      <select id="saPartner" class="priority-input" aria-labelledby="saPartnerL" hidden></select>
+      <div class="modal-label" id="saHalfL">My half</div>
+      <div role="radiogroup" aria-labelledby="saHalfL">
+        <label class="sr-half" data-sa-h="W1"><input type="radio" name="saHalf" value="W1"><span>Sun–Wed</span></label>
+        <label class="sr-half" data-sa-h="W2"><input type="radio" name="saHalf" value="W2"><span>Thu–Sat</span></label>
+        <label class="sr-half" data-sa-h="T1"><input type="radio" name="saHalf" value="T1"><span>Sun–Tue</span></label>
+        <label class="sr-half" data-sa-h="T2"><input type="radio" name="saHalf" value="T2"><span>Wed–Sat</span></label>
+      </div>
+      <div class="modal-label" id="saPHalfL">Partner's half</div>
+      <div class="sa-ftext" id="saPHalf">—</div>
+      <div class="modal-label" id="saBidsL">Who bids</div>
+      <div role="radiogroup" aria-labelledby="saBidsL">
+        <label class="sr-half"><input type="radio" name="saBids" value="me"><span>Me</span></label>
+        <label class="sr-half"><input type="radio" name="saBids" value="p"><span>Partner</span></label>
+      </div>
+      <p class="sr-what">If the bid loses, neither of you gets the week. If it wins, you split it as agreed.</p>
+      <div class="modal-buttons"><button type="button" class="btn-primary" id="saApprove" onclick="_saFormApprove()" disabled>Approve</button><button type="button" class="btn-secondary" id="saFormCancel" onclick="_saFormCancel()">Cancel</button></div>
     </div>
     <p class="sr-frozen" id="srFrozen" hidden>Bidding is closed. Requests open again when the results are sent.</p>
     <div class="modal-buttons"><button type="button" class="btn-primary" onclick="_srDone()">Done</button></div>
@@ -1092,6 +1135,11 @@ const alertPrefsRef = doc(db,"vacations","alertPrefs");
 const splitsRef = doc(db,"vacations","splits");
 // [247 · S2a · §373] {"<initials>": {"<week>": {h, ph, at}}} - each person's split requests; each writes only their own entry (firestore.rules). Read by every signed-in page.
 const splitRequestsRef = doc(db,"vacations","splitRequests");
+// [249 · S2b · §376–§378] {"<initials>": {"<week>": {p, sp, mh, b, ph, ok, cx, rj, at}}} - each person's own side of a split agreement (each writes only their
+// own entry, firestore.rules). {"<bidder>": {"<week>": {p, sp, bh, ph, st, why, at}}, "_w": {b, wk}} - the split recorded in the bidder's bid save
+// (_w names the one entry a write changes). Both read by every signed-in page; the engine reads the second through splitsData (_spRebuild).
+const splitAgreementsRef = doc(db,"vacations","splitAgreements");
+const staffSplitsRef = doc(db,"vacations","staffSplits");
 // The address the auction e-mails come FROM — the one users must whitelist. ASSUMPTION: this is
 // the Gmail account EmailJS sends through. If EmailJS sends from a different address, change this
 // one string (and the admin twin) to match.
@@ -1111,8 +1159,8 @@ let _lwLoaded={best:false,low:false,holds:false}; // [182 · §221] set by three
 // them showed no bids, or everyone Losing (capacity not arrived = 0), and a bid saved then would
 // have compared two half-loaded pictures and alerted nobody. An unloaded document looks exactly
 // like an empty one (the 182 lesson, _lwLoaded above), so "has arrived" is recorded, never inferred.
-const _BOARD_DOCS=['schedule','slots','fte','bidPhase','phases','settings','locks','changes','holds','bidTimes','splits']; // [245 · split weeks · review] splits: the engine reads it (the blend, the partner's refusal, the cap shares)
-const _BOARD_SESSION_DOCS=['schedule','slots','fte','bidPhase','locks','changes','holds','bidTimes','splits']; // re-armed at every sign-out; phases and settings are public listeners that live for the whole tab
+const _BOARD_DOCS=['schedule','slots','fte','bidPhase','phases','settings','locks','changes','holds','bidTimes','splits','staffSplits']; // [245 · split weeks · review] splits: the engine reads it (the blend, the partner's refusal, the cap shares) · [249 · S2b · §376–§378] staffSplits too: merged into the same splitsData
+const _BOARD_SESSION_DOCS=['schedule','slots','fte','bidPhase','locks','changes','holds','bidTimes','splits','staffSplits']; // re-armed at every sign-out; phases and settings are public listeners that live for the whole tab
 const BOARD_LOADING_TEXT='Loading your bids…';
 const BOARD_SLOW_TEXT='Still loading — your connection may be slow. If this stays, reload the page.';
 const BOARD_SLOW_MS=15000;
@@ -1301,7 +1349,7 @@ async function _boardRecheck(){
   }));
 }
 function _boardRefs(){
-  return {schedule:scheduleRef,slots:slotsRef,fte:fteRef,bidPhase:bidPhaseRef,phases:phasesRef,settings:adminRef,locks:locksRef,changes:changesRef,holds:bidHoldsRef,bidTimes:bidTimesRef,splits:(typeof splitsRef!=='undefined'?splitsRef:null)}; // [245 · split weeks · review]
+  return {schedule:scheduleRef,slots:slotsRef,fte:fteRef,bidPhase:bidPhaseRef,phases:phasesRef,settings:adminRef,locks:locksRef,changes:changesRef,holds:bidHoldsRef,bidTimes:bidTimesRef,splits:(typeof splitsRef!=='undefined'?splitsRef:null),staffSplits:(typeof staffSplitsRef!=='undefined'?staffSplitsRef:null)}; // [245 · split weeks · review] · [249 · S2b · §376–§378]
 }
 // Sign-out: the session's documents must arrive afresh for the next sign-in.
 function _boardLoadReset(){
@@ -1832,8 +1880,8 @@ function _timerResetMode(){
 // Does this change alter any OTHER user's projected outcome? This is the outbid
 // predicate — the same comparison sendEmailNotifications makes — factored so the
 // timer gate and the alerts can never disagree about what "affects someone" means.
-function _changeAffectsOthers(prevSnap,afterSnap,actor){
-  const prevAp=computeApprovals(prevSnap), newAp=computeApprovals(afterSnap);
+function _changeAffectsOthers(prevSnap,afterSnap,actor,sp){ // [249 · S2b · §376–§378] sp (optional): the splits before / after a save that records, changes or ends one
+  const prevAp=sp?_withSplits(sp.before,()=>computeApprovals(prevSnap)):computeApprovals(prevSnap), newAp=sp?_withSplits(sp.after,()=>computeApprovals(afterSnap)):computeApprovals(afterSnap);
   for(const user of new Set([...Object.keys(prevSnap),...Object.keys(afterSnap)])){
     if(user===actor) continue;
     const pu=(prevSnap[user]&&typeof prevSnap[user]==='object')?prevSnap[user]:{};
@@ -1855,12 +1903,12 @@ function _changeAffectsOthers(prevSnap,afterSnap,actor){
 // extend-only) stays at the three callers, as before. Any mode but 2 is the classic reset: mode 3 is gone, so isNewBid is no longer
 // read here (the callers keep their shape; nothing else reads their flag - [236 · §317]). The two new clauses are
 // asked typeof-guarded (extracted-code test sandboxes only); a clause that cannot answer adds no restart.
-function _timerModeAllowsReset(mode,isNewBid,prevSnap,afterSnap,actor){
+function _timerModeAllowsReset(mode,isNewBid,prevSnap,afterSnap,actor,sp){ // [249 · S2b · §376–§378] sp: as _changeAffectsOthers (passed to it and to the get-in clause)
   if(mode!==2) return true;
   if(!prevSnap||!afterSnap) return true;
-  if(_changeAffectsOthers(prevSnap,afterSnap,actor)) return true;
+  if(_changeAffectsOthers(prevSnap,afterSnap,actor,sp)) return true;
   if(typeof _minDropped==='function'&&_minDropped(prevSnap,afterSnap,actor)===true) return true;
-  return typeof _giAny==='function'&&_giAny(prevSnap,afterSnap,actor)===true;
+  return typeof _giAny==='function'&&_giAny(prevSnap,afterSnap,actor,sp)===true;
 }
 // [221 · §292, the 18 Oct trigger (§289) as planned 22 Oct, plan §4] Did a competition week's "Minimum new bid" (the week card's own number,
 // _wwMinBid) get WEAKER, or go away, between the two pictures? Every week with a bid on either picture is asked: the number on the picture
@@ -1872,7 +1920,7 @@ function _timerModeAllowsReset(mode,isNewBid,prevSnap,afterSnap,actor){
 // restart. Read-only: nothing here writes, waits or sends. Anything thrown = false.
 // [221 · §292 FIX ROUND, verifier V1] Is the actor's latest change-log entry on week w already the removal of that very bid, stamped this phase /
 // round? Then the real row is there (the listener echoed the save) and no copy may be lent: a second removal reads as an unrecorded return.
-function _lentHas(log,u,w,b){ for(let i=log.length-1;i>=0;i--){ const e=log[i]; if(e&&e.user===u&&e.weekKey===w&&e.action!=='splitReq'&&e.action!=='splitReqOff') return e.action==='removed'&&JSON.stringify(e.bidValue)===JSON.stringify(b)&&!(typeof e.ts==='number'&&e.ts<_wwSince()); } return false; }
+function _lentHas(log,u,w,b){ for(let i=log.length-1;i>=0;i--){ const e=log[i]; if(e&&e.user===u&&e.weekKey===w&&!_isSplitLog(e.action)) return e.action==='removed'&&JSON.stringify(e.bidValue)===JSON.stringify(b)&&!(typeof e.ts==='number'&&e.ts<_wwSince()); } return false; }
 // [221 · §292 FIX ROUND, review lane 1 H1] The picture after is asked as it will stand once the change has LANDED: the actor's "removed" row for
 // each week they left is in the change log meanwhile (the competition test reads the log, not only the remembered level), taken out in the finally.
 function _minDropped(prevSnap,afterSnap,actor){
@@ -1905,8 +1953,8 @@ function _minDropped(prevSnap,afterSnap,actor){
 // never the actor, refused or losing before and allowed and WIN / UNDER REVIEW after), asked with ONLY the admin's e-mail switch set
 // aside (the countdown restarts whether or not alert e-mails are on). It sends nothing. Before the alert choices, the floors, the holds or
 // the change log have arrived it answers false (the first seconds after a page opens: no restart from this clause - plan §4 edge (i)).
-function _giAny(prevSnap,afterSnap,actor){
-  try{ const r=_giOpenings(prevSnap,afterSnap,actor,true); return !!r&&typeof r==='object'&&Object.keys(r).length>0; }
+function _giAny(prevSnap,afterSnap,actor,sp){ // [249 · S2b · §376–§378] sp: passed on to _giOpenings
+  try{ const r=_giOpenings(prevSnap,afterSnap,actor,true,sp); return !!r&&typeof r==='object'&&Object.keys(r).length>0; }
   catch(_){ return false; }
 }
 // [162 · RA-4/H-2] A DEADLINE ON EVERY WRITE THE BID DIALOG WAITS FOR.
@@ -2025,6 +2073,7 @@ async function sha256(str){
 // [BATCH D · L1 · build 127] Twin of the admin coercion — see admin getUserFTE. A string FTE
 // from a hand-edited restored backup must not NaN the tie-fit math on either site.
 function getUserFTE(u){ const raw=fteData[u]; if(raw===undefined||raw===null||raw==='') return 1.0; const v=Number(raw); return isNaN(v)?1.0:v; }
+let _spAdm={}, _spStaff={}, splitAgreementsData={}; // [249 · S2b · §376–§378] the admin's record and the staff record as they arrived (splitsData = their merge, _spRebuild), and everyone's agreement sides. Above S1's block, which stays its twin
 // [410 · split weeks, DECISIONS §368–§369] One record of shared weeks: vacations/splits.
 let splitsData={};
 function _splitHalfDays(sp,h){ return sp==='T' ? (h===1?'Sun–Tue':'Wed–Sat') : (h===1?'Sun–Wed':'Thu–Sat'); }
@@ -2090,16 +2139,278 @@ function _srOpenList(reqs,st,on,weeks,hasSplit){
 // What the reader can take (W3, "... · <this>"), and what the poster wants (W2's labels; the admin's "Half wanted").
 function _srAvailText(h){ return ({W1:'Thu–Sat available',W2:'Sun–Wed available',Wx:'either half available: Sun–Wed / Thu–Sat',T1:'Wed–Sat available',T2:'Sun–Tue available',Tx:'either half available: Sun–Tue / Wed–Sat',any:'any half available'})[h]||''; }
 function _srWantText(h){ return ({W1:'Sun–Wed',W2:'Thu–Sat',Wx:'Either half of Sun–Wed / Thu–Sat',T1:'Sun–Tue',T2:'Wed–Sat',Tx:'Either half of Sun–Tue / Wed–Sat',any:'Any half'})[h]||''; }
+// [S2b · §376–§378] SPLIT AGREEMENTS AND STAFF SPLITS - this block is identical on the staff and admin pages (begin).
+// vacations/splitAgreements {"<me>":{"<wk>":{p,sp,mh,b,ph,ok,cx,rj,at}}}: each person's own side. vacations/staffSplits {"<bidder>":{"<wk>":
+// {p,sp,bh,ph,st,why,at}},"_w":{b,wk}}: the split recorded in the bidder's bid save. A side as written: null when malformed. isPerson(u) = on the roster.
+function _spSideOk(me,s,isPerson){
+  if(!s||typeof s!=='object'||typeof s.p!=='string'||!s.p||s.p===me||typeof s.ph!=='number'||!Number.isFinite(s.ph)) return null;
+  try{ if(isPerson&&!isPerson(s.p)) return null; }catch(_){ return null; }
+  const ok=s.ok===true, cx=s.cx===true; let rj=null;
+  if(s.rj!=null){ if(typeof s.rj!=='object'||['new','change','cancel'].indexOf(s.rj.k)<0||!Number.isFinite(Number(s.rj.at))) return null; rj={k:s.rj.k,at:Number(s.rj.at)}; }
+  const terms=(s.sp==='W'||s.sp==='T')&&(s.mh===1||s.mh===2)&&(s.b===me||s.b===s.p);
+  if((ok||cx)&&!terms) return null;
+  if(!ok&&!cx&&!rj) return null;
+  return {p:s.p,sp:terms?s.sp:null,mh:terms?s.mh:null,b:terms?s.b:null,ph:s.ph,ok:ok,cx:cx,rj:rj,at:Number(s.at)||0,terms:terms};
+}
+// The terms a side stands for, as a split: bidder, partner, pattern, the BIDDER's half, phase. me = the side's owner.
+function _spTerms(me,s){ return (s&&s.terms)?{b:s.b,p:(s.b===me?s.p:me),sp:s.sp,bh:(s.b===me?s.mh:3-s.mh),ph:s.ph}:null; }
+function _spRecTerms(e){ return e?{b:e.b,p:e.p,sp:e.sp,bh:Number(e.bh),ph:Number(e.ph)}:null; }
+function _spSameTerms(x,y){ return !!(x&&y&&x.b===y.b&&x.p===y.p&&x.sp===y.sp&&Number(x.bh)===Number(y.bh)&&Number(x.ph)===Number(y.ph)); }
+// The merge every split reader reads (splitsData): the admin's record (vacations/splits, "<wk>|<b>" keys) and the staff record turned into
+// the same shape under the same key, src:'staff'. The same key in both: the later phase wins, a tie the admin's.
+function _spMerge(adm,staff){
+  const out={}; adm=(adm&&typeof adm==='object')?adm:{}; staff=(staff&&typeof staff==='object')?staff:{};
+  for(const k of Object.keys(adm)) out[k]=adm[k];
+  for(const b of Object.keys(staff)){ if(b==='_w') continue; const m=staff[b]; if(!m||typeof m!=='object') continue;
+    for(const wk of Object.keys(m)){ const e=m[wk];
+      if(!e||typeof e!=='object'||typeof e.p!=='string'||!e.p||e.p===b||(e.sp!=='W'&&e.sp!=='T')||(Number(e.bh)!==1&&Number(e.bh)!==2)||typeof e.ph!=='number'||!Number.isFinite(e.ph)) continue;
+      const k=wk+'|'+b, a=out[k]; if(a&&!(e.ph>Number(a.ph))) continue;
+      const s={wk:wk,b:b,p:e.p,sp:e.sp,bh:Number(e.bh),ph:e.ph,st:e.st,at:e.at,src:'staff'}; if(typeof e.why==='string') s.why=e.why;
+      out[k]=s; } }
+  return out;
+}
+// The recorded split (merged) on wk for phase ph that names me as bidder or partner - one 'on' first - or null.
+function _spRecFor(sd,wk,ph,me){ let best=null;
+  for(const k of Object.keys(sd||{})){ const e=sd[k]; if(!e||e.wk!==wk||Number(e.ph)!==Number(ph)||(e.b!==me&&e.p!==me)) continue;
+    if(!best||(e.st==='on'&&best.st!=='on')) best=e; }
+  return best; }
+// WHERE TWO PEOPLE STAND on wk (PLAN-S2b §1): me and q; mine / theirs = our two sides as stored; rec = _spRecFor(merged,wk,ph,me); live = the
+// bidder has a live bid on wk; ph = the stage's phase. Returns null (nothing to show) or {row, me, q, b, p, sp, bh, ph, k?, next?, was?}.
+function _spAgreeState(me,q,mine,theirs,rec,live,ph,isPerson){
+  const M0=_spSideOk(me,mine,isPerson), T0=_spSideOk(q,theirs,isPerson);
+  let M=(M0&&M0.p===q&&M0.ph===ph)?M0:null, T=(T0&&T0.p===me&&T0.ph===ph)?T0:null;
+  const out=(row,t,x)=>Object.assign({row:row,me:me,q:q,b:t?t.b:null,p:t?t.p:null,sp:t?t.sp:null,bh:t?t.bh:null,ph:ph},x||{});
+  if(!M&&!T&&!(rec&&rec.src==='staff')) return null;
+  const pair=!!(rec&&((rec.b===me&&rec.p===q)||(rec.b===q&&rec.p===me)));
+  if(rec&&rec.src!=='staff'&&(rec.st==='on'||rec.st==='won')&&(M||T)) return out('adminRecorded',null);
+  let R=(pair&&rec.src==='staff')?rec:null;
+  if(R&&R.st==='off'&&R.why==='admin') return out('adminRemoved',_spRecTerms(R));
+  if(R&&R.st==='off'){ const fresh=x=>!!(x&&x.ok&&!x.cx&&!x.rj&&x.at>Number(R.at||0));
+    if(R.why==='staff'&&!fresh(M)&&!fresh(T)) return out('ended',_spRecTerms(R));
+    R=null; }
+  if(R&&R.st!=='on'&&R.st!=='won') R=null;
+  // a rejection newer than the side it answers cancels that side's ask (my rj answers their side; theirs answers mine)
+  const mRj=k=>!!(M&&M.rj&&M.rj.k===k&&T&&M.rj.at>=T.at), tRj=k=>!!(T&&T.rj&&T.rj.k===k&&M&&T.rj.at>=M.at);
+  const mT=_spTerms(me,M), tT=_spTerms(q,T);
+  if(R){
+    const RT=_spRecTerms(R), mx=!!(M&&M.cx), tx=!!(T&&T.cx)&&!mRj('cancel');
+    if(mx&&tx) return out(live?'cancelAgreed':'cancelNoBid',RT);
+    if(mx&&tRj('cancel')) return out('rejected',RT,{k:'cancel'});
+    if(mT&&M.ok&&!_spSameTerms(mT,RT)&&tRj('change')) return out('rejected',RT,{k:'change'});
+    if(mx) return out('iCancel',RT);
+    if(tx) return out('theyCancel',RT);
+    if(mT&&tT&&M.ok&&T.ok&&_spSameTerms(mT,tT)&&!_spSameTerms(mT,RT)) return out(live?'changeAgreed':'changeAgreedNoBid',mT,{was:RT});
+    if(mT&&M.ok&&!_spSameTerms(mT,RT)) return out('iChange',RT,{next:mT});
+    if(tT&&T.ok&&!_spSameTerms(tT,RT)&&!mRj('change')) return out('theyChange',RT,{next:tT});
+    return out(live?'inEffect':'inEffectNoBid',RT);
+  }
+  // not recorded: a cancel older than the other side's fresh start is over (the two started again after an ending)
+  if(M&&T&&T.cx&&!M.cx&&!M.rj&&M.at>T.at) T=null;
+  if(M&&T&&M.cx&&!T.cx&&!T.rj&&T.at>M.at) M=null;
+  const a=_spTerms(me,M), c=_spTerms(q,T);
+  if(M&&T&&M.ok&&T.ok&&a&&c&&_spSameTerms(a,c)){
+    const mx=M.cx&&!tRj('cancel'), tx=T.cx&&!mRj('cancel');
+    if(M.cx&&T.cx) return out('ended',a);
+    if(M.cx&&tRj('cancel')) return out('rejected',a,{k:'cancel'});
+    if(mx) return out('iCancel',a);
+    if(tx) return out('theyCancel',a);
+    return out(live?'agreedLive':'agreed',a);
+  }
+  if(M&&M.ok&&a&&!M.cx){ if(tRj('new')) return out('rejected',a,{k:'new'}); return out('iStarted',a); }
+  if(T&&T.ok&&c&&!T.cx){ if(mRj('new')) return null; return out('theyStarted',c); }
+  return null;
+}
+// The Change Log rows of these actions (and S2a's splitReq / splitReqOff): every reader that treats rows as bid changes skips them.
+function _isSplitLog(a){ return typeof a==='string'&&/^split[A-Z]/.test(a); }
+// [S2b · §376–§378] (end of the identical block)
+// [S2b · §381] C · A PASSED-OVER OFFER (the same function on the staff and admin pages; outside the identical block above). u has a split on wk for
+// phase ph with someone other than `other`: recorded (sd, the merged splits - in place for ph, or won) or agreed (u's own side names that person
+// and the two stand in an agreed row of _spAgreeState). A = the agreements document. Read-only; false when it cannot tell.
+function _spSplitElsewhere(u,other,wk,ph,A,sd,isPerson){
+  try{
+    for(const k of Object.keys(sd||{})){ const e=sd[k]; if(!e||e.wk!==wk||(e.b!==u&&e.p!==u)||(e.b===u?e.p:e.b)===other) continue;
+      if((e.st==='on'&&Number(e.ph)===Number(ph))||e.st==='won') return true; }
+    const m=(A&&typeof A==='object'&&A[u]&&typeof A[u]==='object')?A[u]:{}, s=m[wk], y=(s&&typeof s==='object')?s.p:null;
+    if(typeof y!=='string'||!y||y===u||y===other) return false;
+    const n=(A[y]&&typeof A[y]==='object')?A[y]:{}, x=_spAgreeState(u,y,s,n[wk],_spRecFor(sd,wk,ph,u),false,ph,isPerson);
+    return !!x&&(['agreed','agreedLive','inEffect','inEffectNoBid','iChange','theyChange','changeAgreed','changeAgreedNoBid','iCancel','theyCancel','cancelAgreed','cancelNoBid','adminRecorded'].indexOf(x.row)>=0||(x.row==='rejected'&&x.k!=='new'));
+  }catch(_){ return false; }
+}
 // [247 · S2a · §373] STAFF PAGE ONLY: the requests as this page holds them ({} until the listener brings them, and after sign-out), and this page's
 // own arguments to the helpers above - the stage now, the auction's weeks in calendar order, and S1's test for "u has a split in place on wk"
 // (u bids for one there or is its partner: a split of this phase, or one won in an earlier phase - splitsInForce).
 let splitRequestsData={};
 function _srSt(){ return _srStage(phasesData,timerData,lastPhase()); }
 function _srWeekKeys(){ return mondays.map(dateKey); }
-function _srHasSplit(u,wk){ return !!(_spFor(u,wk)||_spPartner(u,wk).length); }
+function _srHasSplit(u,wk){ return !!(_spFor(u,wk)||_spPartner(u,wk).length)||_spAgreedOn(u,wk); } // [249 · S2b · §376–§378] R6: or a staff split recorded, or one agreed, for the stage's phase
 function _srOpen(){ return _srOpenList(splitRequestsData,_srSt(),_splitWeeksOn(),_srWeekKeys(),_srHasSplit); } // the open requests now
 // The refusal the partner of a split in place gets on that week (they place no bid there, §368 3:20 PM).
-function _splitShareText(b){ return 'You share this week with '+b+', who bids for both of you.'; }
+function _splitShareText(b){ return 'You share this week with '+b+', who bids for both of you. Only '+b+' can place or change the bid.'; } // [249 · S2b · §376–§378] R2 / §376 6:33 (3)
+// [249 · S2b · §376–§378] STAFF PAGE ONLY, from here to the end of the block: split agreements as this page holds them, and this page's own arguments
+// to the shared block above. _spAdm = vacations/splits as it arrived, _spStaff = vacations/staffSplits as it arrived; splitsData = their merge,
+// rebuilt at every arrival (the one object every S1 reader reads). splitAgreementsData = everyone's sides ({} until the listener brings them,
+// and after sign-out). typeof = sandbox convention: a suite that lifts the engine without these declarations gets no agreements.
+function _spRebuild(){ splitsData=_spMerge(_spAdm,_spStaff); }
+// u is on the roster (the page's own list, `names`, as the change-log readers' roster filter reads it: before it has arrived, nobody is refused).
+function _spIsPerson(u){ try{ if(typeof u!=='string'||!u) return false; return !(typeof names!=='undefined'&&Array.isArray(names)&&names.length)||names.indexOf(u)>=0; }catch(_){ return false; } }
+function _spSides(){ return (typeof splitAgreementsData!=='undefined'&&splitAgreementsData&&typeof splitAgreementsData==='object')?splitAgreementsData:{}; }
+function _spSideOf(u,wk){ const m=_spSides()[u]; return (m&&typeof m==='object')?m[wk]:undefined; }
+// The bidder b has a live bid on wk (the shared block's `live`, as _splitPartnerCap reads one). Stage 3's agreements are for the next phase,
+// where no bid exists yet: never live there.
+function _spLive(b,wk){ try{ if(!b||_srSt().stage===3) return false; return !!(data&&data[b]&&data[b][wk]!==undefined&&isCurrentPhaseBid(b,wk)); }catch(_){ return false; } }
+// Where me and q stand on wk for the stage's phase (the shared _spAgreeState on this page's data), or null. `live` is asked of the bidder:
+// the recorded entry's (when it is these two's), else the one the sides name.
+function _spStateRaw(me,q,wk){ // [249 · S2b · §381] C: the state as the shared block gives it; _spStateOf (below) reads the passed-over offer on top
+  try{
+    if(typeof splitsData==='undefined'||!me||!q||me===q) return null;
+    const ph=_srSt().ph; if(ph===null||ph===undefined) return null;
+    const mine=_spSideOf(me,wk), theirs=_spSideOf(q,wk), rec=_spRecFor(splitsData,wk,ph,me);
+    let b=null;
+    if(rec&&((rec.b===me&&rec.p===q)||(rec.b===q&&rec.p===me))) b=rec.b;
+    else { const M=_spSideOk(me,mine,_spIsPerson), Q=_spSideOk(q,theirs,_spIsPerson); b=(M&&M.terms&&M.p===q)?M.b:((Q&&Q.terms&&Q.p===me)?Q.b:null); }
+    return _spAgreeState(me,q,mine,theirs,rec,b?_spLive(b,wk):false,ph,_spIsPerson);
+  }catch(_){ return null; }
+}
+// [249 · S2b · §381] C · A PASSED-OVER OFFER, read on this page: my offer to q waits while q has a split on wk with someone else - my card reads
+// "<q> has a split with someone else on this week." [OK] (row 'passedOver'; OK clears my offer); and q's offer to me is not shown to me (null)
+// while I have a split on wk with someone else.
+function _spStateOf(me,q,wk){
+  const s=_spStateRaw(me,q,wk);
+  try{
+    if(s&&(s.row==='iStarted'||s.row==='theyStarted')&&typeof splitsData!=='undefined'){
+      const ph=_srSt().ph;
+      if(s.row==='iStarted'&&_spSplitElsewhere(q,me,wk,ph,_spSides(),splitsData,_spIsPerson)) return Object.assign({},s,{row:'passedOver'});
+      if(s.row==='theyStarted'&&_spSplitElsewhere(me,q,wk,ph,_spSides(),splitsData,_spIsPerson)) return null;
+    }
+  }catch(_){}
+  return s;
+}
+// The other people q on wk with something to show (_spStateOf not null): the one my side names, everyone whose side names me, and the other
+// person of a staff split recorded for the stage's phase that names me.
+function _spPairs(me,wk){
+  const out=[];
+  try{
+    if(!me||!weekMeta[wk]) return out;
+    const st=_srSt(); if(!st.stage) return out;
+    const add=q=>{ if(typeof q==='string'&&q&&q!==me&&out.indexOf(q)<0&&_spStateOf(me,q,wk)) out.push(q); };
+    const A=_spSides(), mine=_spSideOf(me,wk);
+    if(mine&&typeof mine==='object') add(mine.p);
+    for(const x of Object.keys(A)){ if(x===me) continue; const o=_spSideOf(x,wk); if(o&&typeof o==='object'&&o.p===me) add(x); }
+    const r=(typeof splitsData!=='undefined')?_spRecFor(splitsData,wk,st.ph,me):null;
+    if(r&&r.src==='staff') add(r.b===me?r.p:r.b);
+  }catch(_){}
+  return out;
+}
+// R6: the rows in which two people have an AGREED split - row 3 onward (agreed; recorded; a change or a cancel asked or agreed; the admin's
+// split), and a rejected change or cancel (the split stays). Not: waiting for approval, ended, a rejected new agreement, the admin's removal.
+const SP_AGREED=['agreed','agreedLive','inEffect','inEffectNoBid','iChange','theyChange','changeAgreed','changeAgreedNoBid','iCancel','theyCancel','cancelAgreed','cancelNoBid','adminRecorded'];
+function _spAgreedRow(st){ return !!st&&(SP_AGREED.indexOf(st.row)>=0||(st.row==='rejected'&&st.k!=='new')); }
+// u has a staff split recorded for the stage's phase on wk, or an agreed one there with anyone (S1's in-force test is _srHasSplit's own).
+function _spAgreedOn(u,wk){
+  try{
+    if(typeof splitsData==='undefined'||!u) return false;
+    const st=_srSt(); if(!st.stage) return false;
+    const r=_spRecFor(splitsData,wk,st.ph,u); if(r&&r.src==='staff'&&(r.st==='on'||r.st==='won')) return true;
+    return _spPairs(u,wk).some(q=>_spAgreedRow(_spStateOf(u,q,wk)));
+  }catch(_){ return false; }
+}
+// THE BID SAVE (PLAN-S2b §2). The agreed split that user's save of a bid on wk applies, or null: 'record' (agreed, not recorded), 'update' (a
+// change both agreed), 'end' (a cancel both agreed, the bid live) - only for its bidder, only while bidding is open (stage 1) and the switch is
+// On. {act, q, wk, t:{b,p,sp,bh,ph}}: q = the other person, t = the terms the record will hold (for 'end': the recorded ones).
+function _spPending(user,wk){
+  try{
+    if(!user||!wk||typeof splitsData==='undefined'||!_splitWeeksOn()||_srSt().stage!==1) return null;
+    for(const q of _spPairs(user,wk)){
+      const st=_spStateOf(user,q,wk); if(!st||st.b!==user) continue;
+      const act=(st.row==='agreed'||st.row==='agreedLive')?'record':((st.row==='changeAgreed'||st.row==='changeAgreedNoBid')?'update':(st.row==='cancelAgreed'?'end':null));
+      if(act) return {act:act,q:q,wk:wk,t:{b:st.b,p:st.p,sp:st.sp,bh:Number(st.bh),ph:Number(st.ph)}};
+    }
+  }catch(_){}
+  return null;
+}
+// The staff record's entry for that save - all seven fields (why null while on; bh and ph whole numbers, as the rules check them).
+function _spRecEntry(pend,at){ const t=pend.t, end=pend.act==='end'; return {p:t.p,sp:t.sp,bh:Number(t.bh),ph:Number(t.ph),st:end?'off':'on',why:end?'staff':null,at:at}; }
+// The staff record with that entry in it, and _w naming it (a copy).
+function _spStaffWith(pend,wk,at){
+  const st=JSON.parse(JSON.stringify((typeof _spStaff!=='undefined'&&_spStaff&&typeof _spStaff==='object')?_spStaff:{})), b=pend.t.b;
+  if(!st[b]||typeof st[b]!=='object') st[b]={};
+  st[b][wk]=_spRecEntry(pend,at); st._w={b:b,wk:wk};
+  return st;
+}
+// splitsData as it will stand once that entry is recorded (a copy - the merge of the admin's record and the staff record with it; in a sandbox
+// without the two records, splitsData with that one entry on or off).
+function _spAfterData(pend,wk){
+  wk=wk||pend.wk;
+  if(typeof _spAdm!=='undefined'&&typeof _spStaff!=='undefined') return _spMerge(_spAdm,_spStaffWith(pend,wk,Date.now()));
+  const sd=Object.assign({},(typeof splitsData!=='undefined'&&splitsData)||{}), t=pend.t, e=_spRecEntry(pend,Date.now()), k=wk+'|'+t.b;
+  sd[k]={wk:wk,b:t.b,p:e.p,sp:e.sp,bh:e.bh,ph:e.ph,st:e.st,at:e.at,src:'staff'}; if(e.why) sd[k].why=e.why;
+  return sd;
+}
+// Runs fn with the global splitsData set to sd and puts it back in the finally (the _minDropped device): the splits before / after a save, for
+// its synchronous comparisons. fn's value.
+function _withSplits(sd,fn){ if(typeof splitsData==='undefined') return fn(); const was=splitsData; splitsData=sd; try{ return fn(); } finally{ splitsData=was; } }
+// N4 / W8 / W9 for a save that split applies to; '' = none. N4: the other person holds a live bid on the week. W8 / W9: either person's bid cap
+// on the picture after, used over the cap (in tenths, FP-safe - the admin's partner test, not _capOver's one more whole bid), with this bid
+// tagged with the phase as the save will tag it. chg = the bid is new or its amount changed: W9; else W8.
+function _spCapRefusal(user,wk,pend,chg){
+  try{
+    const q=pend.q;
+    if(_spLive(q,wk)){ const n=displayName(q); return "This split can't start while "+n+" has a bid on this week. "+n+" can remove it first."; }
+    const cap=getMaxBidsPerPhase(); if(cap===null||cap===undefined) return '';
+    const t=pend.t, cur=Number(phasesData.currentPhase||1);
+    const had=!!bidPhaseData[user], hk=had&&Object.prototype.hasOwnProperty.call(bidPhaseData[user],wk), was=hk?bidPhaseData[user][wk]:undefined;
+    if(!bidPhaseData[user]) bidPhaseData[user]={};
+    bidPhaseData[user][wk]=cur;
+    let over=false;
+    try{ over=_withSplits(_spAfterData(pend,wk),()=>[t.b,t.p].some(u=>Math.round(Number(bidLimitStatus(u).used)*10)>Math.round(Number(cap)*10))); }
+    finally{ if(!had) delete bidPhaseData[user]; else if(hk) bidPhaseData[user][wk]=was; else delete bidPhaseData[user][wk]; }
+    if(!over) return '';
+    return chg?"This bid can't be placed with your split. One of you would go over the bid cap.":"This split can't start. One of you would go over the bid cap.";
+  }catch(_){ return ''; }
+}
+// [249 · S2b · §381] A · THE PARTNER'S CAP: a NEW bid by the bidder of a split in force on wk (recorded, this phase) - from the bid box, the server's re-check
+// inside the bid's transaction, or a move into wk (noPend) - is refused when it would put the PARTNER over the cap: the partner's count with their
+// half added (the bidder's bid is not live yet, so the half is not in it), in tenths. '' = no refusal. Not when an agreed split will be applied
+// by this save (_spPending; never on a move): _spCapRefusal judges both people on the picture after.
+function _spPartnerOver(user,wk,noPend){
+  try{
+    if(isVisibleBid(user,wk)) return '';
+    const e=_spFor(user,wk); if(!e||e.st!=='on'||Number(e.ph)!==Number(phasesData.currentPhase||1)) return '';
+    if(!noPend&&typeof _spPending==='function'&&_spPending(user,wk)) return '';
+    const st=bidLimitStatus(e.p); if(st.cap===null||st.cap===undefined) return '';
+    const x=Number(st.used)+_splitHalfWeight(e.sp,3-Number(e.bh));
+    return Math.round(x*10)>Math.round(Number(st.cap)*10)?"This bid can't be placed with your split. One of you would go over the bid cap.":'';
+  }catch(_){ return ''; }
+}
+// THE RECORD WRITE (§377 option A): its own batch, just before the bid - the staff record's entry with _w naming it, and its change-log row.
+// Saved: the page's own copy holds it at once (local-first, as the admin's Create) and the merge is rebuilt. true = saved; false = refused,
+// failed or not confirmed in time (the bid is then not saved).
+async function _spRecordWrite(user,wk,pend){
+  try{
+    const at=Date.now(), b=pend.t.b;
+    const bt=writeBatch(db);
+    bt.set(staffSplitsRef,{[b]:{[wk]:_spRecEntry(pend,at)},_w:{b:b,wk:wk}},{merge:true});
+    bt.set(changesRef,{log:arrayUnion(_logEntry(user,wk,pend.act==='end'?'splitEnd':(pend.act==='update'?'splitUpdate':'splitRecord'),undefined,null,{p:pend.q}))},{merge:true});
+    await _awaitWrite(bt.commit());
+    _spStaff=_spStaffWith(pend,wk,at); _spRebuild();
+    return true;
+  }catch(_){ return false; }
+}
+// The bid box's line while an agreed split will apply to the save (R2); '' otherwise.
+function _spBoxLine(user,wk){ try{ const pd=_spPending(user,wk); return pd?'<div id="spBoxLine" style="margin-top:4px;font-size:.72rem;font-weight:600;color:#1f2329">Your split with '+escH(displayName(pd.q))+' applies to this bid.</div>':''; }catch(_){ return ''; } }
+// The Remove box's notice when the saver bids for a split in force on wk (§376 6:30 / 6:33 (1)); '' otherwise.
+function _spRemoveNote(user,wk){ try{ const e=_spFor(user,wk); return e?'<div style="margin-top:8px;font-size:.85rem;color:#1f2329">The split with '+escH(displayName(e.p))+' stays in effect. To end it, you both need to agree to cancel it in Split weeks.</div>':''; }catch(_){ return ''; } }
+// The partner of the split in force on wk whose bidder is u (on the picture after, sp.after, when given), or null - the partner's e-mails (§2.6).
+function _spPartnerOf(u,wk,sp){ try{ const f=()=>{ const e=_spFor(u,wk); return e?e.p:null; }; return (sp&&sp.after)?_withSplits(sp.after,f):f(); }catch(_){ return null; } }
+// THE ALERT CANCEL (§2.7): after a confirmed save of a new or changed bid, the saver's own alert on that week is deleted (their own entry,
+// _alWrite), and the line says so. No e-mail (R5: an alert write sends none).
+function _spAlertCancel(user,wk){
+  try{
+    if(typeof _alWatch!=='function'||!_alWatch(user,wk)) return;
+    const n=weekMeta[wk].weekNum;
+    Promise.resolve(_alWrite(user,{watchDel:[wk]})).then(ok=>{ if(ok===true) _alToast('Your alert on Week '+n+' is cancelled: you have a bid there now.'); else if(ok===null) _alToast(AL_LATE); }).catch(()=>{});
+  }catch(_){}
+}
 // THE BID CAP'S SHARES (PLAN §3, Q3). A place on a week counts 1, or the person's own half (0.6 / 0.4) when they bid for a split in force there.
 function _splitCapShare(u,wk){ const e=_spFor(u,wk); return e?_splitHalfWeight(e.sp,Number(e.bh)):1; }
 // A partner's halves: prior = splits won in an earlier phase; live = splits of this phase whose bidder's bid is placed (denied ones too, as myCountedWeeks counts them).
@@ -2618,6 +2929,17 @@ function bidLimitStatus(user){
   const used=Math.round((prior+live)*10)/10;
   return {lim:cap, cap, prior, live, count:used, used, atLimit: cap!==null && (typeof _capOver==='function'?_capOver(used,cap):used>=cap), remaining: cap===null?null:Math.max(0,Math.round((cap-used)*10)/10)}; // [410 · split weeks, Q3] one more whole bid would go over
 }
+// [249 · S2b · his 9 Nov 2026 9:54 PM] THE CAP COUNTS A SPLIT BID AS ITS HALF. The share a NEW bid on wk adds to user's count: the bidder's half when a split applies to it - one
+// in force (_splitCapShare), or the agreed one this save records (_spPending; its new terms for a change, a whole bid for an agreed cancel) - else 1,
+// a whole bid (S1 Q3). noPend: a move (R8 - a move never records a split, so only one in force counts as a half).
+function _newBidShare(user,wk,noPend){
+  try{
+    if(!noPend&&typeof _spPending==='function'){ const pd=_spPending(user,wk); if(pd) return pd.act==='end'?1:_splitHalfWeight(pd.t.sp,Number(pd.t.bh)); }
+    return (typeof _splitCapShare==='function')?_splitCapShare(user,wk):1;
+  }catch(_){ return 1; }
+}
+// A new bid on wk would put user over the cap (FP-safe, in tenths); with a share of 1 exactly bidLimitStatus(user).atLimit.
+function _newBidOver(user,wk,noPend){ const s=bidLimitStatus(user); return s.cap!==null&&s.cap!==undefined&&Math.round((Number(s.used)+_newBidShare(user,wk,noPend)-Number(s.cap))*10)/10>0; }
 // Show the "bid limit reached" modal with text that matches the current admin limit.
 function showBidLimitModal(){
   const cur=Number(phasesData.currentPhase||1);
@@ -3464,13 +3786,21 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot, expect, rmMode
       let count=priorApprovedCount(user); const uw=prevSnapshot[user]||{};
       for(const w in uw){ if(getUserBidPhase(user,w)===cur) count+=(typeof _splitCapShare==='function'?_splitCapShare(user,w):1); } // denied bids still count — placed this phase · [410 · split weeks] a split's bidder: their half
       count+=(typeof _splitPartnerCap==='function'?_splitPartnerCap(user).live:0); // [410 · split weeks] a partner's half of every live split bid
-      if((typeof _capOver==='function'?_capOver(count,lim):count>=lim)){ // [410 · split weeks, Q3]
+      if((typeof _newBidShare==='function'?Math.round((count+_newBidShare(user,wk)-lim)*10)/10>0:(typeof _capOver==='function'?_capOver(count,lim):count>=lim))){ // [410 · split weeks, Q3] · [249 · S2b · his 9 Nov 2026 9:54 PM] a split bid counts as its half
         if(data[user]&&prevSnapshot[user]?.[wk]===undefined) delete data[user][wk]; // undo optimistic add
         scheduleRender();
         showCenterAlert("You've reached your bid cap. Remove a bid first."); // [228 · §297]
         return false;
       }
     }
+  }
+  // [249 · S2b · §376–§378] THE SPLIT THIS SAVE APPLIES (PLAN-S2b §2): an agreed split with this person as its bidder (_spPending) - never on a removal; a move
+  // or a swap never comes here (R8). Checked on the page before anything is written: N4 / W8 / W9 (_spCapRefusal), shown in the [OK] box.
+  const _spPend=(bid!==null&&bid!==undefined&&typeof _spPending==='function')?_spPending(user,wk):null;
+  if(_spPend){
+    const _spPv=prevSnapshot?prevSnapshot[user]?.[wk]:undefined;
+    const _spNo=_spCapRefusal(user,wk,_spPend,!(_spPv!==undefined&&isCurrentPhaseBid(user,wk)&&JSON.stringify(_spPv)===JSON.stringify(bid)));
+    if(_spNo){ showCenterAlert(_spNo); return false; }
   }
   if(saveInProgress){ showCenterAlert("Still saving your last change — try again in a moment."); return false; } // L-2: was a silent no-op; tell the user instead · [228 · §297] item 77 (four places)
   saveInProgress=true;
@@ -3480,6 +3810,15 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot, expect, rmMode
     // write below reclassifies a leftover completed-phase value as current-phase before the
     // change model is built, which is exactly how a dead prior-phase bid got scored as
     // "already competing" in the before-picture (audit 20 Aug, double-confirmed CRITICAL).
+    // [249 · S2b · §376–§378] THE RECORD WRITE FIRST (§377 option A): its own batch; refused or not confirmed - the save-error line, and no bid. Saved - the
+    // page's own copy holds the split at once, and the comparisons below see it: _spCmp = the splits before / after and the week (undefined
+    // when no split applies: every comparison exactly as before). The bid's own save below is unchanged in shape.
+    let _spCmp;
+    if(_spPend){
+      const _spB4=splitsData;
+      if(!(await _spRecordWrite(user,wk,_spPend))){ showError("Save failed. Please try again."); return false; }
+      _spCmp={before:_spB4,after:splitsData,wk:wk};
+    }
     const _preTagCurrent=isCurrentPhaseBid(user,wk);
     // [158 · RA-H2] Capture the raw LOCAL tag too. The Firestore web SDK's latency-
     // compensated listener echo replaces bidPhaseData WHOLESALE the moment the remove
@@ -3507,7 +3846,8 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot, expect, rmMode
     // it "no change" against an entry nobody was competing with.
     const _prevRaw=prevSnapshot?.[user]?.[wk];
     const _prevVal=_preTagCurrent?_prevRaw:undefined;
-    const _sameVal=bid!==null&&bid!==undefined&&_prevVal!==undefined&&JSON.stringify(bid)===JSON.stringify(_prevVal);
+    const _sameBid=bid!==null&&bid!==undefined&&_prevVal!==undefined&&JSON.stringify(bid)===JSON.stringify(_prevVal);
+    const _sameVal=_sameBid&&!_spCmp; // [249 · S2b · §376–§378] §2.4: a split this save records, changes or ends is a change
     let _beforeSnap=prevSnapshot;
     if(prevSnapshot&&!_preTagCurrent&&_prevRaw!==undefined){
       _beforeSnap=JSON.parse(JSON.stringify(prevSnapshot));
@@ -3543,12 +3883,12 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot, expect, rmMode
         // tDur is capped at the starting reset length: an opening-window clock is days long, and its last
         // hours must not read as "under 10% left" (the monitor has always measured against the stage length there).
         if(timerData.enabled&&timerData.lastChange){ _fpF.f.tRem=Math.round(_remBefore); _fpF.f.tDur=Math.min((timerData.durationHours||48),stage0Hours())*3600000; }
-        if(prevSnapshot&&_afterSnap) _fpF.f.aff=_sameVal?false:!!_changeAffectsOthers(_beforeSnap,_afterSnap,user);
+        if(prevSnapshot&&_afterSnap) _fpF.f.aff=_sameVal?false:!!_changeAffectsOthers(_beforeSnap,_afterSnap,user,_spCmp);
       }catch(_){ _fpF=null; }
       // The timer DECISION, made here; the timer write itself happens only once the save is confirmed (_timerResetWrite, which
       // checks extend-only again then).
       if(timerData.enabled&&_remBefore>0&&!_sameVal&&!openingWindowActive()
-         &&_timerModeAllowsReset(_timerResetMode(),_isNewBid,_beforeSnap,_afterSnap,user)){ // [154 · AUD-C2]
+         &&_timerModeAllowsReset(_timerResetMode(),_isNewBid,_beforeSnap,_afterSnap,user,_spCmp)){ // [154 · AUD-C2]
         const _n=Date.now(); const _resetH=timerResetHours(timerPhaseStartMs(),_n);
         // [AUDIT 2026-07-26 H5/H8] Extend-only: firestore.rules now REJECT any user timer
         // write whose deadline lands earlier than the current one, so a bidder can no longer
@@ -3598,12 +3938,13 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot, expect, rmMode
         bidPhaseData[user][wk]=info.ph;
       }
       if(_resetWanted) _timerResetWrite();
+      if(!_rm&&!_sameBid&&typeof _spAlertCancel==='function') _spAlertCancel(user,wk); // [249 · S2b · §376–§378] §2.7: a new or changed bid cancels the saver's own alert on the week (any bid)
       if(prevSnapshot){ // [236 · §317] written whether or not alert e-mails are on: the mail server checks the switch when it sends
         // Any change to another user's DISPLAYED outcome — lose/under-review -> win as well
         // as win -> lose -> under review — is detected and notified. [§147] draw and review
         // are one displayed state, so a tie forming or dissolving sends nothing and does not
         // reset the clock. (_afterSnap built above, shared with the timer-mode gate.)
-        sendEmailNotifications(_beforeSnap,_afterSnap,user).catch(()=>{}); // [154 · AUD-C2] · [236 · §317] no hold argument: the mail server combines a person's alerts
+        sendEmailNotifications(_beforeSnap,_afterSnap,user,_spCmp).catch(()=>{}); // [154 · AUD-C2] · [236 · §317] no hold argument: the mail server combines a person's alerts
       }
       if((bid===null||bid===undefined)&&bidPhaseData[user]) delete bidPhaseData[user][wk]; // [155 · AUD-H1] deferred remove-path tag cleanup (see note above)
       if(info&&info.markGone&&bidPhaseData[user]&&bidPhaseData[user].mv&&typeof bidPhaseData[user].mv==='object') delete bidPhaseData[user].mv[wk]; // [216 · §282] Strict only: the page's copy of the moved mark leaves with the bid (markGone is never set under Standard)
@@ -3729,7 +4070,7 @@ function _wwContested(wk,snap){
     const ev=[], there=new Set(), seen=new Set(), always=new Set(), late=Date.now()+600000;
     for(const e of log){
       if(!e||e.weekKey!==wk||typeof e.user!=='string'||!e.user) continue;
-      if(e.action==='splitReq'||e.action==='splitReqOff') continue; // [247 · S2a · §373] a split request's row is not a bid change
+      if(_isSplitLog(e.action)) continue; // [247 · S2a · §373] a split request's row is not a bid change · [249 · S2b · §376–§378] nor any split agreement's row
       if(_wwRoster&&_wwRoster.indexOf(e.user)<0) continue; // [216 · §282] Strict only (rule 8, his q7 "yes"): an entry naming someone not on the roster is ignored
       if(typeof e.ts==='number'&&e.ts<since) continue; // before this phase's (round's) record - 195's own skip, kept FIRST so nothing it skipped is counted here
       if(typeof e.ts!=='number'||!isFinite(e.ts)||e.ts>late){ always.add(e.user); there.add(e.user); seen.add(e.user); continue; } // no usable time, or a clock running ahead: counted throughout
@@ -3915,7 +4256,7 @@ function _weLeftLevel(wk,just){
     let lastArr=null, lastTs=null;
     for(const e of log){
       if(!e||e.weekKey!==wk||typeof e.user!=='string'||!e.user) continue;
-      if(e.action==='splitReq'||e.action==='splitReqOff') continue; // [247 · S2a · §373] a split request's row is not a bid change
+      if(_isSplitLog(e.action)) continue; // [247 · S2a · §373] a split request's row is not a bid change · [249 · S2b · §376–§378] nor any split agreement's row
       if(typeof e.ts==='number'&&e.ts<since) continue;
       const p=st[e.user]||(st[e.user]={on:false,seen:false,v:undefined});
       if(e.action!=='removed'){ p.on=true; p.seen=true; if(e.bidValue!==undefined&&e.bidValue!==null) p.v=e.bidValue; continue; }
@@ -4423,7 +4764,7 @@ function openPriorityModal(wk){
   const isRebid=existingPrio!==undefined;
   // Alert as soon as the user tries to add a NEW bid beyond the per-phase limit —
   // before they even pick a priority.
-  if(!isRebid&&bidLimitStatus(user).atLimit){ showBidLimitModal(); return; }
+  if(!isRebid&&(typeof _newBidOver==='function'?_newBidOver(user,wk):bidLimitStatus(user).atLimit)){ showBidLimitModal(); return; } // [249 · S2b · his 9 Nov 2026 9:54 PM] a split bid counts as its half
   // Priorities used in prior phases where the user WON are permanently unavailable to reuse.
   // Losses and denials return the bid to the user for the next phase.
   const _usedBy=Object.create(null); // [405 · §342 · plan S1] where each number in `used` came from: the first source that put it there
@@ -4449,6 +4790,7 @@ function openPriorityModal(wk){
     let html=`<div style="font-weight:700;color:#1f2329;font-size:.95rem">${meta.range}</div>`;
     if(meta.special) html+=`<div style="margin-top:4px;color:${meta.special.color};font-size:.72rem;font-weight:600">${String(meta.special.label).replace(/(?:\p{Extended_Pictographic}|\p{Regional_Indicator})[\uFE0E\uFE0F\u200D]*\s?/gu,'')}${summerAlso(meta)?' · Summer':''}</div>`; // [398 · §302] W38: no "· High demand" tag
     if(typeof _wwLabelOn==='function'&&_wwLabelOn(wk)){ html+='<div style="margin-top:4px;font-size:.72rem">'+COMP_LABEL_HTML+'</div>'; const _mb=(typeof _wwMinBid==='function')?_wwMinBid(wk):null; if(_mb!==null) html+='<div id="wwMinLine" style="margin-top:2px;font-size:.72rem">'+_wwMinHtml(_mb)+'</div>'; } // [196 · §250] the same label as the week card; typeof = sandbox convention · [214 · §279] and the minimum bid
+    if(typeof _spBoxLine==='function') html+=_spBoxLine(user,wk); // [249 · S2b · §376–§378] R2: "Your split with <name> applies to this bid."
     winfo.innerHTML=html;
   }
   document.getElementById("prioStep1").style.display="block";
@@ -4554,7 +4896,7 @@ window.reviewBid=function(){
     const conflicts=priorities.filter(p=>usedElsewhere.includes(p));
     if(conflicts.length){showError("Bid"+(conflicts.length>1?"s":"")+" "+conflicts.join(", ")+" already used on another week.");return;}
     const isNew=!isVisibleBid(user,pendingWeek);
-    if(isNew&&bidLimitStatus(user).atLimit){showBidLimitModal();return;}
+    if(isNew&&(typeof _newBidOver==='function'?_newBidOver(user,pendingWeek):bidLimitStatus(user).atLimit)){showBidLimitModal();return;} // [249 · S2b · his 9 Nov 2026 9:54 PM] a split bid counts as its half
   }
   // [193 · §245] The weakest-winning-bid rule, checked before the confirm step (and again at commit).
   if(typeof _wwRefuses==='function'&&_wwRefuses(user,pendingWeek,_bfParse(val))!==false){ showError(_wwMsg()); return; } // typeof = sandbox convention
@@ -4597,7 +4939,7 @@ window.reviewBid=function(){
 // shown or written here. The answer: ok with blSpend (a sanctioned lowering, or null), newVal (the bid as saved) and isNP; or a
 // refusal with how the box showed it - kind 'error' = showError, 'center' = showCenterAlert, 'limit' = showBidLimitModal - and close
 // (the box closed after it). _checkShow shows it exactly so. `!val` stays in confirmPriority.
-function _bidCheck(user,wk,val){
+function _bidCheck(user,wk,val,noPend){ // [249 · S2b · his 9 Nov 2026 9:54 PM] noPend: a move (_mvGate) - only a split in force counts as a half
   const no=(kind,msg,close)=>({ok:false,kind:kind,msg:msg,close:close});
   // ALL gates run BEFORE any write. Previously the priority-lock, change-log,
   // and bid-time writes happened first, so a bid rejected by a gate (timer
@@ -4606,7 +4948,8 @@ function _bidCheck(user,wk,val){
   if(!biddingOpen()) return no('error',"Bidding hasn't started yet.",true);
   if(isAuctionClosed()) return no('error',"Bidding is closed.",true);
   if(locksData.globalLock||locksData.weeks?.[wk]) return no('error',"This week is locked.",true);
-  if(!isVisibleBid(user,wk)&&bidLimitStatus(user).atLimit) return no('limit','',true);
+  if(!isVisibleBid(user,wk)&&(typeof _newBidOver==='function'?_newBidOver(user,wk,noPend):bidLimitStatus(user).atLimit)) return no('limit','',true); // [249 · S2b · his 9 Nov 2026 9:54 PM]
+  { const _po=(typeof _spPartnerOver==='function')?_spPartnerOver(user,wk,noPend):''; if(_po) return no('center',_po,true); } // [249 · S2b · §381] A: the partner's cap (a split in force), shown as W9
   if(val==="NP"&&!npAllowedNow()) return no('center',"NP bids aren't allowed in "+phaseShort(Number(phasesData.currentPhase||1))+".",true);
   // [217 · §285] W6: a combination the admin does not allow is refused (a stale page, a hand-edited list) - on the page's copy and on the server's.
   if(val!=="NP"&&typeof comboAllowed==='function'&&!comboAllowed(String(val).split(',').map(p=>parseInt(p.trim())).filter(p=>!isNaN(p)))) return no('center',"That combination bid is not available in this auction.",true);
@@ -4655,7 +4998,7 @@ function _bidCheck(user,wk,val){
   const conflicts=priorities.filter(p=>usedElsewhere.includes(p));
   if(conflicts.length) return no('error',"Bid"+(conflicts.length>1?"s":"")+" "+conflicts.join(", ")+" already used on another week.",false);
   const isNew=!isVisibleBid(user,wk);
-  if(isNew&&bidLimitStatus(user).atLimit) return no('limit','',true);
+  if(isNew&&(typeof _newBidOver==='function'?_newBidOver(user,wk,noPend):bidLimitStatus(user).atLimit)) return no('limit','',true); // [249 · S2b · his 9 Nov 2026 9:54 PM]
   return {ok:true,blSpend:_blSpend,newVal:priorities.length===1?priorities[0]:priorities,isNP:false};
 }
 // [215 · §282] Shows a refusal from _bidCheck or _removeCheck exactly as the code that stood in the box showed it.
@@ -5061,7 +5404,7 @@ async function removeSelection(wk){
   // box and its two buttons, no lock note and no competition note.
   const msg=`<div style="font-size:.95rem;font-weight:600;color:#1f2329">Remove your bid for <span style="color:#1f2329">Week ${meta.weekNum}</span> (${meta.range})?</div>
   <div style="margin-top:8px;font-size:.85rem;color:#1f2329">Current bid: <strong style="color:#4e5e36">${escH(bidLbl(prio))}</strong></div>`; // [228 · §297] item 124 · [405 · §342 · plan S3] and nothing after it
-  const _rmAsk=showConfirm(msg,{yesText:'Remove',noText:'Cancel'}); // [228 · §297] item 133
+  const _rmAsk=showConfirm(msg+(typeof _spRemoveNote==='function'?_spRemoveNote(user,wk):''),{yesText:'Remove',noText:'Cancel'}); // [249 · S2b · §376–§378] the split notice after it, for the bidder of a split in force there (§376 6:30 / 6:33 (1)) // [228 · §297] item 133
   if(!await _rmAsk) return;
   { const _lr=(typeof _saveRefusal==='function')?_saveRefusal():null; if(_lr){ showCenterAlert(_lr); return; } } // [215 · §282] and again after Confirm
   const _prev=JSON.parse(JSON.stringify(data));
@@ -5207,7 +5550,7 @@ function _mvGate(user,src,dst,val){
     const pic=JSON.parse(JSON.stringify(data||{}));
     if(pic[user]&&typeof pic[user]==='object') delete pic[user][src];
     data=pic;
-    return _bidCheck(user,dst,val);
+    return _bidCheck(user,dst,val,true); // [249 · S2b · his 9 Nov 2026 9:54 PM] a move records no split
   } finally { data=keep; }
 }
 // The destinations, sorted: (a) knocked out there by someone else's change this phase and still standing - the port above,
@@ -5659,7 +6002,7 @@ function changeEventsRecent(){
   // resetAt fences off everything from before the last phase close — the
   // counters read 0 the moment a phase completes (same rule as the admin site).
   const cutoff=Math.max(Date.now()-ACTIVITY_WINDOW_MS, changesData.resetAt||0);
-  const log=(changesData.log||[]).filter(e=>e&&typeof e.ts==='number'&&e.ts>=cutoff&&!isDecisionEntry(e)&&!isSystemEntry(e)&&e.action!=='splitReq'&&e.action!=='splitReqOff'); // [247 · S2a · §373] a split request's row is not a change of a bid
+  const log=(changesData.log||[]).filter(e=>e&&typeof e.ts==='number'&&e.ts>=cutoff&&!isDecisionEntry(e)&&!isSystemEntry(e)&&!_isSplitLog(e.action)); // [247 · S2a · §373] a split request's row is not a change of a bid · [249 · S2b · §376–§378] nor any split agreement's row
   const logged=new Set(log.map(e=>(e.user||'')+'|'+(e.weekKey||'')));
   const extras=[];
   for(const u in bidTimesData){ const m=bidTimesData[u]||{}; for(const wk in m){ const t=m[wk]; if(typeof t==='number'&&t>=cutoff&&!logged.has(u+'|'+wk)) extras.push({id:'bt_'+u+'_'+wk,user:u,weekKey:wk,action:'added',actor:'sim',ts:t}); } }
@@ -5864,7 +6207,7 @@ function _blindSync(){
 }
 function renderNotifications(user,ap){
   const cut48=Date.now()-48*3600000;
-  const log48=(changesData.log||[]).filter(e=>e.ts>=cut48&&!isDecisionEntry(e)&&!isSystemEntry(e)&&e.action!=='splitReq'&&e.action!=='splitReqOff'); // [247 · S2a · §373] a split request's row is not a change of a bid
+  const log48=(changesData.log||[]).filter(e=>e.ts>=cut48&&!isDecisionEntry(e)&&!isSystemEntry(e)&&!_isSplitLog(e.action)); // [247 · S2a · §373] a split request's row is not a change of a bid · [249 · S2b · §376–§378] nor any split agreement's row
   // [230 · E1] "your weeks" for this chip: this phase's own bids (an earlier phase's or RVA Round's are not) - as the My Bids list.
   const myWeeks=new Set(myActiveWeeks(user));
   const userBidTimes=bidTimesData[user]||{};
@@ -6064,7 +6407,7 @@ function _lockedCard(user,wk,ap){
   wn.style.cssText="font-size:.62rem;font-weight:700;color:"+((wonIn||proj)?"#1f2329":"#5e5c57")+";text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px";
   wn.textContent="Week "+meta.weekNum; div.appendChild(wn);
   if(typeof _alBellHtml==='function'){ const _bell=_alBellHtml(user,wk); if(_bell) wn.insertAdjacentHTML('beforeend',_bell); } // [220 · §288 · plan §11m] the same marker on a locked week's card: an alert set before the lock stays set
-  if(typeof _srIconHtml==='function'){ const _sri=_srIconHtml(wk); if(_sri) wn.insertAdjacentHTML('beforeend',_sri); } // [247 · S2a · §373] icon E on a locked card too: the icon is its only tap target · [248 · §375] drawn in the card's corner (CSS)
+  if(typeof _srIconHtml==='function'){ const _sri=_srIconHtml(wk,!!wonIn); if(_sri) wn.insertAdjacentHTML('beforeend',_sri); } // [249 · S2b · §376–§378] not on a week won · [247 · S2a · §373] icon E on a locked card too: the icon is its only tap target · [248 · §375] drawn in the card's corner (CSS)
   const dl=document.createElement("div"); dl.className="week-day-label";
   dl.textContent=meta.range; div.appendChild(dl);
   if(meta.special){
@@ -6145,7 +6488,7 @@ function renderCalendar(user,ap){
       wn.style.cssText="font-size:.62rem;font-weight:700;color:#1f2329;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px";
       wn.textContent="Week "+meta.weekNum; div.appendChild(wn);
       if(typeof _alBellHtml==='function'){ const _bell=_alBellHtml(user,wk); if(_bell) wn.insertAdjacentHTML('beforeend',_bell); } // [220 · §288 · plan §11m] the 🔔 marker on this person's own alert week: beside the week number, where it crowds nothing; no tap of its own
-      if(typeof _srIconHtml==='function'){ const _sri=_srIconHtml(wk); if(_sri) wn.insertAdjacentHTML('beforeend',_sri); } // [247 · S2a · §373] icon E while the week has an open split request · [248 · §375] drawn in the card's corner (CSS)
+      if(typeof _srIconHtml==='function'){ const _sri=_srIconHtml(wk,priorWon); if(_sri) wn.insertAdjacentHTML('beforeend',_sri); } // [249 · S2b · §376–§378] not on a week won · [247 · S2a · §373] icon E while the week has an open split request · [248 · §375] drawn in the card's corner (CSS)
       // [196 · §250] "Competition week", at the top, right of the week number (owner's placement). The row becomes two-ended ONLY on a labelled card.
       if(typeof _wwLabelOn==='function'&&_wwLabelOn(wk)){ wn.style.display='flex'; wn.style.justifyContent='space-between'; wn.style.alignItems='baseline'; wn.style.gap='6px'; wn.insertAdjacentHTML('beforeend',COMP_LABEL_HTML); const _mb=(typeof _wwMinBid==='function')?_wwMinBid(wk,ap):null; if(_mb!==null){ const _mr=document.createElement('div'); _mr.className='comp-min-row'; _mr.style.cssText='font-size:.62rem;text-align:right;line-height:1.2;margin:-1px 0 2px'; _mr.innerHTML=_wwMinHtml(_mb); div.appendChild(_mr); } } // typeof = sandbox convention · [214 · §279] the minimum new bid on its own row under the label
       // Line 1: e.g. "Nov 21 – Nov 27" (Sunday-start range)
@@ -6573,14 +6916,16 @@ function _giOutcome(snap,user,wk,bid){
 // asked, the actor's "removed" row for every week they left is in the change log (the competition test reads the log - without the row a week
 // the leaving bid alone made a competition week looked open), taken out again in a finally. So a get-in line, and the countdown's get-in clause,
 // never name a bid the bid box would refuse once the change is in.
-function _giOpenings(prevSnap,newSnap,actor,evenIfOff){
+function _giOpenings(prevSnap,newSnap,actor,evenIfOff,sp){ // [249 · S2b · §376–§378] sp (optional): the splits before / after, and the split's week (walked too)
   const res={};
   try{
     if(!_alLoaded||!_lwLoaded.best||!_lwLoaded.holds||!(_boardLoaded&&_boardLoaded.changes===true)) return res;
     if(locksData.globalLock) return res; // [236 · §317] the admin's alert switch is the mail server's to check
     const pa=(prevSnap&&prevSnap[actor]&&typeof prevSnap[actor]==='object')?prevSnap[actor]:{};
     const na=(newSnap&&newSnap[actor]&&typeof newSnap[actor]==='object')?newSnap[actor]:{};
-    for(const {wk,how} of _lwActorWeakened(prevSnap,newSnap,actor)){
+    const _wks=_lwActorWeakened(prevSnap,newSnap,actor);
+    if(sp&&sp.wk&&!_wks.some(x=>x.wk===sp.wk)) _wks.push({wk:sp.wk,how:'lowered'}); // [249 · S2b · §376–§378] the week of a split this save records, changes or ends: it can open room there (§2.5). 'lowered': the mail server's word nearest to it (the place takes less)
+    for(const {wk,how} of _wks){
       if(!weekMeta[wk]||locksData.weeks?.[wk]) continue;
       const just=(na[wk]===undefined||na[wk]===null)?pa[wk]:undefined; // the actor's removal has no change-log entry yet: its bid is the last one that left (as _lwReturns)
       for(const user of Object.keys(alertPrefsData||{})){
@@ -6590,12 +6935,12 @@ function _giOpenings(prevSnap,newSnap,actor,evenIfOff){
         const nu=(newSnap&&newSnap[user]&&typeof newSnap[user]==='object')?newSnap[user]:{};
         if((pu[wk]!==undefined&&pu[wk]!==null)||(nu[wk]!==undefined&&nu[wk]!==null)) continue; // a bid there: the projection lines speak for it
         if(getPriorPhaseWinners(wk).has(user)) continue;
-        const before=_giJudge(prevSnap,user,wk,w.bid);
+        const before=sp?_withSplits(sp.before,()=>_giJudge(prevSnap,user,wk,w.bid)):_giJudge(prevSnap,user,wk,w.bid); // [249 · S2b · §376–§378] each picture with its own splits
         if(before!=='refused'&&before!=='lose') continue;
         const _lg=(changesData&&Array.isArray(changesData.log))?changesData.log:null, _rows=[]; let after;
         try{
           if(_lg) for(const x of Object.keys(pa)){ if(pa[x]!==undefined&&pa[x]!==null&&(na[x]===undefined||na[x]===null)&&!_lentHas(_lg,actor,x,pa[x])){ const e={user:actor,weekKey:x,action:'removed',actor:'user',ts:Date.now(),bidValue:JSON.parse(JSON.stringify(pa[x]))}; _lg.push(e); _rows.push(e); } }
-          after=_giJudge(newSnap,user,wk,w.bid,just);
+          after=sp?_withSplits(sp.after,()=>_giJudge(newSnap,user,wk,w.bid,just)):_giJudge(newSnap,user,wk,w.bid,just);
         } finally { for(const e of _rows){ const i=_lg.lastIndexOf(e); if(i>=0) _lg.splice(i,1); } }
         if(after!=='win'&&after!=='review') continue;
         (res[user]=res[user]||{})[wk]={how:how,bid:w.bid,out:after}; // [236 · §317] no text: the alert carries the line as data
@@ -7234,7 +7579,7 @@ function openSplitBox(wk){
   const me=getCurrentUser(), m=document.getElementById('splitModal'); if(!me||!m) return;
   if(!_splitWeeksOn()||!_srSt().stage) return;
   const from=(typeof wk==='string'&&wk)?wk:null, ws=_srMyWeeks(me);
-  _srBox.open=true; _srBox.half=null; _srBox.html={}; _srBox.opener=from?document.activeElement:null;
+  _srBox.open=true; _srBox.half=null; _srBox.html={}; _saF=null; _srBox.opener=from?document.activeElement:null; // [249 · S2b · §376–§378] the form closed
   _srBox.wk=(from&&ws.indexOf(from)>=0)?from:(ws[0]||null);
   _srPaint(); m.classList.add('show');
   try{ const mc=m.querySelector('.modal-content'); if(mc) mc.scrollTop=0; const t=document.getElementById('srTitle'); if(t) t.focus({preventScroll:true}); }catch(_){}
@@ -7247,9 +7592,10 @@ function _srPaint(){
     const me=getCurrentUser(), m=document.getElementById('splitModal'); if(!me||!m||!_srBox.open) return;
     const st=_srSt(), ro=st.stage===2, busy=_srBox.busy, rows=_srOpen();
     const lh=rows.length?rows.map(r=>'<div class="al-gi-row sr-row" data-sr-row="'+escH(r.u+'|'+r.wk)+'"><span class="al-gi-t">'+escH(displayName(r.u)+' · '+_alWeekName(r.wk)+' · '+_srAvailText(r.h))+'</span>'
-        +((r.u===me&&!ro)?'<span class="al-gi-b"><button type="button" class="al-gi-rm" data-sr-withdraw="'+escH(r.wk)+'"'+(busy?' disabled':'')+'>Withdraw</button></span>':'')+'</div>').join('')
+        +((r.u===me&&!ro)?'<span class="al-gi-b"><button type="button" class="al-gi-rm" data-sr-withdraw="'+escH(r.wk)+'"'+(busy?' disabled':'')+'>Withdraw</button></span>':((!ro&&typeof _saReqBtn==='function')?_saReqBtn(r,me,busy):''))+'</div>').join('') // [249 · S2b · §376–§378] others' rows: Start agreement
       :'<div class="al-gi-none">No open requests.</div>';
     const list=document.getElementById('srOpenList'); if(list&&_srBox.html.list!==lh){ list.innerHTML=lh; _srBox.html.list=lh; }
+    if(typeof _saPaint==='function') _saPaint(me,st,ro,busy); // [249 · S2b · §376–§378] My agreements and the form
     const pw=document.getElementById('srPostWrap'), fz=document.getElementById('srFrozen');
     if(pw) pw.hidden=ro;
     if(fz) fz.hidden=!ro;
@@ -7265,6 +7611,7 @@ function _srPaint(){
 function _srClose(){
   try{ const m=document.getElementById('splitModal'); if(m) m.classList.remove('show'); }catch(_){}
   _srBox.open=false; _srBox.html={};
+  if(typeof _saFormReset==='function') _saFormReset(); // [249 · S2b · §376–§378] the form closes with the box
 }
 // Done, the dark backdrop and Escape: the box closes; focus back on icon E that opened it, else on the ☰ button (as the alerts box).
 function _srDone(){
@@ -7313,9 +7660,9 @@ async function _srWithdraw(wk){
 }
 // ICON E (W13, "Split request") on a week's card while that week has an open request (anyone's, mine too): the icon alone is the tap target;
 // its tap opens the box at that week and goes no further (the rest of a locked card stays inert). '' = no icon: the card as it is.
-function _srIconHtml(wk){
+function _srIconHtml(wk,won){ // [249 · S2b · §376–§378] R4: won = the viewer won this week - no icon there
   try{
-    if(!_splitWeeksOn()||!_srOpen().some(r=>r.wk===wk)) return '';
+    if(won===true||!_splitWeeksOn()||!_srOpen().some(r=>r.wk===wk)) return '';
     return '<button type="button" class="sr-icon" aria-label="Split request" title="Split request" data-sr-wk="'+escH(wk)+'" onclick="event.stopPropagation();window.openSplitBox(this.getAttribute(\'data-sr-wk\'))"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M4.9 19.1 19.1 4.9"/></svg></button>';
   }catch(_){ return ''; }
 }
@@ -7326,6 +7673,311 @@ function _srIconHtml(wk){
   _sm.addEventListener('change',ev=>{ try{ const t=ev.target; if(!t) return; if(t.id==='srWeek') _srBox.wk=t.value; else if(t.name==='srHalf'&&t.checked) _srBox.half=t.value; else return; _srPaint(); }catch(_){} });
 } }
 try{ document.addEventListener('keydown',ev=>{ try{ if(ev.key!=='Escape'||!_srBox.open) return; const _cm=document.getElementById('confirmModal'); if(_cm&&_cm.classList.contains('show')) return; _srDone(); }catch(_){} }); }catch(_){}
+
+// ── [249 · S2b · §376–§378] MY AGREEMENTS AND THE AGREEMENT FORM (PLAN-S2b §1; SPEC-S2b §3.4–§3.6) ──────────────────────────────────────────
+// In the Split weeks box, between Open requests and Post a request: one card per (week, other person) with something to show (_spPairs), in
+// calendar order, each drawn from where the two stand (_spStateOf → _saView: its lines and its buttons); stage 2: the cards without buttons.
+// Each action checks the switch, the stage and the row again at the moment of saving (otherwise only a repaint) and saves ONE batch: my own
+// side for the week (all nine fields, or its delete) and its change-log row - the cancel that ends a recorded split writes the staff record's
+// end in the same batch. The form (#saForm) is a view of the box of its own: the rest of the box is hidden while it shows.
+let _saF=null; // the open form: {mode:'start'|'change', wk, q, half, bids, halves, fixedWk, fixedQ, fixedB, cur} - null = closed
+const SA_HALVES={W1:{sp:'W',mh:1},W2:{sp:'W',mh:2},T1:{sp:'T',mh:1},T2:{sp:'T',mh:2}}; // the form's four halves: the split and MY half
+const SA_FROM_REQ={W1:['W2'],W2:['W1'],Wx:['W1','W2'],T1:['T2'],T2:['T1'],Tx:['T1','T2'],any:['W1','W2','T1','T2']}; // what a request leaves me
+// What a card shows (SPEC §3.4): its lines (plain text, in order) and its buttons [act, label]. s = _spStateOf(me, s.q, wk).
+function _saView(me,s,wk){
+  const nm=displayName(s.q), isB=s.b===me, L=[], A=[];
+  const halves=t=>{ const my=(t.b===me)?Number(t.bh):3-Number(t.bh); return [_splitHalfDays(t.sp,my),_splitHalfDays(t.sp,3-my)]; };
+  const who=t=>'Bidder: '+(t.b===me?'Me':displayName(t.b));
+  const terms=!!(s.sp&&s.b);
+  if(s.row==='iStarted'||s.row==='theyStarted'||s.row==='agreed'||s.row==='agreedLive'){ // W6
+    L.push(_alWeekName(wk));
+    if(terms){ const h=halves(s); L.push('with '+nm+' · My half '+h[0]+', '+nm+' '+h[1]+' · '+who(s)); }
+  } else { // W10
+    L.push('Week '+weekMeta[wk].weekNum+' · with '+nm);
+    if(terms){ const h=halves(s); L.push('My half '+h[0]+' · '+nm+' '+h[1]+' · '+who(s)); }
+  }
+  const cancel=['cancel','Cancel split'];
+  switch(s.row){
+    case 'iStarted': L.push('Waiting for '+nm+' to approve.'); A.push(['takeBack','Take back']); break;
+    case 'theyStarted': L.push('Waiting for you to approve.'); A.push(['approve','Approve'],['reject','Reject']); break;
+    case 'agreed': L.push(isB?'Agreed. It takes effect when you save a bid on this week.':'Agreed. It takes effect when '+nm+' saves the bid.'); A.push(cancel); break;
+    case 'agreedLive': if(isB) A.push(['useBid','Use the split on my bid'],cancel); else { L.push('Waiting for '+nm+' to update the bid.'); A.push(cancel); } break;
+    case 'inEffect': if(!isB) L.push(_splitShareText(nm)); A.push(['change','Change split'],cancel); break;
+    case 'inEffectNoBid': if(!isB) L.push(nm+' removed the bid. The split stays in effect.'); A.push(['change','Change split'],cancel); break;
+    case 'iChange': L.push('You asked to change the split. Waiting for '+nm+'.'); A.push(['keepAsIs','Keep as is']); break;
+    case 'theyChange': { const h=(s.next&&s.next.sp)?halves(s.next):['','']; L.push(nm+' asked to change: My half '+h[0]+', '+nm+' '+h[1]+'.'); A.push(['changeOk','Approve change'],['reject','Reject']); break; }
+    case 'changeAgreed': if(isB) A.push(['useBid','Update my bid']); else L.push('Waiting for '+nm+' to update the bid.'); break;
+    case 'changeAgreedNoBid': L.push(isB?'Change agreed. It takes effect when you save a bid on this week.':'Change agreed. It takes effect when '+nm+' saves the bid.'); break;
+    case 'iCancel': L.push('You asked to cancel. Waiting for '+nm+'.'); A.push(['keep','Keep split']); break;
+    case 'theyCancel': L.push(nm+' asked to cancel.'); A.push(cancel,['reject','Reject']); break;
+    case 'cancelAgreed': if(isB) A.push(['useBid','Update my bid']); else L.push('Waiting for '+nm+' to update the bid.'); break;
+    case 'cancelNoBid': L.push('You both agreed to cancel. Tap Cancel split to end it.'); A.push(cancel); break; // [249 · S2b · §381] G
+    case 'ended': L.push('The split ended.'); break;
+    case 'rejected': L.push(s.k==='change'?nm+' rejected the change.':(s.k==='cancel'?nm+' rejected the cancel. The split stays.':nm+' rejected the split.')); A.push(['ok','OK']); break;
+    case 'passedOver': L.push(nm+' has a split with someone else on this week.'); A.push(['ok','OK']); break; // [249 · S2b · §381] C
+    case 'adminRemoved': L.push('The admin removed this split.'); break;
+    case 'adminRecorded': L.push('The admin recorded a split on this week.'); break;
+  }
+  return {lines:L,acts:A};
+}
+function _saCardHtml(me,wk,s,ro,busy){
+  const v=_saView(me,s,wk);
+  const lines=v.lines.map(l=>'<span class="sa-l">'+escH(l)+'</span>').join('');
+  const btns=(!ro&&v.acts.length)?'<span class="al-gi-b">'+v.acts.map(a=>'<button type="button" class="al-gi-rm" data-sa-act="'+a[0]+'" data-sa-q="'+escH(s.q)+'" data-sa-wk="'+escH(wk)+'"'+(busy?' disabled':'')+'>'+escH(a[1])+'</button>').join('')+'</span>':'';
+  return '<div class="al-gi-row sa-card" data-sa-card="'+escH(s.q+'|'+wk)+'"><span class="al-gi-t">'+lines+'</span>'+btns+'</div>';
+}
+// An Open-request row of someone else (stage 1 and 3): Start agreement - not on a week where I already have a split.
+function _saReqBtn(r,me,busy){
+  try{ if(!_splitWeeksOn()||!r||r.u===me||_srHasSplit(me,r.wk)) return '';
+    return '<span class="al-gi-b"><button type="button" class="al-gi-rm" data-sa-from="'+escH(r.u+'|'+r.wk)+'"'+(busy?' disabled':'')+'>Start agreement</button></span>'; }catch(_){ return ''; }
+}
+// Called by _srPaint (the box is open): the cards, Start an agreement, the form. A part is rewritten only when it changed (_srBox.html).
+function _saPaint(me,st,ro,busy){
+  try{
+    const wrap=document.getElementById('saWrap'), list=document.getElementById('saList'), sb=document.getElementById('saStartBtn');
+    const on=_splitWeeksOn()&&!!st.stage, act=on&&(st.stage===1||st.stage===3);
+    if(wrap&&wrap.hidden===on) wrap.hidden=!on;
+    let h='';
+    if(on) for(const wk of _srWeekKeys()){ if(!weekMeta[wk]) continue; for(const q of _spPairs(me,wk)){ const s=_spStateOf(me,q,wk); if(s) h+=_saCardHtml(me,wk,s,ro,busy); } }
+    if(!h) h='<div class="al-gi-none">No agreements yet.</div>';
+    if(list&&_srBox.html.sa!==h){ list.innerHTML=h; _srBox.html.sa=h; }
+    if(sb){ if(sb.hidden===act) sb.hidden=!act; sb.disabled=busy; }
+    if(_saF&&!act) _saF=null;
+    _saFormPaint(me,busy);
+  }catch(_){}
+}
+// The people I can pick as a partner: the roster but me.
+function _saPeople(me){ return ((typeof names!=='undefined'&&Array.isArray(names))?names:[]).filter(u=>typeof u==='string'&&u&&u!==me); }
+// The form's terms when it is complete - {sp, mh (MY half), b} - else null. A change must differ from the split in effect (cur).
+function _saFormTerms(me){
+  const F=_saF; if(!F||!F.wk||!weekMeta[F.wk]||!F.q||F.q===me) return null;
+  const H=SA_HALVES[F.half]; if(!H||F.halves.indexOf(F.half)<0||(F.bids!=='me'&&F.bids!=='p')) return null;
+  if(F.mode==='change'&&F.cur&&F.cur.sp===H.sp&&((F.cur.b===me?Number(F.cur.bh):3-Number(F.cur.bh))===H.mh)) return null;
+  return {sp:H.sp,mh:H.mh,b:F.bids==='me'?me:F.q};
+}
+function _saFormPaint(me,busy){
+  const f=document.getElementById('saForm'), m=document.getElementById('splitModal'); if(!f||!m) return;
+  const F=_saF;
+  if(f.hidden===!!F) f.hidden=!F;
+  if(m.classList.contains('sa-form-on')!==!!F){ if(F) m.classList.add('sa-form-on'); else m.classList.remove('sa-form-on'); }
+  if(!F) return;
+  const wt=document.getElementById('saWeekText'), ws=document.getElementById('saWeek');
+  if(F.fixedWk){ if(wt){ wt.hidden=false; const t=weekMeta[F.wk]?_alWeekName(F.wk):''; if(wt.textContent!==t) wt.textContent=t; } if(ws) ws.hidden=true; }
+  else {
+    const wks=_srMyWeeks(me); if(wks.indexOf(F.wk)<0) F.wk=wks[0]||null;
+    const oh=wks.map(w=>'<option value="'+escH(w)+'">'+escH(_alWeekName(w))+'</option>').join('');
+    if(wt) wt.hidden=true;
+    if(ws){ ws.hidden=false; if(_srBox.html.saWk!==oh){ ws.innerHTML=oh; _srBox.html.saWk=oh; } if(ws.value!==(F.wk||'')) ws.value=F.wk||''; ws.disabled=busy; }
+  }
+  const pt=document.getElementById('saPartnerText'), ps=document.getElementById('saPartner');
+  if(F.fixedQ){ if(pt){ pt.hidden=false; const t=displayName(F.q); if(pt.textContent!==t) pt.textContent=t; } if(ps) ps.hidden=true; }
+  else {
+    const ppl=_saPeople(me); if(F.q&&ppl.indexOf(F.q)<0) F.q=null;
+    const oh='<option value="">—</option>'+ppl.map(u=>'<option value="'+escH(u)+'">'+escH(displayName(u))+'</option>').join('');
+    if(pt) pt.hidden=true;
+    if(ps){ ps.hidden=false; if(_srBox.html.saQ!==oh){ ps.innerHTML=oh; _srBox.html.saQ=oh; } if(ps.value!==(F.q||'')) ps.value=F.q||''; ps.disabled=busy; }
+  }
+  if(F.half&&F.halves.indexOf(F.half)<0) F.half=null;
+  document.querySelectorAll('#saForm [data-sa-h]').forEach(l=>{ const show=F.halves.indexOf(l.getAttribute('data-sa-h'))>=0; if(l.hidden===show) l.hidden=!show; });
+  document.querySelectorAll('#saForm input[name="saHalf"]').forEach(r=>{ r.checked=(r.value===F.half); r.disabled=busy; });
+  const ph=document.getElementById('saPHalf'); if(ph){ const H=SA_HALVES[F.half]; const t=H?_splitHalfDays(H.sp,3-H.mh):'—'; if(ph.textContent!==t) ph.textContent=t; }
+  document.querySelectorAll('#saForm input[name="saBids"]').forEach(r=>{ r.checked=(r.value===F.bids); r.disabled=busy||!!F.fixedB; });
+  const ap=document.getElementById('saApprove'); if(ap) ap.disabled=busy||!_saFormTerms(me);
+}
+// The form opens: the box shows it alone, scrolled to the top, its title focused.
+function _saShow(){
+  _srPaint();
+  try{ const mc=document.querySelector('#splitModal .modal-content'); if(mc) mc.scrollTop=0; const t=document.getElementById('saFormTitle'); if(t) t.focus({preventScroll:true}); }catch(_){}
+}
+function _saCanStart(me){ const st=_srSt(); return !!me&&!_srBox.busy&&_srBox.open&&_splitWeeksOn()&&(st.stage===1||st.stage===3); }
+// Start agreement on someone's request: the week and the partner fixed; My half only what the request leaves me (one: picked already).
+function _saOpenReq(u,wk){
+  const me=getCurrentUser(); if(!_saCanStart(me)) return;
+  const r=_srOpen().find(x=>x.u===u&&x.wk===wk);
+  if(!r||u===me||_srHasSplit(me,wk)){ _srPaint(); return; }
+  if(_saOffersMe(me,u,wk)){ showCenterAlert(_saCrossText(u)); return; } // [249 · S2b · §381] B
+  const hs=(SA_FROM_REQ[r.h]||[]).slice();
+  _saF={mode:'start',wk:wk,q:u,half:hs.length===1?hs[0]:null,bids:null,halves:hs,fixedWk:true,fixedQ:true,fixedB:false,cur:null};
+  _saShow();
+}
+// Start an agreement: the week (my weeks, as Post a request offers them) and the partner (the roster but me) picked in the form.
+function _saOpenStart(){
+  const me=getCurrentUser(); if(!_saCanStart(me)) return;
+  _saF={mode:'start',wk:_srMyWeeks(me)[0]||null,q:null,half:null,bids:null,halves:['W1','W2','T1','T2'],fixedWk:false,fixedQ:false,fixedB:false,cur:null};
+  _saShow();
+}
+// Change split: the week, the partner and the bidder fixed (R3); all four halves; cur = the split in effect.
+function _saOpenChange(me,q,wk,s){
+  _saF={mode:'change',wk:wk,q:q,half:null,bids:s.b===me?'me':'p',halves:['W1','W2','T1','T2'],fixedWk:true,fixedQ:true,fixedB:true,cur:{b:s.b,sp:s.sp,bh:s.bh}};
+  _saShow();
+}
+function _saFormCancel(){ _saF=null; _srPaint(); try{ const t=document.getElementById('srTitle'); if(t) t.focus({preventScroll:true}); }catch(_){} }
+function _saFormReset(){ _saF=null; try{ const m=document.getElementById('splitModal'); if(m) m.classList.remove('sa-form-on'); const f=document.getElementById('saForm'); if(f) f.hidden=true; }catch(_){} }
+function _saFormApprove(){ const F=_saF; if(!F) return; return (F.mode==='change')?_saChange():_saStart(); }
+window._saOpenStart=_saOpenStart; window._saFormCancel=_saFormCancel; window._saFormApprove=_saFormApprove;
+// MY SIDE for wk with q: the terms t (as the state gives them - {b, p, sp, bh}, the bidder's half) seen from me, and the flags; t null = no
+// terms (a rejected new agreement). All nine fields, always (a field left out of a merged set would survive from an earlier side).
+function _saSide(me,q,ph,t,ok,cx,rj,at){
+  const has=!!(t&&t.sp&&t.b);
+  return {p:q,sp:has?t.sp:null,mh:has?(t.b===me?Number(t.bh):3-Number(t.bh)):null,b:has?t.b:null,ph:ph,ok:!!ok,cx:!!cx,rj:rj||null,at:at};
+}
+// The side's time: now, but always after the other person's side and the two's staff record (the state compares them - a clock behind the
+// other person's must not make a newer answer read as older).
+function _saAt(me,q,wk){
+  let t=Date.now();
+  try{
+    const o=_spSideOf(q,wk); if(o&&typeof o==='object'&&Number.isFinite(Number(o.at))) t=Math.max(t,Number(o.at)+1);
+    const ph=_srSt().ph, r=(typeof splitsData!=='undefined')?_spRecFor(splitsData,wk,ph,me):null;
+    if(r&&r.src==='staff'&&(r.b===q||r.p===q)&&Number.isFinite(Number(r.at))) t=Math.max(t,Number(r.at)+1);
+  }catch(_){}
+  return t;
+}
+// ONE batch: my side (null = its delete, the page's dotted-path delete), the staff record's entry rec {b, e} when the cancel ends a recorded
+// split (with _w naming it), and the change-log row log {a, x} (none for OK after a rejection). Throws as the commit does.
+async function _saWrite(me,wk,side,log,rec){
+  const b=writeBatch(db);
+  if(side===null) b.update(splitAgreementsRef,{[`${me}.${wk}`]:deleteField()});
+  else b.set(splitAgreementsRef,{[me]:{[wk]:side}},{merge:true});
+  if(rec) b.set(staffSplitsRef,{[rec.b]:{[wk]:rec.e},_w:{b:rec.b,wk:wk}},{merge:true});
+  if(log) b.set(changesRef,{log:arrayUnion(_logEntry(me,wk,log.a,undefined,null,log.x))},{merge:true});
+  await _awaitWrite(b.commit());
+  if(rec){ try{ const st=JSON.parse(JSON.stringify(_spStaff||{})); if(!st[rec.b]||typeof st[rec.b]!=='object') st[rec.b]={}; st[rec.b][wk]=rec.e; st._w={b:rec.b,wk:wk}; _spStaff=st; _spRebuild(); }catch(_){} } // local-first, as the record write
+}
+// Saves it: the box busy meanwhile; then the toast (okText; none - only a failure is told: S2a's words, _srSaid) and a repaint. true / null
+// (not confirmed yet) / false.
+async function _saRun(me,wk,side,log,rec,okText){
+  _srBox.busy=true; _srPaint();
+  let res=false;
+  try{ await _saWrite(me,wk,side,log,rec); res=true; }catch(e){ res=(e&&e.code==='write-deadline')?null:false; }
+  _srBox.busy=false;
+  if(okText||res!==true) _srSaid(res,okText||'');
+  _srPaint();
+  return res;
+}
+// The row a button belongs to, at the moment of action: the switch On, stage 1 or 3, the week, and the two's row still offering act. null =
+// nothing is written (the caller repaints).
+function _saCheck(act,q,wk){
+  const me=getCurrentUser(); if(!me||_srBox.busy) return null;
+  const st=_srSt(); if(!_splitWeeksOn()||!(st.stage===1||st.stage===3)||!wk||!weekMeta[wk]||!q||q===me) return null;
+  const s=_spStateOf(me,q,wk); if(!s||!_saView(me,s,wk).acts.some(a=>a[0]===act)) return null;
+  return {me:me,st:st,s:s};
+}
+// [249 · S2b · §381] B · CROSSING OFFERS: q's side on wk offers ME an agreement that waits - for the stage's phase, approved, not cancelled, not one I
+// rejected. Starting one of my own there is refused: "<name> already sent you an agreement for this week. Approve or reject it first."
+function _saOffersMe(me,q,wk){
+  try{
+    const ph=_srSt().ph, T=_spSideOk(q,_spSideOf(q,wk),_spIsPerson);
+    if(!T||T.p!==me||T.ph!==ph||!T.ok||T.cx||!T.terms) return false;
+    const M=_spSideOk(me,_spSideOf(me,wk),_spIsPerson);
+    return !(M&&M.p===q&&M.ph===ph&&M.rj&&M.rj.k==='new'&&M.rj.at>=T.at);
+  }catch(_){ return false; }
+}
+function _saCrossText(q){ return displayName(q)+' already sent you an agreement for this week. Approve or reject it first.'; }
+// START (the form): my side with the terms, ok. Refused in the [OK] box - Q5: the other person has an agreement on this week with someone else;
+// N4: the would-be partner holds a live bid there.
+async function _saStart(){
+  const me=getCurrentUser(); if(!me||_srBox.busy) return;
+  const st=_srSt(), F=_saF, t=_saFormTerms(me);
+  if(!F||F.mode!=='start'||!t||!_splitWeeksOn()||!(st.stage===1||st.stage===3)||!_spIsPerson(F.q)||_srHasSplit(me,F.wk)){ _srPaint(); return; }
+  const q=F.q, wk=F.wk, qs=_spSideOk(q,_spSideOf(q,wk),_spIsPerson);
+  if(_saOffersMe(me,q,wk)){ showCenterAlert(_saCrossText(q)); return; } // [249 · S2b · §381] B
+  if((qs&&qs.ok&&qs.ph===st.ph&&qs.p!==me)||_srHasSplit(q,wk)){ showCenterAlert(displayName(q)+' already has an agreement on this week.'); return; }
+  const pt=(t.b===me)?q:me;
+  if(_spLive(pt,wk)){ const n=displayName(pt); showCenterAlert("This split can't start while "+n+" has a bid on this week. "+n+" can remove it first."); return; }
+  const side={p:q,sp:t.sp,mh:t.mh,b:t.b,ph:st.ph,ok:true,cx:false,rj:null,at:_saAt(me,q,wk)};
+  if(await _saRun(me,wk,side,{a:'splitAgree',x:{p:q}},null,'Agreement sent.')===true){ _saF=null; _srPaint(); }
+}
+// APPROVE (row 2): my side = the mirror of theirs (the same split, bidder and phase; my half the other one).
+async function _saApprove(q,wk){
+  const c=_saCheck('approve',q,wk); if(!c||_srHasSplit(c.me,wk)){ _srPaint(); return; }
+  await _saRun(c.me,wk,_saSide(c.me,q,c.st.ph,c.s,true,false,null,_saAt(c.me,q,wk)),{a:'splitApprove',x:{p:q}},null,'Approved.');
+}
+// REJECT (rows 2, 8, 11): a new agreement - my side holds no terms, only the rejection; a change - my side = the recorded terms; a cancel - my
+// side = the terms in effect; each with rj {k, at}.
+async function _saReject(q,wk){
+  const c=_saCheck('reject',q,wk); if(!c){ _srPaint(); return; }
+  const at=_saAt(c.me,q,wk), k=c.s.row==='theyStarted'?'new':(c.s.row==='theyChange'?'change':'cancel');
+  const side=(k==='new')?_saSide(c.me,q,c.st.ph,null,false,false,{k:'new',at:at},at):_saSide(c.me,q,c.st.ph,c.s,true,false,{k:k,at:at},at);
+  await _saRun(c.me,wk,side,{a:'splitReject',x:{p:q,k:k}},null,'Rejected.');
+}
+// TAKE BACK (row 1, N5): my side deleted.
+async function _saTakeBack(q,wk){
+  const c=_saCheck('takeBack',q,wk); if(!c){ _srPaint(); return; }
+  await _saRun(c.me,wk,null,{a:'splitTakeBack',x:{p:q}},null,'Approval taken back.');
+}
+// CHANGE (the form, rows 5-6): my side with the new halves, the same bidder (R3).
+async function _saChange(){
+  const me=getCurrentUser(), F=_saF, t=_saFormTerms(me); if(!me||_srBox.busy) return;
+  const c=(F&&F.mode==='change')?_saCheck('change',F.q,F.wk):null;
+  if(!c||!t||t.b!==c.s.b){ if(!c) _saF=null; _srPaint(); return; }
+  const side={p:F.q,sp:t.sp,mh:t.mh,b:t.b,ph:c.st.ph,ok:true,cx:false,rj:null,at:_saAt(me,F.q,F.wk)};
+  if(await _saRun(me,F.wk,side,{a:'splitChange',x:{p:F.q}},null,'Change sent.')===true){ _saF=null; _srPaint(); }
+}
+// APPROVE CHANGE (row 8): my side = the mirror of their change.
+async function _saChangeOk(q,wk){
+  const c=_saCheck('changeOk',q,wk); if(!c||!c.s.next){ _srPaint(); return; }
+  await _saRun(c.me,wk,_saSide(c.me,q,c.st.ph,c.s.next,true,false,null,_saAt(c.me,q,wk)),{a:'splitApprove',x:{p:q,k:'change'}},null,'Approved.');
+}
+// CANCEL SPLIT (rows 3-6, 11, 12 with no bid): my side = the terms shown, with the cancel. THE CANCEL THAT ENDS: the other person has asked
+// already (row 11) or both have (no bid: cancelNoBid), the staff record holds the split ('on') and the bidder has no live bid - the same batch
+// ends the record (st 'off', why 'staff'), and the row is splitEnded. Not recorded (rows 3-4 terms): my side only - both sides then cancel.
+async function _saCancel(q,wk){
+  const c=_saCheck('cancel',q,wk); if(!c){ _srPaint(); return; }
+  const me=c.me, s=c.s, at=_saAt(me,q,wk);
+  const R=(typeof splitsData!=='undefined')?_spRecFor(splitsData,wk,c.st.ph,me):null;
+  const recOn=!!(R&&R.src==='staff'&&R.st==='on'&&((R.b===me&&R.p===q)||(R.b===q&&R.p===me)));
+  let rec=null, log={a:'splitCancel',x:{p:q}};
+  if(recOn&&(s.row==='theyCancel'||s.row==='cancelNoBid')&&!_spLive(R.b,wk)){
+    if(locksData.globalLock||locksData.weeks?.[wk]){ showError("This week is locked."); _srPaint(); return; }
+    rec={b:R.b,e:{p:R.p,sp:R.sp,bh:Number(R.bh),ph:Number(R.ph),st:'off',why:'staff',at:at}};
+    log={a:'splitEnded',x:{p:q}};
+  }
+  await _saRun(me,wk,_saSide(me,q,c.st.ph,s,true,true,null,at),log,rec,'Cancel sent.');
+}
+// KEEP SPLIT (row 10): my side without the cancel. KEEP AS IS (row 7): my side = the recorded terms.
+async function _saKeep(q,wk){
+  const c=_saCheck('keep',q,wk); if(!c){ _srPaint(); return; }
+  await _saRun(c.me,wk,_saSide(c.me,q,c.st.ph,c.s,true,false,null,_saAt(c.me,q,wk)),{a:'splitKeep',x:{p:q}},null,'Kept as is.');
+}
+async function _saKeepAsIs(q,wk){
+  const c=_saCheck('keepAsIs',q,wk); if(!c){ _srPaint(); return; }
+  await _saRun(c.me,wk,_saSide(c.me,q,c.st.ph,c.s,true,false,null,_saAt(c.me,q,wk)),{a:'splitKeepAsIs',x:{p:q}},null,'Kept as is.');
+}
+// OK after "<name> rejected …" (row 14): a new agreement - my side deleted; a change - my side = the recorded terms; a cancel - my side without
+// the cancel. No change-log row, no toast.
+async function _saOk(q,wk){
+  const c=_saCheck('ok',q,wk); if(!c){ _srPaint(); return; }
+  const side=(c.s.k==='new'||c.s.row==='passedOver')?null:_saSide(c.me,q,c.st.ph,c.s,true,false,null,_saAt(c.me,q,wk)); // [249 · S2b · §381] C: OK on a passed-over offer clears it
+  await _saRun(c.me,wk,side,null,null,null);
+}
+// USE THE SPLIT ON MY BID / UPDATE MY BID (rows 4, 9, 12; the bidder, stage 1): my own live bid on wk saved again, unchanged, through the bid
+// box's own save (persistScheduleChange, with the snapshot taken as confirmPriority takes it) - which records, changes or ends the split first.
+async function _saUseBid(wk){
+  const me=getCurrentUser(); if(!me||_srBox.busy) return false;
+  if(!_splitWeeksOn()||_srSt().stage!==1||!weekMeta[wk]||!_spPending(me,wk)||!_spLive(me,wk)){ _srPaint(); return false; }
+  const bid=JSON.parse(JSON.stringify(data[me][wk])), prev=JSON.parse(JSON.stringify(data));
+  _srBox.busy=true; _srPaint();
+  let ok=false;
+  try{ ok=await persistScheduleChange(me,wk,bid,prev); }catch(_){ ok=false; }
+  _srBox.busy=false; _srPaint();
+  return ok;
+}
+function _saAct(act,q,wk){
+  if(act==='change'){ const c=_saCheck('change',q,wk); if(c) _saOpenChange(c.me,q,wk,c.s); else _srPaint(); return; }
+  if(act==='useBid'){ if(_saCheck('useBid',q,wk)) _saUseBid(wk); else _srPaint(); return; }
+  const f={takeBack:_saTakeBack,approve:_saApprove,reject:_saReject,changeOk:_saChangeOk,cancel:_saCancel,keep:_saKeep,keepAsIs:_saKeepAsIs,ok:_saOk}[act];
+  if(f) f(q,wk);
+}
+// The box's clicks and choices for the cards, the request rows' Start agreement and the form (S2a's own listeners above are unchanged).
+{ const _sm=document.getElementById('splitModal'); if(_sm){
+  _sm.addEventListener('click',ev=>{ try{ const t=ev.target; if(!t||!t.closest) return;
+    let b=t.closest('[data-sa-act]'); if(b){ if(!b.disabled) _saAct(b.getAttribute('data-sa-act'),b.getAttribute('data-sa-q'),b.getAttribute('data-sa-wk')); return; }
+    b=t.closest('[data-sa-from]'); if(b&&!b.disabled){ const p=String(b.getAttribute('data-sa-from')).split('|'); _saOpenReq(p[0],p[1]); } }catch(_){} });
+  _sm.addEventListener('change',ev=>{ try{ const t=ev.target, F=_saF; if(!t||!F) return;
+    if(t.id==='saWeek') F.wk=t.value||null; else if(t.id==='saPartner') F.q=t.value||null;
+    else if(t.name==='saHalf'&&t.checked) F.half=t.value; else if(t.name==='saBids'&&t.checked&&!F.fixedB) F.bids=t.value; else return;
+    _srPaint(); }catch(_){} });
+} }
 
 
 
@@ -7338,13 +7990,13 @@ try{ document.addEventListener('keydown',ev=>{ try{ if(ev.key!=='Escape'||!_srBo
 // their lines out here (_alOn 'proj' / 'chance'; nothing stored, or not yet arrived = ON); a person with no address gets nothing. Everything is
 // worked out before the first await (see the bidPhase note at the call site), and every request is handed to the database before any is
 // awaited. Written only by the page signed in as `actor` (the rules check `by`). Never throws.
-async function sendEmailNotifications(prevSnap,newSnap,actor){
+async function sendEmailNotifications(prevSnap,newSnap,actor,sp){ // [249 · S2b · §376–§378] sp (optional): as _changeAffectsOthers - the same decision
   try{
-    const prevAp=computeApprovals(prevSnap), newAp=computeApprovals(newSnap);
+    const prevAp=sp?_withSplits(sp.before,()=>computeApprovals(prevSnap)):computeApprovals(prevSnap), newAp=sp?_withSplits(sp.after,()=>computeApprovals(newSnap)):computeApprovals(newSnap);
     const lines={}; // [236 · §317] person → the lines of their request
     const add=(user,l)=>{ (lines[user]=lines[user]||[]).push(l); };
     let rt={}; try{ rt=_lwReturns(prevSnap,newSnap,actor)||{}; }catch(_){ rt={}; } // [192 · §243] a failure here costs no other alert
-    let gi={}; try{ gi=(typeof _giOpenings==='function')?(_giOpenings(prevSnap,newSnap,actor)||{}):{}; }catch(_){ gi={}; } // [220 · §288 · plan §11k]
+    let gi={}; try{ gi=(typeof _giOpenings==='function')?(_giOpenings(prevSnap,newSnap,actor,undefined,sp)||{}):{}; }catch(_){ gi={}; } // [220 · §288 · plan §11k]
     const _alWants=(typeof _alOn==='function')?_alOn:()=>true; // [220 · §288 · plan §10a] each person's two switches
     for(const user of new Set([...Object.keys(prevSnap),...Object.keys(newSnap)])){
       if(user===actor) continue;
@@ -7354,6 +8006,7 @@ async function sendEmailNotifications(prevSnap,newSnap,actor){
         // [§147] The MERGED projection, matching _changeAffectsOthers exactly: a tie forming or dissolving is not a change. [236 · §317]
         const po=uiOutcome(getOutcome(wk,user,prevAp)), no=uiOutcome(getOutcome(wk,user,newAp));
         if(po!==no&&_alWants(user,'proj')) add(user,{k:'p',wk:wk,from:po,to:no}); // switch 1 "Changes to my projections" · [236 · §317]
+        if(po!==no&&typeof _spPartnerOf==='function'){ const _pp=_spPartnerOf(user,wk,sp); if(_pp&&_pp!==actor&&_alWants(_pp,'proj')) add(_pp,{k:'p',wk:wk,from:po,to:no}); } // [249 · S2b · §376–§378] §2.6: the partner of the split in force there (the picture after) whose bidder this is gets the same line - by their own switch
       }
     }
     // [192 · §243] a week the person LEFT, where their withdrawn bid would win again (switch 2 "My withdrawn bid would win again") · [236 · §317]
@@ -7469,8 +8122,10 @@ function _subscribeSensitiveOnce(){
   _sensitiveUnsubs.push(onSnapshot(fteRef,      snap=>{ _boardMark('fte',snap); if(snap.exists()){ fteData=snap.data(); scheduleRender(); } }));
   _sensitiveUnsubs.push(onSnapshot(bidPhaseRef, snap=>{ _boardMark('bidPhase',snap); bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); scheduleRender(); }));
   _sensitiveUnsubs.push(onSnapshot(slotsRef,   snap=>{ _boardMark('slots',snap); slotsData=snap.exists()?snap.data():{}; applySlotOverrides(); scheduleRender(); }));
-  if(typeof splitsRef!=='undefined') _sensitiveUnsubs.push(onSnapshot(splitsRef,  snap=>{ _boardMark('splits',snap); splitsData=snap.exists()?(snap.data()||{}):{}; scheduleRender(); })); // [410 · split weeks] read only, redraws as the holds do. [245 · split weeks · review] One of the board's waited-for documents (_BOARD_DOCS), as the holds are: a bid judged before it arrives would miss a split. It is missing until the admin records a split; _boardMark counts the server's "no such document" as arrived, and _boardRecheck asks for it when that answer never comes
+  if(typeof splitsRef!=='undefined') _sensitiveUnsubs.push(onSnapshot(splitsRef,  snap=>{ _boardMark('splits',snap); _spAdm=snap.exists()?(snap.data()||{}):{}; if(typeof _spRebuild==='function') _spRebuild(); else splitsData=_spAdm; scheduleRender(); })); // [410 · split weeks] read only, redraws as the holds do. [245 · split weeks · review] One of the board's waited-for documents (_BOARD_DOCS), as the holds are: a bid judged before it arrives would miss a split. It is missing until the admin records a split; _boardMark counts the server's "no such document" as arrived, and _boardRecheck asks for it when that answer never comes
+  if(typeof staffSplitsRef!=='undefined') _sensitiveUnsubs.push(onSnapshot(staffSplitsRef, snap=>{ _boardMark('staffSplits',snap); _spStaff=snap.exists()?(snap.data()||{}):{}; _spRebuild(); scheduleRender(); })); // [249 · S2b · §376–§378] the staff record, merged into splitsData beside the admin's (above): one of the board's waited-for documents, as splits
   if(typeof splitRequestsRef!=='undefined') _sensitiveUnsubs.push(onSnapshot(splitRequestsRef, snap=>{ splitRequestsData=snap.exists()?(snap.data()||{}):{}; if(typeof _srSync==='function') _srSync(); scheduleRender(); })); // [247 · S2a · §373] read only: the Split weeks box repaints, and the board (icon E). The board's drawing does not wait for it (not in _BOARD_DOCS)
+  if(typeof splitAgreementsRef!=='undefined') _sensitiveUnsubs.push(onSnapshot(splitAgreementsRef, snap=>{ splitAgreementsData=snap.exists()?(snap.data()||{}):{}; if(typeof _srSync==='function') _srSync(); scheduleRender(); })); // [249 · S2b · §376–§378] everyone's agreement sides: the Split weeks box repaints, and the board (a request closes on an agreed split). Not waited for
 }
 // [FIX 25 Jul 2026 · delta-audit #10] Tear these down when the Google session ends. The latch
 // above is one-shot and was never reset, while "Sign in as someone else" / "Sign out" drop the
@@ -7488,8 +8143,8 @@ function _unsubscribeSensitive(){
   if(typeof _alCloseAll==='function') _alCloseAll(); // [220 · §288] and the 🔔 box and alert window close
   welcomeLogData={}; whitelistConfirmData={}; _whitelistLoaded=false;
   // [build 152] batch 2's caches — same rule. slots also re-zeroes weekMeta capacity.
-  locksData={globalLock:false,weeks:{}}; fteData={}; bidPhaseData={}; slotsData={}; splitsData={}; // [410 · split weeks]
-  splitRequestsData={}; if(typeof _srClose==='function') _srClose(); // [247 · S2a · §373] the requests too, and the Split weeks box closes
+  locksData={globalLock:false,weeks:{}}; fteData={}; bidPhaseData={}; slotsData={}; splitsData={}; _spAdm={}; _spStaff={}; // [410 · split weeks] · [249 · S2b · §376–§378] and the two records it is merged from
+  splitRequestsData={}; splitAgreementsData={}; if(typeof _srClose==='function') _srClose(); // [249 · S2b · §376–§378] the agreement sides too · // [247 · S2a · §373] the requests too, and the Split weeks box closes
   applySlotOverrides();
   _boardLoadReset();             // [190 · §241] every cache above is empty again — the board must wait for the next arrivals
 }
