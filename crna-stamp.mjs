@@ -134,6 +134,7 @@ const KEYS = [
   // [testing site · 31 Oct 2026] two names added to the MD pages since August
   ["'reportsView'", 0, 2, "'crnaReportsView'"],   // admin: the capacity report's view
   ["'vacVisit'", 1, 0, "'crnaVacVisit'"],         // staff: VISIT_LS, the visit record
+  ["'srSeen.'", 2, 0, "'crnaSrSeen.'"],
 ];
 for (const [lit, ns, na, to] of KEYS) {
   if (ns) rep('staff', lit, to, ns);
