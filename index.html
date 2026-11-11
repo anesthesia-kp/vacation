@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 250;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 251;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -2249,7 +2249,7 @@ let splitRequestsData={};
 function _srSt(){ return _srStage(phasesData,timerData,lastPhase()); }
 function _srWeekKeys(){ return mondays.map(dateKey); }
 function _srHasSplit(u,wk){ return !!(_spFor(u,wk)||_spPartner(u,wk).length)||_spAgreedOn(u,wk); } // [249 · S2b · §376–§378] R6: or a staff split recorded, or one agreed, for the stage's phase
-function _srOpen(){ return _srOpenList(splitRequestsData,_srSt(),_splitWeeksOn(),_srWeekKeys(),_srHasSplit); } // the open requests now
+function _srOpen(){ return _srOpenList(splitRequestsData,_srSt(),_splitWeeksOn(),_srWeekKeys(),(u,wk)=>_srHasSplit(u,wk)&&!_spWonHalf(u,wk)); } // the open requests now · [251 · §369] a half of a won split, nothing agreed, may ask for the other half
 // The refusal the partner of a split in place gets on that week (they place no bid there, §368 3:20 PM).
 function _splitShareText(b){ return 'You share this week with '+b+', who bids for both of you. Only '+b+' can place or change the bid.'; } // [249 · S2b · §376–§378] R2 / §376 6:33 (3)
 // [249 · S2b · §376–§378] STAFF PAGE ONLY, from here to the end of the block: split agreements as this page holds them, and this page's own arguments
@@ -2272,7 +2272,7 @@ function _spStateRaw(me,q,wk){ // [249 · S2b · §381] C: the state as the shar
     const ph=_srSt().ph; if(ph===null||ph===undefined) return null;
     const mine=_spSideOf(me,wk), theirs=_spSideOf(q,wk), rec=_spRecFor(splitsData,wk,ph,me);
     let b=null;
-    if(rec&&((rec.b===me&&rec.p===q)||(rec.b===q&&rec.p===me))) b=rec.b;
+    if(rec&&(rec.st==='on'||rec.st==='won')&&((rec.b===me&&rec.p===q)||(rec.b===q&&rec.p===me))) b=rec.b; // [251 · §390 LOW 2] an ended or removed record's bidder is history: the sides name the bidder
     else { const M=_spSideOk(me,mine,_spIsPerson), Q=_spSideOk(q,theirs,_spIsPerson); b=(M&&M.terms&&M.p===q)?M.b:((Q&&Q.terms&&Q.p===me)?Q.b:null); }
     return _spAgreeState(me,q,mine,theirs,rec,b?_spLive(b,wk):false,ph,_spIsPerson);
   }catch(_){ return null; }
@@ -2403,7 +2403,7 @@ async function _spRecordWrite(user,wk,pend){
   }catch(_){ return false; }
 }
 // The bid box's line while an agreed split will apply to the save (R2); '' otherwise.
-function _spBoxLine(user,wk){ try{ const pd=_spPending(user,wk); return pd?'<div id="spBoxLine" style="margin-top:4px;font-size:.72rem;font-weight:600;color:#1f2329">Your split with '+escH(displayName(pd.q))+' applies to this bid.</div>':''; }catch(_){ return ''; } }
+function _spBoxLine(user,wk){ try{ const pd=_spPending(user,wk); return (pd&&!_spLive(pd.q,wk))?'<div id="spBoxLine" style="margin-top:4px;font-size:.72rem;font-weight:600;color:#1f2329">Your split with '+escH(displayName(pd.q))+' applies to this bid.</div>':''; }catch(_){ return ''; } } // [251 · §390 LOW 2] not while the partner holds a bid there: the save refuses it (N4) and the card says why
 // The Remove box's notice when the saver bids for a split in force on wk (§376 6:30 / 6:33 (1)); '' otherwise.
 function _spRemoveNote(user,wk){ try{ const e=_spFor(user,wk); return e?'<div style="margin-top:8px;font-size:.85rem;color:#1f2329">The split with '+escH(displayName(e.p))+' stays in effect. To end it, you both need to agree to cancel it in Split weeks.</div>':''; }catch(_){ return ''; } }
 // The partner of the split in force on wk whose bidder is u (on the picture after, sp.after, when given), or null - the partner's e-mails (§2.6).
@@ -7579,7 +7579,7 @@ function _srSync(){
   }catch(_){}
 }
 // The weeks I can post on: every week of the auction but those where I have a split in place.
-function _srMyWeeks(me){ return _srWeekKeys().filter(wk=>weekMeta[wk]&&!_srHasSplit(me,wk)); }
+function _srMyWeeks(me){ return _srWeekKeys().filter(wk=>weekMeta[wk]&&!(_srHasSplit(me,wk)&&!_spWonHalf(me,wk))); } // [251 · §369] and a week I hold a half of a won split on (its other half)
 // wk (from icon E): that week chosen in the form, and its request rows scrolled into view and marked for a moment. Off or over: nothing opens.
 function openSplitBox(wk){
   const me=getCurrentUser(), m=document.getElementById('splitModal'); if(!me||!m) return;
@@ -7634,7 +7634,8 @@ function _srSaid(res,okText){ if(res===true) _alToast(okText); else if(res===nul
 async function _srPost(){
   const me=getCurrentUser(); if(!me||_srBox.busy) return;
   const st=_srSt(), wk=_srBox.wk, h=_srBox.half;
-  if(!_splitWeeksOn()||!(st.stage===1||st.stage===3)||!wk||!weekMeta[wk]||_srHasSplit(me,wk)||SR_HALVES.indexOf(h)<0){ _srPaint(); return; }
+  if(!_splitWeeksOn()||!(st.stage===1||st.stage===3)||!wk||!weekMeta[wk]||(_srHasSplit(me,wk)&&!_spWonHalf(me,wk))||SR_HALVES.indexOf(h)<0){ _srPaint(); return; }
+  { const wh=_spWonHalf(me,wk); if(wh){ const hh=(wh.b===me)?Number(wh.bh):3-Number(wh.bh); if(h!==wh.sp+String(3-hh)){ showCenterAlert('You can only ask for '+_splitHalfDays(wh.sp,3-hh)+' on this week.'); return; } } } // [251 · §369] one per half: only the other half
   _srBox.busy=true; _srPaint();
   let res=false;
   try{
@@ -7706,8 +7707,11 @@ function _saView(me,s,wk){
   switch(s.row){
     case 'iStarted': L.push('Waiting for '+nm+' to approve.'); A.push(['takeBack','Take back']); break;
     case 'theyStarted': L.push('Waiting for you to approve.'); A.push(['approve','Approve'],['reject','Reject']); break;
-    case 'agreed': L.push(isB?'Agreed. It takes effect when you save a bid on this week.':'Agreed. It takes effect when '+nm+' saves the bid.'); A.push(cancel); break;
-    case 'agreedLive': if(isB) A.push(['useBid','Use the split on my bid'],cancel); else { L.push('Waiting for '+nm+' to update the bid.'); A.push(cancel); } break;
+    case 'agreed': case 'agreedLive': // [251 · §390 LOW 2] the partner holds a bid on the week: the bid save refuses it (N4) - say so, no Use button
+      if(_spLive(s.p,wk)) L.push(isB?"This split can't start while "+nm+" has a bid on this week. "+nm+" can remove it first.":"This split can't start while you have a bid on this week. You can remove it first.");
+      else if(s.row==='agreed') L.push(isB?'Agreed. It takes effect when you save a bid on this week.':'Agreed. It takes effect when '+nm+' saves the bid.');
+      else if(isB) A.push(['useBid','Use the split on my bid']); else L.push('Waiting for '+nm+' to update the bid.');
+      A.push(cancel); break;
     case 'inEffect': if(!isB) L.push(_splitShareText(nm)); if(!_saOtherHalfSplit(s,wk)) A.push(['change','Change split']); A.push(cancel); break; // [250 · §388 F5]
     case 'inEffectNoBid': if(!isB) L.push(nm+' removed the bid. The split stays in effect.'); if(!_saOtherHalfSplit(s,wk)) A.push(['change','Change split']); A.push(cancel); break; // [250 · §388 F5]
     case 'iChange': L.push('You asked to change the split. Waiting for '+nm+'.'); A.push(['keepAsIs','Keep as is']); break;
@@ -7736,7 +7740,7 @@ function _saCardHtml(me,wk,s,ro,busy){
 }
 // An Open-request row of someone else (stage 1 and 3): Start agreement - not on a week where I already have a split.
 function _saReqBtn(r,me,busy){
-  try{ if(!_splitWeeksOn()||!r||r.u===me||_srHasSplit(me,r.wk)) return '';
+  try{ if(!_splitWeeksOn()||!r||r.u===me||(_srHasSplit(me,r.wk)&&!_spWonHalf(me,r.wk))||(_spWonHalf(me,r.wk)&&_spWonHalf(r.u,r.wk))) return ''; // [251 · §369] a half-holder may answer, but two half-holders cannot pair (neither may bid)
     return '<span class="al-gi-b"><button type="button" class="al-gi-rm" data-sa-from="'+escH(r.u+'|'+r.wk)+'"'+(busy?' disabled':'')+'>Start agreement</button></span>'; }catch(_){ return ''; }
 }
 // Called by _srPaint (the box is open): the cards, Start an agreement, the form. A part is rewritten only when it changed (_srBox.html).
@@ -7802,7 +7806,7 @@ function _saCanStart(me){ const st=_srSt(); return !!me&&!_srBox.busy&&_srBox.op
 function _saOpenReq(u,wk){
   const me=getCurrentUser(); if(!_saCanStart(me)) return;
   const r=_srOpen().find(x=>x.u===u&&x.wk===wk);
-  if(!r||u===me||_srHasSplit(me,wk)){ _srPaint(); return; }
+  if(!r||u===me||(_srHasSplit(me,wk)&&!_spWonHalf(me,wk))){ _srPaint(); return; } // [251 · §369] a half-holder may answer
   if(_saOffersMe(me,u,wk)){ showCenterAlert(_saCrossText(u)); return; } // [249 · S2b · §381] B
   const hs=(SA_FROM_REQ[r.h]||[]).slice();
   _saF={mode:'start',wk:wk,q:u,half:hs.length===1?hs[0]:null,bids:null,halves:hs,fixedWk:true,fixedQ:true,fixedB:false,cur:null};
@@ -7902,9 +7906,12 @@ function _saCrossText(q){ return displayName(q)+' already sent you an agreement 
 async function _saStart(){
   const me=getCurrentUser(); if(!me||_srBox.busy) return;
   const st=_srSt(), F=_saF, t=_saFormTerms(me);
-  if(!F||F.mode!=='start'||!t||!_splitWeeksOn()||!(st.stage===1||st.stage===3)||!_spIsPerson(F.q)||_srHasSplit(me,F.wk)){ _srPaint(); return; }
+  if(!F||F.mode!=='start'||!t||!_splitWeeksOn()||!(st.stage===1||st.stage===3)||!_spIsPerson(F.q)||(_srHasSplit(me,F.wk)&&!_spWonHalf(me,F.wk))){ _srPaint(); return; } // [251 · §369] a half-holder may start, as the partner
   const q=F.q, wk=F.wk, qs=_spSideOk(q,_spSideOf(q,wk),_spIsPerson);
   if(_saOffersMe(me,q,wk)){ showCenterAlert(_saCrossText(q)); return; } // [249 · S2b · §381] B
+  const mh=_spWonHalf(me,wk); // [251 · §369] one per half: I hold a half of a split won here - I may be the PARTNER, for its exact other half
+  if(mh&&t.b===me){ showCenterAlert("You can't be the bidder on this week."); return; }
+  if(mh&&!_spOtherHalfOk(wk,me,t.sp,3-t.mh)){ const h=(mh.b===me)?Number(mh.bh):3-Number(mh.bh); showCenterAlert('You can only take '+_splitHalfDays(mh.sp,3-h)+' on this week.'); return; }
   const qBusy=!!(qs&&qs.ok&&qs.ph===st.ph&&qs.p!==me&&(_spStateRaw(q,qs.p,wk)||{}).row!=='adminRemoved'); // [250 · §388 B3] q's side with someone else, unless the admin removed that split
   const wh=qBusy?null:_spWonHalf(q,wk); // [250 · §388 F2] one per half (§369): q holds a half of a won split there - I may bid for its exact other half, q the partner
   if(wh&&t.b!==me){ showCenterAlert(displayName(q)+" can't be the bidder on this week."); return; } // [250 · §390 LOW 1] the half-holder is never the bidder (§369): say so, not the half

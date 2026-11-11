@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 416;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 417;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1165,7 +1165,7 @@ thead th{color:var(--t2)}
           <span id="trChevron" class="chev">▸ Show</span>
         </div>
         <div id="timerRulesWrap" style="display:none">
-          <div class="page-sub" style="margin:10px 0">Sets duration of timer, which can get shorter as the phase goes on. Which bids restart it is set in Timer Reset Mode. Press Save to apply changes.</div>
+          <div class="page-sub" style="margin:10px 0">Sets duration of timer, which can get shorter as the phase goes on. Which bids restart it is set in Timer Reset Mode.</div>
           <div id="timerRulesBody"></div>
         </div>
       </div>
@@ -1407,10 +1407,17 @@ thead th{color:var(--t2)}
   </div><!-- /content -->
 </div><!-- /shell -->
 
-<div class="tr-bar" id="trBar" hidden><!-- [416 · §387–§388 A] the timer rules Save bar (painted by _trRefreshFoot) -->
-  <div class="tr-bar-msg">Unsaved changes to Timer Rules<span class="tr-bar-sub" id="tr_dirty">Save to apply them, or Cancel to put them back.</span></div>
-  <button id="tr_cancel" class="btn btn-secondary" onclick="cancelTimerRules()">Cancel</button>
-  <button id="tr_save" class="btn btn-primary" onclick="saveTimerRulesBatch()">Save timer rules</button>
+<!-- [417 · §392–§393] The timer rules box: the editor in the site's usual pop-up box. No ✕, no tap-outside, no Escape: once anything is
+     edited it closes only by "Cancel" or "Save timer rules". Opened by openTimerRulesEditor; its editor is painted by renderTimerRules. -->
+<div id="trModal" class="cmodal">
+  <div class="cmodal-box">
+    <div class="cmodal-title">Timer Rules</div>
+    <div class="cmodal-body" id="trModalBody"></div>
+    <div class="cmodal-buttons">
+      <button id="tr_cancel" class="btn btn-secondary" onclick="cancelTimerRules()">Cancel</button>
+      <button id="tr_save" class="btn btn-primary" onclick="saveTimerRulesBatch()">Save timer rules</button>
+    </div>
+  </div>
 </div>
 <div id="toast"></div>
 
@@ -1533,16 +1540,8 @@ thead th{color:var(--t2)}
 @media (max-width:560px){#panel-rules{padding:0 6px}}
 @media (prefers-reduced-motion:reduce){.rl-chev{transition:none}}
 </style>
-<style id="timer-bar">/* [416 · §387–§388 A] The timer rules Save bar — the look approved on his phone (test page "Timer Save Bar", 10 Nov 2026 6:53 AM):
-   fixed to the bottom of the screen on every admin section while timer rules are unsaved. Under the ☰ menu's dimmer (50) and drawer (55),
-   so an open menu is never covered; the toast and the confirm box sit above it. */
-.tr-bar{position:fixed;left:200px;right:0;bottom:0;z-index:45;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--s1);border-top:2px solid var(--red);box-shadow:0 -8px 24px -8px rgba(31,35,41,.25);padding:12px max(16px, env(safe-area-inset-right, 0px)) calc(12px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px))}
-.tr-bar[hidden]{display:none!important}
-.tr-bar-msg{flex:1 1 180px;min-width:0;font-size:13.5px;font-weight:700;color:var(--red);line-height:1.35}
-.tr-bar-sub{display:block;font-size:12px;font-weight:500;color:var(--t2)}
-.tr-bar .btn{font-size:13.5px;padding:9px 16px}
-body.tr-dirty .content{padding-bottom:120px}
-@media (max-width:900px){.tr-bar{left:0}}
+<style id="timer-box">/* [417 · §392–§393] the timer rules box: wide enough for a step's row on one line */
+#trModal .cmodal-box{max-width:560px}
 </style>
 <div id="authGate">
   <div class="ag-hero">
@@ -7032,11 +7031,7 @@ function _srValue(name){
     case 'NP bids this phase': return L([1,2,3,4].filter(_slotRuns).map(p=>P4[p-1]+': '+(npAllowedForPhase(p)?'allowed':'not allowed')));
     case 'Cumulative bid caps':{ const c=_savedCaps(); return L([1,2,3,4].filter(_slotRuns).map(p=>(p===1?'Phase 1':'Through '+phaseShort(p))+': '+(c[p-1]===null?'no limit':c[p-1]+' week'+(c[p-1]!==1?'s':'')))); } // [395 · E2] the slots that run
     // [385 · §292] 'Bid lowerings allowed' is no longer a review row (Archived settings)
-    case 'Timer rules':{ const r=getTimerRules(), st=r.stages||[], out=[];
-      if(r.openingWindow) out.push('Opening window: '+r.openingWindow.days+' days (bids do not reset the timer until '+((st[0]||{}).hours||48)+' hours remain)');
-      st.forEach((s,i)=>out.push((i===0?'At the start':'After '+(s.days||0)+' days')+': resets to '+s.hours+' hours'));
-      if(r.quietEnabled) out.push('Overnight: once the reset is '+r.quietWhenHoursLE+' hours or less, a timer ending between '+fmtHour12(r.quietStart)+' and '+fmtHour12(r.quietEnd)+' Pacific moves to '+fmtHour12(r.quietEnd));
-      return L(out); }
+    case 'Timer rules': return L(_trSummaryLines()); // [417 · §392] the same lines as the Timer Rules card
     case 'Projection-change e-mails': return yn(adminSettings.emailNotifsEnabled!==false);
     case 'Locked weeks on the staff board': return L([1,2,3,4].filter(_slotRuns).map(p=>(p===4?phaseShort(4)+' (all rounds)':P4[p-1])+': '+(lockedInPlaceFor(p)?'in their month, grey':'at the bottom of the board')));
   }
@@ -12470,7 +12465,7 @@ function _srPaintAdmin(){
   const card=document.getElementById('srAdminCard'), tb=document.getElementById('srReqBody'); if(!card||!tb) return;
   const on=!!(adminSettings&&adminSettings.splitWeeksOn===true); card.style.display=on?'':'none'; if(!on){ tb.innerHTML=''; return; }
   const st=_srStage(phasesData,timerData,lastPhase());
-  const rows=_srOpenList(splitRequestsData,st,on,(mondays||[]).map(dateKey),(u,wk)=>_splitsOfOn(u,wk).length>0);
+  const rows=_srOpenList(splitRequestsData,st,on,(mondays||[]).map(dateKey),(u,wk)=>{ const m=_splitsOfOn(u,wk); return m.length>1||(m.length===1&&m[0].st!=='won'); }); // [417 · §369] a half of a won split may ask for the other half
   const td=x=>'<td style="white-space:nowrap">'+x+'</td>';
   tb.innerHTML=rows.length?rows.map(q=>{ const nm=displayName(q.u);
     return '<tr>'+td(esc(wLabel(wkDate(q.wk))))+td('<strong>'+esc(q.u)+'</strong>'+(nm&&nm!==q.u?' '+esc(nm):''))+td(esc(_srWantText(q.h)))+td(esc(q.at?fmtAbsTime(q.at):'—'))+'</tr>'; }).join('')
@@ -13243,9 +13238,32 @@ function _trHourOk(h){ return Number.isInteger(h)&&h>=TR_MIN_H&&h<=TR_MAX_H; }
 function _trQuietSpanH(qs,qe){ return ((((qe-qs)%24)+24+23)%24)+1; }
 // The day count the Opening window shows: the SAVED one, kept when the box is unticked (O-C); 3 when none is saved.
 function _owSavedDays(){ try{ const x=(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.timerRules)?adminSettings.timerRules.openingWindow:null; const d=Number(x&&x.days); return (d>0)?Math.min(60,Math.max(1,Math.round(d))):3; }catch(_){ return 3; } }
-function renderTimerRules(){
-  if(window._trEditing) return; // M-13 / TR-4: unsaved edits are open — never rebuild (and silently discard) them from a live snapshot
+// [417 · §392] The timer rules as they stand, one line each: the card and the guided review's Timer rules screen read the same lines.
+function _trSummaryLines(){ const r=getTimerRules(), st=r.stages||[], out=[];
+  if(r.openingWindow) out.push('Opening window: '+r.openingWindow.days+' days (bids do not reset the timer until '+((st[0]||{}).hours||48)+' hours remain)');
+  st.forEach((s,i)=>out.push((i===0?'At the start':'After '+(s.days||0)+' days')+': resets to '+s.hours+' hours'));
+  if(r.quietEnabled) out.push('Overnight: once the reset is '+r.quietWhenHoursLE+' hours or less, a timer ending between '+fmtHour12(r.quietStart)+' and '+fmtHour12(r.quietEnd)+' Pacific moves to '+fmtHour12(r.quietEnd));
+  return out; }
+// [417 · §392] The Timer Rules card: the master switch, the rules as they stand and the button that opens the box. Read-only, so a live
+// snapshot always repaints it.
+function _trPaintCard(){
   const el=document.getElementById('timerRulesBody'); if(!el) return;
+  const masterOn=!!(timerData&&timerData.enabled);
+  el.innerHTML=`<div class="trow" style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--b1)">
+    <div>
+      <div class="trow-label">Bidding timer</div>
+      <div class="trow-desc">Master switch (same as the dashboard Timer card). OFF = no timer runs at all — no resets, no expiry — and bidding stays open until you close the phase manually. The rules below only apply while this is ON.</div>
+    </div>
+    <div class="tog${masterOn?' on-blue':''}" id="trMasterTog" onclick="toggleTimerEnabled()"></div>
+  </div>
+  <div id="trSummary" style="font-size:13px;color:var(--t1);line-height:1.7">${_trSummaryLines().map(x=>'<div>'+esc(x)+'</div>').join('')}</div>
+  <div style="margin-top:14px"><button class="btn btn-primary" id="trEditBtn" onclick="openTimerRulesEditor()">Edit timer rules</button></div>`;
+}
+function renderTimerRules(){
+  _trPaintCard(); // [417 · §392] the card first: it is read-only, so it is always current
+  if(window._trEditing) return; // M-13 / TR-4: unsaved edits are open — never rebuild (and silently discard) them from a live snapshot
+  const el=document.getElementById('trModalBody'); if(!el) return; // [417 · §392] the editor lives in the timer rules box
+  { const m=document.getElementById('trModal'); if(!m||!m.classList.contains('show')) return; } // [417] painted only while the box is open
   const r=getTimerRules();
   const hoursSel=(id,val)=>`<input type="number" id="${id}" class="inp" style="width:64px" min="${TR_MIN_H}" max="${TR_MAX_H}" step="1" inputmode="numeric" value="${esc(String(val))}"> h`; // [373 · §269] any whole number of hours
   const dayInp=(id,val)=>`<input type="number" id="${id}" class="inp" style="width:60px" min="0" max="90" value="${val}">`;
@@ -13261,14 +13279,7 @@ function renderTimerRules(){
     : DEFAULT_TIMER_RULES.stages;
   const st=rawR;
   const row=(inner)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;font-size:13px;color:var(--t1)">${inner}</div>`;
-  const masterOn=!!(timerData&&timerData.enabled);
-  let rows=`<div class="trow" style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--b1)">
-    <div>
-      <div class="trow-label">Bidding timer</div>
-      <div class="trow-desc">Master switch (same as the dashboard Timer card). OFF = no timer runs at all — no resets, no expiry — and bidding stays open until you close the phase manually. The rules below only apply while this is ON.</div>
-    </div>
-    <div class="tog${masterOn?' on-blue':''}" id="trMasterTog" onclick="toggleTimerEnabled()"></div>
-  </div>`;
+  let rows='<div class="page-sub" style="margin:0 0 12px">The starting reset applies at the start of each phase; each later reset applies once the auction has been open the days you set.</div>'; // [417 · §392] the master switch is on the card (_trPaintCard)
   rows+=row(`<span style="color:var(--t2);min-width:150px">At the start of a round</span><span>reset to</span> ${hoursSel('tr_h0',(st[0]||{}).hours||48)}`);
   // TR-3: a line with no saved stage behind it renders SWITCHED OFF with placeholder
   // numbers — never as if it were a configured rule. Saving stores it as enabled:false,
@@ -13289,8 +13300,7 @@ function renderTimerRules(){
   // Save, which is still guarded by one confirm dialog (working rule 5). This also makes a
   // multi-field edit ATOMIC — the old per-field save wrote half-finished ladders that were
   // briefly the live rule.
-  // [416 · §387–§388 A] Save, Cancel and the unsaved-changes line live in the Save bar (#trBar), fixed to the bottom of the screen on every
-  // admin section while anything is unsaved; the card's foot keeps the warnings.
+  // [417 · §392–§393] Cancel and Save timer rules are the box's own buttons; the editor's foot holds the warnings.
   const foot=`<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--b1)">
     <div id="tr_msg" style="font-size:12.5px;line-height:1.65"></div>
   </div>`;
@@ -13335,35 +13345,43 @@ function _trValidate(rules){
   }
   return out;
 }
-function _trOnEdit(){ window._trEditing=true; _trRefreshFoot(); }
+function _trOnEdit(){ if(window._trSaving) return; window._trEditing=true; _trRefreshFoot(); } // [417 · REVIEW M1] the fields are frozen while a save runs
 function _trRefreshFoot(){
   const sv=document.getElementById('tr_save'); if(!sv) return;
-  const cx=document.getElementById('tr_cancel'), msg=document.getElementById('tr_msg'), dz=document.getElementById('tr_dirty');
-  const bar=document.getElementById('trBar'); // [416 · §387–§388 A] the Save bar
+  const cx=document.getElementById('tr_cancel'), msg=document.getElementById('tr_msg');
   const problems=_trValidate(buildTimerRulesFromDOM());
   const dirty=!!window._trEditing;
   if(msg) msg.innerHTML=problems.length?('<span style="color:var(--red)">'+problems.join('<br>')+'</span>'):'';
-  sv.disabled=!dirty||problems.length>0;
-  if(cx) cx.disabled=!dirty;
-  if(dz) dz.textContent=problems.length?'Fix the warning in Timer Rules to save.':'Save to apply them, or Cancel to put them back.';
-  if(bar) bar.hidden=!dirty;
-  if(!dirty){ try{ const ae=document.activeElement; if(ae&&(ae===sv||ae===cx)&&typeof ae.blur==='function') ae.blur(); }catch(_){} } // [416 · §390 LOW 4] a hidden Save / Cancel lets go of focus, so a live refresh is never held back by it
-  try{ document.body.classList.toggle('tr-dirty',dirty); }catch(_){}
+  sv.disabled=!dirty||problems.length>0||!!window._trSaving;
+  if(cx) cx.disabled=!!window._trSaving; // [417 · §393] Cancel is always offered (with Save, the only way out of the box) - but not while a save runs
 }
-window.saveTimerRulesBatch=function(){
-  const pending=buildTimerRulesFromDOM(); // capture BEFORE the modal opens — a live snapshot must not be able to change what gets written
+// [417 · §392–§393] "Save timer rules" saves from the box (the box is the dialog, working rule 5). A refused save keeps the box open with
+// the edits, so nothing typed is lost; a good one closes it.
+window.saveTimerRulesBatch=async function(){
+  const pending=buildTimerRulesFromDOM(); // captured at the press — a live snapshot must not be able to change what gets written
   const problems=_trValidate(pending);
   if(problems.length){ toast('Fix the timer-rule warnings first','warn'); _trRefreshFoot(); return; }
-  if(typeof openConfirm!=='function'){ window._trEditing=false; saveTimerRules(pending); return; }
-  openConfirm({
-    title:'Save timer rule changes?',
-    body:'Save these timer rules? The starting reset applies at the start of each phase; each later reset applies once the auction has been open the days you set.',
-    okText:'Save changes',
-    onConfirm:async()=>{ window._trEditing=false; await saveTimerRules(pending); renderTimerRules(); },
-    onCancel:()=>{ _trRefreshFoot(); }, // keep the edits — the admin only backed out of the dialog
-  });
+  if(!window._trEditing){ _trRefreshFoot(); return; } // nothing edited: nothing to save
+  if(window._trSaving) return; // one save at a time
+  window._trSaving=true; _trFreeze(true); _trRefreshFoot();
+  let ok;
+  try{ ok=await _withTimeout(Promise.resolve(saveTimerRules(pending)),15000,'saving the timer rules'); } // [417 · REVIEW M1] offline, a write waits rather than fails
+  catch(_){ ok=null; toast('Timer rules not confirmed as saved — check your connection. Your changes are still in the box: Save again or Cancel.','warn'); }
+  window._trSaving=false; _trFreeze(false);
+  if(ok!==true){ _trRefreshFoot(); return; } // not saved, or not confirmed: the box stays open with the edits
+  window._trEditing=false; _trCloseBox(); renderTimerRules();
 };
-window.cancelTimerRules=function(){ window._trEditing=false; renderTimerRules(); };
+function _trFreeze(on){ try{ const b=document.getElementById('trModalBody'); if(b) b.querySelectorAll('input,select').forEach(f=>{ f.disabled=!!on; }); }catch(_){} } // [417 · REVIEW M1] nothing typed while a save runs
+window.cancelTimerRules=function(){ window._trEditing=false; _trCloseBox(); renderTimerRules(); };
+window.openTimerRulesEditor=function(){ // [417 · §392] opens the box with the rules as saved
+  const m=document.getElementById('trModal'); if(!m||m.classList.contains('show')) return; // [417 · REVIEW L1] already open: its edits are kept
+  window._trEditing=false; m.classList.add('show'); renderTimerRules();
+  const b=document.getElementById('trModalBody'); if(b) b.scrollTop=0; // opens at its top, as openConfirm does
+};
+function _trCloseBox(){
+  const m=document.getElementById('trModal'); if(m) m.classList.remove('show');
+  try{ const ae=document.activeElement; if(ae&&/^tr_/.test(ae.id||'')&&typeof ae.blur==='function') ae.blur(); }catch(_){} // [416 · §390 LOW 4] a hidden button or field lets go of focus, so a live refresh is never held back by it
+}
 // TR-4 · a Save button can lose work in a way save-on-change never could, so a page that is
 // closed with unsaved timer edits asks first. Scoped to this editor's dirty flag only.
 try{ window.addEventListener('beforeunload',function(e){ if(window._trEditing){ e.preventDefault(); e.returnValue=''; } }); }catch(e){}
