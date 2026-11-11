@@ -656,14 +656,14 @@ service cloud.firestore {
                    || (docId == 'alertPrefs' && (isAdmin() || (isRegisteredUser() && writesOnlyOwnKeys() && ownMapBounded() && alertEntryOk()))) // [384 · §288 · part 2] and the entry's shape (alertEntryOk)
                    // [413 · S2a · §373, 8 Nov 2026] Split requests: {INITIALS:{<wk>:{h,ph,at}}} — each person's own requests to share a week.
                    // A colleague may write only their OWN entry (writesOnlyOwnKeys), at most 60 weeks (ownMapBounded), and only while bidding
-                   // is open (biddingNotClosed) or in the gap after a phase's results are sent (inPhaseGap): from bidding close until the
-                   // results are sent the requests are frozen. The admin is free (Reset, Restore). What a week's value holds is NOT bounded
-                   // (a recorded residual, the same as the bid maps'). Cost: emailToUser and timer are already fetched by those functions
-                   // (identical lookups are cached); inPhaseGap adds the phases read only when bidding is closed. Read: a colleague or an admin (above).
-                   || (docId == 'splitRequests' && (isAdmin() || (isRegisteredUser() && writesOnlyOwnKeys() && ownMapBounded() && (biddingNotClosed() || inPhaseGap()))))
+                   // is open [420 · §408]: the admin has not closed bidding (biddingNotClosed) and the countdown has not run out (timerNotExpired),
+                   // the bid writes' own two tests. While bidding is closed the requests are frozen. The admin is free (Reset, Restore). What a
+                   // week's value holds is NOT bounded (a recorded residual, the same as the bid maps'). Cost: emailToUser and timer are already
+                   // fetched by those functions (identical lookups are cached); no other document is read. Read: a colleague or an admin (above).
+                   || (docId == 'splitRequests' && (isAdmin() || (isRegisteredUser() && writesOnlyOwnKeys() && ownMapBounded() && biddingNotClosed() && timerNotExpired())))
       // [415 · S2b · §376–§378] splitAgreements: each colleague writes only their own side (as splitRequests). staffSplits: the split recorded
       // in the bidder's bid save - the admin, or a colleague whose write names its one week in _w and agrees with both sides (staffSplitWriteOk).
-      || (docId == 'splitAgreements' && (isAdmin() || (isRegisteredUser() && writesOnlyOwnKeys() && ownMapBounded() && (biddingNotClosed() || inPhaseGap()))))
+      || (docId == 'splitAgreements' && (isAdmin() || (isRegisteredUser() && writesOnlyOwnKeys() && ownMapBounded() && biddingNotClosed() && timerNotExpired())))
       || (docId == 'staffSplits' && (isAdmin() || (isRegisteredUser() && staffSplitWriteOk())))
                    || (!isAdminOnlyDoc(docId) && !isBidDoc(docId) && !isRelayDoc(docId)
                         && docId != 'timer' && docId != 'signInMisses' && docId != 'emails'
