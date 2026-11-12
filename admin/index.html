@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 421;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 422;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -3623,6 +3623,17 @@ function _spSplitElsewhere(u,other,wk,ph,A,sd,isPerson){
 // listeners give them. Every reader of splits reads splitsData; every local change patches its own record, then rebuilds the merge here.
 function _spRebuild(){ splitsData=_spMerge(_spAdm,_spStaff); }
 function _splitHalfDays(sp,h){ return sp==='T' ? (h===1?'Sun–Tue':'Wed–Sat') : (h===1?'Sun–Wed':'Thu–Sat'); }
+// [422 · §420 H2] The dates of a split half: "Feb 14–17", across a month "Feb 28–Mar 3". The days are read from _splitHalfDays itself (its
+// first and last day name, counted from the week key's Sunday), on local calendar dates. '' when the week key is not a Sunday date or the half can't be read.
+function _splitHalfDates(wk,sp,h){
+  const DN=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'], MS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const r=String(_splitHalfDays(sp,h)).split('–'), a=DN.indexOf(r[0]), b=DN.indexOf(r[1]);
+  const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(wk||'')); if(!m||a<0||b<a) return '';
+  const y=Number(m[1]), mo=Number(m[2])-1, d=Number(m[3]), w=new Date(y,mo,d);
+  if(isNaN(w.getTime())||w.getDay()!==0||w.getDate()!==d) return '';
+  const s=new Date(y,mo,d+a), e=new Date(y,mo,d+b);
+  return MS[s.getMonth()]+' '+s.getDate()+'–'+(e.getMonth()===s.getMonth()?'':MS[e.getMonth()]+' ')+e.getDate();
+}
 function _splitHalfWeight(sp,h){ return sp==='T' ? (h===1?0.4:0.6) : (h===1?0.6:0.4); }
 // Blended FTE: 0.6 × the 4-day holder's FTE + 0.4 × the 3-day holder's, rounded UP to 0.1 (FP-safe).
 function splitBlendFte(e){
@@ -3762,8 +3773,9 @@ function _splitRowPh(lbl){ const cur=Number(phasesData.currentPhase||1); for(let
 function _splitScopePh(scope){ const m=(typeof scope==='string')&&scope.match(/^ph(\d+)$/); return m?Number(m[1]):null; }
 // The split u BIDS for on wk as a report reads it (ph null: in force now; a number: splitsInForceAt(ph)), or null. wk must be a week key.
 function _splitRowOf(u,wk,ph){ if(typeof wk!=='string'||!wk) return null; return ((ph===null||ph===undefined)?splitsInForce():splitsInForceAt(ph)).find(e=>e.b===u&&e.wk===wk)||null; }
-// "AF Sun–Wed 0.6, BC Thu–Sat 0.4" — who has which days, and each share.
-function _splitDaysText(e){ const h=Number(e.bh), o=3-h; return e.b+' '+_splitHalfDays(e.sp,h)+' '+_splitHalfWeight(e.sp,h)+', '+e.p+' '+_splitHalfDays(e.sp,o)+' '+_splitHalfWeight(e.sp,o); }
+// "AF Sun–Wed (Feb 14–17) 0.6, BC Thu–Sat (Feb 18–20) 0.4" — who has which days, their dates, and each share. [422 · §420 H2] the dates
+function _splitDaysText(e){ const h=Number(e.bh), o=3-h, dt=x=>{ const s=_splitHalfDates(e.wk,e.sp,x); return s?' ('+s+')':''; };
+  return e.b+' '+_splitHalfDays(e.sp,h)+dt(h)+' '+_splitHalfWeight(e.sp,h)+', '+e.p+' '+_splitHalfDays(e.sp,o)+dt(o)+' '+_splitHalfWeight(e.sp,o); }
 // "AF/BC · AF Sun–Wed 0.6, BC Thu–Sat 0.4" — a split row's bid cell in the User Summary.
 function _splitPairText(e){ return e.b+'/'+e.p+' · '+_splitDaysText(e); }
 // Phase Results' user cell as text (Excel / CSV): "AF/BC (0.7) · AF Sun–Wed 0.6, BC Thu–Sat 0.4" for a split's bidder, else fteName.
@@ -6659,11 +6671,12 @@ window._runSimulationNow=async function(){
     const logEntries=[];
     for(const user of Object.keys(newSchedule)){
       for(const [wk,bid] of Object.entries(newSchedule[user])){
-        logEntries.push({
+        let _se=null; try{ _se=_splitRowOf(user,wk,null); }catch(_){ _se=null; } // [422 · §420 H1] the split's partner, as adminLog stamps it
+        logEntries.push(Object.assign({
           id:Math.random().toString(36).slice(2),
           user, weekKey:wk, action:'added', actor:'admin',
           type:'admin-add', ts:Date.now(), bidValue:bid
-        });
+        },(_se&&typeof _se.p==='string'&&_se.p)?{sp:_se.p}:{}));
       }
     }
     if(logEntries.length){
@@ -12720,6 +12733,9 @@ function normalizeEntry(c){
   return { actor, action, system, type:raw, user:c.user||'—', weekKey:c.weekKey, bidValue:c.bidValue, ts:c.ts, reason:c.reason, hours:c.hours, choice:c.choice, by:c.by, change:c.change, bl:c.bl, review:c.review, reviewedAt:c.reviewedAt, reviewedBy:c.reviewedBy, seen:c.seen, of:c.of, skipped:c.skipped, p:c.p, sp:c.sp, bh:c.bh, k:c.k }; /* [410 · split weeks · admin-page] a split row's partner and halves · [415 · S2b · §376–§378] a staff split rejection's kind (k) */ /* [404 · §334 G] the initials reach the row */ /* [404 · FIX F1] the settings row's change and the Strict row's lowerings mark too · [404 · FIX F8] and a phase start's settings review (every field the row's sentence reads) */ // [350 · §232] the timer reset's length and choice survive normalization too — they were dropped here, so the row read "to  h (chosen length)" every time // [327 · §180] the hold reason survives normalization (found in the browser walk: it was dropped here)
 }
 
+// [422 · §420 H1] The row's person as the Change Log sentence names them: "AVG/AF" for a bid stamped with its split's partner (sp), else the
+// initials. Display only: the User filter and the Excel User column keep e.user. A split row's sp (its kind, W / T) is never read here.
+function _clUserTxt(e){ return (e&&!e.system&&typeof e.sp==='string'&&e.sp)?e.user+'/'+e.sp:e.user; }
 function fmtRelative(ts){
   if(!ts) return '—';
   const diff = (Date.now()-ts)/1000;
@@ -12895,9 +12911,9 @@ function renderChangelog(){
       </div>`;
       }
       const wkStr = e.weekKey ? (()=>{try{return wLabel(wkDate(e.weekKey));}catch(_){return e.weekKey;}})() : '—';
-      const actionText = e.actor==='admin'
-        ? `Admin ${esc(e.action)} ${e.action==='approved'||e.action==='denied'||e.action==='revoked'?'':'bid for '}<strong>${esc(e.user)}</strong>`
-        : `<strong>${esc(e.user)}</strong> ${esc(e.action)} their bid`;
+      const actionText = e.actor==='admin' // [422 · §420 H1] the split's partner beside the bidder (_clUserTxt)
+        ? `Admin ${esc(e.action)} ${e.action==='approved'||e.action==='denied'||e.action==='revoked'?'':'bid for '}<strong>${esc(_clUserTxt(e))}</strong>`
+        : `<strong>${esc(_clUserTxt(e))}</strong> ${esc(e.action)} their bid`;
       return `<div class="cl-row">
         <div class="cl-time" title="${fmtAbsTime(e.ts)}">${fmtRelative(e.ts)}</div>
         <div class="cl-pills">${actorPill(e)} ${actionPill(e.action)}</div>
@@ -12940,9 +12956,9 @@ function _clEntryView(e){
   }
   const wkStr=e.weekKey?(()=>{try{return wLabel(wkDate(e.weekKey));}catch(_){return e.weekKey;}})():'—';
   const isDecision=e.action==='approved'||e.action==='denied'||e.action==='revoked';
-  const sentence=e.actor==='admin'
-    ? `Admin ${esc(e.action)} ${isDecision?'':'bid for '}<strong>${esc(e.user)}</strong>`
-    : `<strong>${esc(e.user)}</strong> ${esc(e.action)} their bid`;
+  const sentence=e.actor==='admin' // [422 · §420 H1] the split's partner beside the bidder (_clUserTxt); the user column stays e.user
+    ? `Admin ${esc(e.action)} ${isDecision?'':'bid for '}<strong>${esc(_clUserTxt(e))}</strong>`
+    : `<strong>${esc(_clUserTxt(e))}</strong> ${esc(e.action)} their bid`;
   return { when:when, actor:e.actor==='admin'?'admin':'user', action:e.action, user:e.user, week:wkStr, bid:bidTxt,
     html:sentence+' on <strong>'+esc(wkStr)+'</strong>'+(bidTxt?' · '+esc(bidTxt):'') };
 }
@@ -13059,6 +13075,8 @@ async function adminLog(u,wk,type,bidValue,extra){ // [327 · §180] extra: fiel
   // without having to guess from the filler values.
   if(String(wk||'')==='ALL') entry.scope='system';
   if(bidValue!==undefined) entry.bidValue=bidValue;
+  // [422 · §420 H1] a bid row of a split's BIDDER carries the partner's initials (sp), as the split stood at this write; the partner places no bid
+  if(type==='admin-add'||type==='admin-edit'||type==='admin-remove'){ try{ const _se=_splitRowOf(u,wk,null); if(_se&&typeof _se.p==='string'&&_se.p) entry.sp=_se.p; }catch(_){} }
   if(extra&&typeof extra==='object') Object.assign(entry,extra); // [327 · §180]
   // [AUDIT 2026-07-25 #3] Approve/deny/revoke entries go to an ADMIN-ONLY doc, never to
   // vacations/changes. `changes` is world-readable and already sits in every staff
@@ -16517,6 +16535,8 @@ window.renderCloudBackups=async function(){
 // [420 · §408] 6.33 in his words (splits only while bidding is open). 190 items, as above.
 // [420 fix 1 · REVIEW-254 L2] 6.34 and 6.36: an end request is answered by ending or keeping the split. 190 items, as above.
 // [421 · §411 · §412] 2.42, 6.32, 6.34 and 6.35: the AF/BC mark, the tick before Phase 1 and between phases, the confirm boxes, "My bid remains active.". 190 items, as above. [421 fix · §415] 6.35 also names the admin's removal with the bid kept.
+// [422 · §418–§421] 6.32 ("Interested"), 6.35 ("<initials>'s bid remains active."), 2.42 (the dates; the Change Log split mark) and 6.37 added at the end of
+// section 6 (split wording), as approved (tests/docs/split-wording/PLAN.md §6, §11 Q3). 191 items, [12,40,12,16,13,37,10,51].
 // Each item: n (its number), kind (new / live / term), html (its approved words), and for a live line its label, the words shown
 // when the setting gives nothing (whenEmpty) and, for the timer mode, the name of each value.
 const RULES_TEXT={sub:"How the auction works: every setting, the decision engine, and the rules staff see. Current values are read each time this page opens.",sections:[
@@ -16574,7 +16594,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.39","kind":"new","html":"<b>Auto-Approve/Deny Results<\/b> — writes real decisions: approves Winning and single Under Review bids, settles each tie at random (approving while the week stays within its capacity plus the overage), denies the rest."},
 {"n":"2.40","kind":"new","html":"<b>Users<\/b> — each person has initials, a full name, an FTE, a Google login e-mail and, if they want one, a KP e-mail. Initials cannot change. Adding a person needs every field but the KP e-mail. Add several users takes one person per line, fields in any order; a preview shows who will be added and why any line is not, and the people are added together or not at all. Each row has one Save: it refuses a blank full name or login e-mail, and changes FTE only before Phase 1 begins. Two people can never share a login e-mail. The login e-mail must be a Gmail address. A KP e-mail saved blank is off: that person is not asked for one. When a KP e-mail is turned off or replaced, the address that was on file gets one note saying so."},
 {"n":"2.41","kind":"new","html":"<b>Round down capacity<\/b> (Week Capacity, between phases) — for each week with more than 1.0 and less than 2.0 FTE left, lowers the capacity by the part that no group of people on the roster can win outright; a backup first, each change in the Change Log. No outright win changes."},
-{"n":"2.42","kind":"new","html":"<b>Split weeks<\/b> (On / Off) — two people can share a week; one bids for both. Can be changed before Phase 1 and between phases. Off: no new splits; splits already made stay. On the admin's lists a split shows on the bidder's row as both sets of initials, the bidder first (AF/BC)."}
+{"n":"2.42","kind":"new","html":"<b>Split weeks<\/b> (On / Off) — two people can share a week; one bids for both. Can be changed before Phase 1 and between phases. Off: no new splits; splits already made stay. On the admin's lists a split shows on the bidder's row as both sets of initials, the bidder first (AF/BC). Each person's days show with their dates (Sun–Wed (Feb 14–17)). In the Change Log a bid made for a split shows the same way, as it stood when the bid was made."}
 ]},
 {n:"3",title:"Timer",items:[
 {"n":"3.1","kind":"new","html":"The timer decides when a phase's bidding ends. At 0, bidding closes for everyone."},
@@ -16655,11 +16675,12 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"6.29","kind":"new","html":"If the bid wins, each has their half. If it loses, neither has the week. Neither of them can bid on that week again. Either can take the other half in one more split, with someone else bidding. The admin can remove a split and either leave the bid with the bidder alone or cancel the bid. A split won in an earlier phase stays with the bidder. After the admin removes a split, either of the two can make a new split on that week, with each other or with someone else."},
 {"n":"6.30","kind":"new","html":"The partner places no bid on that week and spends no bid number."},
 {"n":"6.31","kind":"new","html":"When the admin records a split, the admin can also place the bidder's bid on that week. That bid follows every rule a bid follows except the competition-week rules (4.9) and the last-bid limit."},
-{"n":"6.32","kind":"new","html":"Staff can tick \"I'm interested\" on a week to be listed as interested in a split. The list shows in that week's Split weeks box to everyone signed in, with each person's name, and as a small half-and-half square on the week's card. While bidding is open, locked weeks show no square and are not offered; a week someone won outright is not offered to them. The days and the bidder are chosen when a split is proposed. A listing made before a split on that week is not shown again once the split ends. The tick also works before Phase 1 begins and from results sent until the next phase begins; a tick made after results are sent is for the next phase."},
+{"n":"6.32","kind":"new","html":"Staff can tick \"Interested\" on a week to be listed as interested in a split. The list shows in that week's Split weeks box to everyone signed in, with each person's name, and as a small half-and-half square on the week's card. While bidding is open, locked weeks show no square and are not offered; a week someone won outright is not offered to them. The days and the bidder are chosen when a split is proposed. A listing made before a split on that week is not shown again once the split ends. The tick also works before Phase 1 begins and from results sent until the next phase begins; a tick made after results are sent is for the next phase."},
 {"n":"6.33","kind":"new","html":"Splits are made only while bidding is open. While bidding is closed, splits are frozen; only the admin can add or remove a split."},
 {"n":"6.34","kind":"new","html":"Either of two people can propose a split: the week, each person's days and the bidder. It takes effect when the other accepts it. To end it, one asks, and the other ends the split at once or keeps it. Either can decline the other's proposal, and either can withdraw their own before it is accepted. To change a split, end it and propose a new one. Sending, accepting, declining, withdrawing, ending and keeping a split each ask first in a confirm box."},
-{"n":"6.35","kind":"new","html":"When a split is accepted, each person's bid cap is checked; if either would go over, it is refused with the reason. When a split with a bid ends, the bid stays as the bidder's own whole-week bid, and the bidder is told \"My bid remains active.\" (in the confirm box when the bidder ends it, in the e-mail when the partner does, and beside \"The admin removed this split.\" when the admin removes it while bidding is open and keeps the bid); the ending is refused if that would put the bidder over the bid cap. The partner can't hold their own bid on that week."},
-{"n":"6.36","kind":"new","html":"A split counts as part of the bid: alert e-mails and the timer follow the same rules as any bid change, whenever a split starts or ends on a week with a bid. The partner gets the same alert e-mails as the bidder for that week. Staff are e-mailed when the other person proposes a split or asks to end one, and when the other person answers theirs: accepts or declines the proposal, or ends or keeps the split. The ☰ menu shows how many splits wait for their tap. These e-mails follow the alert e-mail switch."}
+{"n":"6.35","kind":"new","html":"When a split is accepted, each person's bid cap is checked; if either would go over, it is refused with the reason. When a split with a bid ends, the bid stays as the bidder's own whole-week bid, and the bidder is told so: \"My bid remains active.\" in the confirm box when the bidder ends it and in the e-mail when the partner does, and \"&lt;initials&gt;'s bid remains active.\" beside \"The admin removed this split.\" when the admin removes it while bidding is open and keeps the bid; the ending is refused if that would put the bidder over the bid cap. The partner can't hold their own bid on that week."},
+{"n":"6.36","kind":"new","html":"A split counts as part of the bid: alert e-mails and the timer follow the same rules as any bid change, whenever a split starts or ends on a week with a bid. The partner gets the same alert e-mails as the bidder for that week. Staff are e-mailed when the other person proposes a split or asks to end one, and when the other person answers theirs: accepts or declines the proposal, or ends or keeps the split. The ☰ menu shows how many splits wait for their tap. These e-mails follow the alert e-mail switch."},
+{"n":"6.37","kind":"new","html":"In split wording, staff see the other person's full name first, then their initials, and themselves by their own initials; the bidder shows as \"Bidder: &lt;initials&gt;\"."}
 ]},
 {n:"7",title:"What staff see",items:[
 {"n":"7.1","kind":"new","html":"Staff read this list in Rules &amp; Reminders (☰ menu) and in their welcome e-mail. It follows the settings."},
