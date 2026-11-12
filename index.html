@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 254;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 255;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -2240,8 +2240,14 @@ function _spSplitElsewhere(u,other,wk,ph,A,sd,isPerson){
 let splitRequestsData={};
 function _srSt(){ return _srStage(phasesData,timerData,lastPhase()); }
 // [254 · §408] Splits are made only while bidding is open: stage 1 and the bid box's own closed test (the admin's flag, or the countdown run
-// out) - the same "open" the rules read. Every staff split action (the tick too) asks this.
-function _srBiddingOpen(st){ st=st||_srSt(); return st.stage===1&&!(typeof isAuctionClosed==='function'&&isAuctionClosed()); }
+// out) - the same "open" the rules read - [255 · §411] and Phase 1 has begun (biddingOpen, the bid box's own test). Every staff split action
+// asks this but the tick I'm interested and its undo, which ask _srTickOpen [255 · §412].
+function _srBiddingOpen(st){ st=st||_srSt(); return st.stage===1&&!(typeof biddingOpen==='function'&&!biddingOpen())&&!(typeof isAuctionClosed==='function'&&isAuctionClosed()); }
+// [255 · §412] THE TICK'S OWN TIME: the tick I'm interested (and its undo) works while bidding is open, before Phase 1 begins (stage 1, not
+// closed) and from results sent until the next phase begins (stage 3 - the tick is for the next phase, st.ph). Frozen: stage 2 and stage 0.
+function _srTickOpen(st){ st=st||_srSt(); return st.stage===3||(st.stage===1&&!(typeof isAuctionClosed==='function'&&isAuctionClosed())); }
+// [255 · §412] #srFrozen's line while the box is read-only: in the tick's own time SR_NOTYET_TXT, else SR_CLOSED_TXT (the markup's default).
+const SR_CLOSED_TXT='Bidding is closed. Split weeks opens again when bidding opens.', SR_NOTYET_TXT='Proposals open when bidding opens.';
 function _srWeekKeys(){ return mondays.map(dateKey); }
 function _srHasSplit(u,wk){ return !!(_spFor(u,wk)||_spPartner(u,wk).length)||_spAgreedOn(u,wk); } // [249 · S2b · §376–§378] R6: or a staff split recorded, or one agreed, for the stage's phase
 function _srOpen(){ return _srOpenList(splitRequestsData,_srSt(),_splitWeeksOn(),_srWeekKeys(),(u,wk)=>_srHasSplit(u,wk)&&!_spWonHalf(u,wk)).filter(r=>!_srGone(r)); } // the open requests now · [251 · §369] a half of a won split, nothing agreed, may ask for the other half · [252 · Q13] _srGone
@@ -6466,7 +6472,7 @@ function _lockedCard(user,wk,ap){
   wn.style.cssText="font-size:.62rem;font-weight:700;color:"+((wonIn||proj)?"#1f2329":"#5e5c57")+";text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px";
   wn.textContent="Week "+meta.weekNum; div.appendChild(wn);
   if(typeof _alBellHtml==='function'){ const _bell=_alBellHtml(user,wk); if(_bell) wn.insertAdjacentHTML('beforeend',_bell); } // [220 · §288 · plan §11m] the same marker on a locked week's card: an alert set before the lock stays set
-  if(typeof _srIconHtml==='function'&&!(typeof _srSt==='function'&&_srSt().stage===1)){ /* [252 · T6 · Q1] a locked week shows no icon while bidding is open */ const _sri=_srIconHtml(wk,!!wonIn); if(_sri) wn.insertAdjacentHTML('beforeend',_sri); } // [249 · S2b · §376–§378] not on a week won · [247 · S2a · §373] icon E on a locked card too: the icon is its only tap target · [248 · §375] drawn in the card's corner (CSS)
+  if(typeof _srIconHtml==='function'&&!(typeof _srSt==='function'&&_srSt().stage===1&&biddingOpen())){ /* [252 · T6 · Q1] a locked week shows no icon while bidding is open · [255 · §412] before Phase 1 it shows (6.32) · [255 fix · L1] stage 1 once Phase 1 has begun, the countdown run out too: none (as 254) */ const _sri=_srIconHtml(wk,!!wonIn); if(_sri) wn.insertAdjacentHTML('beforeend',_sri); } // [249 · S2b · §376–§378] not on a week won · [247 · S2a · §373] icon E on a locked card too: the icon is its only tap target · [248 · §375] drawn in the card's corner (CSS)
   const dl=document.createElement("div"); dl.className="week-day-label";
   dl.textContent=meta.range; div.appendChild(dl);
   if(meta.special){
@@ -7646,8 +7652,9 @@ function _saCountSync(show){
 // The weeks I can post on: every week of the auction but those where I have a split in place.
 function _srMyWeeks(me){ const sg=_srSt().stage; return _srWeekKeys().filter(wk=>weekMeta[wk]&&!(_srHasSplit(me,wk)&&!_spWonHalf(me,wk))&&_srWeekOk(me,wk,sg)); } // [251 · §369] and a week I hold a half of a won split on (its other half) · [252 · T6] and _srWeekOk
 // [252 · T6] A week my lists offer: not a locked week while bidding is open (Q1: from Send Results to the next phase every week is locked), and
-// not one I won outright (a half of a won split stays offered, for its other half). sg = the stage (asked when not given).
-function _srWeekOk(me,wk,sg){ try{ if((sg===undefined?_srSt().stage:sg)===1&&(locksData.globalLock||(locksData.weeks&&locksData.weeks[wk]))) return false; return !(_boardWonIn(me,wk)&&!_spWonHalf(me,wk)); }catch(_){ return true; } }
+// not one I won outright (a half of a won split stays offered, for its other half). sg = the stage (asked when not given). [255 · §412] The lock
+// test only while bidding is open (_srBiddingOpen): before Phase 1 a locked week can be ticked.
+function _srWeekOk(me,wk,sg){ try{ if((sg===undefined?_srSt().stage:sg)===1&&_srBiddingOpen()&&(locksData.globalLock||(locksData.weeks&&locksData.weeks[wk]))) return false; return !(_boardWonIn(me,wk)&&!_spWonHalf(me,wk)); }catch(_){ return true; } }
 // [252 · fix] F3 a week's short name: "Week 3 · Jan 17" - the week's number and its first day, short enough for a 320 px phone. [253 · §405] The week box's title, my list's rows and Open a week [254 · §410].
 function _srWeekOpt(wk){ return 'Week '+weekMeta[wk].weekNum+' · '+formatShort(wk); }
 // [253 · §405–§406] wk (the corner button, a row of my list, Open a week): THAT week's box. No week (☰ Split weeks): my list. Opened
@@ -7664,7 +7671,8 @@ function openSplitBox(wk){
 window.openSplitBox=openSplitBox;
 // [253 · §405–§406] THE BOX: its title (the week, "Week 7 · Feb 14", or "Split weeks") and ONE view - the form (#saForm); the week's box: my
 // split there (#saList, state c) or, with none, who is interested, the tick and Propose a split (#srWeekBox, state a; grey notes above it);
-// or my list (#srListBox). While bidding is closed: read-only, and the frozen line [254 · §408].
+// or my list (#srListBox). While bidding is closed: read-only, and the frozen line [254 · §408]. [255 · §412] In the tick's own time (_srTickOpen)
+// the tick, the names and Open a week work, every other button stays hidden, and the line reads "Proposals open when bidding opens.".
 function _srPaint(){
   try{
     const me=getCurrentUser(), m=document.getElementById('splitModal'); if(!me||!m||!_srBox.open) return;
@@ -7675,6 +7683,7 @@ function _srPaint(){
     const show=(id,on)=>{ const e=document.getElementById(id); if(e&&e.hidden===on) e.hidden=!on; };
     const put=(id,k,h)=>{ const e=document.getElementById(id); if(e&&_srBox.html[k]!==h){ e.innerHTML=h; _srBox.html[k]=h; } };
     show('saList',!F&&!!wk); show('srWeekBox',!F&&!!wk&&!n); show('srListBox',!F&&!wk); show('srFrozen',!F&&ro);
+    { const fz=document.getElementById('srFrozen'), ft=(ro&&_srTickOpen(st))?SR_NOTYET_TXT:SR_CLOSED_TXT; if(fz&&fz.textContent!==ft) fz.textContent=ft; } // [255 · §412]
     if(!F){ if(wk){ if(!n) _srPaintWeek(me,wk,act,busy,put); } else _srPaintList(me,act,busy,_saCards(me),put); }
     _saFormPaint(me,busy);
   }catch(_){}
@@ -7683,13 +7692,13 @@ function _srPaint(){
 // included), the tick I'm interested (while bidding is open: on a week my lists offer, or while I am listed - my listing as _srOpen shows it) and
 // Propose a split (a week my lists offer, _srMyWeeks). While a tick is saving it keeps the state it was tapped to. [254 · §408] Each name I
 // can pair with (_saWith) has Make an offer (the form, that person picked); the divider shows with Propose a split; while bidding is closed
-// the names include mine (L5).
+// the names include mine (L5). [255 · §412] tko = the tick works (_srTickOpen; true whenever act): the tick and the names as while bidding is open.
 function _srPaintWeek(me,wk,act,busy,put){
-  const rows=_srOpen().filter(r=>r.wk===wk), listed=rows.some(r=>r.u===me), others=rows.filter(r=>r.u!==me), offer=act&&_srMyWeeks(me).indexOf(wk)>=0;
-  const nl=act?others:rows, can=offer?_saWith(me,wk):[]; // [254 · §408] L5 · Make an offer
+  const rows=_srOpen().filter(r=>r.wk===wk), listed=rows.some(r=>r.u===me), others=rows.filter(r=>r.u!==me), tko=act||_srTickOpen(), my=tko&&_srMyWeeks(me).indexOf(wk)>=0, offer=act&&my; // [255 · §412]
+  const nl=tko?others:rows, can=offer?_saWith(me,wk):[]; // [254 · §408] L5 · Make an offer
   const mk=u=>can.indexOf(u)>=0?'<span class="al-gi-b"><button type="button" class="al-gi-ch" data-sa-with="'+escH(u)+'"'+(busy?' disabled':'')+'>Make an offer</button></span>':'';
   put('srOpenList','list',nl.length?nl.map(r=>'<div class="al-gi-row sr-row"><span class="al-gi-t">'+escH(displayName(r.u))+'</span>'+mk(r.u)+'</div>').join(''):(listed?'':'<div class="al-gi-none">No one listed.</div>'));
-  const tl=document.getElementById('srTickL'), tk=document.getElementById('srTick'), on=act&&(offer||listed);
+  const tl=document.getElementById('srTickL'), tk=document.getElementById('srTick'), on=tko&&(my||listed); // [255 · §412]
   if(tl&&tl.hidden===on) tl.hidden=!on;
   if(tk){ if(!busy&&tk.checked!==listed) tk.checked=listed; tk.disabled=busy; }
   const sb=document.getElementById('saStartBtn'); if(sb){ if(sb.hidden===offer) sb.hidden=!offer; sb.disabled=busy; }
@@ -7697,7 +7706,7 @@ function _srPaintWeek(me,wk,act,busy,put){
 }
 // [253 · §405–§406] MY LIST (☰ Split weeks): Waiting for me (the weeks with something for my tap - the ☰ count), then My weeks (my other
 // splits and the weeks I am interested in), one row a week, "Week 7 · Feb 14 · <status>", each opening that week's box; then Open a week
-// (while bidding is open: every week I can split, _srMyWeeks), which opens the week picked [254 · §408 · §410]. Empty: "No splits." A week with only a grey note
+// (while bidding is open [255 · §412] or in the tick's own time: every week I can split, _srMyWeeks), which opens the week picked [254 · §408 · §410]. Empty: "No splits." A week with only a grey note
 // has no row (the note shows in its box).
 function _srPaintList(me,act,busy,cards,put){
   const ord=new Map(_srWeekKeys().map((w,i)=>[w,i])), seen=new Set(), wait=[], mine=[];
@@ -7709,7 +7718,7 @@ function _srPaintList(me,act,busy,cards,put){
   if(!h) h='<div class="al-gi-none">No splits.</div>';
   put('srListRows','rows',h);
   const sel=document.getElementById('srOther');
-  if(sel){ const ws=act?_srMyWeeks(me):[], oh='<option value="">Open a week</option>'+ws.map(w=>'<option value="'+escH(w)+'">'+escH(_srWeekOpt(w))+'</option>').join('');
+  if(sel){ const ws=(act||_srTickOpen())?_srMyWeeks(me):[], oh='<option value="">Open a week</option>'+ws.map(w=>'<option value="'+escH(w)+'">'+escH(_srWeekOpt(w))+'</option>').join('');
     if(_srBox.html.other!==oh){ sel.innerHTML=oh; _srBox.html.other=oh; } if(sel.value!=='') sel.value=''; sel.disabled=busy; if(sel.hidden===!!ws.length) sel.hidden=!ws.length; }
 }
 function _srClose(){
@@ -7727,13 +7736,13 @@ window._srDone=_srDone;
 // What a save says: saved - the line; past the write deadline - the alerts box's own "not confirmed yet" (the batch may still land); refused or
 // failed - the bid save's own words.
 function _srSaid(res,okText){ if(res===true) _alToast(okText); else if(res===null) _alToast(AL_LATE); else showError("Save failed. Please try again."); }
-// POST: the switch On and bidding open (_srBiddingOpen [254 · §408]), checked again at the moment of saving (otherwise nothing is written, only a repaint); ONE batch - my own
+// POST: the switch On and the tick's own time (_srTickOpen [255 · §412]), checked again at the moment of saving (otherwise nothing is written, only a repaint); ONE batch - my own
 // entry for the week ({h, ph, at}: it replaces any earlier one of mine there) and its change-log row (arrayUnion, as a bid save appends one;
 // set with merge, so a missing log document is made).
 async function _srPost(){
   const me=getCurrentUser(); if(!me||_srBox.busy) return;
   const st=_srSt(), wk=_srBox.wk, h='any'; // [252 · T5] interest is the week only (the days are chosen when a split is proposed) · [253 · §405] wk = the box's week
-  if(!_splitWeeksOn()||!_srBiddingOpen(st)||!wk||!weekMeta[wk]||(_srHasSplit(me,wk)&&!_spWonHalf(me,wk))||_srMyWeeks(me).indexOf(wk)<0){ _srPaint(); return; } // [252 · T6] a week the list offers · [254 · §408]
+  if(!_splitWeeksOn()||!_srTickOpen(st)||!wk||!weekMeta[wk]||(_srHasSplit(me,wk)&&!_spWonHalf(me,wk))||_srMyWeeks(me).indexOf(wk)<0){ _srPaint(); return; } // [252 · T6] a week the list offers · [254 · §408] · [255 · §412]
   _srBox.busy=true; _srPaint();
   let res=false;
   try{
@@ -7751,7 +7760,7 @@ window._srPost=_srPost;
 async function _srWithdraw(wk){
   const me=getCurrentUser(); if(!me||_srBox.busy) return;
   const st=_srSt(), mine=splitRequestsData&&splitRequestsData[me];
-  if(!_splitWeeksOn()||!_srBiddingOpen(st)||!mine||typeof mine!=='object'||!mine[wk]||!weekMeta[wk]){ _srPaint(); return; } // [254 · §408]
+  if(!_splitWeeksOn()||!_srTickOpen(st)||!mine||typeof mine!=='object'||!mine[wk]||!weekMeta[wk]){ _srPaint(); return; } // [254 · §408] · [255 · §412]
   _srBox.busy=true; _srPaint();
   let res=false;
   try{
@@ -7800,8 +7809,10 @@ function _saView(me,s,wk){
   const terms=()=>{ if(t.sp&&t.b) L.push(days(t)+' · '+(t.b===me?'I bid':fn+' bids')); };
   if(row==='ended') return {lines:[],acts:[],note:''}; // [253 · §406 Q8] nothing to show
   if(row==='rejected'&&s.k!=='change'){ terms(); return {lines:L,acts:[['ok','OK']],note:s.k==='cancel'?fn+' kept the split.':fn+' declined the split.',stay:true}; } // [254 · §410]
-  const gone={passedOver:nm+' has a split with someone else on this week.',adminRemoved:'The admin removed this split.',adminRecorded:'The admin recorded a split on this week.'}[row];
-  if(gone) return {lines:[],acts:[],note:gone,only:true};
+  const gone={passedOver:nm+' has a split with someone else on this week.',adminRemoved:'The admin removed this split.'+((row==='adminRemoved'&&s.b===me&&_srBiddingOpen()&&_spLive(me,wk))?' My bid remains active.':''),adminRecorded:'The admin recorded a split on this week.'}[row];
+  if(gone) return {lines:[],acts:[],note:gone,only:true}; // [255 fix · §415] the bidder whose bid the admin's Remove kept: "My bid remains active." - while bidding is open the Remove
+  // keeps the bid or removes it (Remove the bid too), so a bid still on the week is the kept one; once bidding has closed a denial does not show on
+  // this page (Deny the bid), so the note says nothing more then
   terms();
   if(row==='iStarted'){ L.push('Waiting for '+fn+'.'); A.push(['takeBack','Withdraw']); }
   else if(row==='theyStarted'){ L.push('Split proposed for this week.'); A.push(['approve','Accept'],['reject','Decline']); } // [254 · §408]
@@ -7980,8 +7991,9 @@ async function _saRun(me,wk,side,log,rec,okText,onLand){
 // [252 · T8] THE SPLIT E-MAIL (MAP T8 b): after a confirmed step (_saRun true - never on "not confirmed yet"), ONE alert request to the other
 // person, with one line {k:'sa', wk, ev, of?, sp, mh, ub, end?}: ev new|change|cancel|ok|no (of = what ok / no answers), mh = the RECIPIENT's
 // half, ub = the recipient bids, end = my accept ended the split. No name in the line: the mail server takes it from `by` (the rules prove it).
-// t = terms as a state gives them {b, sp, bh (the bidder's half)}. Skipped when the other person has no address (as the bid alerts).
-function _saLine(wk,q,ev,of,t,end){ const l={k:'sa',wk:wk,ev:ev}; if(of) l.of=of; l.sp=t.sp; l.mh=(t.b===q)?Number(t.bh):3-Number(t.bh); l.ub=t.b===q; if(end===true) l.end=true; return l; }
+// t = terms as a state gives them {b, sp, bh (the bidder's half)}. Skipped when the other person has no address (as the bid alerts). [255 · §411]
+// bid = the ending leaves the recipient's bid on the week (the recipient is the bidder): "My bid remains active." - only with end.
+function _saLine(wk,q,ev,of,t,end,bid){ const l={k:'sa',wk:wk,ev:ev}; if(of) l.of=of; l.sp=t.sp; l.mh=(t.b===q)?Number(t.bh):3-Number(t.bh); l.ub=t.b===q; if(end===true) l.end=true; if(end===true&&bid===true&&t.b===q) l.bid=true; return l; }
 function _saMail(me,q,wk,line){ try{ if(!me||!q||me===q||!line||(line.sp!=='W'&&line.sp!=='T')||!recipientsFor(q).length) return; _moWrite('a_'+_moRand(24),{kind:'alert',u:q,by:me,lines:[line]}).catch(()=>{}); }catch(_){} }
 // The row a button belongs to, at the moment of action: the switch On, bidding open [254 · §408], the week, and the two's row still offering act. null =
 // nothing is written (the caller repaints).
@@ -8009,9 +8021,34 @@ function _saOffersMe(me,q,wk){
   }catch(_){ return false; }
 }
 function _saCrossText(q){ return 'A split on this week waits for my answer. Accept or decline it first.'; } // [252 · T4] · [254 · §408] about the split, not the person
+// [255 · §411] ACCEPT'S TWO REFUSALS, lifted out of _saApprove (which, and the confirm box, ask them): my own bid on the week when I am not the
+// bidder (Q4); with either bid in, both people's bid caps on the picture after (_spCapRefusal, as the bid save). The refusal's text, or ''.
+function _saApproveNo(me,s,wk){
+  if(s.b!==me&&_spLive(me,wk)) return 'My bid on Week '+weekMeta[wk].weekNum+' has to be removed first.'; // [253 · §406 Q4] the non-bidder's own bid
+  const pend={act:'record',q:s.p,wk:wk,t:{b:s.b,p:s.p,sp:s.sp,bh:Number(s.bh),ph:Number(s.ph)}};
+  if(_spLive(s.b,wk)||_spLive(s.p,wk)){ const no=_spCapRefusal(s.b,wk,pend,false); if(no) return no; }
+  return '';
+}
+// [255 fix · L2] ACCEPT WHERE I HOLD A SPLIT (§388 F3): only the half-holder, as the partner, for the exact other half - null when that is
+// so (or I hold none); else _saStart's own two refusals, in its words; any other split of mine on the week: '' (no words, as _saStart).
+function _saHalfNo(me,s,wk){
+  if(!_srHasSplit(me,wk)||(s.b===s.q&&_spWonHalf(me,wk)&&_spOtherHalfOk(wk,me,s.sp,s.bh))) return null;
+  const mh=_spWonHalf(me,wk); if(!mh) return '';
+  if(s.b===me) return greetName(s.q)+' has to be the bidder on this week.';
+  const h=(mh.b===me)?Number(mh.bh):3-Number(mh.bh); return 'I can only take '+_splitHalfDays(mh.sp,3-h)+' on this week.';
+}
+// [255 · §411] THE ENDING OF A RECORDED SPLIT, lifted out of _saCancel (which, and the confirm box, read it): the staff record 'on' between me and
+// q on wk for the stage's phase - R; pend (the end); live = the bidder's bid is in; over = ending it puts the bidder over the bid cap - or null.
+function _saEndInfo(me,q,wk){
+  const R=(typeof splitsData!=='undefined')?_spRecFor(splitsData,wk,_srSt().ph,me):null;
+  if(!(R&&R.src==='staff'&&R.st==='on'&&((R.b===me&&R.p===q)||(R.b===q&&R.p===me)))) return null;
+  const pend={act:'end',q:R.p,wk:wk,t:{b:R.b,p:R.p,sp:R.sp,bh:Number(R.bh),ph:Number(R.ph)}}, live=_spLive(R.b,wk);
+  return {R:R,pend:pend,live:live,over:live&&_spEndOver(pend)};
+}
 // START (the form): my side with the terms, ok. Refused in the [OK] box - Q5: the other person has an agreement on this week with someone else;
-// N4: the would-be partner holds a live bid there.
-async function _saStart(){
+// N4: the would-be partner holds a live bid there. [255 · §411] Send (go not true) asks first, after every refusal: "Send the proposed split for
+// Week 7?" [Send] [Not now] (§416); its Send runs this again (go true) - every check again at the moment of saving - and only then writes.
+async function _saStart(go){
   const me=getCurrentUser(); if(!me||_srBox.busy) return;
   const st=_srSt(), F=_saF, t=_saFormTerms(me);
   if(!F||F.mode!=='start'||!t||!_splitWeeksOn()||!_srBiddingOpen(st)||!_spIsPerson(F.q)||(_srHasSplit(me,F.wk)&&!_spWonHalf(me,F.wk))){ _srPaint(); return; } // [251 · §369] a half-holder may start, as the partner
@@ -8029,6 +8066,7 @@ async function _saStart(){
   const pt=(t.b===me)?q:me;
   if(pt===me&&_spLive(me,wk)){ showCenterAlert('My bid on Week '+weekMeta[wk].weekNum+' has to be removed first.'); return; } // [253 · §406 Q4] the non-bidder's own bid
   if(_spLive(pt,wk)){ const n=displayName(pt); showCenterAlert("This split can't start while "+n+" has a bid on this week. "+n+" can remove it first."); return; }
+  if(go!==true){ showConfirm('Send the proposed split for Week '+weekMeta[wk].weekNum+'?',{yesText:'Send',noText:'Not now'}).then(y=>{ if(y) _saStart(true); }).catch(()=>{}); return; } // [255 · §411] · [255 · §416] Not now
   const side={p:q,sp:t.sp,mh:t.mh,b:t.b,ph:st.ph,ok:true,cx:false,rj:null,at:_saAt(me,q,wk)};
   if(await _saRun(me,wk,side,{a:'splitAgree',x:{p:q}},null,'Sent.')===true){ _saMail(me,q,wk,_saLine(wk,q,'new',null,{b:t.b,sp:t.sp,bh:t.b===me?t.mh:3-t.mh})); _saF=null; _srPaint(); } // [252 · T3 · T8]
 }
@@ -8037,16 +8075,16 @@ async function _saStart(){
 // (Q4); the partner's bid (N4) and, with the bidder's bid in, both people's bid caps on the picture after (_spCapRefusal, as the bid save);
 // bidding not closed and the week not locked (the record is refused then). Saved with the bidder's bid in: _spChangeFollowUps (the bid is not
 // touched; [254 · §408] M3 they run when the server confirms the batch, on the after-picture fixed at the tap). [254 · §408] Only while
-// bidding is open (_saCheck), so the record is always written with the side.
+// bidding is open (_saCheck), so the record is always written with the side. [255 · §411] The own-bid and cap refusals are _saApproveNo's.
 async function _saApprove(q,wk){
-  const c=_saCheck('approve',q,wk); if(!c||(_srHasSplit(c.me,wk)&&!(c.s.b===q&&_spWonHalf(c.me,wk)&&_spOtherHalfOk(wk,c.me,c.s.sp,c.s.bh)))){ _srPaint(); return; } // [250 · §388 F3] the half-holder, as the partner, approves the exact other half
+  const c=_saCheck('approve',q,wk); if(!c){ _srPaint(); return; }
+  const hn=_saHalfNo(c.me,c.s,wk); if(hn!==null){ if(hn) showCenterAlert(hn); else _srPaint(); return; } // [250 · §388 F3] the half-holder, as the partner, approves the exact other half · [255 fix · L2] its reason (_saHalfNo)
   const me=c.me, s=c.s, at=_saAt(me,q,wk);
-  if(s.b!==me&&_spLive(me,wk)){ showCenterAlert('My bid on Week '+weekMeta[wk].weekNum+' has to be removed first.'); return; } // [253 · §406 Q4] the non-bidder's own bid
+  const no=_saApproveNo(me,s,wk); if(no){ showCenterAlert(no); return; } // [255 · §411]
   let rec=null, live=false, snap=null, b4=null, fu=null;
   if(c.st.stage===1){
     const pend={act:'record',q:s.p,wk:wk,t:{b:s.b,p:s.p,sp:s.sp,bh:Number(s.bh),ph:Number(s.ph)}};
     live=_spLive(s.b,wk);
-    if(live||_spLive(s.p,wk)){ const no=_spCapRefusal(s.b,wk,pend,false); if(no){ showCenterAlert(no); return; } }
     if(isAuctionClosed()){ showError("Bidding is closed."); _srPaint(); return; }
     if(locksData.globalLock||locksData.weeks?.[wk]){ showError("This week is locked."); _srPaint(); return; }
     rec={b:s.b,e:_spRecEntry(pend,at)};
@@ -8074,25 +8112,25 @@ async function _saTakeBack(q,wk){
 // Q9): it ends at once, with or without a bid. Recorded 'on': the same batch ends the record (st 'off', why 'staff') and the row is
 // splitEnded; with the bidder's bid in, the bid stays as the bidder's whole-week bid - refused first when that puts the bidder over the bid cap
 // (_spEndOver), and _spChangeFollowUps when the server confirms the batch ([254 · §408] M3). Not recorded: my side only (both sides then cancel). "The split ended."; accepting theirs is e-mailed.
+// [255 · §411] The recorded split, its bid and the cap check are _saEndInfo's (E); accepting theirs with the bidder's bid in tells the bidder
+// (the e-mail line's bid: "My bid remains active.").
 async function _saCancel(q,wk){
   const c=_saCheck('cancel',q,wk); if(!c){ _srPaint(); return; }
   const me=c.me, s=c.s, t=s.was||s, at=_saAt(me,q,wk);
-  const R=(typeof splitsData!=='undefined')?_spRecFor(splitsData,wk,c.st.ph,me):null;
-  const recOn=!!(R&&R.src==='staff'&&R.st==='on'&&((R.b===me&&R.p===q)||(R.b===q&&R.p===me)));
-  const ask=['theyCancel','cancelAgreed','cancelNoBid'].indexOf(s.row)<0;
+  const ask=['theyCancel','cancelAgreed','cancelNoBid'].indexOf(s.row)<0, E=ask?null:_saEndInfo(me,q,wk); // [255 · §411]
   let rec=null, log={a:'splitCancel',x:{p:q}}, live=false, snap=null, b4=null, fu=null;
-  if(!ask&&recOn){
+  if(E){
     if(isAuctionClosed()){ showError("Bidding is closed."); _srPaint(); return; }
     if(locksData.globalLock||locksData.weeks?.[wk]){ showError("This week is locked."); _srPaint(); return; }
-    const pend={act:'end',q:R.p,wk:wk,t:{b:R.b,p:R.p,sp:R.sp,bh:Number(R.bh),ph:Number(R.ph)}};
-    live=_spLive(R.b,wk);
-    if(live&&_spEndOver(pend)){ showCenterAlert(R.b===me?"This split can't end. Without the split, I would go over the bid cap.":"This split can't end. Without the split, "+greetName(R.b)+" would go over the bid cap.") /* [253 fix 1 · §408] */; return; }
+    const R=E.R, pend=E.pend;
+    live=E.live;
+    if(E.over){ showCenterAlert(R.b===me?"This split can't end. Without the split, I would go over the bid cap.":"This split can't end. Without the split, "+greetName(R.b)+" would go over the bid cap.") /* [253 fix 1 · §408] */; return; }
     rec={b:R.b,e:{p:R.p,sp:R.sp,bh:Number(R.bh),ph:Number(R.ph),st:'off',why:'staff',at:at}};
     log={a:'splitEnded',x:{p:q}};
     if(live){ snap=JSON.parse(JSON.stringify(data)); b4=splitsData; const af=_spAfterData(pend,wk); fu=()=>_spChangeFollowUps(me,wk,snap,b4,R.b,af); } // [254 · §408] M3
   }
   if(await _saRun(me,wk,_saSide(me,q,c.st.ph,t,true,true,null,at),log,rec,ask?'Asked.':'The split ended.',fu)===true){ // [252 · T3] · [254 · §408] M3 fu
-    if(ask) _saMail(me,q,wk,_saLine(wk,q,'cancel',null,t)); else if(s.row==='theyCancel') _saMail(me,q,wk,_saLine(wk,q,'ok','cancel',t,true)); // [252 · T8]
+    if(ask) _saMail(me,q,wk,_saLine(wk,q,'cancel',null,t)); else if(s.row==='theyCancel') _saMail(me,q,wk,_saLine(wk,q,'ok','cancel',t,true,!!(E&&E.live&&E.R.b===q))); // [252 · T8] · [255 · §411] bid
   }
 }
 // KEEP SPLIT (I asked to end: Withdraw): my side without the cancel.
@@ -8111,19 +8149,23 @@ function _saAct(act,q,wk){
   const f={takeBack:_saTakeBack,approve:_saApprove,reject:_saReject,cancel:_saCancel,keep:_saKeep,ok:_saOk}[act]; // [252 · fix] F1 ok (no confirm box: _saAsk gives none) · [253 · §405]
   if(!f) return;
   // [252 · §398] Withdraw, Decline, End split (asking) and [254 · §410] End split / Keep split (an end request) wait for the page's confirm box: nothing is written until its button, and only while the
-  // card still stands as it did
+  // card still stands as it did. [255 · §411] Accept and End split where both asked already too; the no-button is always Not now (§416).
   const c=_saCheck(act,q,wk); if(!c){ _srPaint(); return; }
-  const ask=_saAsk(act,c.s,wk); if(!ask){ f(q,wk); return; }
-  showConfirm(ask.msg,{yesText:ask.yes,noText:ask.no||'Keep'}).then(yes=>{ if(!yes) return; const c2=_saCheck(act,q,wk); if(!c2||c2.s.row!==c.s.row){ _srPaint(); return; } f(q,wk); }).catch(()=>{}); // [254 · §410] ask.no
+  const ask=_saAsk(act,c.s,wk,c.me); if(!ask){ f(q,wk); return; }
+  showConfirm(ask.msg,{yesText:ask.yes,noText:'Not now'}).then(yes=>{ if(!yes) return; const c2=_saCheck(act,q,wk); if(!c2||c2.s.row!==c.s.row){ _srPaint(); return; } f(q,wk); }).catch(()=>{}); // [254 · §410]
 }
-// [252 · §398] The confirm box for a tap, or null (none: Accept, OK, and End split where both asked already). PLAN §1's words; the message is HTML (escaped name).
-function _saAsk(act,s,wk){
+// [252 · §398] The confirm box for a tap, or null (none: OK; [255 · §411] and a tap that will be refused - Accept refused by _saHalfNo or
+// _saApproveNo, an ending over the bid cap - whose reason shows with no box first). PLAN §1's words; the message is HTML (escaped name). me = the one tapping.
+function _saAsk(act,s,wk,me){
   const nm=escH(displayName(s.q)), w='Week '+weekMeta[wk].weekNum;
   if(act==='takeBack') return {msg:'Withdraw the proposed split for '+w+'?',yes:'Withdraw'}; // [254 · §408]
   if(act==='keep') return {msg:'Withdraw my request to end the split for '+w+'?',yes:'Withdraw'};
-  if(act==='reject') return s.row==='theyStarted'?{msg:'Decline the proposed split for '+w+'?',yes:'Decline'}:{msg:'Keep the split for '+w+'?',yes:'Keep split',no:'Cancel'}; // [254 · §408 · §410]
-  if(act==='cancel'&&s.row==='theyCancel') return {msg:'End the split for '+w+'?',yes:'End split',no:'Cancel'}; // [254 · §410] an end request · [254 fix 1 · REVIEW-254 L1] no: Cancel
-  if(act==='cancel'&&['theyCancel','cancelAgreed','cancelNoBid'].indexOf(s.row)<0) return {msg:'Ask '+nm+' to end the split for '+w+'?',yes:'Ask'}; // [253 · §405]
+  if(act==='approve') return (_saHalfNo(me,s,wk)!==null||_saApproveNo(me,s,wk))?null:{msg:'Accept the proposed split for '+w+'?',yes:'Accept'}; // [255 · §411] · [255 fix · L2] _saHalfNo too
+  if(act==='reject') return s.row==='theyStarted'?{msg:'Decline the proposed split for '+w+'?',yes:'Decline'}:{msg:'Keep the split for '+w+'?',yes:'Keep split'}; // [254 · §408 · §410]
+  if(act==='cancel'&&['theyCancel','cancelAgreed','cancelNoBid'].indexOf(s.row)>=0){ // [254 · §410] an end request · [255 · §411] and where both asked already; the bidder with a bid in is told
+    const E=_saEndInfo(me,s.q,wk); if(E&&E.over) return null;
+    return {msg:'End the split for '+w+'?'+((E&&E.live&&E.R.b===me)?' My bid remains active.':''),yes:'End split'}; }
+  if(act==='cancel') return {msg:'Ask '+nm+' to end the split for '+w+'?',yes:'Ask'}; // [253 · §405]
   return null;
 }
 // [253 · §405] The box's clicks and choices for the cards and the form (S2a's own listeners above are separate).

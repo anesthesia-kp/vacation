@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 420;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 421;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -3785,6 +3785,10 @@ function _splitUserRows(byUser,groups,ph,all){ // [410 · split weeks · review]
 function _splitWinnersTxt(set,wk,ph){ const out=[];
   for(const u of (set||[])){ if((ph===null||ph===undefined)&&_splitPartnerOnly(u,wk)) continue; out.push(_splitRowOf(u,wk,ph)?fteName(u,wk,ph):u); }
   return out.join(', '); }
+// [421 · §411] The name on a person's row of a week: "AF/BC" for a split's bidder on wk (ph null: the splits in force now; a number: that
+// completed phase's, splitsInForceAt), else u. Display only: row ids, buttons and data keep u. Callers pass the phase the row's own FTE or
+// result reads, so the mark and the FTE always agree. Not HTML: callers that print into markup wrap it in esc.
+function _splitMark(u,wk,ph){ const e=_splitRowOf(u,wk,ph); return e?e.b+'/'+e.p:u; }
 // SEAM for the Split weeks page (admin-page lane): every recorded split, whatever its status, with its key — sorted by phase (latest
 // first), then week, then bidder. Nothing else is drawn or written here.
 function splitsList(){ const out=[];
@@ -7801,8 +7805,9 @@ window.completePhase=function(){
   // was later edited/removed), completing now freezes it as a permanent, wrong loss. Show it
   // here where the admin must see it before confirming — not just in a toast they may miss.
   const _stale=_allStaleDenials().concat(_allStaleApprovals());
+  // [421 · §411] each name as _splitMark gives it (the phase is still open: the splits in force).
   const _staleHtml=_stale.length?`<div class="cmodal-warn" style="margin-top:10px"><strong>${_stale.length} decision${_stale.length!==1?'s':''} contradict${_stale.length===1?'s':''} the projection</strong> and will be frozen permanently:
-        <ul style="margin:6px 0 0 16px;line-height:1.6;max-height:120px;overflow-y:auto">${_stale.map(s=>`<li>${esc(s.user)} — ${wLabel(wkDate(s.wk))} — projects <strong>${s.proj==='win'?'WIN':'LOSE'}</strong> but is <strong>${s.decision==='denied'?'DENIED':'APPROVED'}</strong></li>`).join('')}</ul>
+        <ul style="margin:6px 0 0 16px;line-height:1.6;max-height:120px;overflow-y:auto">${_stale.map(s=>`<li>${esc(_splitMark(s.user,s.wk,null))} — ${wLabel(wkDate(s.wk))} — projects <strong>${s.proj==='win'?'WIN':'LOSE'}</strong> but is <strong>${s.decision==='denied'?'DENIED':'APPROVED'}</strong></li>`).join('')}</ul>
         <div style="margin-top:6px;font-size:11px;color:var(--t3)">This doesn't block completion — an override can be deliberate.</div></div>`:'';
   openConfirm({
     title:'✓ Complete '+phaseName(cur)+'?',
@@ -10635,9 +10640,10 @@ window.renderAppDenials=function(){
     // A "decision" is any current-phase bid still awaiting Approve/Deny — used
     // by "Jump to Next Decision" to find and scroll to the next one in DOM order.
     const needsDecision=!isHistorical&&!e.approved&&!e.denied;
+    // [421 · §411] The user cell reads "AF/BC" for a split's bidder, in the FTE cell's own phase; the row id and the buttons keep e.user.
     return `<tr class="dr-row" id="drrow_${e.wk}_${e.user}" data-outcome="${e.outcome}"${needsDecision?' data-undecided="1"':''}>
       ${wkHtml}
-      <td class="dr-user">${phaseBadge}${esc(e.user)}</td>
+      <td class="dr-user">${phaseBadge}${esc(_splitMark(e.user,e.wk,isHistorical?Number(e.phase):null))}</td>
       <td class="dr-bid">${esc(lbl)} · FTE ${(typeof placeFte==='function')?(isHistorical?placeFteAt(e.user,e.wk,Number(e.phase)):placeFte(e.user,e.wk)):getUserFTE(e.user)}</td>
       <td><div class="dr-status">${
         // Undecided bids: the dashed projection pill alone (the solid chip would
@@ -11451,7 +11457,7 @@ async function _execSimulationApprovals(){
         &&!approvedHere.includes(u)&&!deniedHere.includes(u)&&!priorWinnersSim.has(u);
       // 1) Approve a projected winner (never changes anyone else's projection).
       const win=[...a.winners].find(undecided);
-      if(win){ await _simApprove(wk,win,'✓ Approved '+win+' for Wk '+(_wkNumByISO[wk]||wk)); continue; }
+      if(win){ await _simApprove(wk,win,'✓ Approved '+esc(_splitMark(win,wk,null))+' for Wk '+(_wkNumByISO[wk]||wk)); continue; }
       // 2) Resolve ONE random draw member — approve if they fit within the review
       //    threshold (float-safe rounded-difference test, matching computeApprovals),
       //    else deny — then recompute so the rest of the tie sees the live FTE state.
@@ -11465,26 +11471,27 @@ async function _execSimulationApprovals(){
           // recompute was a no-op, so every member of a draw met the identical fit test and all
           // were approved. committedFte moves as approvals land, which is what the loop assumed.
           if(Math.round((weekLedger(wk).committedFte+((typeof placeFte==='function')?placeFte(u,wk):getUserFTE(u))-cap)*10)/10<=T){ // [410 · split weeks]
-            await _simApprove(wk,u,'✓ Tie winner: '+u+' for Wk '+(_wkNumByISO[wk]||wk));
+            await _simApprove(wk,u,'✓ Tie winner: '+esc(_splitMark(u,wk,null))+' for Wk '+(_wkNumByISO[wk]||wk));
           } else {
-            await _simDeny(wk,u,'✕ Tie loser: '+u+' for Wk '+(_wkNumByISO[wk]||wk));
+            await _simDeny(wk,u,'✕ Tie loser: '+esc(_splitMark(u,wk,null))+' for Wk '+(_wkNumByISO[wk]||wk));
           }
           continue;
         }
       }
       // 3) Approve a review (overage ≤ threshold by definition).
       const rev=[...a.reviews].find(undecided);
-      if(rev){ await _simApprove(wk,rev,'✓ Review approved: '+rev+' for Wk '+(_wkNumByISO[wk]||wk)); continue; }
+      if(rev){ await _simApprove(wk,rev,'✓ Review approved: '+esc(_splitMark(rev,wk,null))+' for Wk '+(_wkNumByISO[wk]||wk)); continue; }
       // 4) Deny ONE remaining loser — the recompute after it may promote someone.
       let loser=null;
       for(const u in scheduleData){
         if(!undecided(u)) continue;
         if(!a.winners.has(u)&&!a.draws.has(u)&&!a.reviews.has(u)){ loser=u; break; }
       }
-      if(loser){ await _simDeny(wk,loser,'✕ Denied '+loser+' for Wk '+(_wkNumByISO[wk]||wk)); continue; }
+      if(loser){ await _simDeny(wk,loser,'✕ Denied '+esc(_splitMark(loser,wk,null))+' for Wk '+(_wkNumByISO[wk]||wk)); continue; }
       break; // week fully decided
     }
   }
+  // [421 fix · L5] each line names a split's bidder "AF/BC" (_splitMark, the splits in force), escaped; the writes keep the initials
   if(log) log.innerHTML='<div style="color:#36694a;font-weight:700;margin-bottom:6px">Auto-approval complete — '+approvalCount+' approved, '+denialCount+' denied</div>'+logLines.map(l=>'<div>'+l+'</div>').join('');
   toast('Simulation approvals done: '+approvalCount+' approved, '+denialCount+' denied','ok');
 };
@@ -11570,8 +11577,9 @@ window.renderEditTable=function(){
               +((typeof comboAdminList==='function')?comboAdminList():['1','2','3','4','5','6','7','8','9','10','NP','1,2','1,2,3']).map(v=>`<option value="${v}"${(_scor&&String(pl)===v.replace(/,/g,'/'))?' selected':''}>${v.replace(/,/g,'/')}</option>`).join('');
           })()}</select>`;
       const removeBtn=isHistorical?'':`<button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="adminRemove('${_jsq(u)}','${_jsq(wk)}')">Remove</button>`;
+      // [421 · §411] "AF/BC" for a split's bidder (the archive's phase, a closed phase's, else the splits in force); the controls keep u.
       rows.push(`<tr>
-        <td>${phaseBadge}<strong>${u}</strong></td><td class="mono">${wLabel(m)}</td><td style="color:var(--t2)">${wRange(m)}</td>
+        <td>${phaseBadge}<strong>${esc(_splitMark(u,wk,_histSched?Number(_mmH[1]):(bidPh<cur?Number(bidPh):null)))}</strong></td><td class="mono">${wLabel(m)}</td><td style="color:var(--t2)">${wRange(m)}</td>
         <td>${controls}</td>
         <td><span class="pill ${uiOutcome(o)==='win'?'p-green':uiOutcome(o)==='review'?'p-purple':'p-red'}" style="${uiOutcome(o)==='review'?'background:rgba(138,100,20,.1);color:#8a6414':''}">
           ${uiOutcome(o)==='win'?'WIN':uiOutcome(o)==='review'?'UNDER REVIEW':'LOSE'}</span></td>
@@ -11600,9 +11608,9 @@ async function _reconcileStaleDenials(wk){
     // Only CONTRADICTED decisions — see the rule note on _allStaleDenials below.
     const badDeny=denied.filter(u=>getOutcome(wk,u,nat)==='win');
     const badAppr=appr.filter(u=>getOutcome(wk,u,nat)==='lose');
-    const bits=[];
-    if(badDeny.length) bits.push(badDeny.join(', ')+' project'+(badDeny.length===1?'s':'')+' WIN but '+(badDeny.length===1?'is':'are')+' DENIED');
-    if(badAppr.length) bits.push(badAppr.join(', ')+' project'+(badAppr.length===1?'s':'')+' LOSE but '+(badAppr.length===1?'is':'are')+' APPROVED');
+    const bits=[]; // [421 · §411] names as _splitMark gives them (the splits in force)
+    if(badDeny.length) bits.push(badDeny.map(u=>_splitMark(u,wk,null)).join(', ')+' project'+(badDeny.length===1?'s':'')+' WIN but '+(badDeny.length===1?'is':'are')+' DENIED');
+    if(badAppr.length) bits.push(badAppr.map(u=>_splitMark(u,wk,null)).join(', ')+' project'+(badAppr.length===1?'s':'')+' LOSE but '+(badAppr.length===1?'is':'are')+' APPROVED');
     if(bits.length){
       toast('Wk '+(_wkNumByISO[wk]||wk)+': '+bits.join(' · ')
         +' — review in Approvals & Denials','warn');
@@ -12404,7 +12412,8 @@ function renderLastBids(){
     const m=src[u]; if(!m||typeof m!=='object') continue;
     for(const wk of Object.keys(m).sort()){ const v=m[wk]; if(v!==undefined&&v!==null) rows.push([u,wk,v]); }
   }
-  tb.innerHTML=rows.length?rows.map(([u,wk,v])=>'<tr><td>'+esc(u)+'</td><td>'+esc(wLabel(wkDate(wk)))+'</td><td>'+esc(bidLblAdmin(v))+'</td>'
+  // [421 · §411] the name cell reads "AF/BC" for a split's bidder (this phase's splits); Clear and its confirm keep u.
+  tb.innerHTML=rows.length?rows.map(([u,wk,v])=>'<tr><td>'+esc(_splitMark(u,wk,null))+'</td><td>'+esc(wLabel(wkDate(wk)))+'</td><td>'+esc(bidLblAdmin(v))+'</td>'
     +'<td><button class="btn btn-ghost" style="font-size:12px;padding:4px 12px" onclick="clearLastBid(\''+_jsq(u)+'\',\''+_jsq(wk)+'\')">Clear</button></td></tr>').join('')
     :'<tr><td colspan="4" style="text-align:center;color:var(--t2);padding:20px">No last bids this phase.</td></tr>';
 }
@@ -15373,7 +15382,8 @@ function drawWheel(){
     const large=(a2-a1)>Math.PI?1:0;
     parts+=`<path d="M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${large} 1 ${x2},${y2} Z" fill="${palette[i%palette.length]}" stroke="#ffffff" stroke-width="1.5"/>`;
     const am=(a1+a2)/2, tx=cx+(r*0.62)*Math.cos(am), ty=cy+(r*0.62)*Math.sin(am);
-    parts+=`<text x="${tx}" y="${ty}" text-anchor="middle" dominant-baseline="middle" fill="#ffffff" font-size="14" font-weight="700" font-family="Hanken Grotesk,sans-serif">${esc(wheelUsers[i])}</text>`;
+    // [421 · §411] the slice reads "AF/BC" for a split's bidder; wheelUsers keeps the bidder's initials.
+    parts+=`<text x="${tx}" y="${ty}" text-anchor="middle" dominant-baseline="middle" fill="#ffffff" font-size="14" font-weight="700" font-family="Hanken Grotesk,sans-serif">${esc(_splitMark(wheelUsers[i],wheelWk,null))}</text>`;
   }
   parts+=`<circle cx="${cx}" cy="${cy}" r="7" fill="#ffffff" stroke="#cbc4b5" stroke-width="2"/>`;
   svg.innerHTML=parts;
@@ -15394,7 +15404,7 @@ window.spinWheel=function(){
   svg.style.transition='transform 6s cubic-bezier(.17,.67,.21,1)';
   svg.style.transform=`rotate(${finalRot}deg)`;
   setTimeout(()=>{
-    document.getElementById("wheelWinner").innerHTML=`${esc(wheelUsers[winnerIdx])} <span style="font-size:12px;color:var(--t2);font-weight:400">— random selection complete. Take action manually as needed.</span>`;
+    document.getElementById("wheelWinner").innerHTML=`${esc(_splitMark(wheelUsers[winnerIdx],wheelWk,null))} <span style="font-size:12px;color:var(--t2);font-weight:400">— random selection complete. Take action manually as needed.</span>`;
     document.getElementById("wheelSpinBtn").textContent='Spin again';
     document.getElementById("wheelSpinBtn").disabled=false;
     wheelSpinning=false;
@@ -15496,9 +15506,10 @@ window.renderDrawsReviews=function(){
     }
     const m=wkDate(e.wk);
     const weekCol=showWeekLabel?`<td class="dr-weeklabel">${wLabel(m)}</td>`:'';
+    // [421 · §411] the user cell reads "AF/BC" for a split's bidder (the splits in force, as the FTE cell); the buttons keep e.user.
     return `<tr class="dr-row">
       ${weekCol}
-      <td class="dr-user">${esc(e.user)}</td>
+      <td class="dr-user">${esc(_splitMark(e.user,e.wk,null))}</td>
       <td class="dr-bid">${esc(lbl)} · FTE ${(typeof placeFte==='function')?placeFte(e.user,e.wk):getUserFTE(e.user)}</td>
       <td><div class="dr-status">${tag}</div></td>
       <td><div class="dr-actions">${actions}</div></td>
@@ -15554,8 +15565,9 @@ window.renderDrawsReviews=function(){
         const color=o==='win'?'p-green':'';
         const bgcolor=o==='win'?'rgba(54,105,74,.12)':'rgba(74,80,90,.08)';
         const lbl=Array.isArray(b.priority)?b.priority.join('/'):b.priority;
+        // [421 · §411] as the rows above: "AF/BC" for a split's bidder.
         contextRows.push(`<tr class="dr-row" style="background:${bgcolor};opacity:.8">
-          <td class="dr-user">${esc(b.user)}</td>
+          <td class="dr-user">${esc(_splitMark(b.user,wk,null))}</td>
           <td class="dr-bid">${esc(lbl)} · FTE ${(typeof placeFte==='function')?placeFte(b.user,wk):getUserFTE(b.user)}</td>
           <td><div class="dr-status"><span class="pill ${color}" style="${o==='win'?'':'background:rgba(74,80,90,.2);color:var(--t2)'}">${label}</span></div></td>
           <td><span style="color:var(--t3);font-size:11px;font-style:italic">context only</span></td>
@@ -16504,6 +16516,7 @@ window.renderCloudBackups=async function(){
 // [418 · split weeks trims] 6.32, 6.34 and 6.36 in the approved words (tests/docs/split-trim/SPEC.md "Admin RULES_TEXT"). 190 items, as above.
 // [420 · §408] 6.33 in his words (splits only while bidding is open). 190 items, as above.
 // [420 fix 1 · REVIEW-254 L2] 6.34 and 6.36: an end request is answered by ending or keeping the split. 190 items, as above.
+// [421 · §411 · §412] 2.42, 6.32, 6.34 and 6.35: the AF/BC mark, the tick before Phase 1 and between phases, the confirm boxes, "My bid remains active.". 190 items, as above. [421 fix · §415] 6.35 also names the admin's removal with the bid kept.
 // Each item: n (its number), kind (new / live / term), html (its approved words), and for a live line its label, the words shown
 // when the setting gives nothing (whenEmpty) and, for the timer mode, the name of each value.
 const RULES_TEXT={sub:"How the auction works: every setting, the decision engine, and the rules staff see. Current values are read each time this page opens.",sections:[
@@ -16561,7 +16574,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.39","kind":"new","html":"<b>Auto-Approve/Deny Results<\/b> — writes real decisions: approves Winning and single Under Review bids, settles each tie at random (approving while the week stays within its capacity plus the overage), denies the rest."},
 {"n":"2.40","kind":"new","html":"<b>Users<\/b> — each person has initials, a full name, an FTE, a Google login e-mail and, if they want one, a KP e-mail. Initials cannot change. Adding a person needs every field but the KP e-mail. Add several users takes one person per line, fields in any order; a preview shows who will be added and why any line is not, and the people are added together or not at all. Each row has one Save: it refuses a blank full name or login e-mail, and changes FTE only before Phase 1 begins. Two people can never share a login e-mail. The login e-mail must be a Gmail address. A KP e-mail saved blank is off: that person is not asked for one. When a KP e-mail is turned off or replaced, the address that was on file gets one note saying so."},
 {"n":"2.41","kind":"new","html":"<b>Round down capacity<\/b> (Week Capacity, between phases) — for each week with more than 1.0 and less than 2.0 FTE left, lowers the capacity by the part that no group of people on the roster can win outright; a backup first, each change in the Change Log. No outright win changes."},
-{"n":"2.42","kind":"new","html":"<b>Split weeks<\/b> (On / Off) — two people can share a week; one bids for both. Can be changed before Phase 1 and between phases. Off: no new splits; splits already made stay."}
+{"n":"2.42","kind":"new","html":"<b>Split weeks<\/b> (On / Off) — two people can share a week; one bids for both. Can be changed before Phase 1 and between phases. Off: no new splits; splits already made stay. On the admin's lists a split shows on the bidder's row as both sets of initials, the bidder first (AF/BC)."}
 ]},
 {n:"3",title:"Timer",items:[
 {"n":"3.1","kind":"new","html":"The timer decides when a phase's bidding ends. At 0, bidding closes for everyone."},
@@ -16642,10 +16655,10 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"6.29","kind":"new","html":"If the bid wins, each has their half. If it loses, neither has the week. Neither of them can bid on that week again. Either can take the other half in one more split, with someone else bidding. The admin can remove a split and either leave the bid with the bidder alone or cancel the bid. A split won in an earlier phase stays with the bidder. After the admin removes a split, either of the two can make a new split on that week, with each other or with someone else."},
 {"n":"6.30","kind":"new","html":"The partner places no bid on that week and spends no bid number."},
 {"n":"6.31","kind":"new","html":"When the admin records a split, the admin can also place the bidder's bid on that week. That bid follows every rule a bid follows except the competition-week rules (4.9) and the last-bid limit."},
-{"n":"6.32","kind":"new","html":"Staff can tick \"I'm interested\" on a week to be listed as interested in a split. The list shows in that week's Split weeks box to everyone signed in, with each person's name, and as a small half-and-half square on the week's card. While bidding is open, locked weeks show no square and are not offered; a week someone won outright is not offered to them. The days and the bidder are chosen when a split is proposed. A listing made before a split on that week is not shown again once the split ends."},
+{"n":"6.32","kind":"new","html":"Staff can tick \"I'm interested\" on a week to be listed as interested in a split. The list shows in that week's Split weeks box to everyone signed in, with each person's name, and as a small half-and-half square on the week's card. While bidding is open, locked weeks show no square and are not offered; a week someone won outright is not offered to them. The days and the bidder are chosen when a split is proposed. A listing made before a split on that week is not shown again once the split ends. The tick also works before Phase 1 begins and from results sent until the next phase begins; a tick made after results are sent is for the next phase."},
 {"n":"6.33","kind":"new","html":"Splits are made only while bidding is open. While bidding is closed, splits are frozen; only the admin can add or remove a split."},
-{"n":"6.34","kind":"new","html":"Either of two people can propose a split: the week, each person's days and the bidder. It takes effect when the other accepts it. To end it, one asks, and the other ends the split at once or keeps it. Either can decline the other's proposal, and either can withdraw their own before it is accepted. To change a split, end it and propose a new one."},
-{"n":"6.35","kind":"new","html":"When a split is accepted, each person's bid cap is checked; if either would go over, it is refused with the reason. When a split with a bid ends, the bid stays as the bidder's own whole-week bid, and the ending is refused if that would put the bidder over the bid cap. The partner can't hold their own bid on that week."},
+{"n":"6.34","kind":"new","html":"Either of two people can propose a split: the week, each person's days and the bidder. It takes effect when the other accepts it. To end it, one asks, and the other ends the split at once or keeps it. Either can decline the other's proposal, and either can withdraw their own before it is accepted. To change a split, end it and propose a new one. Sending, accepting, declining, withdrawing, ending and keeping a split each ask first in a confirm box."},
+{"n":"6.35","kind":"new","html":"When a split is accepted, each person's bid cap is checked; if either would go over, it is refused with the reason. When a split with a bid ends, the bid stays as the bidder's own whole-week bid, and the bidder is told \"My bid remains active.\" (in the confirm box when the bidder ends it, in the e-mail when the partner does, and beside \"The admin removed this split.\" when the admin removes it while bidding is open and keeps the bid); the ending is refused if that would put the bidder over the bid cap. The partner can't hold their own bid on that week."},
 {"n":"6.36","kind":"new","html":"A split counts as part of the bid: alert e-mails and the timer follow the same rules as any bid change, whenever a split starts or ends on a week with a bid. The partner gets the same alert e-mails as the bidder for that week. Staff are e-mailed when the other person proposes a split or asks to end one, and when the other person answers theirs: accepts or declines the proposal, or ends or keeps the split. The ☰ menu shows how many splits wait for their tap. These e-mails follow the alert e-mail switch."}
 ]},
 {n:"7",title:"What staff see",items:[
