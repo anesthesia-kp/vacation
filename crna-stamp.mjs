@@ -6,8 +6,8 @@
 //               crna-vacation (crna-config.json); browser-storage prefix "crna"; the CRNA labels;
 //               App Check through reCAPTCHA v3, like the MD site.
 //   · TESTING → testing/  served at /vacation/testing/ and /vacation/testing/admin/; Firebase project
-//               testing-vacation (testing-config.json); storage prefix "tst"; the testing labels and
-//               the thin red band; App Check through Fraud Defense (reCAPTCHA Enterprise) — a new
+//               testing-vacation (testing-config.json); storage prefix "tst"; the testing labels (its
+//               staff line and admin heading in oxblood, §461); App Check through Fraud Defense (reCAPTCHA Enterprise) — a new
 //               project can no longer register reCAPTCHA v3 in App Check (PLAN §8, DECISIONS §454).
 // The script keeps its old name on purpose (§321 Q1): nobody sees it, and the suites name it.
 //
@@ -31,8 +31,9 @@
 //      origin (anesthesia-kp.github.io), so localStorage/sessionStorage are SHARED: unrenamed,
 //      one site's cached auction config would poison another's. Every key is renamed; a canary
 //      pass proves none survived, and the two copies' prefixes never meet.
-//   3. LABELS — the owner's approved wording: CRNA (17 Aug 2026; §452 T8) and testing (§321),
-//      and the thin red band "🧪 TESTING SITE — not the real auction" on the testing copy only.
+//   3. LABELS — the owner's approved wording: CRNA (17 Aug 2026; §452 T8) and testing (§321), and
+//      the site's name in the staff page's line under the title (§461: MD → CRNA / Testing); the
+//      testing copy's staff line and admin heading in oxblood (§461; the red band of §321 removed).
 //   4. CROSS-LINKS — the admin page's link to the staff page points at the copy's own folder,
 //      so nobody hops from a copy into the real site without noticing.
 //   5. versions.json — a copy in each folder, same build numbers (identical code = same builds).
@@ -52,11 +53,12 @@ const REQUIRED = ['apiKey', 'authDomain', 'projectId', 'storageBucket', 'messagi
 
 // ── THE COPIES ─────────────────────────────────────────────────────────────────────────
 // prefix: the browser-storage prefix (shared origin). labels: [staff <title>, admin heading words,
-// admin <title>]. band: the thin red testing band. provider: the App Check provider class.
+// admin <title>]. site: the name in the staff page's line under the title. color: that whole line's
+// and the admin heading's colour (null = the page's own). provider: the App Check provider class.
 const COPIES = [
-  { name: 'CRNA',    folder: 'crna',    config: 'crna-config.json',    prefix: 'crna', band: false, provider: 'ReCaptchaV3Provider',
+  { name: 'CRNA',    folder: 'crna',    config: 'crna-config.json',    prefix: 'crna', site: 'CRNA',    color: null,      provider: 'ReCaptchaV3Provider',
     labels: ['CRNA Vacation Auction — Department of Anesthesia', 'Dashboard CRNA Vacation Auction', 'CRNA Vacation Auction Admin'] },
-  { name: 'TESTING', folder: 'testing', config: 'testing-config.json', prefix: 'tst',  band: true,  provider: 'ReCaptchaEnterpriseProvider',
+  { name: 'TESTING', folder: 'testing', config: 'testing-config.json', prefix: 'tst',  site: 'Testing', color: '#5C1F15', provider: 'ReCaptchaEnterpriseProvider',
     labels: ['Testing Site — Vacation Auction', 'Dashboard Testing Site', 'Testing Site — Vacation Auction Admin'] },
 ];
 
@@ -182,32 +184,16 @@ function stampCopy(copy) {
 
   // ── 3 · Labels — the owner's exact wording ──
   // [build 274 · C7] The MD pages carry their own labels, so these rules SWAP MD → the copy's.
-  // [227 · §296] The staff page carries no MD label line (owner, 26 Oct 2026), so there is no header-sub line to swap here.
+  // [259 · §461] The staff page names its site in the line under the title ("Dept. of Anesthesia · MD · 2027");
+  // the copy's name replaces it, and a copy with a colour (testing: oxblood) gets it on that WHOLE line and
+  // on its admin heading. An inline colour beats the page's own (the redesign rule skips styled elements).
+  const COLOR = copy.color ? `color:${copy.color}` : '';
+  rep('staff', '<p class="header-sub">Dept. of Anesthesia &nbsp;·&nbsp; <span id="siteLabel">MD</span>',
+               `<p class="header-sub"${COLOR ? ` style="${COLOR}"` : ''}>Dept. of Anesthesia &nbsp;·&nbsp; <span id="siteLabel">${copy.site}</span>`, 1);
   rep('staff', '<title>MD Vacation Auction — Department of Anesthesia</title>', `<title>${copy.labels[0]}</title>`, 1);
   rep('admin', '<div class="page-title" style="margin:0">Dashboard MD Vacation Auction — <span id="acYearHdr">2027</span></div>',
-               `<div class="page-title" style="margin:0">${copy.labels[1]} — <span id="acYearHdr">2027</span></div>`, 1);
+               `<div class="page-title" style="margin:0${COLOR ? ';' + COLOR : ''}">${copy.labels[1]} — <span id="acYearHdr">2027</span></div>`, 1);
   rep('admin', '<title>MD Vacation Auction Admin</title>', `<title>${copy.labels[2]}</title>`, 1);
-
-  // ── 3b · THE THIN RED BAND — testing copy only (owner, 31 Oct 2026, §321: "make it a thin red band") ──
-  // One line at the very top of both pages, so the testing site is never mistaken for the real
-  // one. It is drawn by the html element itself (html::before), NOT inside the page's body: the
-  // staff page scales its whole body by 1.15 on wide screens (body{zoom:1.15}), which would
-  // stretch a band placed in the body. The html element makes room for it (padding-top), so
-  // the page's own content starts below it. It is drawn above EVERYTHING (the highest z-index):
-  // the sign-in screen is a full-screen layer, and a band drawn under it would vanish exactly
-  // where it matters (render check, 31 Oct 2026). At the top of the page it can therefore lie
-  // over the top 16px of a full-screen box or sheet — but only to the eye: it never takes a
-  // tap or click (pointer-events:none), so whatever is under it still works. It scrolls away
-  // with the page. System font: nothing to load.
-  if (copy.band) {
-    const BAND = '<style id="testing-band">html{padding-top:16px!important}' +
-      'html::before{content:"\\1F9EA  TESTING SITE \\2014  not the real auction";' +
-      'position:absolute;top:0;left:0;right:0;height:16px;z-index:2147483647;' +
-      'background:#b3261e;color:#ffffff;font:700 10.5px/16px system-ui,-apple-system,sans-serif;' +
-      'letter-spacing:.08em;text-align:center;white-space:nowrap;overflow:hidden;pointer-events:none}</style>';
-    rep('staff', '<body>', '<body>\n' + BAND, 1);
-    rep('admin', '<body>\n<!-- [build 227 · CONNECTION INTEGRITY]', '<body>\n' + BAND + '\n<!-- [build 227 · CONNECTION INTEGRITY]', 1);
-  }
 
   // ── 3c · RELATIVE FILE ADDRESSES ──
   // Each copy is served one folder below the MD page, so a relative address would look for its
@@ -298,7 +284,7 @@ function stampCopy(copy) {
 
   // ── CANARY: nothing MD-only, and nothing of the OTHER copy, may survive ──
   const others = COPIES.filter(o => o !== copy);
-  const FORBIDDEN = [MD_FB.projectId, MD_FB.appId, MD_FB.authDomain, MD_FB.apiKey, MD_FB.messagingSenderId, MD_APPCHECK,
+  const FORBIDDEN = ['<span id="siteLabel">MD</span>', MD_FB.projectId, MD_FB.appId, MD_FB.authDomain, MD_FB.apiKey, MD_FB.messagingSenderId, MD_APPCHECK,
     "'auctionConfigV1'", '"vk_lastUser"', "'adminRemembered'", "'insightsView'",
     "'acReloadedFor'", '"vrl-"', "'rbgate-'", "'reportsView'", "'vacVisit'"];
   for (const o of others) {
