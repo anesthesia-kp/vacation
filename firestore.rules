@@ -365,11 +365,16 @@ service cloud.firestore {
       // started, or the doc not existing at all means no restriction — the exists()
       // guard matters: get() on a missing doc ERRORS (evaluating to deny), which
       // would silently block every bid on a fresh database.
+      // [§427] The document is read once, after the exists() guard, and its fields are judged by timerLeftIn.
       return !exists(/databases/$(database)/documents/vacations/timer)
-        || !(get(/databases/$(database)/documents/vacations/timer).data.get('enabled', false) == true)
-        || get(/databases/$(database)/documents/vacations/timer).data.get('lastChange', null) == null
-        || request.time.toMillis() < get(/databases/$(database)/documents/vacations/timer).data.get('lastChange', 0)
-             + int(get(/databases/$(database)/documents/vacations/timer).data.get('durationHours', 48) * 3600000);
+        || timerLeftIn(get(/databases/$(database)/documents/vacations/timer).data);
+    }
+    // [§427] timerNotExpired()'s test on the timer document's data (t), read once by the caller. The staff split record (ssTimerOk) passes it the same read.
+    function timerLeftIn(t) {
+      return !(t.get('enabled', false) == true)
+        || t.get('lastChange', null) == null
+        || request.time.toMillis() < t.get('lastChange', 0)
+             + int(t.get('durationHours', 48) * 3600000);
     }
     // Has the admin explicitly CLOSED bidding? [AUDIT 2026-07-25 #2]
     // Bid writes used to be gated by the timer alone, so with the timer switched OFF a
@@ -417,12 +422,18 @@ service cloud.firestore {
       return s.get('p', null) == p && s.get('sp', null) == sp && s.get('mh', null) == mh
         && s.get('b', null) == b && s.get('ph', null) == ph && s.get('ok', false) == true;
     }
-    function ssWeekOpen(wk) {
-      return !exists(/databases/$(database)/documents/vacations/timer)
-        || (get(/databases/$(database)/documents/vacations/timer).data.get('lockAll', false) != true
-            && (!(get(/databases/$(database)/documents/vacations/timer).data.get('lockedWeeks', []) is list)
-                || !(wk in get(/databases/$(database)/documents/vacations/timer).data.get('lockedWeeks', []))));
+    // [§427] The week not locked, judged on the timer document's data (t), read once by ssTimerOk below (which carries the exists() guard).
+    function ssWeekOpen(t, wk) {
+      return t.get('lockAll', false) != true
+        && (!(t.get('lockedWeeks', []) is list) || !(wk in t.get('lockedWeeks', [])));
     }
+    // [§427] The countdown not run out (timerLeftIn, timerNotExpired's test) and the week not locked (ssWeekOpen), on ONE read of vacations/timer.
+    // No timer document: neither refuses. The exists() guard comes first because get() on a missing document errors.
+    function ssTimerOk(wk) {
+      return !exists(/databases/$(database)/documents/vacations/timer)
+        || ssTimerIn(get(/databases/$(database)/documents/vacations/timer).data, wk);
+    }
+    function ssTimerIn(t, wk) { return timerLeftIn(t) && ssWeekOpen(t, wk); }
     // [415 · S2b · §381 D · §383] The entry a colleague's 'on' replaces (the document before this write: resource, no extra lookup): none; one in place
     // ('on' - a change); or one ended ('off' - by the two, by the bid's loss, or by the admin's Remove, which does not bar a new split, §383); never a won split ('won').
     function ssOnOverOk(b, wk, e) {
@@ -435,28 +446,43 @@ service cloud.firestore {
         && e.get('p', null) is string && e.p != b
         && e.get('sp', null) in ['W', 'T'] && e.get('bh', null) in [1, 2] && e.get('ph', null) is int
         && ((e.get('st', null) == 'on' && (b in myInitials() || e.p in myInitials()) && ssOnOverOk(b, wk, e) // [415 · S2b · §381 D]
-              && ssSideIs(ssSide(b, wk), e.p, e.sp, e.bh, b, e.ph)
-              && ssSideIs(ssSide(e.p, wk), b, e.sp, 3 - e.bh, b, e.ph)
-              && ssSide(b, wk).get('cx', false) != true && ssSide(e.p, wk).get('cx', false) != true)
+              && ssOnSidesOk(ssSide(b, wk), ssSide(e.p, wk), b, e)) // [§427] each side read once
           || (e.get('st', null) == 'off' && e.get('why', null) == 'staff'
               && (b in myInitials() || e.p in myInitials())
               && ssBefore(b) is map && ssBefore(b).get(wk, {}).get('p', null) == e.p
               && ssBefore(b).get(wk, {}).get('st', null) == 'on' // [415 · S2b · §381 D] only a split in effect is ended
-              && ssSide(b, wk).get('p', null) == e.p && ssSide(e.p, wk).get('p', null) == b
-              && ssSide(b, wk).get('ph', null) == e.ph && ssSide(e.p, wk).get('ph', null) == e.ph
-              && ssSide(b, wk).get('cx', false) == true && ssSide(e.p, wk).get('cx', false) == true));
+              && ssOffSidesOk(ssSide(b, wk), ssSide(e.p, wk), b, e))); // [§427] each side read once
+    }
+    // [§427] staffSplitEntryOk's tests on the two sides: sideB = the bidder's side, sideP = the partner's, each read once (ssSide) and passed in.
+    // 'on': both approve exactly these terms, no cancel. 'off': both name each other and this phase, both carry the cancel.
+    function ssOnSidesOk(sideB, sideP, b, e) {
+      return ssSideIs(sideB, e.p, e.sp, e.bh, b, e.ph)
+        && ssSideIs(sideP, b, e.sp, 3 - e.bh, b, e.ph)
+        && sideB.get('cx', false) != true && sideP.get('cx', false) != true;
+    }
+    function ssOffSidesOk(sideB, sideP, b, e) {
+      return sideB.get('p', null) == e.p && sideP.get('p', null) == b
+        && sideB.get('ph', null) == e.ph && sideP.get('ph', null) == e.ph
+        && sideB.get('cx', false) == true && sideP.get('cx', false) == true;
     }
     function staffSplitWriteOk() {
-      return ssW() is map && ssW().keys().hasOnly(['b', 'wk'])
-        && ssW().get('b', null) is string && ssW().get('wk', null) is string
+      let w = ssW(); // [§427] _w read once; it is the first thing this test reads
+      return w is map && w.keys().hasOnly(['b', 'wk'])
+        && w.get('b', null) is string && w.get('wk', null) is string
         && (resource == null
-              ? request.resource.data.keys().hasOnly(['_w', ssW().b])
-              : request.resource.data.diff(resource.data).affectedKeys().hasOnly(['_w', ssW().b]))
-        && request.resource.data.get(ssW().b, null) is map && ssBefore(ssW().b) is map
-        && request.resource.data[ssW().b].diff(ssBefore(ssW().b)).affectedKeys().hasOnly([ssW().wk])
-        && request.resource.data[ssW().b].get(ssW().wk, null) is map
-        && biddingNotClosed() && timerNotExpired() && ssWeekOpen(ssW().wk)
-        && staffSplitEntryOk(ssW().b, ssW().wk, request.resource.data[ssW().b][ssW().wk]);
+              ? request.resource.data.keys().hasOnly(['_w', w.b])
+              : request.resource.data.diff(resource.data).affectedKeys().hasOnly(['_w', w.b]))
+        && request.resource.data.get(w.b, null) is map
+        && ssRecordOk(w.b, w.wk, request.resource.data[w.b], ssBefore(w.b));
+    }
+    // [§427] The rest of staffSplitWriteOk's tests. m = the bidder's map after this write, mb = before it; each is read once and passed in.
+    // biddingNotClosed(), then ssTimerOk: timerNotExpired()'s test and ssWeekOpen on one read of the timer document.
+    function ssRecordOk(b, wk, m, mb) {
+      return mb is map
+        && m.diff(mb).affectedKeys().hasOnly([wk])
+        && m.get(wk, null) is map
+        && biddingNotClosed() && ssTimerOk(wk)
+        && staffSplitEntryOk(b, wk, m[wk]);
     }
     // User timer writes may only touch lastChange/durationHours with sane values.
     // [AUDIT 2026-07-25 #1] The old version bounded lastChange but left durationHours
