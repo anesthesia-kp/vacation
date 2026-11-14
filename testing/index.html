@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 257;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 258;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -2066,6 +2066,20 @@ let _spAdm={}, _spStaff={}, splitAgreementsData={}; // [249 · S2b · §376–§
 // [410 · split weeks, DECISIONS §368–§369] One record of shared weeks: vacations/splits.
 let splitsData={};
 function _splitHalfDays(sp,h){ return sp==='T' ? (h===1?'Sun–Tue':'Wed–Sat') : (h===1?'Sun–Wed':'Thu–Sat'); }
+// [422 · §420 H2] The dates of a split half: "Feb 14–17", across a month "Feb 28–Mar 3". The days are read from _splitHalfDays itself (its
+// first and last day name, counted from the week key's Sunday), on local calendar dates. '' when the week key is not a Sunday date or the half can't be read.
+function _splitHalfDates(wk,sp,h){
+  const DN=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'], MS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const r=String(_splitHalfDays(sp,h)).split('–'), a=DN.indexOf(r[0]), b=DN.indexOf(r[1]);
+  const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(wk||'')); if(!m||a<0||b<a) return '';
+  const y=Number(m[1]), mo=Number(m[2])-1, d=Number(m[3]), w=new Date(y,mo,d);
+  if(isNaN(w.getTime())||w.getDay()!==0||w.getDate()!==d) return '';
+  const s=new Date(y,mo,d+a), e=new Date(y,mo,d+b);
+  return MS[s.getMonth()]+' '+s.getDate()+'–'+(e.getMonth()===s.getMonth()?'':MS[e.getMonth()]+' ')+e.getDate();
+}
+// [258 · §442] A split half as staff and admin read it: the days, then the dates in brackets - "Sun–Wed (Jan 24–27)"; the days
+// alone when the week key gives no dates. Identical on the staff and admin pages.
+function _splitHalfLabel(wk,sp,h){ const d=(typeof _splitHalfDates==='function')?_splitHalfDates(wk,sp,h):''; return _splitHalfDays(sp,h)+(d?' ('+d+')':''); }
 function _splitHalfWeight(sp,h){ return sp==='T' ? (h===1?0.4:0.6) : (h===1?0.6:0.4); }
 // Blended FTE: 0.6 × the 4-day holder's FTE + 0.4 × the 3-day holder's, rounded UP to 0.1 (FP-safe).
 function splitBlendFte(e){
@@ -2345,6 +2359,10 @@ function _spPending(user,wk){
   }catch(_){}
   return null;
 }
+// [258 · §443 Q3] The split a bid by user on wk is placed under, for the confirm box: the agreed one this save applies (_spPending: record or
+// update; an agreed END leaves the whole week), else the split recorded and in place this phase with user as its bidder; null = none.
+function _spConfirmTerms(user,wk){ try{ const pend=(typeof _spPending==='function')?_spPending(user,wk):null; if(pend) return pend.act==='end'?null:pend.t;
+  const e=_spFor(user,wk); return (e&&e.b===user&&e.st==='on'&&Number(e.ph)===Number(phasesData.currentPhase||1))?e:null; }catch(_){ return null; } }
 // The staff record's entry for that save - all seven fields (why null while on; bh and ph whole numbers, as the rules check them).
 function _spRecEntry(pend,at){ const t=pend.t, end=pend.act==='end'; return {p:t.p,sp:t.sp,bh:Number(t.bh),ph:Number(t.ph),st:end?'off':'on',why:end?'staff':null,at:at}; }
 // The staff record with that entry in it, and _w naming it (a copy).
@@ -4985,7 +5003,8 @@ window.reviewBid=function(){
   }
   // Populate confirmation panel
   const meta=weekMeta[pendingWeek];
-  document.getElementById("confirmDates").textContent=meta.range;
+  { const _ct=(typeof _spConfirmTerms==='function')?_spConfirmTerms(user,pendingWeek):null; // [258 · §443 Q3] B2: a split's bidder sees their half
+    document.getElementById("confirmDates").textContent=_ct?(_splitHalfLabel(pendingWeek,_ct.sp,Number(_ct.bh))+', shared with '+_ct.p):meta.range; } // [258 · §449] the other person by initials
   document.getElementById("confirmBidLevel").textContent=val==="NP"?"NP (No Priority)":val.replace(/,/g,'/');
   _whyPut('confirmLowering','confirmLoweringWhy',[_blNote],_blNote?_blWhy:''); // [405 · §342 · plan S2] the short line and its "Why?" (none: hidden)
   // [216 · §282] Strict only (plan rule 4, W3): a NUMBERED bid on a competition week - or on the week this bid makes one - is told before
@@ -5995,6 +6014,17 @@ window.openPhaseHistory=function(){
     }
     return false;
   }
+  // [258 · §442 · §443 Q1 / Q2] A SPLIT'S HALF. The splits decided in phase ph that name user, as that phase's result reads them: 'won', or lost
+  // ('off' / why 'lost'); one still 'on' reads won when its bidder is in the phase's approvals for the week, else lost (the rule publish
+  // writes). Ended and admin-removed splits are not shown. {b: {wk: e} as bidder, p: {wk: e} as partner}, e carrying r ('won' | 'lost').
+  function phSplits(ph){
+    const out={b:{},p:{}}, n=Number(ph), ap=(completed[ph]&&completed[ph].approvals)||{}, sd=(typeof splitsData!=='undefined'&&splitsData)||{};
+    for(const k in sd){ const e=sd[k]; if(!e||!e.wk||!e.b||!e.p||Number(e.ph)!==n) continue;
+      let r=null; if(e.st==='won') r='won'; else if(e.st==='off'&&e.why==='lost') r='lost'; else if(e.st==='on') r=(Array.isArray(ap[e.wk])&&ap[e.wk].includes(e.b))?'won':'lost';
+      if(!r) continue;
+      if(e.b===user) out.b[e.wk]=Object.assign({},e,{r:r}); else if(e.p===user) out.p[e.wk]=Object.assign({},e,{r:r}); }
+    return out;
+  }
   let html='';
   keys.forEach(ph=>{
     const d=completed[ph];
@@ -6005,28 +6035,36 @@ window.openPhaseHistory=function(){
     for(const wk of Object.keys(allBids)){
       if(!inEarlierHist(user,wk,allBids[wk],ph)) userBids[wk]=allBids[wk];
     }
-    if(!Object.keys(userBids).length){
+    const sp=phSplits(ph);
+    const rows=Object.keys(userBids).map(wk=>({wk:wk,prio:userBids[wk],e:sp.b[wk]||null,partner:false}));
+    for(const wk of Object.keys(sp.p)) if(!Object.prototype.hasOwnProperty.call(userBids,wk)) rows.push({wk:wk,e:sp.p[wk],partner:true}); // the partner placed no bid
+    if(!rows.length){
       html+=`<div style="margin-bottom:16px"><div style="font-weight:700;color:#1f2329;margin-bottom:6px">${phaseName(ph)}</div><div style="color:#4a505a;font-size:.8rem">No bids placed in this ${isRvaPhase(ph)?'round':'phase'}.</div></div>`;
       return;
     }
     html+=`<div style="margin-bottom:18px;padding:14px;background:rgba(255,255,255,.85);border:1px solid #e2ddd1;border-radius:10px">
       <div style="font-weight:700;color:#1f2329;margin-bottom:10px;font-size:.95rem">${phaseName(ph)}</div>`;
-    Object.entries(userBids).sort(([a],[b])=>a.localeCompare(b)).forEach(([wk,prio])=>{
+    rows.sort((a,b)=>a.wk.localeCompare(b.wk)).forEach(r=>{
+      const wk=r.wk, e=r.e;
       const meta=weekMeta[wk];
       const approvedHere=Array.isArray(phApprovals[wk])?phApprovals[wk]:[];
       const phDenials=d.denials||{};
       const deniedHere=Array.isArray(phDenials[wk])?phDenials[wk]:[];
       // Completed phases contain only decided bids, so the honest labels are
       // APPROVED / DENIED. (NOT APPROVED covers legacy/simulated snapshots
-      // where a bid was never explicitly decided.)
+      // where a bid was never explicitly decided.) A partner's row reads its split's result.
       let outcome, oc;
-      if(approvedHere.includes(user)){ outcome='APPROVED'; oc='#36694a'; }
+      if(r.partner){ if(e.r==='won'){ outcome='APPROVED'; oc='#36694a'; } else { outcome='DENIED'; oc='#5c1f15'; } }
+      else if(approvedHere.includes(user)){ outcome='APPROVED'; oc='#36694a'; }
       else if(deniedHere.includes(user)){ outcome='DENIED'; oc='#5c1f15'; }
       else { outcome='NOT APPROVED'; oc='#5c1f15'; }
-      const lbl=escH(bidLbl(prio));
+      const when=e?(_splitHalfLabel(wk,e.sp,r.partner?3-Number(e.bh):Number(e.bh))+', shared with '+(r.partner?e.b:e.p)):(meta?.range||wk); // [258] the half, not the whole week; the other person by initials (§449)
+      let lbl;
+      if(r.partner){ const pb=phSchedule[e.b]?.[wk]; lbl=(pb!==undefined?escH(bidLbl(pb))+' ':'')+'('+escH(e.b)+')'; } // the bidder's bid, with their initials
+      else lbl=escH(bidLbl(r.prio));
       html+=`<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid rgba(31,35,41,.04)">
         <span style="font-size:.72rem;font-weight:700;color:#1f2329;min-width:48px">W${meta?.weekNum||''}</span>
-        <span style="font-size:.8rem;color:#1f2329;flex:1">${escH(meta?.range||wk)}</span>
+        <span style="font-size:.8rem;color:#1f2329;flex:1">${escH(when)}</span>
         <span style="font-size:.72rem;color:#4a505a">Bid: ${lbl}</span>
         <span style="font-size:.72rem;font-weight:700;color:${oc}">${outcome}</span>
       </div>`;
@@ -7808,7 +7846,7 @@ const SA_HALVES={W1:{sp:'W',mh:1},W2:{sp:'W',mh:2},T1:{sp:'T',mh:1},T2:{sp:'T',m
 // effect). s = _spStateOf(me, s.q, wk).
 function _saView(me,s,wk){
   const nm=displayName(s.q), oi=s.q, L=['Split with '+nm], A=[], row=s.row, t=s.was||s; // [256 · §418–§419] the other person: full name (nm) first, then initials (oi); me: my initials
-  const days=x=>{ const my=(x.b===me)?Number(x.bh):3-Number(x.bh); return 'You: '+_splitHalfDays(x.sp,my)+' · '+oi+': '+_splitHalfDays(x.sp,3-my); }; // [257 · §436] Y1 / Y2
+  const days=x=>{ const my=(x.b===me)?Number(x.bh):3-Number(x.bh); return 'You: '+_splitHalfLabel(wk,x.sp,my)+' · '+oi+': '+_splitHalfLabel(wk,x.sp,3-my); }; // [257 · §436] Y1 / Y2 · [258 · §442] S1 the dates
   const terms=()=>{ if(t.sp&&t.b) L.push(days(t)+' · Bidder: '+(t.b===me?'you':t.b)); }; // [256] A1 / A2 · [257 · §436] Y1 / Y2
   if(row==='ended') return {lines:[],acts:[],note:''}; // [253 · §406 Q8] nothing to show
   if(row==='rejected'&&s.k!=='change'){ terms(); return {lines:L,acts:[['ok','OK']],note:s.k==='cancel'?oi+' kept the split.':oi+' declined the split.',stay:true}; } // [254 · §410] · [256] A7 / A8
@@ -7921,6 +7959,7 @@ function _saFormPaint(me,busy){
   }
   if(F.half&&F.halves.indexOf(F.half)<0) F.half=null;
   document.querySelectorAll('#saForm [data-sa-h]').forEach(l=>{ const show=F.halves.indexOf(l.getAttribute('data-sa-h'))>=0; if(l.hidden===show) l.hidden=!show; });
+  document.querySelectorAll('#saForm [data-sa-h]').forEach(l=>{ const H=SA_HALVES[l.getAttribute('data-sa-h')], x=l.querySelector('span'); if(H&&x){ const t=_splitHalfLabel(F.wk,H.sp,H.mh); if(x.textContent!==t) x.textContent=t; } }); // [258 · §442] S2: each day choice with the box's week's dates
   document.querySelectorAll('#saForm input[name="saHalf"]').forEach(r=>{ r.checked=(r.value===F.half); r.disabled=busy; });
   { const hl=document.getElementById('saHalfL'), bm=document.getElementById('saBidsMe'), hd='Your days'; if(hl&&hl.textContent!==hd) hl.textContent=hd; if(bm&&bm.textContent!=='You') bm.textContent='You'; } // [257 · §436] Y8 / Y9
   const bq=document.getElementById('saBidsQ'); if(bq){ const t=F.q||''; if(bq.textContent!==t) bq.textContent=t; } // [252 · T2] blank (and not choosable) before anyone is picked · [256 · §418–§419] D2 the other person's initials

@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 426;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 427;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -724,7 +724,7 @@ thead th{color:var(--t2)}
       <div class="card">
         <div class="card-title">Create a split</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <select id="swWeek" class="sel" style="width:170px" aria-label="Week"></select>
+          <select id="swWeek" class="sel" style="width:170px" aria-label="Week" onchange="_swHalves()"></select><!-- [258 · §442] A3: the half choices take the week's dates -->
           <select id="swBidder" class="sel" style="width:100px" aria-label="Bidder"></select>
           <select id="swPartner" class="sel" style="width:100px" aria-label="Partner"></select>
           <select id="swSplit" class="sel" style="width:180px" aria-label="Split" onchange="_swHalves()"></select>
@@ -2308,8 +2308,8 @@ function _resultsBodyFor(key,u,entry,schedSrc){ // [391 · §296] greets by the 
   const approved=(entry.approved||[]).slice(), denied=(entry.denied||[]).slice();
   approved.sort(); denied.sort();
   const appLines=approved.map(wk=>{const m=wkDate(wk); const _se=(typeof _splitWonIn==='function')?_splitWonIn(cur,u,wk):null; // [410 · split weeks, Q10]
-    if(_se&&_se.b!==u) return `  • ${wLabel(m)} — ${_splitHalfDays(_se.sp,3-Number(_se.bh))}, shared with ${displayName(_se.b)}`; // the partner placed no bid
-    return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`+(_se?` — ${_splitHalfDays(_se.sp,Number(_se.bh))}, shared with ${displayName(_se.p)}`:'');}).join('\n');
+    if(_se&&_se.b!==u) return `  • ${wLabel(m)} — ${_splitHalfLabel(wk,_se.sp,3-Number(_se.bh))}, shared with ${displayName(_se.b)}`; // the partner placed no bid
+    return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`+(_se?` — ${_splitHalfLabel(wk,_se.sp,Number(_se.bh))}, shared with ${displayName(_se.p)}`:'');}).join('\n');
   const denLines=denied.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
   return `Hi ${((typeof greetName==='function')?greetName(u):u)},
 
@@ -3643,6 +3643,9 @@ function _splitHalfDates(wk,sp,h){
   const s=new Date(y,mo,d+a), e=new Date(y,mo,d+b);
   return MS[s.getMonth()]+' '+s.getDate()+'–'+(e.getMonth()===s.getMonth()?'':MS[e.getMonth()]+' ')+e.getDate();
 }
+// [258 · §442] A split half as staff and admin read it: the days, then the dates in brackets - "Sun–Wed (Jan 24–27)"; the days
+// alone when the week key gives no dates. Identical on the staff and admin pages.
+function _splitHalfLabel(wk,sp,h){ const d=(typeof _splitHalfDates==='function')?_splitHalfDates(wk,sp,h):''; return _splitHalfDays(sp,h)+(d?' ('+d+')':''); }
 function _splitHalfWeight(sp,h){ return sp==='T' ? (h===1?0.4:0.6) : (h===1?0.6:0.4); }
 // Blended FTE: 0.6 × the 4-day holder's FTE + 0.4 × the 3-day holder's, rounded UP to 0.1 (FP-safe).
 function splitBlendFte(e){
@@ -4386,9 +4389,15 @@ function userPhaseHistory(u){
     const snap=cp[k]||{};
     const _n=Number(k), ph=isRvaPhase(_n)?('R'+rvaRound(_n)):_n;
     const apr=snap.approvals||{}, den=snap.denials||{};
-    let w=0,l=0;
-    for(const wk of Object.keys(apr)){ if(Array.isArray(apr[wk])&&apr[wk].includes(u)) w++; }
-    for(const wk of Object.keys(den)){ if(Array.isArray(den[wk])&&den[wk].includes(u)) l++; }
+    // [258 · §442 · §443 Q4] counted in halves: a split half won is ½W for its bidder and ½W for its partner (who is in no approvals list);
+    // a split half lost is ½L for its bidder (the partner placed no bid). The splits as phase _n's result reads them (splitsInForceAt).
+    const _sp=(typeof splitsInForceAt==='function')?splitsInForceAt(_n).filter(e=>Number(e.ph)===_n):[];
+    const _sb=(wk,won)=>_sp.some(e=>e.wk===wk&&e.b===u&&(won?e.st==='won':e.st==='off'));
+    let w2=0,l2=0;
+    for(const wk of Object.keys(apr)){ if(Array.isArray(apr[wk])&&apr[wk].includes(u)) w2+=_sb(wk,true)?1:2; }
+    for(const wk of Object.keys(den)){ if(Array.isArray(den[wk])&&den[wk].includes(u)) l2+=_sb(wk,false)?1:2; }
+    for(const e of _sp){ if(e.p===u&&e.st==='won') w2+=1; }
+    const w=w2/2, l=l2/2;
     rows.push({phase:ph,w,l,bid:(w+l)>0});
   }
   return {phaseNums,rows};
@@ -4397,6 +4406,8 @@ function userPhaseHistory(u){
 // Delineated by phase, red/green only — no overall total. Rendered inside the
 // row's trailing "history" table cell, so it lines up directly under the
 // card header's Prior Phase Results button (same column, native to <table>).
+// [258 · §442] A count in halves as the line prints it: 2 → "2", 0.5 → "½", 1.5 → "1½".
+function _halfTxt(x){ const h=Math.round(Number(x)*2), n=Math.floor(h/2); return (h%2)?((n?String(n):'')+'½'):String(n); }
 function priorPhaseInlineHtml(u){
   const hist=userPhaseHistory(u);
   if(!hist.phaseNums.length) return ''; // Phase 1, nothing completed yet
@@ -4404,8 +4415,8 @@ function priorPhaseInlineHtml(u){
     const _pl=String(r.phase).startsWith('R')?r.phase:('P'+r.phase); // [319 · P-3] "R1: 1W"
     if(!r.bid) return `<span><span style="color:var(--t3)">${_pl}:</span> <span style="color:var(--t3)">–</span></span>`;
     const bits=[];
-    if(r.w) bits.push(`<span style="color:var(--green);font-weight:700">${r.w}W</span>`);
-    if(r.l) bits.push(`<span style="color:var(--red);font-weight:700">${r.l}L</span>`);
+    if(r.w) bits.push(`<span style="color:var(--green);font-weight:700">${_halfTxt(r.w)}W</span>`); // [258 · §442] ½W
+    if(r.l) bits.push(`<span style="color:var(--red);font-weight:700">${_halfTxt(r.l)}L</span>`); // [258 · §443 Q4] ½L
     return `<span><span style="color:var(--t3)">${_pl}:</span> ${bits.join(' ')}</span>`;
   });
   return `<div class="dr-history">${parts.join('')}</div>`;
@@ -6576,7 +6587,7 @@ window._runSimulationNow=async function(){
       else if(Array.isArray(v)) v.forEach(n=>usedPrios.add(n));
       else usedPrios.add(v);
     }
-    const weeks=fyShuffle([...allWeeks].filter(wk=>!priorWonWeeks.has(wk)&&!existingWeeks.has(wk)));
+    const weeks=fyShuffle([...allWeeks].filter(wk=>!priorWonWeeks.has(wk)&&!existingWeeks.has(wk)&&!getPriorPhaseWinners(wk).has(user))); // [427 · §447] a week the person holds (a won split's partner too) gets no simulated bid
     let bidCount=existingWeeks.size; // target INCLUDES bids the user already placed
     // [SIM 25 Jul 2026] Honour the CUMULATIVE cap, not just the slider. A real user is
     // stopped by bidLimitStatus() at priorApprovedCount + live bids >= cap, so a slider
@@ -7004,18 +7015,19 @@ function _rmFteHtml(byMonth,picked,rN,off){
   const set=new Set(); (picked||[]).forEach(m=>((byMonth[m]&&byMonth[m].availWeeks)||[]).forEach(wk=>set.add(wk)));
   if(!set.size) return '';
   const prev=_setupPrevCaps('p'+(fallPhases()+rN));
-  const rows=[...set].sort().map(wk=>{ const now=getSlots(wk), c=prev&&prev.caps[wk], pc=(c&&typeof c.cap==='number')?c.cap:null; const sn=getSlc(wk), ps=_bdSlcPrev(prev,wk), fc=pc!==null&&Math.round(pc*10)!==Math.round(now*10), sc=ps!==null&&Math.round(ps*10)!==Math.round(sn*10); return {wk,now,pc,fc,sn,ps,sc,ch:fc||sc}; }); // [393 · §297 Build D] D: fc / sc = the FTE / the Smart Lock changed
+  const _capRows={}; ((typeof _capacityWeekRows==='function')?_capacityWeekRows():[]).forEach(r=>{ _capRows[r.wk]=r; }); // [427 · §450] Available = the Week Capacity page's rows
+  const rows=[...set].sort().map(wk=>{ const now=getSlots(wk), c=prev&&prev.caps[wk], pc=(c&&typeof c.cap==='number')?c.cap:null; const sn=getSlc(wk), ps=_bdSlcPrev(prev,wk), fc=pc!==null&&Math.round(pc*10)!==Math.round(now*10), sc=ps!==null&&Math.round(ps*10)!==Math.round(sn*10); const cr=_capRows[wk]; return {wk,now,pc,fc,sn,ps,sc,ch:fc||sc,av:cr?cr.avail:'—',ac:(cr&&typeof _capacityWeekOpen==='function'&&_capacityWeekOpen(cr))?'#36694a':'#4a1911'}; }); // [427 · §450] av / ac: the week's Available and its colour // [393 · §297 Build D] D: fc / sc = the FTE / the Smart Lock changed
   const ch=rows.filter(r=>r.ch), ord=ch.concat(rows.filter(r=>!r.ch));
   const TH='padding:4px 8px;border-bottom:2px solid var(--b1);color:var(--t2);font-weight:700;font-size:12px', TD='padding:5px 8px;border-bottom:1px solid var(--b1)';
   return '<div style="font-size:14px;color:var(--t1)">'+rows.length+' week'+(rows.length!==1?'s':'')+' can open — untick to keep a week locked'
       +(ch.length?' · <b style="color:#4a4f5a">'+ch.length+' changed since '+esc(prev.label)+'</b>':'')+'</div>'
     +'<button type="button" class="btn btn-ghost" style="margin-top:8px" onclick="_rmFteOpen()">Open Week Capacity</button>'
     +'<table id="rmFteTbl" style="width:100%;min-width:0;border-collapse:collapse;font-size:14px;line-height:1.3;color:var(--t1);margin-top:10px"><thead><tr><th style="text-align:left;'+TH+'">Week</th><th style="text-align:right;white-space:nowrap;'+TH+'">Capacity (FTE)</th>'
-      +'<th style="text-align:right;'+TH+'">Smart Lock</th>'+(prev?'<th style="text-align:right;'+TH+'">In '+esc(prev.label)+'</th>':'')+'</tr></thead><tbody>' // [393 · §297 Build D] D: these two heads may wrap (a phone's width)
+      +'<th style="text-align:right;'+TH+'">Available</th><th style="text-align:right;'+TH+'">Smart Lock</th></tr></thead><tbody>' // [393 · §297 Build D] D: these heads may wrap (a phone's width) · [427 · §450] Available; no "In <phase>" column
       +ord.map(r=>'<tr data-wk="'+r.wk+'"'+(r.ch?' style="background:rgba(111,106,96,.28)"':'')+'><td style="white-space:nowrap;'+TD+(r.ch?';box-shadow:inset 4px 0 #6f6a60':'')+'"><label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" name="rmwk" value="'+r.wk+'"'+((off&&off.has(r.wk))?'':' checked')+' style="width:16px;height:16px;margin:0;flex:none">Wk '+esc(_wkNumByISO[r.wk]||'?')+' · '+esc(_srWkShort(r.wk))+'</label></td>'
         +'<td style="text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;'+TD+'"><b>'+(r.fc?BD_WARN_SVG:'')+esc(r.now)+'</b>'+(r.fc?' <span style="color:var(--t2)">was '+esc(r.pc)+'</span>':'')+'</td>'
-        +'<td style="text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;'+TD+'"><b>'+(r.sc?BD_WARN_SVG:'')+esc(r.sn)+'</b></td>' // [393 · §297 Build D] D
-        +(prev?'<td style="text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--t2);'+TD+'">'+(r.ps===null?'—':esc(r.ps))+'</td>':'')+'</tr>').join('')+'</tbody></table>';
+        +'<td style="text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:600;color:'+r.ac+';'+TD+'">'+esc(r.av)+'</td>' // [427 · §450] Available, coloured as the Week Capacity page
+        +'<td style="text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;'+TD+'"><b>'+(r.sc?BD_WARN_SVG:'')+esc(r.sn)+'</b>'+(r.sc?' <span style="color:var(--t2)">was '+esc(r.ps)+'</span>':'')+'</td></tr>').join('')+'</tbody></table>'; // [393 · §297 Build D] D · [427 · §450] a changed Smart Lock: "was" in its cell
 }
 // Step 2's "📆 Open FTE Availability" leaves "↩ Back to Round N" at the top of that page (owner 11:20 PM): it reopens the picker straight at
 // step 2 with the same months, read fresh (the rooms and the FTE as they are then, exactly as step 1 + Next would) - unless the round has
@@ -12475,7 +12487,7 @@ function _splitStatusHtml(e0){ const e=_splitDerived(e0), by=(e0&&e0.src==='staf
 function _swFill(id,first,opts){ const s=document.getElementById(id); if(!s) return; const prev=s.value;
   const h='<option value="">'+esc(first)+'</option>'+opts.map(o=>'<option value="'+esc(String(o[0]))+'">'+esc(String(o[1]))+'</option>').join('');
   if(s.dataset.sw!==h){ s.innerHTML=h; s.dataset.sw=h; if(opts.some(o=>String(o[0])===prev)) s.value=prev; } }
-function _swHalves(){ const s=document.getElementById('swSplit'), sp=(s&&s.value==='T')?'T':'W'; _swFill('swHalf',"Bidder's half",[[1,_splitHalfDays(sp,1)],[2,_splitHalfDays(sp,2)]]); }
+function _swHalves(){ const s=document.getElementById('swSplit'), sp=(s&&s.value==='T')?'T':'W', w=document.getElementById('swWeek'), wk=(w&&w.value)||''; _swFill('swHalf',"Bidder's half",[[1,_splitHalfLabel(wk,sp,1)],[2,_splitHalfLabel(wk,sp,2)]]); } // [258 · §442] A3: with the dates once a week is picked
 window._swHalves=_swHalves;
 // [411 · split weeks, §371] The switch (its card is in Settings, greyed while a phase runs by renderRunLocks) and the Split weeks page's Off line — painted by syncControls and renderSplitWeeks.
 function _swPaintSwitch(){
@@ -12548,7 +12560,7 @@ function _saPaintAdmin(){
   const rows=st.stage?_saWaitList(splitAgreementsData,splitsData,st.ph,(mondays||[]).map(dateKey),_spIsPerson,_saLive):[];
   const td=x=>'<td style="white-space:nowrap">'+x+'</td>';
   tb.innerHTML=rows.length?rows.map(x=>{ const h=Number(x.bh);
-    return '<tr>'+td(esc(wLabel(wkDate(x.wk))))+td(esc(x.b+'/'+x.p))+td(esc(_splitHalfDays(x.sp,h)+' / '+_splitHalfDays(x.sp,3-h)))+td(esc(x.b))+td(esc(_saWaitFor(x)))+'</tr>'; }).join('')
+    return '<tr>'+td(esc(wLabel(wkDate(x.wk))))+td(esc(x.b+'/'+x.p))+td(esc(_splitHalfLabel(x.wk,x.sp,h)+' / '+_splitHalfLabel(x.wk,x.sp,3-h))) /* [258 · §442] A2 */+td(esc(x.b))+td(esc(_saWaitFor(x)))+'</tr>'; }).join('')
     :'<tr><td colspan="5" style="text-align:center;color:var(--t2);padding:20px">No agreements waiting.</td></tr>';
 }
 function renderSplitWeeks(){
@@ -12561,7 +12573,7 @@ function renderSplitWeeks(){
   const td=x=>'<td style="white-space:nowrap">'+x+'</td>';
   tb.innerHTML=rows.length?rows.map(e=>{ const h=Number(e.bh);
     return '<tr>'+(all?td(esc(phaseName(e.ph))):'')+td(esc(wLabel(wkDate(e.wk))))+td(esc(e.b))+td(esc(e.p))+td(esc(_splitBidCell(e)))
-      +td(esc(e.b+' '+_splitHalfDays(e.sp,h))+'<br>'+esc(e.p+' '+_splitHalfDays(e.sp,3-h)))+td(esc((+splitBlendFte(e)).toFixed(1)))+td(_splitStatusHtml(e))
+      +td(esc(e.b+' '+_splitHalfLabel(e.wk,e.sp,h))+'<br>'+esc(e.p+' '+_splitHalfLabel(e.wk,e.sp,3-h))) /* [258 · §442] A1 */+td(esc((+splitBlendFte(e)).toFixed(1)))+td(_splitStatusHtml(e))
       +td(_splitRemovable(e)?'<button class="btn btn-ghost" style="font-size:12px;padding:4px 12px" onclick="removeSplit(\''+_jsq(e.key)+'\')">Remove</button>':'')+'</tr>'; }).join('')
     :'<tr><td colspan="'+(all?9:8)+'" style="text-align:center;color:var(--t2);padding:20px">No splits.</td></tr>';
   _swFill('swWeek','Week',(mondays||[]).map(d=>[dateKey(d),wLabel(d)]));
@@ -12609,7 +12621,7 @@ function _splitCreateRefusal(wk,b,p,sp,bh){
 // not shown here; a bid placed in the same step is still refused over a cap (_splitBidRefusal).
 function _splitCreateBody(e){
   const h=Number(e.bh);
-  return '<div>'+esc(_splitWkName(e.wk)+' · '+e.b+' '+_splitHalfDays(e.sp,h)+', '+e.p+' '+_splitHalfDays(e.sp,3-h)+' · '+e.b+' bids · blended FTE '+(+splitBlendFte(e)).toFixed(1)+'.')+'</div>';
+  return '<div>'+esc(_splitWkName(e.wk)+' · '+e.b+' '+_splitHalfLabel(e.wk,e.sp,h)+', '+e.p+' '+_splitHalfLabel(e.wk,e.sp,3-h)+' · '+e.b+' bids · blended FTE '+(+splitBlendFte(e)).toFixed(1)+'.')+'</div>';
 }
 // [411 · split weeks, §371] Create may place the bidder's bid in the same step ("Bid"; No bid = the split alone, exactly as before). Every rule
 // a bid follows is checked BEFORE anything is written, with the split in place; any broken rule refuses the whole step, nothing saved (Q1).
@@ -16554,6 +16566,7 @@ window.renderCloudBackups=async function(){
 // section 6 (split wording), as approved (tests/docs/split-wording/PLAN.md §6, §11 Q3). 191 items, [12,40,12,16,13,37,10,51].
 // [425 · §433] 6.22: one sentence appended (Finish the auction; tests/docs/build425-plan/PLAN.md §2.2). 191 items, as above.
 // [426 · §436 · §438] 6.35 and 6.37: split wording in "you" (tests/docs/split-you/PLAN.md §3). 191 items, as above.
+// [427 · §442] 6.38 added at the end of section 6 (who sees a split's days; tests/docs/split-dates/PLAN.md §A R1). 192 items, [12,40,12,16,13,38,10,51].
 // Each item: n (its number), kind (new / live / term), html (its approved words), and for a live line its label, the words shown
 // when the setting gives nothing (whenEmpty) and, for the timer mode, the name of each value.
 const RULES_TEXT={sub:"How the auction works: every setting, the decision engine, and the rules staff see. Current values are read each time this page opens.",sections:[
@@ -16697,7 +16710,8 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"6.34","kind":"new","html":"Either of two people can propose a split: the week, each person's days and the bidder. It takes effect when the other accepts it. To end it, one asks, and the other ends the split at once or keeps it. Either can decline the other's proposal, and either can withdraw their own before it is accepted. To change a split, end it and propose a new one. Sending, accepting, declining, withdrawing, ending and keeping a split each ask first in a confirm box."},
 {"n":"6.35","kind":"new","html":"When a split is accepted, each person's bid cap is checked; if either would go over, it is refused with the reason. When a split with a bid ends, the bid stays as the bidder's own whole-week bid, and the bidder is told so: \"Your bid remains active.\" — in the confirm box when the bidder ends it, in the e-mail when the partner does, and beside \"The admin removed this split.\" when the admin removes it while bidding is open and keeps the bid; the ending is refused if that would put the bidder over the bid cap. The partner can't hold their own bid on that week."},
 {"n":"6.36","kind":"new","html":"A split counts as part of the bid: alert e-mails and the timer follow the same rules as any bid change, whenever a split starts or ends on a week with a bid. The partner gets the same alert e-mails as the bidder for that week. Staff are e-mailed when the other person proposes a split or asks to end one, and when the other person answers theirs: accepts or declines the proposal, or ends or keeps the split. The ☰ menu shows how many splits wait for their tap. These e-mails follow the alert e-mail switch."},
-{"n":"6.37","kind":"new","html":"In split wording, staff see the other person's full name first, then their initials, and themselves as \"you\"; the bidder shows as \"Bidder: &lt;initials&gt;\" or \"Bidder: you\"."}
+{"n":"6.37","kind":"new","html":"In split wording, staff see the other person's full name first, then their initials, and themselves as \"you\"; the bidder shows as \"Bidder: &lt;initials&gt;\" or \"Bidder: you\"."},
+{"n":"6.38","kind":"new","html":"Only the two people in a split and the admin see which days it covers. Someone proposing a split to a person who already has half of that week is told which half that person can take."}
 ]},
 {n:"7",title:"What staff see",items:[
 {"n":"7.1","kind":"new","html":"Staff read this list in Rules &amp; Reminders (☰ menu) and in their welcome e-mail. It follows the settings."},
