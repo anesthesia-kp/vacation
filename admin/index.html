@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 424;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 426;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -9223,6 +9223,7 @@ window.finishAuction=function(){
   const cur=Number(phasesData.currentPhase||1);
   if(phasesData.finishedAt){ toast('Auction complete.','warn'); return; }
   if(!isRvaPhase(cur)||!(phasesData.completedPhases||{})[cur]||!(phasesData.resultsSent||{})[cur]){ toast('Finish the auction is offered once a Round\'s results are sent.','warn'); return; }
+  if(!_bkBypass){ _backupThen('finishing the auction',function(){ _bkBypass=true; try{ window.finishAuction(); } finally { _bkBypass=false; } }); return; } // [425 · §433] the backup offer, as Begin / Complete
   openConfirm({
     title:'■ Finish the auction',
     body:'<div>No more Rounds can begin. Only Reset or a backup restore undoes this.</div>',
@@ -16551,6 +16552,8 @@ window.renderCloudBackups=async function(){
 // [421 · §411 · §412] 2.42, 6.32, 6.34 and 6.35: the AF/BC mark, the tick before Phase 1 and between phases, the confirm boxes, "My bid remains active.". 190 items, as above. [421 fix · §415] 6.35 also names the admin's removal with the bid kept.
 // [422 · §418–§421] 6.32 ("Interested"), 6.35 ("<initials>'s bid remains active."), 2.42 (the dates; the Change Log split mark) and 6.37 added at the end of
 // section 6 (split wording), as approved (tests/docs/split-wording/PLAN.md §6, §11 Q3). 191 items, [12,40,12,16,13,37,10,51].
+// [425 · §433] 6.22: one sentence appended (Finish the auction; tests/docs/build425-plan/PLAN.md §2.2). 191 items, as above.
+// [426 · §436 · §438] 6.35 and 6.37: split wording in "you" (tests/docs/split-you/PLAN.md §3). 191 items, as above.
 // Each item: n (its number), kind (new / live / term), html (its approved words), and for a live line its label, the words shown
 // when the setting gives nothing (whenEmpty) and, for the timer mode, the name of each value.
 const RULES_TEXT={sub:"How the auction works: every setting, the decision engine, and the rules staff see. Current values are read each time this page opens.",sections:[
@@ -16679,7 +16682,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"6.19","kind":"new","html":"<b>Complete Phase<\/b> needs bidding closed, every week locked (or Global Lock on), and every bid of the phase approved or denied."},
 {"n":"6.20","kind":"new","html":"Completing locks the approvals in. Each approved person becomes an earlier winner of that week (step 1) for the rest of the auction, and that bid's numbers are gone for good. Losing and denied bids end with the phase; their numbers come back. Last bids and the competition-week record start fresh."},
 {"n":"6.21","kind":"new","html":"Staff learn their results when the admin sends the phase results."},
-{"n":"6.22","kind":"new","html":"<b>Rolling Vacation Auction.<\/b> Each round is its own phase: its own bids, decisions and competition record. Earlier rounds' winners are earlier winners. All rounds share the RVA's one set of per-phase settings."},
+{"n":"6.22","kind":"new","html":"<b>Rolling Vacation Auction.<\/b> Each round is its own phase: its own bids, decisions and competition record. Earlier rounds' winners are earlier winners. All rounds share the RVA's one set of per-phase settings. ■ Finish the auction, offered once a round's results are sent, ends the auction: no more rounds can begin. It offers a backup first; only Reset or a restore undoes it."},
 {"n":"6.23","kind":"new","html":"<span class=\"ex\"><b>Example 1 — a clean week; a decision changes nothing<\/b><br>Phase 2. Capacity 3.0. PW won it in Phase 1. AF 1, BB 3, CC 5.<br>PW Winning (earlier winner, 1.0 used) · AF Winning · BB Winning (3.0 filled) · CC Losing.<br>The admin denies AF and approves CC: PW, AF, BB still Winning, CC still Losing.<\/span>"},
 {"n":"6.24","kind":"new","html":"<span class=\"ex\"><b>Example 2 — ties<\/b><br>(a) Capacity 1.0. AF 3, BB 3: each alone fits → both Under Review (tie).<br>(b) Capacity 1.5. AF 1, BB 4, CC 4, DD 6: AF Winning (0.5 left); BB + CC need 2.0, each alone over by 0.5 → both Under Review (tie); DD Losing.<br>(c) Capacity 1.0. AF 1, BB 4, CC 4: AF Winning (0 left); each tied bid over by 1.0 → both Losing.<\/span>"},
 {"n":"6.25","kind":"new","html":"<span class=\"ex\"><b>Example 3 — one bid over<\/b><br>AF 2, BB 4, CC 6. (a) Capacity 1.5: AF Winning; BB over by 0.5 → Under Review; CC Losing.<br>(b) Capacity 1.2: AF Winning; BB over by 0.8 → Losing; CC Losing.<br>(c) Capacity 1.5, FTE overage 0: AF Winning; BB Losing; CC Losing.<br>(d) Capacity 1.5. AF 1, BB 2, CC 3 at 0.5 FTE: AF Winning; BB Under Review; CC Losing — CC's 0.5 would fit in the 0.5 left, but the week settled at BB (step 6).<\/span>"},
@@ -16692,9 +16695,9 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"6.32","kind":"new","html":"Staff can tick \"Interested\" on a week to be listed as interested in a split. The list shows in that week's Split weeks box to everyone signed in, with each person's name, and as a small half-and-half square on the week's card. While bidding is open, locked weeks show no square and are not offered; a week someone won outright is not offered to them. The days and the bidder are chosen when a split is proposed. A listing made before a split on that week is not shown again once the split ends. The tick also works before Phase 1 begins and from results sent until the next phase begins; a tick made after results are sent is for the next phase."},
 {"n":"6.33","kind":"new","html":"Splits are made only while bidding is open. While bidding is closed, splits are frozen; only the admin can add or remove a split."},
 {"n":"6.34","kind":"new","html":"Either of two people can propose a split: the week, each person's days and the bidder. It takes effect when the other accepts it. To end it, one asks, and the other ends the split at once or keeps it. Either can decline the other's proposal, and either can withdraw their own before it is accepted. To change a split, end it and propose a new one. Sending, accepting, declining, withdrawing, ending and keeping a split each ask first in a confirm box."},
-{"n":"6.35","kind":"new","html":"When a split is accepted, each person's bid cap is checked; if either would go over, it is refused with the reason. When a split with a bid ends, the bid stays as the bidder's own whole-week bid, and the bidder is told so: \"My bid remains active.\" in the confirm box when the bidder ends it and in the e-mail when the partner does, and \"&lt;initials&gt;'s bid remains active.\" beside \"The admin removed this split.\" when the admin removes it while bidding is open and keeps the bid; the ending is refused if that would put the bidder over the bid cap. The partner can't hold their own bid on that week."},
+{"n":"6.35","kind":"new","html":"When a split is accepted, each person's bid cap is checked; if either would go over, it is refused with the reason. When a split with a bid ends, the bid stays as the bidder's own whole-week bid, and the bidder is told so: \"Your bid remains active.\" — in the confirm box when the bidder ends it, in the e-mail when the partner does, and beside \"The admin removed this split.\" when the admin removes it while bidding is open and keeps the bid; the ending is refused if that would put the bidder over the bid cap. The partner can't hold their own bid on that week."},
 {"n":"6.36","kind":"new","html":"A split counts as part of the bid: alert e-mails and the timer follow the same rules as any bid change, whenever a split starts or ends on a week with a bid. The partner gets the same alert e-mails as the bidder for that week. Staff are e-mailed when the other person proposes a split or asks to end one, and when the other person answers theirs: accepts or declines the proposal, or ends or keeps the split. The ☰ menu shows how many splits wait for their tap. These e-mails follow the alert e-mail switch."},
-{"n":"6.37","kind":"new","html":"In split wording, staff see the other person's full name first, then their initials, and themselves by their own initials; the bidder shows as \"Bidder: &lt;initials&gt;\"."}
+{"n":"6.37","kind":"new","html":"In split wording, staff see the other person's full name first, then their initials, and themselves as \"you\"; the bidder shows as \"Bidder: &lt;initials&gt;\" or \"Bidder: you\"."}
 ]},
 {n:"7",title:"What staff see",items:[
 {"n":"7.1","kind":"new","html":"Staff read this list in Rules &amp; Reminders (☰ menu) and in their welcome e-mail. It follows the settings."},
