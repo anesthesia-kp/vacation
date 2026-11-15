@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 427;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 428;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -3541,14 +3541,14 @@ function _spTerms(me,s){ return (s&&s.terms)?{b:s.b,p:(s.b===me?s.p:me),sp:s.sp,
 function _spRecTerms(e){ return e?{b:e.b,p:e.p,sp:e.sp,bh:Number(e.bh),ph:Number(e.ph)}:null; }
 function _spSameTerms(x,y){ return !!(x&&y&&x.b===y.b&&x.p===y.p&&x.sp===y.sp&&Number(x.bh)===Number(y.bh)&&Number(x.ph)===Number(y.ph)); }
 // The merge every split reader reads (splitsData): the admin's record (vacations/splits, "<wk>|<b>" keys) and the staff record turned into
-// the same shape under the same key, src:'staff'. The same key in both: the later phase wins, a tie the admin's.
+// the same shape under the same key, src:'staff'. The same key in both: the later phase wins, a tie the admin's; an admin "won" always stays [260 · RA-13 F3 · §463].
 function _spMerge(adm,staff){
   const out={}; adm=(adm&&typeof adm==='object')?adm:{}; staff=(staff&&typeof staff==='object')?staff:{};
   for(const k of Object.keys(adm)) out[k]=adm[k];
   for(const b of Object.keys(staff)){ if(b==='_w') continue; const m=staff[b]; if(!m||typeof m!=='object') continue;
     for(const wk of Object.keys(m)){ const e=m[wk];
       if(!e||typeof e!=='object'||typeof e.p!=='string'||!e.p||e.p===b||(e.sp!=='W'&&e.sp!=='T')||(Number(e.bh)!==1&&Number(e.bh)!==2)||typeof e.ph!=='number'||!Number.isFinite(e.ph)) continue;
-      const k=wk+'|'+b, a=out[k]; if(a&&!(e.ph>Number(a.ph))) continue;
+      const k=wk+'|'+b, a=out[k]; if(a&&((a.src!=='staff'&&a.st==='won')||!(e.ph>Number(a.ph)))) continue; // [260 · RA-13 F3 · §463] an admin "won" is never replaced
       const s={wk:wk,b:b,p:e.p,sp:e.sp,bh:Number(e.bh),ph:e.ph,st:e.st,at:e.at,src:'staff'}; if(typeof e.why==='string') s.why=e.why;
       out[k]=s; } }
   return out;
@@ -4960,7 +4960,7 @@ function _fpOutcomes(wkMap,cap,priorSet,fteOf){
 function _fpOver(wkMap,cap,priorSet,fteOf){
   const _f=fteOf||getUserFTE; // [410 · split weeks] as _fpOutcomes (twin: the staff page's _wwContested, whose bids take placeFte)
   let fte=0, k=0; for(const u of priorSet) fte+=_f(u);
-  for(const u in wkMap){ if(priorSet.has(u)||wkMap[u]===undefined||wkMap[u]===null) continue; fte+=_f(u); k++; }
+  for(const u in wkMap){ if(priorSet.has(u)||wkMap[u]===undefined||wkMap[u]===null) continue; fte+=getUserFTE(u); k++; } // [428 · RA-13 F1 · §463] this phase's bids at the bidder's own FTE, as the staff page's _wwContested
   return k>=2&&Math.round((fte-cap)*10)/10>0;
 }
 // What a phase is measured against, and its pieces: [{round, multi, ev, capOf(wk), priorOf(wk)}]. One piece per phase (an RVA Round is a
@@ -15820,6 +15820,17 @@ window.toggleAllControlPanels=function(which){
 // two modes: FULL restore (everything back to that moment — break-glass) and
 // SINGLE-USER restore (one person's bids/locks/times/phase tags — the everyday
 // fix that leaves everyone else's newer activity untouched).
+// [428 · RA-13 F2 · §463] THE SITE A BACKUP BELONGS TO. Every backup records this page's own Firebase project (_site, set per site by
+// crna-stamp.mjs through the page's config) and its short name (_siteName = SITE_SHORT, which crna-stamp.mjs swaps to the copy's own: CRNA,
+// Testing). A restore refuses a file from another project (at the list, and again at the moment of action); a file that records no site
+// (made before 428) is marked "Site not recorded" and Full Restore asks for the site's short name typed in place of RESTORE (his Q3, §463).
+// A new stamped site needs only its entry in crna-stamp.mjs's COPIES. typeof = sandbox convention: no app = this site unknown, nothing refused.
+const SITE_SHORT='Testing';
+function _siteId(){ try{ return (typeof app!=='undefined'&&app&&app.options&&app.options.projectId)?String(app.options.projectId):''; }catch(_){ return ''; } }
+function _bkSite(d){ return (d&&typeof d._site==='string'&&d._site)?d._site:null; }
+function _bkSiteName(d){ return (d&&typeof d._siteName==='string'&&d._siteName)?d._siteName:(_bkSite(d)||''); }
+function _bkOther(d){ const s=_bkSite(d), me=_siteId(); return !!(s&&me&&s!==me); }
+function _bkOtherRefused(d){ if(!_bkOther(d)) return false; if(typeof toast==='function') toast('Not restored — this backup is from the '+_bkSiteName(d)+' site.','warn'); return true; }
 let _restoreFiles=[];
 // [build 215] One toggle for the merged Backups & Restore card; opening it loads the cloud list.
 window.toggleBackups=function(){ const w=document.getElementById('backupsWrap'),c=document.getElementById('bkChevron'); if(!w)return; const show=w.style.display==='none'; w.style.display=show?'':'none'; if(c)c.textContent=show?'▾ Hide':'▸ Show'; if(show&&typeof renderCloudBackups==='function') renderCloudBackups(); };
@@ -15875,11 +15886,11 @@ function renderRestoreList(){
     const diff=`vs now: ${dBids===0?'same bid count':(dBids>0?'current has '+dBids+' more bid'+(dBids!==1?'s':''):'current has '+(-dBids)+' fewer bid'+((-dBids)!==1?'s':''))} · ${phNow!==Number(ph.currentPhase||1)?'phase differs':'same phase'} · ${_difKeys.length===0?'settings identical':_difKeys.length+' setting'+(_difKeys.length!==1?'s':'')+' differ: '+_difKeys.slice(0,4).join(', ')+(_difKeys.length>4?'…':'')}`;
     return `<div style="border:1px solid var(--b1);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:12.5px">
       <div style="font-weight:700;color:var(--t1)">${esc(f.name)}</div>
-      <div style="color:var(--t2);margin-top:3px">Taken <strong>${new Date(f.ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'})}</strong> · ${phTxt} · ${bc.weeks} bid${bc.weeks!==1?'s':''} across ${bc.users} user${bc.users!==1?'s':''} · ${tmTxt}${simTxt}</div>
+      <div style="color:var(--t2);margin-top:3px">${_bkSite(d)?esc(_bkSiteName(d))+' site':'Site not recorded'} · Taken <strong>${new Date(f.ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'})}</strong> · ${phTxt} · ${bc.weeks} bid${bc.weeks!==1?'s':''} across ${bc.users} user${bc.users!==1?'s':''} · ${tmTxt}${simTxt}</div>
       <div style="color:var(--t3);margin-top:2px;font-size:11.5px">${diff}</div>
       <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn" style="padding:3px 10px;font-size:11px;background:rgba(31,35,41,.12);color:var(--blue);border:1px solid rgba(31,35,41,.3)" onclick="_restoreUser(${i})">Restore One User…</button>
-        <button class="btn btn-danger" style="padding:3px 10px;font-size:11px" onclick="_restoreFull(${i})">Full Restore…</button>
+        ${_bkOther(d)?`<span style="color:var(--red);font-weight:600;align-self:center">From the ${esc(_bkSiteName(d))} site — restore it on the ${esc(_bkSiteName(d))} admin page.</span>`:`<button class="btn" style="padding:3px 10px;font-size:11px;background:rgba(31,35,41,.12);color:var(--blue);border:1px solid rgba(31,35,41,.3)" onclick="_restoreUser(${i})">Restore One User…</button>
+        <button class="btn btn-danger" style="padding:3px 10px;font-size:11px" onclick="_restoreFull(${i})">Full Restore…</button>`}
         <button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;margin-left:auto" onclick="_restoreRemove(${i})">✕ Remove from list</button>
       </div>
     </div>`;
@@ -15916,6 +15927,8 @@ function _restoreAlsoChanges(bk){
   }catch(_){ return []; }
 }
 function _confirmFullRestore(f){
+  if(f&&_bkOtherRefused(f.data)) return; // [428 · RA-13 F2 · §463]
+  const _bkW=(f&&f.data&&!_bkSite(f.data))?SITE_SHORT.toUpperCase():'RESTORE'; // [428 · §463 Q3] no site recorded: the site's short name is the word
   const when=new Date(f.ts).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'});
   const _also=(phase1Started()&&f&&f.data)?_restoreAlsoChanges(f.data.adminSettings):[]; // [404 · §334 A1 · K-Q1] mid-auction only
   const _unl=!!(f&&f.data&&_restoreLowUnl(f.data.adminSettings)); // [404 · §334 A3 · B2] the restore lands Strict with a lowering limit: it writes Unlimited
@@ -15931,12 +15944,12 @@ function _confirmFullRestore(f){
     onConfirm:()=>{
       openConfirm({
         title:'Final Confirmation',
-        body:`<div style="text-align:center;font-weight:700;color:var(--red)">Type RESTORE to confirm the full restore from ${when}:</div>
+        body:`<div style="text-align:center;font-weight:700;color:var(--red)">${_bkW==='RESTORE'?'':'This backup does not record its site. '}Type ${_bkW} to confirm the full restore from ${when}:</div>
               <div style="text-align:center;margin-top:10px"><input type="text" id="restoreTypeInput" class="inp" style="width:140px;text-align:center;text-transform:uppercase" autocomplete="off"></div>`,
         okText:'RESTORE NOW', danger:true,
         onConfirm:async()=>{
           const typed=(document.getElementById('restoreTypeInput')?.value||'').trim().toUpperCase();
-          if(typed!=='RESTORE'){ toast('Not restored — you must type RESTORE to confirm','warn'); return; }
+          if(typed!==_bkW){ toast('Not restored — you must type '+_bkW+' to confirm','warn'); return; }
           await _doFullRestore(f);
         }
       });
@@ -15949,6 +15962,7 @@ async function _doFullRestore(f){
   // mirrors are exactly the stale state the 15 Aug incident rode in on) could restore blind.
   // typeof = sandbox convention.
   if(typeof _feedsHealthyOrExplain==='function'&&!_feedsHealthyOrExplain('Full Restore')) return;
+  if(f&&_bkOtherRefused(f.data)) return; // [428 · RA-13 F2 · §463] at the moment of action, whatever the list showed
   const d=f.data;
   const map={schedule:scheduleRef,bestBids:worstBidsRef,bidTimes:bidTimesRef,bidPhase:bidPhaseRef,approvals:approvalsRef,denials:deniedRef,phases:phasesRef,locks:locksRef,meta:metaRef,changes:changesRef,changesDecisions:changesDecisionsRef,changesArchive:changesArchiveRef,adminSettings:adminRef,timer:timerRef,fteMap:fteRef,userList:userListRef,usernames:usernamesRef,loginEmails:loginEmailsRef,emails:emailsRef,emailToUser:emailToUserRef,slcMap:slcRef,signInMisses:signInMissesRef,slots:doc(db,'vacations','slots'),passcodes:doc(db,'vacations','passcodes'),...(typeof bidLoweringsRef!=='undefined'?{bidLowerings:bidLoweringsRef,bidLoweringsArchive:bidLoweringsArchiveRef}:{}),...(typeof splitsRef!=='undefined'?{splits:splitsRef}:{}),...(typeof splitRequestsRef!=='undefined'?{splitRequests:splitRequestsRef}:{}),...(typeof splitAgreementsRef!=='undefined'?{splitAgreements:splitAgreementsRef}:{}),...(typeof staffSplitsRef!=='undefined'?{staffSplits:staffSplitsRef}:{})}; /* [410 · split weeks · admin-page] · [413 · S2a · §373] splitRequests · [415 · S2b · §376–§378] splitAgreements, staffSplits */ // [build 268 · BL] spread-guard = extracted-code sandbox convention (production always has the refs; a pin test fails if removed)
   // [AUDIT 2026-07-26 H13] PRE-FLIGHT: refuse a knowingly-partial restore. A backup with
@@ -16083,6 +16097,7 @@ function _restoreUserFlow(f){
   // promise a diff of) bids the page can't currently see.
   if(!_feedsHealthyOrExplain('Restore One User')) return;
   const d=f.data;
+  if(_bkOtherRefused(d)) return; // [428 · RA-13 F2 · §463]
   // [build 232 · audit] Guard both sides of the roster union: a FETCH-FAILED schedule is a
   // STRING, whose Object.keys are junk indices ('0','1','2'…) — display-only (the restore
   // itself is refused downstream), but never show garbage in the picker.
@@ -16094,7 +16109,7 @@ function _restoreUserFlow(f){
     body:`<div>Restore one user's bids, last bids, bid times and phase tags to <strong>${when}</strong>. No one else is touched.</div>
           <div style="margin-top:10px"><label style="font-size:12px;color:var(--t2)">User: </label>
             <select id="restoreUserSel" class="sel" style="margin-left:6px">${roster.map(u=>`<option>${esc(u)}</option>`).join('')}</select></div>
-          <div class="cmodal-info" style="margin-top:8px">Approvals and denials are NOT changed — review them afterwards if the phase is in approvals.</div>`,
+          <div class="cmodal-info" style="margin-top:8px">Approvals and denials are NOT changed — review them afterwards if the phase is in approvals.</div>`+(_bkSite(d)?'':`<div class="cmodal-warn" style="margin-top:8px">This backup does not record its site. Check it is from the ${esc(SITE_SHORT)} site.</div>`),
     okText:'Preview restore',
     onConfirm:()=>{
       const u=document.getElementById('restoreUserSel')?.value; if(!u) return;
@@ -16127,6 +16142,7 @@ function _restoreUserFlow(f){
   });
 };
 async function _doUserRestore(f,u){
+  if(f&&_bkOtherRefused(f.data)) return; // [428 · RA-13 F2 · §463] at the moment of action
   if(/[.~*/[\]]/.test(u)){ toast('Cannot restore user "'+u+'" — the name contains characters that are unsafe as a field key.','err'); return; }
   const d=f.data;
   const pairs=[[scheduleRef,'schedule'],[worstBidsRef,'bestBids'],[bidTimesRef,'bidTimes'],[bidPhaseRef,'bidPhase']];
@@ -16289,7 +16305,7 @@ function _bkProgressToast(label){
 }
 async function _backupFetchAll(onProgress){
   const docs=_backupDocMap();
-  const out={_exportedAt:new Date().toISOString(),_build:(typeof window.BUILD!=='undefined'?window.BUILD:'?')};
+  const out={_exportedAt:new Date().toISOString(),_build:(typeof window.BUILD!=='undefined'?window.BUILD:'?'),_site:_siteId(),_siteName:SITE_SHORT}; // [428 · RA-13 F2 · §463]
   let fails=0, done=0;
   const entries=Object.entries(docs), total=entries.length;
   const tick=function(){ done++; if(typeof onProgress==='function'){ try{ onProgress(done,total); }catch(_){} } };
@@ -16336,7 +16352,7 @@ window.exportBackup=async function(){
   const blob=new Blob([JSON.stringify(out,null,1)],{type:'application/json'});
   // Filename in LOCAL time (the ISO/UTC stamp confused the admin — 17:58Z is 10:58 PDT)
   const _d=new Date(), _p=n=>String(n).padStart(2,'0');
-  const fname='vacation-auction-backup-'+_d.getFullYear()+'-'+_p(_d.getMonth()+1)+'-'+_p(_d.getDate())+'_'+_p(_d.getHours())+'-'+_p(_d.getMinutes())+'-'+_p(_d.getSeconds())+'.json';
+  const fname='vacation-auction-backup-'+SITE_SHORT+'-'+_d.getFullYear()+'-'+_p(_d.getMonth()+1)+'-'+_p(_d.getDate())+'_'+_p(_d.getHours())+'-'+_p(_d.getMinutes())+'-'+_p(_d.getSeconds())+'.json';
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);
   a.download=fname;
@@ -16476,7 +16492,7 @@ async function _cbFetchFile(id){
     const m=await _withTimeout(getDoc(doc(db,'backups',id)),BACKUP_FETCH_TIMEOUT_MS,'backup manifest');
     if(!m.exists()){ toast('That cloud backup no longer exists — refreshing the list.','warn'); renderCloudBackups(); return null; }
     const md=m.data();
-    const data={_exportedAt:md.exportedAt,_build:md.build};
+    const data={_exportedAt:md.exportedAt,_build:md.build,_site:_siteId(),_siteName:SITE_SHORT}; // [428 · RA-13 F2 · §463] this project's own store
     const names=md.names||Object.keys(_backupDocMap());
     const onP=_bkProgressToast('Reading backup'); let done=0;
     onP(0,names.length);
@@ -16610,7 +16626,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.26","kind":"new","html":"<b>FTE Overage Amount<\/b> — how far over a week's capacity a bid can go and be Under Review instead of Losing. 0 to 2; default 0.5. Locked while a phase is running."},
 {"n":"2.27","kind":"new","html":"<b>Last Bids<\/b> (Bids &amp; decisions) — each person's last bid on each week this phase. Clear removes one: that person's next bid on that week is not measured against it. Each Clear is logged in the Change Log with the admin's initials."},
 {"n":"2.28","kind":"new","html":"<b>Allowed lowerings per phase<\/b> (under Competition weeks) — for Loose rules: how many times each person may make a bid weaker than their last bid on the week, per phase (default Unlimited, which adds no rule). Off while Strict is on. Can change at any time; lowerings already used this phase still count."},
-{"n":"2.29","kind":"new","html":"<b>Backups &amp; Restore<\/b> — cloud and local copies of the whole auction. No effect on decisions. Once Phase 1 has begun, a restore brings back the backup's Competition weeks, Strict applies to, Allowed lowerings per phase and NP Bids by Phase, and its confirm names each one that changes; a backup made under a different auction setup is refused."},
+{"n":"2.29","kind":"new","html":"<b>Backups &amp; Restore<\/b> — cloud and local copies of the whole auction. No effect on decisions. Once Phase 1 has begun, a restore brings back the backup's Competition weeks, Strict applies to, Allowed lowerings per phase and NP Bids by Phase, and its confirm names each one that changes; a backup made under a different auction setup is refused. Each backup records its site, and its file name carries the site's name. A backup from another site is refused; one that does not record its site restores only after the site's name is typed."},
 {"n":"2.30","kind":"new","html":"<b>Timer Rules<\/b> — how long the timer resets to, shortening as the phase goes on; overnight protection; the opening window (section 3). Can be saved at any time."},
 {"n":"2.31","kind":"new","html":"<b>Timer Reset Mode<\/b> — which bid changes restart the timer: 1 every bid, 2 only changes that affect others (section 3). Can be changed at any time."},
 {"n":"2.32","kind":"new","html":"<b>Destination of the Day<\/b> — the photo on the staff sign-in screen. Default on. No effect on bidding."},
@@ -16640,7 +16656,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"3.12","kind":"new","html":"A colleague using browser developer tools can push the timer back without placing a bid. If the timer jumps unexpectedly, Close Phase Bidding always ends the phase."}
 ]},
 {n:"4",title:"Competition weeks",items:[
-{"n":"4.1","kind":"new","html":"<b>What makes one.<\/b> At one moment in the phase, at least two people have a bid of this phase on the week, and their FTE plus the FTE of earlier winners is more than the week's capacity."},
+{"n":"4.1","kind":"new","html":"<b>What makes one.<\/b> At one moment in the phase, at least two people have a bid of this phase on the week, and their FTE plus the FTE of earlier winners is more than the week's capacity. A split week's bid counts here at the bidder's own FTE."},
 {"n":"4.2","kind":"new","html":"It stays a competition week for the rest of the phase, even if everyone leaves. The record starts fresh each phase and each RVA round. One person alone over the room does not make one."},
 {"n":"4.3","kind":"new","html":"Staff see \"Competition week\" on the week's card, with its \"Minimum new bid\"."},
 {"n":"4.4","kind":"new","html":"<b>Coming in (Minimum new bid).<\/b> Anyone with no bid on the week at that moment is a newcomer, including someone who left. A newcomer's bid must match or beat the weakest Winning or Under Review bid there; if none is Winning or Under Review, the strongest bid there."},

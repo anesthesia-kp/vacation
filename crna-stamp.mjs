@@ -194,6 +194,7 @@ function stampCopy(copy) {
   rep('admin', '<div class="page-title" style="margin:0">Dashboard MD Vacation Auction — <span id="acYearHdr">2027</span></div>',
                `<div class="page-title" style="margin:0${COLOR ? ';' + COLOR : ''}">${copy.labels[1]} — <span id="acYearHdr">2027</span></div>`, 1);
   rep('admin', '<title>MD Vacation Auction Admin</title>', `<title>${copy.labels[2]}</title>`, 1);
+  rep('admin', "const SITE_SHORT='MD';", `const SITE_SHORT='${copy.site}';`, 1); // [428 · RA-13 F2 · §463] the short name a backup records and its file name carries
 
   // ── 3c · RELATIVE FILE ADDRESSES ──
   // Each copy is served one folder below the MD page, so a relative address would look for its

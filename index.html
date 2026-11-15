@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 259;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 260;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -2159,14 +2159,14 @@ function _spTerms(me,s){ return (s&&s.terms)?{b:s.b,p:(s.b===me?s.p:me),sp:s.sp,
 function _spRecTerms(e){ return e?{b:e.b,p:e.p,sp:e.sp,bh:Number(e.bh),ph:Number(e.ph)}:null; }
 function _spSameTerms(x,y){ return !!(x&&y&&x.b===y.b&&x.p===y.p&&x.sp===y.sp&&Number(x.bh)===Number(y.bh)&&Number(x.ph)===Number(y.ph)); }
 // The merge every split reader reads (splitsData): the admin's record (vacations/splits, "<wk>|<b>" keys) and the staff record turned into
-// the same shape under the same key, src:'staff'. The same key in both: the later phase wins, a tie the admin's.
+// the same shape under the same key, src:'staff'. The same key in both: the later phase wins, a tie the admin's; an admin "won" always stays [260 · RA-13 F3 · §463].
 function _spMerge(adm,staff){
   const out={}; adm=(adm&&typeof adm==='object')?adm:{}; staff=(staff&&typeof staff==='object')?staff:{};
   for(const k of Object.keys(adm)) out[k]=adm[k];
   for(const b of Object.keys(staff)){ if(b==='_w') continue; const m=staff[b]; if(!m||typeof m!=='object') continue;
     for(const wk of Object.keys(m)){ const e=m[wk];
       if(!e||typeof e!=='object'||typeof e.p!=='string'||!e.p||e.p===b||(e.sp!=='W'&&e.sp!=='T')||(Number(e.bh)!==1&&Number(e.bh)!==2)||typeof e.ph!=='number'||!Number.isFinite(e.ph)) continue;
-      const k=wk+'|'+b, a=out[k]; if(a&&!(e.ph>Number(a.ph))) continue;
+      const k=wk+'|'+b, a=out[k]; if(a&&((a.src!=='staff'&&a.st==='won')||!(e.ph>Number(a.ph)))) continue; // [260 · RA-13 F3 · §463] an admin "won" is never replaced
       const s={wk:wk,b:b,p:e.p,sp:e.sp,bh:Number(e.bh),ph:e.ph,st:e.st,at:e.at,src:'staff'}; if(typeof e.why==='string') s.why=e.why;
       out[k]=s; } }
   return out;
@@ -4127,7 +4127,7 @@ function _wwMsg(){ if(_wwRefuses.why==='moved'&&typeof _strictW6==='function') r
 // their previous entry, and count from it); anyone with an entry that carries no usable time (or one
 // more than ten minutes ahead of this device's clock) counts throughout; if the log carries no reset
 // stamp (the admin's "clear log" writes none) every floor counts throughout; entries at the same
-// instant are taken adds first. FTE and capacity are today's. When it cannot tell (no week record,
+// instant are taken adds first. FTE and capacity are today's; a split bid counts at the bidder's own FTE [260 · RA-13 F1 · §463: a split never undoes or makes a competition week]. When it cannot tell (no week record,
 // the change log or the floors not yet arrived, anything thrown) it answers true. It can never answer
 // true where 195's test answered false (every person it counts, 195 counted). [196 audits, 7 Oct 2026:
 // the floors, the unrecorded returns, the clock and the reset stamp were added after two audits showed
@@ -4141,7 +4141,7 @@ function _wwContested(wk,snap){
     const base=getPriorPhaseFteWon(wk), slots=Number(meta.slots);
     // [198 · §256, owner 8 Oct 2026: "at least two… are actually needed to make it a competition week"] TWO people at the least: one person
     // bigger than the room left (a week mostly held from an earlier phase) is not a competition, whatever the arithmetic says.
-    const over=set=>{ let fte=base, k=0; for(const u of set){ if(!prior.has(u)){ fte+=(typeof _spFte==='function'?_spFte(u,wk):getUserFTE(u)); k++; /* [410 · split weeks] the bid's FTE as the engine takes it */ } } return k>=2&&Math.round((fte-slots)*10)/10>0; }; // the engine's own FP-safe fit test
+    const over=set=>{ let fte=base, k=0; for(const u of set){ if(!prior.has(u)){ fte+=getUserFTE(u); k++; /* [260 · RA-13 F1 · §463] a split bid counts at the bidder's own FTE here (Rules 4.1), so starting or ending a split never changes the record (the engine itself still takes the blend) */ } } return k>=2&&Math.round((fte-slots)*10)/10>0; }; // the engine's own FP-safe fit test
     const onIt=(src,u)=>{ const m=src?src[u]:null; return !!(m&&typeof m==='object'&&m[wk]!==undefined&&m[wk]!==null&&isCurrentPhaseBid(u,wk)); };
     const now=new Set();
     for(const u of Object.keys(d||{})){ if(onIt(d,u)) now.add(u); }
