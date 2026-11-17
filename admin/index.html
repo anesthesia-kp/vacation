@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 428;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 429;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -577,7 +577,7 @@ thead th{color:var(--t2)}
             <button class="btn btn-ghost" id="expireTimerBtn" onclick="adminExpireTimer()" disabled>Expire timer now</button>
           </div>
           <div class="trow" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
-            <div><div class="trow-label">Bidding Timer</div><div class="trow-desc">Live timer shown to all users</div></div>
+            <div><div class="trow-label">Bidding Timer</div><div class="trow-desc">Bidding closes when it reaches zero. Off: no deadline.</div></div>
             <div class="tog" id="timerToggle" onclick="toggleTimerEnabled()"></div>
           </div>
           <div class="trow" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
@@ -1086,16 +1086,8 @@ thead th{color:var(--t2)}
       <div class="card">
         <div class="card-title">Cumulative Bid Caps (max weeks per user)</div>
         <div class="trow" style="align-items:flex-start;flex-direction:column;gap:10px">
-          <div>
-            <div class="trow-label">Most weeks a person can win, counting every phase so far.</div>
-            <div class="trow-desc">Live bids in the current phase count too. A later phase's cap can't be lower than an earlier one.</div>
-          </div>
-          <div style="display:grid;grid-template-columns:auto 84px auto;gap:8px 14px;align-items:center">
-            <label style="font-size:12px;color:var(--t2);font-weight:600">Phase 1</label><input type="number" id="cap1" class="inp" style="width:78px" min="1" max="52" step="1" placeholder="none" oninput="_syncCaps()" onchange="_capsChanged()"><label style="font-size:12px;color:var(--t2);display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="nolim1" onchange="_capNoLimitToggle(1)"> No limit</label>
-            <label style="font-size:12px;color:var(--t2);font-weight:600">Through Phase 2</label><input type="number" id="cap2" class="inp" style="width:78px" min="1" max="52" step="1" placeholder="none" oninput="_syncCaps()" onchange="_capsChanged()"><label style="font-size:12px;color:var(--t2);display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="nolim2" onchange="_capNoLimitToggle(2)"> No limit</label>
-            <label style="font-size:12px;color:var(--t2);font-weight:600">Through Phase 3</label><input type="number" id="cap3" class="inp" style="width:78px" min="1" max="52" step="1" placeholder="none" oninput="_syncCaps()" onchange="_capsChanged()"><label style="font-size:12px;color:var(--t2);display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="nolim3" onchange="_capNoLimitToggle(3)"> No limit</label>
-            <label style="font-size:12px;color:var(--t2);font-weight:600">Through Phase 4</label><input type="number" id="cap4" class="inp" style="width:78px" min="1" max="52" step="1" placeholder="none" oninput="_syncCaps()" onchange="_capsChanged()"><label style="font-size:12px;color:var(--t2);display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="nolim4" onchange="_capNoLimitToggle(4)"> No limit</label>
-          </div>
+          <div class="trow-label" id="capsSum"></div><!-- [429 · O7] one summary line (capSentence), painted by _populateCapsFromSaved -->
+          <button class="btn btn-ghost" id="cap1" onclick="openCapsBuilder()">Change caps</button><!-- [429 · O7] id cap1: the card's anchor (RUN_LOCK_CARDS, the guided review) -->
           <div id="capsMsg" style="font-size:11px;color:var(--t2)"></div>
         </div>
       </div>
@@ -1422,6 +1414,7 @@ thead th{color:var(--t2)}
     <div class="cmodal-title">Timer Rules</div>
     <div class="cmodal-body" id="trModalBody"></div>
     <div class="cmodal-buttons">
+      <span id="tr_fix" style="margin-right:auto;align-self:center;font-size:12px;color:var(--red)"></span><!-- [429 · O6] why Save is greyed, beside it -->
       <button id="tr_cancel" class="btn btn-secondary" onclick="cancelTimerRules()">Cancel</button>
       <button id="tr_save" class="btn btn-primary" onclick="saveTimerRulesBatch()">Save timer rules</button>
     </div>
@@ -1435,7 +1428,7 @@ thead th{color:var(--t2)}
     <div class="cmodal-title" id="cmTitle">Confirm</div>
     <div class="cmodal-body" id="cmBody"></div>
     <div class="cmodal-buttons">
-      <button class="btn btn-secondary" onclick="closeConfirm()">Cancel</button>
+      <button class="btn btn-secondary" id="cmCancel" onclick="closeConfirm()">Cancel</button>
       <button class="btn btn-ghost" id="cmAlt" style="display:none"></button><!-- [383 · §287] shown only when openConfirm is given `alt` (the Begin dialogs' "Begin without review") -->
       <button class="btn btn-primary" id="cmOk">Confirm</button>
     </div>
@@ -2310,14 +2303,18 @@ function _resultsBodyFor(key,u,entry,schedSrc){ // [391 · §296] greets by the 
   const appLines=approved.map(wk=>{const m=wkDate(wk); const _se=(typeof _splitWonIn==='function')?_splitWonIn(cur,u,wk):null; // [410 · split weeks, Q10]
     if(_se&&_se.b!==u) return `  • ${wLabel(m)} — ${_splitHalfLabel(wk,_se.sp,3-Number(_se.bh))}, shared with ${displayName(_se.b)}`; // the partner placed no bid
     return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`+(_se?` — ${_splitHalfLabel(wk,_se.sp,Number(_se.bh))}, shared with ${displayName(_se.p)}`:'');}).join('\n');
-  const denLines=denied.map(wk=>{const m=wkDate(wk); return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`;}).join('\n');
+  const _sl=wk=>(typeof _splitLostIn==='function')?_splitLostIn(cur,u,wk):null; // [429 · F4] a denied split names the split as an approved one does
+  const denLines=denied.map(wk=>{const m=wkDate(wk), _sd=_sl(wk);
+    if(_sd&&_sd.b!==u) return `  • ${wLabel(m)} — ${_splitHalfLabel(wk,_sd.sp,3-Number(_sd.bh))}, shared with ${displayName(_sd.b)}`; // the partner placed no bid
+    return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`+(_sd?` — ${_splitHalfLabel(wk,_sd.sp,Number(_sd.bh))}, shared with ${displayName(_sd.p)}`:'');}).join('\n');
+  const ownDenied=denied.some(wk=>{const _sd=_sl(wk); return !(_sd&&_sd.b!==u);}); // [429 · F4] "Denied bid numbers…" only to someone with a denied bid of their own
   return `Hi ${((typeof greetName==='function')?greetName(u):u)},
 
 ${phaseName(cur)} of the Vacation Auction is complete.
 
 Here are your ${phaseName(cur)} results:
 
-${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.length?`DENIED (${denied.length}):\n${denLines}\n\nDenied bid numbers become available again for you to use in the next ${isRvaPhase(cur)?'bidding round':'phase'}.`:''}`.trimEnd();
+${approved.length?`APPROVED (${approved.length}):\n${appLines}\n\n`:''}${denied.length?`DENIED (${denied.length}):\n${denLines}`+(ownDenied?`\n\nDenied bid numbers become available again for you to use in the next ${isRvaPhase(cur)?'bidding round':'phase'}.`:''):''}`.trimEnd();
 }
 // [401 · server mail] THE RESULTS OF ONE PHASE, AS THE OUTBOX SHOWS THEM. The expected list (PLAN-AMENDMENT-1 §1.2) is worked out
 // again each time from the phase's frozen results (completedPhases[ph]) and the addresses on file now: every address of every doctor
@@ -2329,7 +2326,7 @@ function _resultsCtxOf(key){
   const summary={};
   for(const wk of Object.keys(arch.approvals||{})) for(const u of (Array.isArray(arch.approvals[wk])?arch.approvals[wk]:[])){ (summary[u]=summary[u]||{approved:[],denied:[]}).approved.push(wk); }
   for(const wk of Object.keys(arch.denials||{})) for(const u of (Array.isArray(arch.denials[wk])?arch.denials[wk]:[])){ (summary[u]=summary[u]||{approved:[],denied:[]}).denied.push(wk); }
-  if(typeof _splitResultsAdd==='function') _splitResultsAdd(summary,Number(k),arch.approvals||{}); // [410 · split weeks, Q10] the partner of a split won in this phase
+  if(typeof _splitResultsAdd==='function') _splitResultsAdd(summary,Number(k),arch.approvals||{},arch.denials||{}); // [410 · split weeks, Q10] the partner of a split won in this phase · [429 · F4] or lost (denied)
   const label=phaseName(k);
   return {key:k, label, summary, users:Object.keys(summary), schedSrc:arch.schedule||scheduleData,
     subject:'Vacation Auction — '+phaseName(k)+' Results'};
@@ -3769,12 +3766,16 @@ async function _splitPublishMarks(staged){
 }
 // [410 · split weeks, ANSWERS Q10] The split WON in phase ph on wk that u is the bidder or the partner of, or null.
 function _splitWonIn(ph,u,wk){ const n=Number(ph); return splitsInForceAt(n).find(e=>Number(e.ph)===n&&e.st==='won'&&e.wk===wk&&(e.b===u||e.p===u))||null; }
+// [429 · F4] The split LOST in phase ph on wk that u is the bidder or the partner of, or null.
+function _splitLostIn(ph,u,wk){ const n=Number(ph); return splitsInForceAt(n).find(e=>Number(e.ph)===n&&e.st==='off'&&e.why==='lost'&&e.wk===wk&&(e.b===u||e.p===u))||null; }
 // The partner of a split won in phase ph gets that phase's results e-mail: the week is added to their approved list (ap = the phase's
-// frozen approvals; the bidder must be in them).
-function _splitResultsAdd(summary,ph,ap){ const n=Number(ph);
-  for(const e of splitsInForceAt(n)){ if(Number(e.ph)!==n||e.st!=='won') continue;
-    if(!(Array.isArray(ap&&ap[e.wk])&&ap[e.wk].includes(e.b))) continue;
-    const s=summary[e.p]||(summary[e.p]={approved:[],denied:[]}); if(s.approved.indexOf(e.wk)<0) s.approved.push(e.wk); }
+// frozen approvals; the bidder must be in them). [429 · F4] The partner of a split lost there gets it too: the week is added to their denied
+// list (den = the phase's frozen denials; the bidder must be in them).
+function _splitResultsAdd(summary,ph,ap,den){ const n=Number(ph);
+  for(const e of splitsInForceAt(n)){ if(Number(e.ph)!==n) continue;
+    const lost=e.st==='off'&&e.why==='lost'; if(e.st!=='won'&&!lost) continue;
+    const src=lost?den:ap; if(!(Array.isArray(src&&src[e.wk])&&src[e.wk].includes(e.b))) continue;
+    const s=summary[e.p]||(summary[e.p]={approved:[],denied:[]}), L=lost?s.denied:s.approved; if(L.indexOf(e.wk)<0) L.push(e.wk); }
   return summary; }
 // The name a person is shown by (twin of the staff page's displayName): the name on file, else the initials.
 function displayName(initials){ return usernamesData[initials]||initials; }
@@ -3985,7 +3986,15 @@ function _hasOpenRoundBid(u){
     if(uw[wk]===undefined||getUserBidPhaseAdmin(u,wk)!==cur) continue;
     return true;
   }
-  return false;
+  return (typeof _partnerLiveSplits==='function')&&_partnerLiveSplits(u).length>0; // [429 · F2] (typeof = sandbox convention) the partner of a split in force whose bidder holds a bid of this window has a bid too
+}
+// [429 · F2] The splits u is the PARTNER of that are in force in the open window and whose bidder holds a bid placed in it (the bidder bids
+// for both, Rules 6.30). A denied bid still counts as placed (H-9). Ended, removed, lost, proposed-only and declined splits are not here.
+// typeof = sandbox convention (a suite that lifts _hasOpenRoundBid alone runs it as before).
+function _partnerLiveSplits(u){
+  if(typeof splitsAsPartner!=='function'||typeof splitsData==='undefined') return [];
+  const cur=Number(phasesData.currentPhase||1);
+  return splitsAsPartner(u).filter(e=>e.st==='on'&&scheduleData[e.b]&&scheduleData[e.b][e.wk]!==undefined&&getUserBidPhaseAdmin(e.b,e.wk)===cur);
 }
 // [319 · R-2] §152: a bare "P4" is always wrong. [394 · E1] The compact tag of a phase for the report columns and badges ("P" + it):
 // phaseName without its "Phase " and with ": Round " as ":R" - "2" for Phase 2, "4:R1" for Phase 4: Round 1.
@@ -4300,7 +4309,7 @@ function _alOptOutLine(){
     const rows=_alGiRows(), n=rows.length;
     if(!n) _alByPerson=false;
     const who=a=>a.length?a.map(esc).join(', '):'none';
-    return '<strong>Turned off by people (their own choice):</strong> Changes to my projections — '+who(off.proj)+' · My withdrawn bid would win again — '+who(off.chance)+' · “Notify if a week opens up” alerts set now: '+n
+    return '<strong>Turned off by people (their own choice):</strong> Changes to your projections — '+who(off.proj)+' · Your withdrawn bid would win again — '+who(off.chance)+' · “Notify if a week opens up” alerts set now: '+n
       +(n?' <button type="button" class="btn btn-ghost" id="alByPersonBtn" aria-expanded="'+(_alByPerson?'true':'false')+'" style="padding:5px 12px;font-size:11px;margin-left:4px;min-height:28px;min-width:44px" onclick="_alByPersonToggle()">'+(_alByPerson?'Hide ▴':'Show by person ▾')+'</button>':'')
       +(n&&_alByPerson?'<div id="alByPersonList" style="margin-top:6px;line-height:1.6">'+rows.map(r=>'<div>'+esc(r.u)+' — '+esc(wLabel(wkDate(r.wk)))+' — bid '+esc(bidLblAdmin(r.bid))+'</div>').join('')+'</div>':'');
   }catch(_){ return ''; }
@@ -5594,7 +5603,7 @@ window.smartLockUnlock=function(){
   const toLock=weeksNeedingLock(true).list;            // unlocked + no availability → lock
   const toUnlock=lockedWeeksWithAvailability().list.filter(w=>!_p1||HIGH_DEMAND_WEEKS.has(w.wk));   // locked + has availability → unlock (high-demand weeks only in a high-demand-only Phase 1)
   if(!toLock.length&&!toUnlock.length){
-    openConfirm({title:'Smart Lock and Unlock',body:'<div class="cmodal-info">No weeks need locking or unlocking.</div>'+_p1Line,okText:'OK',onConfirm:()=>{}});
+    openConfirm({title:'Smart Lock and Unlock',body:'<div class="cmodal-info">No weeks need locking or unlocking.</div>'+_p1Line,okText:'OK',okOnly:true,onConfirm:()=>{}});
     return;
   }
   openConfirm({
@@ -5638,7 +5647,8 @@ function renderOverview(){
     const fte=getUserFTE(n);
     const allWeeks=Object.entries(scheduleData[n]||{}).sort((a,b)=>a[0].localeCompare(b[0]));
     const weeks=allWeeks.filter(([wk])=>bidMatchesPhaseFilter(n,wk,phaseFilter));
-    if(!weeks.length) return `<div class="ovcard"><div class="ovcard-name">${esc(n)} <span style="color:var(--t2);font-size:10px;font-weight:400">${fte} FTE</span></div><div style="color:var(--t3);font-size:10px">No bids${phaseFilter!=='all'?(isRvaPhase(/^ph\d+$/.test(phaseFilter)?Number(phaseFilter.slice(2)):Number(phasesData.currentPhase||1))?' in this round':' in this phase'):''}</div></div>`;
+    const _pw=(weeks.length||typeof _partnerLiveSplits!=='function')?[]:_partnerLiveSplits(n).filter(e=>bidMatchesPhaseFilter(e.b,e.wk,phaseFilter)); // [429 · F2 · Q2] a partner's split weeks (the bidder bids for both)
+    if(!weeks.length&&!_pw.length) return `<div class="ovcard"><div class="ovcard-name">${esc(n)} <span style="color:var(--t2);font-size:10px;font-weight:400">${fte} FTE</span></div><div style="color:var(--t3);font-size:10px">No bids${phaseFilter!=='all'?(isRvaPhase(/^ph\d+$/.test(phaseFilter)?Number(phaseFilter.slice(2)):Number(phasesData.currentPhase||1))?' in this round':' in this phase'):''}</div></div>`;
     const grouped={win:[],review:[],lose:[]}; // [§147] draw folds into review
     weeks.forEach(([wk])=>{
       // In 'all phases' or a specific past-phase filter, use that phase's snapshot outcome for historical accuracy
@@ -5662,6 +5672,7 @@ function renderOverview(){
       const suffix=(phaseFilter==='all'&&bidPh)?` <span style="opacity:.6;font-size:9px">(${_phLbl})</span>`:'';
       grouped[uiOutcome(outcome)].push(fmtWk(wk)+suffix);
     });
+    _pw.forEach(e=>grouped[uiOutcome(getOutcome(e.wk,e.b,ap))].push(fmtWk(e.wk)+' ('+esc(e.b)+'/'+esc(n)+')')); // [429 · F2 · Q2] the bidder's outcome; AF/BC, the bidder first (2.42)
     let lines=[];
     const renderVertical=(arr)=>arr.map(w=>`<div style="padding-left:4px">${w}</div>`).join('');
     if(grouped.win.length) lines.push(`<div style="font-size:10px;margin-bottom:2px"><span style="color:var(--green);font-weight:600">Win:</span></div>${renderVertical(grouped.win)}`);
@@ -5954,77 +5965,165 @@ window.toggleGlobalLock=function(){
   });
 };
 
-// Resolve the four phases to [p1,p2,p3,p4] where each is a number or null (= no limit).
-// A phase whose "No limit" box is checked is null. Otherwise a blank inherits the greatest
-// earlier NUMBER (or is null/no-limit if no earlier number), and a typed number can only be
-// raised to that running max — never set below an earlier numbered phase.
-function _syncCaps(){
-  const nolim=[1,2,3,4].map(p=>!!document.getElementById('nolim'+p)?.checked);
-  const rawNums=[1,2,3,4].map(p=>{ const v=(document.getElementById('cap'+p)?.value||'').trim(); return v===''?null:(/^\d+$/.test(v)?Math.max(1,Math.min(52,Number(v))):null); });
-  const out=[]; let runMax=0;
-  for(let i=0;i<4;i++){
-    if(!_slotRuns(i+1)){ out[i]=_savedCaps()[i]; continue; } // [395 · E2] a slot that does not run: its saved value, never read, no floor
-    if(nolim[i]){ out[i]=null; continue; }                 // explicit no limit — imposes no floor
-    if(rawNums[i]===null){ out[i]=runMax>0?runMax:null; }   // blank: inherit running max, else leading no-limit
-    else { out[i]=Math.max(rawNums[i],runMax); }            // typed: snap up to running max
-    if(out[i]!==null) runMax=Math.max(runMax,out[i]);
+// [429 · O7 · §475/§476] THE ONE CAP SENTENCE — a port of CAP-BUILDER-TEST.html's capSentence (approved), the same words as the staff page's
+// twin for the same stored caps. c = {1:n|null, 2:…, 3:…, 4:…}; the phases are the slots that run (1 … F, and 4 = the RVA, named Phase F+1).
+function _capPhases(){ return [1,2,3,4].filter(_slotRuns); }
+function capSentence(c){
+  const ps=_capPhases();
+  const pname=p=>phaseShort(p);
+  const nums=ps.map(p=>c[p]);
+  if(nums.every(v=>v==null)) return '';
+  // runs of the same number merge into the LAST phase of the run
+  const runs=[]; // {n, last}
+  let firstNull=-1;
+  for(let i=0;i<ps.length;i++){
+    const v=nums[i];
+    if(v==null){ firstNull=i; break; }
+    if(runs.length&&runs[runs.length-1].n===v) runs[runs.length-1].last=ps[i];
+    else runs.push({n:v,last:ps[i]});
   }
-  // Rewrite number inputs (skip no-limit and the field being typed in). Checkboxes are user-owned.
-  for(let p=1;p<=4;p++){
-    const el=document.getElementById('cap'+p); if(!el||document.activeElement===el||!_slotRuns(p)) continue;
-    if(nolim[p-1]){ el.value=''; el.disabled=true; el.style.opacity='.45'; }
-    else { el.disabled=false; el.style.opacity=''; el.value=(out[p-1]===null?'':out[p-1]); }
+  const p4tag=p=>p===4?' (all its rounds together)':'';
+  if(firstNull===-1&&runs.length===1){
+    return 'Bid cap: up to '+runs[0].n+' weeks in total across the whole auction'+(ps.includes(4)?' ('+pname(4)+'’s rounds together)':'')+'.';
   }
-  return out; // null = no limit
-}
-// [build 238 · audit of 237] Same bug class as the dead skip-backup button: the cap fields'
-// oninput="_syncCaps()" attributes run in GLOBAL scope, but _syncCaps was module-scoped and never
-// window-attached — every keystroke in a Cumulative Bid Caps field threw a silent ReferenceError,
-// so the live inherit/snap-up/disable behavior while TYPING was dead (values were still saved
-// correctly on blur/Enter via the window-attached _capsChanged). One line reconnects it.
-window._syncCaps=_syncCaps;
-function _savedCaps(){ const m=adminSettings?.maxBidsCumulative||{}; return [1,2,3,4].map(p=>{ const raw=m[p]!==undefined?m[p]:m[String(p)]; return (raw===undefined||raw===null||raw===''||raw==='none')?null:Number(raw); }); }
-// Reflect the saved caps onto both the number inputs and the No-limit checkboxes (used on
-// initial load, on the live snapshot, and to revert a cancelled change). Skips focused fields.
-function _populateCapsFromSaved(force){ // [373 · §269 O-A hunt] force = a revert: write even the focused field
-  const s=_savedCaps();
-  for(let p=2;p<=4;p++){ const inp=document.getElementById('cap'+p); if(!inp) continue; const on=_slotRuns(p), lb=inp.previousElementSibling; [lb,inp,inp.nextElementSibling].forEach(e=>{ if(e&&e.style.display!==(on?'':'none')) e.style.display=on?'':'none'; }); if(p===4&&lb){ const t='Through '+phaseShort(4); if(lb.textContent!==t) lb.textContent=t; } } // [395 · E2] slots above F hidden; slot 4 = the RVA's number
-  for(let p=1;p<=4;p++){
-    const inp=document.getElementById('cap'+p), cb=document.getElementById('nolim'+p); if(!inp||!cb) continue;
-    const isNL=s[p-1]===null;
-    if(force===true||document.activeElement!==cb) cb.checked=isNL;
-    if(force===true||document.activeElement!==inp) inp.value=isNL?'':s[p-1];
-    inp.disabled=isNL; inp.style.opacity=isNL?'.45':'';
-  }
-}
-// Toggling a "No limit" box is a discrete commit — disable/enable its number field, then confirm.
-window._capNoLimitToggle=function(p){
-  const cb=document.getElementById('nolim'+p), inp=document.getElementById('cap'+p);
-  if(cb&&inp){ inp.disabled=cb.checked; inp.style.opacity=cb.checked?'.45':''; if(cb.checked) inp.value=''; }
-  _capsChanged();
-};
-// On commit (blur/Enter/checkbox): normalize, and if changed from saved, confirm before saving.
-window._capsChanged=function(){
-  if(!cfgUnlockedNow()){ toast('Bid caps are locked while a phase is running — editable between phases, once results are sent.','err'); _populateCapsFromSaved(true); return; } // [build 268 · FRZ8/GAP]
-  const out=_syncCaps();
-  // Force display to the normalized values so what's shown matches what will be saved.
-  for(let p=1;p<=4;p++){ const el=document.getElementById('cap'+p), cb=document.getElementById('nolim'+p); if(!el||!_slotRuns(p)) continue; const nl=!!cb?.checked; el.disabled=nl; el.style.opacity=nl?'.45':''; el.value=(nl||out[p-1]===null)?'':out[p-1]; }
-  if(JSON.stringify(out)===JSON.stringify(_savedCaps())) return; // nothing changed
-  const summary=[1,2,3,4].filter(_slotRuns).map(p=>{ const label=(p===1?'Phase 1':('Through '+phaseShort(p))); return label+': '+(out[p-1]===null?'no limit':(out[p-1]+' week'+(out[p-1]!==1?'s':''))); }).join('<br>');
-  openConfirm({
-    title:'Confirm bid caps',
-    body:`<div>Save these cumulative bid caps?</div><div style="margin-top:8px;font-family:var(--mono);font-size:12px;line-height:1.8">${summary}</div>`+(phase1Started()?'<div class="cmodal-warn" style="margin-top:8px">LIVE auction: applies to the next phase as soon as you save.</div>':'')+``,
-    okText:'Save caps',
-    onConfirm:async()=>{
-      try{ await setDoc(adminRef,{maxBidsCumulative:_slotKeep(adminSettings&&adminSettings.maxBidsCumulative,{1:out[0],2:out[1],3:out[2],4:out[3]})},{merge:true}); } // [395 · E2] a slot that does not run: left alone
-      catch(e){ toast(_cfgDeniedMsg(e,'the bid caps')||('Bid caps NOT saved — nothing changed ('+(e?.message||e)+'). Try again.'),'err'); _populateCapsFromSaved(true); return; } // [build 268 · FRZ8]
-      _cfgLog('Cumulative bid caps',summary.split('<br>').join('; ')); // [404 · §334 A1 · K-Q3]
-      const el=document.getElementById('capsMsg'); if(el){ el.style.color='var(--green)'; el.textContent='✓ Saved'; setTimeout(()=>{ if(el&&el.textContent==='✓ Saved') el.textContent=''; },3000); }
-      toast('Bid caps saved','ok');
-    },
-    onCancel:()=>{ _populateCapsFromSaved(true); }
+  const parts=runs.map((r,i)=>{
+    if(i===0){
+      if(r.last===1) return 'up to '+r.n+' weeks in Phase 1';
+      return 'up to '+r.n+' weeks in total through '+pname(r.last)+p4tag(r.last);
+    }
+    return (i===1&&runs[0].last===1?r.n+' in total through ':r.n+' through ')+pname(r.last)+p4tag(r.last);
   });
+  let s;
+  if(parts.length===1) s=parts[0];
+  else s=parts.slice(0,-1).join(', ')+' and '+parts[parts.length-1];
+  if(firstNull!==-1) s+=', no limit after that';
+  return 'Bid cap: '+s+'.';
+}
+const COUNT_LINE='Weeks won earlier and bids this phase both count.';
+function _savedCaps(){ const m=adminSettings?.maxBidsCumulative||{}; return [1,2,3,4].map(p=>{ const raw=m[p]!==undefined?m[p]:m[String(p)]; return (raw===undefined||raw===null||raw===''||raw==='none')?null:Number(raw); }); }
+// The stored caps as the sentence reads them, parsed as every reader that enforces them parses a slot (_cumCap): a whole number 1+, else no limit.
+function _savedCapsObj(){ const m=adminSettings?.maxBidsCumulative||{}, o={}; for(const p of [1,2,3,4]){ const raw=m[p]!==undefined?m[p]:m[String(p)]; const n=(raw===undefined||raw===null||raw===''||raw==='none')?NaN:parseInt(raw,10); o[p]=(isNaN(n)||n<1)?null:n; } return o; }
+// The caps card's line and the guided review's value: the sentence and the count line, or no cap.
+function _capsSummaryLine(c){ const s=capSentence(c||_savedCapsObj()); return s?s+' '+COUNT_LINE:'No bid cap: any number of weeks can be won.'; }
+// The card's summary line (on load, on every settings snapshot).
+function _populateCapsFromSaved(){ const el=document.getElementById('capsSum'); if(el){ const t=_capsSummaryLine(); if(el.textContent!==t) el.textContent=t; } }
+// [429 · O7 · §476] THE CAPS BUILDER, as on CAP-BUILDER-TEST.html: step 1 the kind (No cap · One cap, then no limit · A cap for each phase), step 2
+// the number(s) with a live preview, Save caps. It refuses with a message, never a silent change, and writes the same stored shape
+// ({1..4: n|null}, _slotKeep), so nothing that enforces the caps changes. Locked while a phase is running.
+const CAPS_LOCKED_TEXT='Bid caps are locked while a phase is running — editable between phases, once results are sent.';
+let _cbMode=null, _cbDraft=null;
+function _cbModeOf(c){
+  const ps=_capPhases(), v=ps.map(p=>c[p]);
+  if(v.every(x=>x==null)) return 'none';
+  const k=v.findIndex(x=>x==null), lim=k===-1?v.length:k;
+  const firstN=v[0];
+  if(firstN!=null&&v.slice(0,lim).every(x=>x===firstN)) return 'one';
+  return 'each';
+}
+window.openCapsBuilder=function(){
+  if(!cfgUnlockedNow()){ toast(CAPS_LOCKED_TEXT,'err'); return; } // [build 268 · FRZ8/GAP]
+  const saved=_savedCapsObj();
+  _cbMode=_cbModeOf(saved); _cbDraft={...saved};
+  // the "one cap" draft: its number and its last phase
+  const ps=_capPhases(), v=ps.map(p=>saved[p]); const k=v.findIndex(x=>x==null);
+  _cbDraft._oneN=v[0]!=null?v[0]:6; _cbDraft._oneThrough=k===-1?ps[ps.length-1]:Math.max(1,ps[k-1]||1);
+  _cbStep1();
 };
+function _cbLiveWarn(){ return phase1Started()?'<div class="cmodal-warn" style="margin-top:8px">LIVE auction: applies to the next phase as soon as you save.</div>':''; }
+function _cbStep1(){
+  const ch=(m,t,s)=>'<button type="button" onclick="_cbPick(\''+m+'\')" style="display:block;width:100%;text-align:left;border:1.5px solid '+(_cbMode===m?'var(--t1)':'var(--b1)')+';background:'+(_cbMode===m?'var(--s2)':'transparent')+';border-radius:12px;padding:10px 12px;margin:0 0 8px;cursor:pointer;color:var(--t1)"><b style="display:block">'+t+'</b><span style="color:var(--t2);font-size:12px">'+s+'</span></button>';
+  openConfirm({ title:'Change caps',
+    body:ch('none','No cap','Any number of weeks can be won.')
+      +ch('one','One cap, then no limit','One number through a chosen phase.')
+      +ch('each','A cap for each phase','A number for each phase; each at least the one before.'),
+    okText:_cbMode==='none'?'Next':'Next →',
+    onConfirm:()=>{ if(_cbMode==='none') _cbStepNone(); else _cbStep2(); } });
+}
+window._cbPick=function(m){ _cbMode=m; _cbStep1(); };
+const _cbNONE={1:null,2:null,3:null,4:null};
+function _cbStepNone(){
+  openConfirm({ title:'No cap',
+    body:'<div id="cb_prev" class="cmodal-info">'+esc('Preview: '+_capsSummaryLine(_cbNONE))+'</div>'+_cbLiveWarn(),
+    okText:'Save caps', alt:{text:'← Back',onClick:()=>_cbStep1()},
+    onConfirm:()=>_cbSave({..._cbNONE}) });
+}
+function _cbStep2(){
+  const ps=_capPhases(), pname=p=>phaseShort(p);
+  let title, rows;
+  if(_cbMode==='one'){
+    if(!ps.includes(_cbDraft._oneThrough)) _cbDraft._oneThrough=ps[ps.length-1];
+    title='One cap, then no limit';
+    rows='<div style="display:flex;align-items:center;gap:10px;padding:7px 0"><span>Up to</span><input type="number" id="cb_oneN" class="inp" style="width:74px" min="1" max="52" inputmode="numeric" value="'+esc(String(_cbDraft._oneN))+'" oninput="_cbLive()"><span>weeks through</span></div>'
+      +'<div style="display:flex;align-items:center;gap:10px;padding:7px 0"><select id="cb_oneT" class="sel" onchange="_cbLive()">'+ps.map(p=>'<option value="'+p+'"'+(p===_cbDraft._oneThrough?' selected':'')+'>'+esc(pname(p))+'</option>').join('')+'</select></div>';
+  } else {
+    title='A cap for each phase';
+    // first "no limit" row (never Phase 1): everything from it on is no limit
+    const nlFrom=ps.find(p=>p!==ps[0]&&_cbDraft[p]==null);
+    rows=ps.map(p=>{
+      const off=nlFrom!=null&&p>nlFrom;
+      return '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--b1)'+(off?';opacity:.45':'')+'"><span style="flex:1">'+esc(p===1?'Phase 1':'Through '+pname(p))+(p===4?' <span style="color:var(--t2);font-size:12px">(all rounds)</span>':'')+'</span>'
+        +'<input type="number" class="inp" style="width:74px" min="1" max="52" inputmode="numeric" data-cbp="'+p+'" value="'+(_cbDraft[p]==null?'':esc(String(_cbDraft[p])))+'"'+((nlFrom!=null&&p>=nlFrom)?' disabled':'')+' oninput="_cbLive()">'
+        +(p===ps[0]?'':'<label style="font-size:12px;color:var(--t2);display:flex;gap:4px;align-items:center;white-space:nowrap"><input type="checkbox" data-cbnl="'+p+'"'+(nlFrom===p?' checked':'')+(off?' disabled':'')+' onchange="_cbNoLimit('+p+',this.checked)"> No limit from here</label>')+'</div>';
+    }).join('');
+  }
+  openConfirm({ title:title,
+    body:rows+'<div id="cb_prev" class="cmodal-info" style="display:none"></div><div id="cb_err" class="cmodal-danger" style="display:none"></div>'+_cbLiveWarn(),
+    okText:'Save caps', alt:{text:'← Back',onClick:()=>{ _cbRead(); _cbStep1(); }},
+    onConfirm:()=>{ _cbRead(); const r=_cbBuild(); if(r.ok) return _cbSave(r.caps); _cbStep2(); } }); // a refused build: the box again, its message showing
+  _cbLive();
+}
+// The box's fields into the draft (an emptied box reads '', a "no limit" row stays null).
+function _cbRead(){
+  const q=s=>Array.from(document.querySelectorAll('#cmBody '+s));
+  if(_cbMode==='one'){ const n=document.getElementById('cb_oneN'), t=document.getElementById('cb_oneT'); if(n) _cbDraft._oneN=n.value; if(t) _cbDraft._oneThrough=Number(t.value); return; }
+  q('input[data-cbp]').forEach(i=>{ if(!i.disabled) _cbDraft[Number(i.getAttribute('data-cbp'))]=i.value===''?'':i.value; });
+}
+window._cbNoLimit=function(p,on){
+  _cbRead(); const ps=_capPhases();
+  if(on){ for(const q of ps) if(q>=p) _cbDraft[q]=null; }
+  else { for(const q of ps) if(q>=p&&_cbDraft[q]==null) _cbDraft[q]=''; }
+  _cbStep2();
+};
+function _cbBuild(){
+  const ps=_capPhases(), pname=p=>phaseShort(p), caps={1:null,2:null,3:null,4:null};
+  const okNum=v=>/^\d+$/.test(String(v).trim())&&Number(v)>=1&&Number(v)<=52;
+  if(_cbMode==='none') return {ok:true,caps};
+  if(_cbMode==='one'){
+    if(!okNum(_cbDraft._oneN)) return {ok:false,msg:'Enter a whole number from 1 to 52.'};
+    for(const p of ps) caps[p]=p<=_cbDraft._oneThrough?Number(_cbDraft._oneN):null;
+    return {ok:true,caps};
+  }
+  let prev=null, prevP=null, nl=false;
+  for(const p of ps){
+    const v=_cbDraft[p];
+    if(v==null||nl){ caps[p]=null; nl=true; continue; } // after a phase with no limit no later phase has a cap (Q9)
+    if(!okNum(v)) return {ok:false,msg:(p===1?'Phase 1':'Through '+pname(p))+': enter a whole number from 1 to 52.'};
+    const n=Number(v);
+    if(prev!=null&&n<prev) return {ok:false,msg:'Through '+pname(p)+' can’t be lower than '+(prevP===1?'Phase 1':'Through '+pname(prevP))+' ('+prev+').'};
+    caps[p]=n; prev=n; prevP=p;
+  }
+  if(ps.every(p=>caps[p]==null)) return {ok:false,msg:'Enter a number for Phase 1, or choose No cap.'};
+  return {ok:true,caps};
+}
+window._cbLive=function(){
+  _cbRead(); const r=_cbBuild();
+  const pv=document.getElementById('cb_prev'), er=document.getElementById('cb_err'), ok=document.getElementById('cmOk');
+  if(r.ok){ if(er){ er.textContent=''; er.style.display='none'; } if(pv){ pv.textContent='Preview: '+_capsSummaryLine(r.caps); pv.style.display=''; } if(ok) ok.disabled=false; }
+  else { if(er){ er.textContent=r.msg; er.style.display=''; } if(pv) pv.style.display='none'; if(ok) ok.disabled=true; }
+  return r;
+};
+async function _cbSave(caps){
+  if(!cfgUnlockedNow()){ toast(CAPS_LOCKED_TEXT,'err'); return; } // asked again at the click: a phase may have begun under the box
+  const out=[caps[1],caps[2],caps[3],caps[4]];
+  for(let i=0;i<4;i++) if(!_slotRuns(i+1)) out[i]=_savedCaps()[i]; // [395 · E2] a slot that does not run: its saved value, left alone
+  if(JSON.stringify(out)===JSON.stringify(_savedCaps())) return; // nothing changed
+  const summary=[1,2,3,4].filter(_slotRuns).map(p=>{ const label=(p===1?'Phase 1':('Through '+phaseShort(p))); return label+': '+(out[p-1]===null?'no limit':(out[p-1]+' week'+(out[p-1]!==1?'s':''))); }).join('; ');
+  try{ await setDoc(adminRef,{maxBidsCumulative:_slotKeep(adminSettings&&adminSettings.maxBidsCumulative,{1:out[0],2:out[1],3:out[2],4:out[3]})},{merge:true}); } // [395 · E2] a slot that does not run: left alone
+  catch(e){ toast(_cfgDeniedMsg(e,'the bid caps')||('Bid caps NOT saved — nothing changed ('+(e?.message||e)+'). Try again.'),'err'); return; } // [build 268 · FRZ8]
+  _cfgLog('Cumulative bid caps',summary); // [404 · §334 A1 · K-Q3]
+  const el=document.getElementById('capsMsg'); if(el){ el.style.color='var(--green)'; el.textContent='✓ Saved'; setTimeout(()=>{ if(el&&el.textContent==='✓ Saved') el.textContent=''; },3000); }
+  toast('Bid caps saved','ok');
+}
 
 // [build 274 · V3] Timer Reset Mode — current value, radio sync, and the confirmed +
 // audited change handler. Mode semantics live on the staff page (_timerResetMode /
@@ -7067,7 +7166,7 @@ function _srValue(name){
     case 'simulatorEnabled': return yn(adminSettings.simulatorEnabled===true);
     case 'FTE overage': return esc((Math.round(getReviewThreshold()*10)/10)+' FTE');
     case 'NP bids this phase': return L([1,2,3,4].filter(_slotRuns).map(p=>P4[p-1]+': '+(npAllowedForPhase(p)?'allowed':'not allowed')));
-    case 'Cumulative bid caps':{ const c=_savedCaps(); return L([1,2,3,4].filter(_slotRuns).map(p=>(p===1?'Phase 1':'Through '+phaseShort(p))+': '+(c[p-1]===null?'no limit':c[p-1]+' week'+(c[p-1]!==1?'s':'')))); } // [395 · E2] the slots that run
+    case 'Cumulative bid caps': return esc(_capsSummaryLine()); // [429 · O7] the caps card's line
     // [385 · §292] 'Bid lowerings allowed' is no longer a review row (Archived settings)
     case 'Timer rules': return L(_trSummaryLines()); // [417 · §392] the same lines as the Timer Rules card
     case 'Projection-change e-mails': return yn(adminSettings.emailNotifsEnabled!==false);
@@ -7104,7 +7203,7 @@ function _srPaint(){
     const x=rows[i];
     title=x.fte?'Capacity of the weeks opening in '+esc(lbl):esc(x.n);
     body=head+(x.fte?_srFteHtml(R.key):('<div>'+esc(x.d)+'</div><div style="margin-top:10px;font-weight:700;color:var(--t1)">Now: '+_srValue(x.v)+'</div>'+(x.info?'<div class="cmodal-info">'+esc(x.info)+'</div>':'')));
-    btns=B('Skip the rest','_srSkip()')+(i?B('← Back','_srGo(-1)'):'')+B(x.fte?'Open Week Capacity':'Change it','_srChange()')+B('Looks right →','_srGo(1)','btn-primary');
+    btns=B('Already reviewed','_srSkip()')+(i?B('← Back','_srGo(-1)'):'')+B(x.fte?'Open Week Capacity':'Change it','_srChange()')+B('Looks right →','_srGo(1)','btn-primary');
   }
   const t=document.getElementById('srTitle'), b=document.getElementById('srBody'), k=document.getElementById('srBtns'), m=document.getElementById('setupReviewModal');
   if(t) t.innerHTML=title; if(b){ b.innerHTML=body; b.scrollTop=0; } if(k) k.innerHTML=btns; if(m) m.classList.add('show');
@@ -7140,7 +7239,7 @@ window._srBackToReview=_srBackToReview;
 function _capCardGo(){ gotoSlotsPanel(); _srBackPlace('slots',null,'Back to Settings',_capCardBack,'settings'); }
 function _capCardBack(){ _srBackRemove(); _suOpenCard('setup','setupCapBtn'); }
 window._capCardGo=_capCardGo;
-// "Skip the rest" marks the review done, like ✓ Done, noting how far it went (owner 8:11 PM).
+// "Already reviewed" marks the review done, like ✓ Done, noting how far it went (owner 8:11 PM).
 function _srSkip(){ const R=_suReview; if(!R) return; const n=_srRows(R.mode,R.key).length; return _srMark(Math.min(R.seen,n),n,true); }
 window._srSkip=_srSkip;
 function _srDone(){ const R=_suReview; if(!R) return; const n=_srRows(R.mode,R.key).length; return _srMark(n,n,false); }
@@ -7612,7 +7711,7 @@ window.skipPhaseResults=function(cur){
   openConfirm({
     title:'Skip sending '+phaseName(cur)+' results?',
     body:`<div>Marks <strong>${phaseName(cur)}</strong> results as sent <strong>without e-mailing anyone</strong>.</div>
-          <div class="cmodal-warn" style="margin-top:8px">Testing only — users get NO results e-mail. You can still send it later from Approvals/Denials.</div>`,
+          <div class="cmodal-warn" style="margin-top:8px">Testing only — users never get these results by e-mail.</div>`,
     okText:'Skip — don’t e-mail', danger:true,
     onConfirm:async()=>{
       // [build 222 · audit] Re-check at the moment of action — the dialog may have outlived a
@@ -7622,7 +7721,7 @@ window.skipPhaseResults=function(cur){
       // [AUDIT 2026-07-26 disputed-low] Do NOT swallow a failed publish — the batch is what
       // makes results public and stamps resultsSent. A dropped network here used to toast
       // "skipped" while nothing published, so the admin walked away believing it advanced.
-      try{ await _publishPhaseResults({resultsSent:{...(phasesData.resultsSent||{}),[cur]:Date.now()}},cur); } // [401 · AMENDMENT-3 §3.3] THIS phase only
+      try{ await _publishPhaseResults({resultsSent:{...(phasesData.resultsSent||{}),[cur]:Date.now()},resultsSkipped:{...(phasesData.resultsSkipped||{}),[cur]:true}},cur); } // [401 · AMENDMENT-3 §3.3] THIS phase only · [429 · O15] the skip is recorded
       catch(e){ toast('Could not publish '+phaseName(cur)+' results — nothing was changed ('+(e?.message||e)+'). Try again.','err'); return; }
       toast(phaseName(cur)+' results skipped (no e-mail sent)','warn');
     }
@@ -7692,6 +7791,7 @@ function renderNextStep(){
       }
     } else if(_auctionOver(cur)){ // [407 · §350] finished, or no RVA after the last Fall phase
       html=box(`${phaseName(cur)} results are sent — the auction is complete.`,''); // [407 · §351 W5]
+      if((phasesData.resultsSkipped||{})[cur]) html=box(`${phaseName(cur)} results were not sent (skipped) — the auction is complete.`,''); // [429 · O15]
     } else if(isRvaPhase(cur)){
       // [394 · E1] After a Round's results: ▶ Begin the next Round and ■ Finish the auction; after the last Round, only Finish.
       html=(cur<fallPhases()+RVA_MAX_ROUNDS)
@@ -7712,6 +7812,8 @@ function renderNextStep(){
         ? box(`${_phaseWindowLabel(cur)} bidding is <strong>CLOSED</strong> (server-side), but the timer or week locks were changed afterwards, so this screen looks half-open. Users cannot bid until you reopen it.`,
             btn('Reopen '+_phaseWindowLabel(cur)+' bidding','reopenBidding()','btn-ghost')
             + '&nbsp;' + btn('Re-close it properly','closePhaseBidding('+cur+')'))
+        : (isRvaPhase(cur)&&!locksData.globalLock&&Array.isArray(mondays)&&mondays.length>0&&mondays.every(d=>!!locksData?.weeks?.[dateKey(d)])) // [429 · O14] the month picker closed without picking
+        ? box('Every week is locked — pick the month(s) to open.',btn('Pick months','reopenBidding()'))
         : box(`${_phaseWindowLabel(cur)} bidding is OPEN — users can place and change bids. When bidding should end, close it (expires the timer and locks all weeks).`,btn('Close '+_phaseWindowLabel(cur)+' bidding','closePhaseBidding('+cur+')'));
     } else {
       const pending=countPendingDecisions();
@@ -8225,7 +8327,8 @@ async function _commitBeginPhase(next){
   // simply lost. Calling the whole count "denied bids" understated what had been removed.
   const _retireNote=_retired?(' · '+_retired+' leftover bid'+(_retired!==1?'s':'')+' from finished phases retired — numbers returned to their users'):''; // [295 · DB-1 · wording 297]
   toast(_t.ok
-    ? (_t.ow ? '▶ '+phaseName(next)+' begun — bidding is open (opening window: '+_t.ow.days+' days, no timer resets until '+stage0Hours()+'h remain)'+_retireNote
+    ? isRvaPhase(next) ? '▶ '+phaseName(next)+' begun — pick the month(s) to open'+_retireNote // [429 · O14] a Round's weeks open at the month picker, next
+    : (_t.ow ? '▶ '+phaseName(next)+' begun — bidding is open (opening window: '+_t.ow.days+' days, no timer resets until '+stage0Hours()+'h remain)'+_retireNote
              : '▶ '+phaseName(next)+' begun — bidding is open (timer reset to '+stage0Hours()+'h)'+_retireNote)
     : phaseName(next)+' begun, but the TIMER did NOT verifiably arm — users may see the auction as CLOSED and CANNOT BID. Open the Timer card and reset the timer NOW.',
     _t.ok?'ok':'err');
@@ -8663,7 +8766,7 @@ window.msgPreview=function(){
   openConfirm({title:'Preview — the e-mail '+esc(u)+' would get',
     body:`<div style="font-size:13px;white-space:pre-wrap;word-break:break-word;padding:10px;border:1px solid var(--b1);max-height:50vh;overflow-y:auto">${esc(_msgText(u,c.body))}</div>
           <div class="cmodal-info" style="margin-top:8px">Sent with the usual subject line; the site link and sign-off are added at the bottom.</div>`,
-    okText:'Close', onConfirm:()=>{}});
+    okText:'Close', okOnly:true, onConfirm:()=>{}});
 };
 window.msgSaveDraft=async function(){
   const c=_msgCheck(); if(!c) return;
@@ -8868,24 +8971,8 @@ function _cumCap(phase){
   const n=parseInt(raw,10);
   return (isNaN(n)||n<1)?null:n;
 }
-// Simple-language description of the cumulative bid caps for the welcome e-mail.
-function cumulativeCapEmailText(){
-  const _sl=[1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||(p===4&&(typeof rvaOn!=='function'||rvaOn()))), caps=_sl.map(_cumCap); // [231 · E2] Fall slots 1 … F, then the RVA's slot 4
-  if(caps.every(c=>c===null)) return ''; // [384 · §288 · plan §11e] no cap in any phase: no bullet in the welcome e-mail (twin of the staff page's cumulativeCapDescription)
-  // [build 268 · COPY] Grouped collapse — as short as the settings allow, never shorter
-  // than the truth: equal-cap runs merge into their LAST clause (for a CUMULATIVE cap the
-  // later checkpoint implies the earlier ones), a trailing uncapped stretch reads as one
-  // "no limit after that", and four equal caps become a single clause.
-  if(caps.every(c=>c===caps[0])) return 'Running cap on total weeks you can win across the auction (only weeks you win count) — up to '+caps[0]+' across all phases'; // [229 / 393 · §297] item 189: the 227 wording
-  const parts=[], _rva=(typeof fallPhases==='function'?fallPhases():3)+1; // [230 · E1] slot 4 is the RVA: named by its phase number
-  for(let i=0;i<caps.length;i++){
-    const p=_sl[i], c=caps[i]; // [231 · E2] p = the stored slot (4 = the RVA)
-    if(i<caps.length-1&&caps[i+1]===c) continue; // merged into the last clause of this equal run
-    if(c===null&&p===4){ parts.push(parts.length?'no limit after that':'no limit through Phase '+_rva); continue; }
-    parts.push((p===1?'Phase 1':'Through Phase '+(p===4?_rva:p))+': '+(c===null?'no limit':c));
-  }
-  return 'Running cap on total weeks you can win across the auction (only weeks you win count) — '+parts.join(' · '); // [229 / 393 · §297] item 189: the 227 wording
-}
+// [429 · O7] The cap line of the welcome e-mail and of Rules 1.8: one line, the cap sentence (twin of the staff page) and the count line; no cap: none.
+function cumulativeCapEmailText(){ const s=capSentence(_savedCapsObj()); return s?s+' '+COUNT_LINE:''; }
 // [384 · §288 · plan §11f item 2 / §11g] The competition-week rule line of the welcome e-mail: the words both rule sets share, word for word the
 // staff page's RULE_NOWEAKEN (twin); under Strict the welcome e-mail adds the Strict line straight below it (_ruleCompSetText), as the staff page does.
 const RULE_NOWEAKEN='On a competition week, a new bid must match or beat the weakest winning or under-review bid, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. If everyone leaves, a new bid must match or beat the last bid that was there.'; // [228 / 392 · §297] item 199
@@ -8902,9 +8989,7 @@ function _ruleCompSetLine(strict,n){
 function _ruleCompSetText(){ return _ruleCompSetLine(!!(typeof adminSettings!=='undefined'&&adminSettings&&adminSettings.bidRuleSet==='strict'),(typeof _strictN==='function')?_strictN():null); } // [384 · §288] the set in force, as this page knows it
 function buildWelcomeEmailBody(user){ // [391 · §296] greets by the full name (usernamesData, initials when none is on file) · [393 · §297] item 8: by the first name (greetName)
   const _capTxt=cumulativeCapEmailText();
-  const capBullets=_capTxt.startsWith('Running cap') // [229 / 393 · §297] item 189: the 227 split - the lead + ":", then what follows its " — "
-    ? [_capTxt.slice(0,_capTxt.indexOf(' — '))+':', _capTxt.slice(_capTxt.indexOf(' — ')+3)]
-    : (_capTxt?[_capTxt]:[]); // [384 · §288] no cap in any phase: no bullet at all (plan §11e — an empty text would leave a bare "•")
+  const capBullets=_capTxt?[_capTxt]:[]; // [429 · O7] one bullet · [384 · §288] no cap in any phase: no bullet at all (plan §11e — an empty text would leave a bare "•")
   const B=_emBold;
   const bullets=arr=>arr.map(t=>'• '+t).join('\n');
   return `Hi ${((typeof greetName==='function')?greetName(user):user)},
@@ -9047,7 +9132,7 @@ window.sendReminderEmails=function(){
   // so "you have no bids" would leak the decision; an UNANNOUNCED round denial counts as placed too).
   for(const u of names){ if(!_hasOpenRoundBid(u)) noBidders.push(u); }
   if(!noBidders.length){
-    openConfirm({title:'Send Reminder E-mails',body:`<div>Every user has a ${_phaseWindowLabel()} bid. No reminders to send.</div>`,okText:'OK',onConfirm:()=>{}});
+    openConfirm({title:'Send Reminder E-mails',body:`<div>Every user has a ${_phaseWindowLabel()} bid. No reminders to send.</div>`,okText:'OK',okOnly:true,onConfirm:()=>{}});
     return;
   }
   const preview=noBidders.slice(0,10).join(', ')+(noBidders.length>10?`, ...+${noBidders.length-10} more`:'');
@@ -9116,7 +9201,7 @@ window.sendPhaseResultsEmails=function(){
   const _completedNums=Object.keys(completed).map(Number).filter(n=>!isNaN(n)).sort((a,b)=>a-b);
   const target=_completedNums.find(n=>!_sent[n]) ?? _completedNums[_completedNums.length-1];
   if(!target){
-    openConfirm({title:'Send Phase Results E-mails',body:`<div>No phase is complete yet — nothing to send.</div>`,okText:'OK',onConfirm:()=>{}});
+    openConfirm({title:'Send Phase Results E-mails',body:`<div>No phase is complete yet — nothing to send.</div>`,okText:'OK',okOnly:true,onConfirm:()=>{}});
     return;
   }
   const cur=target; // downstream body text / resultsSent tracking refer to this phase
@@ -9135,7 +9220,7 @@ window.sendPhaseResultsEmails=function(){
       summary[u].denied.push(wk);
     }
   }
-  if(typeof _splitResultsAdd==='function') _splitResultsAdd(summary,cur,apSrc); // [410 · split weeks, Q10] the partner of a split won in this phase gets this phase's results
+  if(typeof _splitResultsAdd==='function') _splitResultsAdd(summary,cur,apSrc,denSrc); // [410 · split weeks, Q10] · [429 · F4] and the partner of a split denied in it the partner of a split won in this phase gets this phase's results
   const usersWithResults=Object.keys(summary);
   if(!usersWithResults.length){
     // [build 254] A completed phase with ZERO recorded decisions used to dead-end here: this
@@ -9159,7 +9244,7 @@ window.sendPhaseResultsEmails=function(){
         }
       });
     } else {
-      openConfirm({title:'Send Phase Results E-mails',body:`<div>No approvals or denials recorded for ${phaseName(target)}.</div>`,okText:'OK',onConfirm:()=>{}});
+      openConfirm({title:'Send Phase Results E-mails',body:`<div>No approvals or denials recorded for ${phaseName(target)}.</div>`,okText:'OK',okOnly:true,onConfirm:()=>{}});
     }
     return;
   }
@@ -11821,7 +11906,7 @@ function refuseAdminFloor(u,wk,val,why,after){
          <div class="cmodal-warn" style="margin-top:8px">Switch NP on for ${esc(phaseName(Number(phasesData.currentPhase||1)))} in Settings — applies to everyone.</div>`
       :`<div>Floor is <strong>${esc(String(why.floor))} or better</strong>, for admins too — the engine won't score it.</div>
          <div class="cmodal-warn" style="margin-top:8px">Change the floor in Settings (between phases) — applies to everyone.</div>`,
-    okText:'Understood', onConfirm:_done, onCancel:_done
+    okText:'Understood', okOnly:true, onConfirm:_done, onCancel:_done
   });
 }
 // [291 · ES-1] The explanation dialog. Both buttons just dismiss; nothing is ever written
@@ -11841,7 +11926,7 @@ function refuseAdminHold(u,wk,val,held,after){
     title:'Withheld number — nothing saved',
     body:`<div>Bid number${held.length>1?'s':''} <strong>${esc(held.join(', '))}</strong> <strong>withheld from ${esc(u)}</strong> on User Bids.</div>
           <div class="cmodal-warn" style="margin-top:8px">Release it there (grey chip) first.</div>`,
-    okText:'OK', danger:false, onConfirm:_done, onCancel:_done
+    okText:'OK', danger:false, okOnly:true, onConfirm:_done, onCancel:_done
   });
 }
 function refuseAdminDup(u,wk,val,clashes,after){
@@ -11852,7 +11937,7 @@ function refuseAdminDup(u,wk,val,clashes,after){
     body:`<ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">${lines}</ul>
           <div class="cmodal-danger">A number on two weeks scores as no bid on BOTH; ${esc(u)} would lose both.</div>
           <div class="cmodal-warn" style="margin-top:8px">Remove or change it on the other week first.</div>`,
-    okText:'Understood',
+    okText:'Understood', okOnly:true,
     onConfirm:_done, onCancel:_done
   });
 }
@@ -11974,7 +12059,7 @@ function guardAdminBid(u,wk,val,isNew,proceed,onCancel){
     title:'This bid breaks the rules users follow',
     body:`<div>Setting <strong>${esc(u)}</strong> to <strong style="font-family:var(--mono)">${esc(String(val))}</strong> on <strong>${esc(wLabel(wkDate(wk)))}</strong> would:</div>
           <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">${issues.map(i=>'<li>'+i+'</li>').join('')}</ul>
-          <div class="cmodal-danger">Admin entries skip all bidding checks — continue only if deliberate.</div>${(typeof _bdFootHtml==='function')?_bdFootHtml(u):''}`, // [393 · §297 Build D] C: the footer
+          <div class="cmodal-danger">These are not checked for the admin. Continue only if deliberate.</div>${(typeof _bdFootHtml==='function')?_bdFootHtml(u):''}`, // [393 · §297 Build D] C: the footer
     okText:'Save anyway', danger:true,
     onConfirm:()=>proceed(),
     // [FIX 25 Jul 2026 · delta-audit #7] On cancel nothing is written, but the Edit Selections
@@ -12291,7 +12376,7 @@ window.adminAddSelection=function(){
       body:`<div><strong>${esc(u)}</strong>'s ${esc(phaseName(_oldPh))} bid (<strong style="font-family:var(--mono)">${esc(_oldVal)}</strong>) on <strong>${esc(wLabel(_mD))}</strong> didn't win and is out of play.</div>
             <div style="margin-top:8px">Replace with a <strong>${esc(phaseName(Number(phasesData.currentPhase||1)))}</strong> bid of <strong style="font-family:var(--mono)">${/* [FIX1 · F4] */esc(String(pv).replace(/,/g,'/'))}</strong>?</div>`
         +(_rIss.length?`<ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">${_rIss.map(i=>'<li>'+i+'</li>').join('')}</ul>
-            <div class="cmodal-danger">Admin entries skip all bidding checks — continue only if deliberate.</div>`:'')
+            <div class="cmodal-danger">These are not checked for the admin. Continue only if deliberate.</div>`:'')
         +`<div class="cmodal-warn" style="margin-top:8px">Clears any leftover approval/denial; colleagues whose projection changes may be e-mailed.</div>`+((_rIss.length&&typeof _bdFootHtml==='function')?_bdFootHtml(u):''), // [393 · §297 Build D] C: the footer, only with the list
       okText:_rIss.length?'Replace anyway':'Replace with current-phase bid', danger:true,
       onConfirm:()=>{ if(_addBidRoundDone()) return; return window._adminChangePriorityRaw(u,wk,pv,_ds); } // [M4 · 234] promise returned → failures surface · [404 · J-D1]
@@ -12307,7 +12392,7 @@ window.adminAddSelection=function(){
     title:_iss.length?'Add Bid — breaks the rules users follow':'Add Bid',
     body:`<div>Add bid <strong style="font-family:var(--mono)">${/* [FIX1 · F4] 2/3, not 2,3 */String(pv).replace(/,/g,'/')}</strong> for <strong>${esc(u)}</strong>, week of <strong>${wLabel(m)}</strong> (${wRange(m)})?</div>`
       +(_iss.length?`<ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">${_iss.map(i=>'<li>'+i+'</li>').join('')}</ul>
-          <div class="cmodal-danger">Admin entries skip all bidding checks — continue only if deliberate.</div>${(typeof _bdFootHtml==='function')?_bdFootHtml(u):''}`:''), // [393 · §297 Build D] C: the footer
+          <div class="cmodal-danger">These are not checked for the admin. Continue only if deliberate.</div>${(typeof _bdFootHtml==='function')?_bdFootHtml(u):''}`:''), // [393 · §297 Build D] C: the footer
     okText:_iss.length?'Add anyway':'Add', danger:!!_iss.length,
     onConfirm:async()=>{
       if(_dsA&&!_decisionGuard(_dsA)) return; // [292 · RA-M1] phase changed while the dialog sat open
@@ -12665,7 +12750,7 @@ window.createSplit=function(){
   const comp=!!bid&&!!_bdCompNow(wk), ph0=e.ph; // [411 · §371 9:36 AM (4)] what the box was opened on, asked again at the click
   const lbl=bid?_splitLastBidLine(e,bid):null, warn=comp||!!lbl, wl=[comp?_bdCompLine():null,lbl].filter(Boolean); // [411 · §371 9:39 AM (b)]
   const bidHtml=!bid?'':'<div style="margin-top:8px">'+esc(b+'/'+p+' bids '+comboLbl(bid)+' on this week.')+'</div>'
-    +(warn?'<ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">'+wl.map(x=>'<li>'+x+'</li>').join('')+'</ul><div class="cmodal-danger">Admin entries skip all bidding checks — continue only if deliberate.</div>'+_bdFootHtml(b):'');
+    +(warn?'<ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">'+wl.map(x=>'<li>'+x+'</li>').join('')+'</ul><div class="cmodal-danger">Every other rule is checked. Continue only if deliberate.</div>'+_bdFootHtml(b):'');
   openConfirm({ title:'Create split', body:_splitCreateBody(e)+bidHtml, okText:warn?'Create anyway':'Confirm', danger:warn, onConfirm:async()=>{
     const why2=_splitCreateRefusal(wk,b,p,sp,bh); if(why2){ toast(why2,'err'); return; } // asked again at the click: the board may have changed under the dialog
     e.ph=Number(phasesData.currentPhase||1); e.at=new Date().toISOString();
@@ -12828,7 +12913,7 @@ function _systemActionText0(e){
   if(t==='admin-phase-begin'){ const c=String(e.choice||''), m=/^p4r(\d+)$/.exec(c), lbl=m?('Phase 4: Round '+m[1]):(/^p\d{1,2}$/.test(c)?phaseName(c.slice(1)):'A phase'); // [383 · §287] · [394 · E1] a row written before 394 for a Round (p4rN) keeps its name
     if(e.review==='none'||!(Number(e.reviewedAt)>=0&&e.reviewedAt!==undefined)) return esc(lbl)+' begun without the settings review';
     const w=Number(e.reviewedAt)>0?new Date(Number(e.reviewedAt)).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'';
-    return esc(lbl)+' begun — settings reviewed (guided review'+((e.skipped===true&&typeof e.seen==='number'&&typeof e.of==='number')?': reviewed '+e.seen+' of '+e.of+', rest skipped':'')+(w?', '+esc(w):'')+((typeof e.reviewedBy==='string'&&e.reviewedBy)?', '+esc(e.reviewedBy):'')+')'; }
+    return esc(lbl)+' begun — settings reviewed (guided review'+((e.skipped===true&&typeof e.seen==='number'&&typeof e.of==='number')?': '+e.seen+' of '+e.of+' checked, then Already reviewed':'')+(w?', '+esc(w):'')+((typeof e.reviewedBy==='string'&&e.reviewedBy)?', '+esc(e.reviewedBy):'')+')'; }
   if(t==='admin-hold') return 'Admin <strong>withheld</strong> bid number <strong>'+esc(String(e.bidValue??''))+'</strong> from <strong>'+who+'</strong>'+(e.reason?' — '+esc(e.reason):''); // [327 · §180]
   if(t==='admin-release') return 'Admin <strong>released</strong> bid number <strong>'+esc(String(e.bidValue??''))+'</strong> to <strong>'+who+'</strong>'+(e.reason?' — '+esc(e.reason):''); // [327 · §180]
   if(t==='admin-clear-last-bid'){ const w=String(e.choice||''); let wl=w; try{ if(w) wl=wLabel(wkDate(w)); }catch(_){ wl=w; } return 'Admin cleared <strong>'+who+'</strong>\'s last bid on <strong>'+esc(wl||'a week')+'</strong>'+((typeof e.by==='string'&&e.by)?' ('+esc(e.by)+')':''); } // [404 · §334 G]
@@ -13270,7 +13355,7 @@ function updatePhaseOpen(){
   const began=phasesData?_windowStartMs():null; // [322 · P-2] the open phase's start (an RVA Round's own)
   const completed=!!(phasesData&&phasesData.completedPhases&&phasesData.completedPhases[cur]);
   const expired=!!(timerData&&timerData.enabled&&timerData.lastChange&&(getDurationMs()-(Date.now()-timerData.lastChange))<=0);
-  const open=began&&(phasesData&&(phasesData.phase1Started||cur>1))&&!completed&&!expired;
+  const open=began&&(phasesData&&(phasesData.phase1Started||cur>1))&&!completed&&!expired&&!(timerData&&timerData.biddingClosed===true); // [429 · F3 · Q4] not "open for" once bidding is closed
   const el=document.getElementById('phaseOpenFor');
   if(el) el.textContent=open?(_phaseWindowLabel()+' has been open for '+fmtElapsed(Date.now()-began)):''; // [322 · P-2] names the round (staff 166 already did)
   const ri=document.getElementById('timerResetInfo');
@@ -13406,6 +13491,7 @@ function _trRefreshFoot(){
   const problems=_trValidate(buildTimerRulesFromDOM());
   const dirty=!!window._trEditing;
   if(msg) msg.innerHTML=problems.length?('<span style="color:var(--red)">'+problems.join('<br>')+'</span>'):'';
+  { const fx=document.getElementById('tr_fix'); if(fx) fx.textContent=problems.length?'Fix the problems listed above to save.':''; } // [429 · O6] nothing when there are none
   sv.disabled=!dirty||problems.length>0||!!window._trSaving;
   if(cx) cx.disabled=!!window._trSaving; // [417 · §393] Cancel is always offered (with Save, the only way out of the box) - but not while a save runs
 }
@@ -13491,12 +13577,12 @@ function syncTimer(){
   const xb=document.getElementById("expireTimerBtn"); if(xb) xb.disabled=!en||_windowCompletedNow(); // [341 · §209] same gate as Reset Timer
   const bl=document.getElementById("timerBlock"); const lb=document.getElementById("timerLabel"); const mt=document.getElementById("timerMeta");
   if(!bl||!lb||!mt)return;
-  if(!en){bl.className="timer-block";lb.textContent="Timer disabled";mt.textContent="Enable above to start.";document.getElementById("timerDigs").innerHTML="";return;}
+  if(!en){bl.className="timer-block";lb.textContent="Timer disabled";mt.textContent=timerData.biddingClosed===true?"Bidding closed.":"Enable below to start."; /* [429 · F3 · Q4] the switch is below; with bidding closed, turning it on starts nothing */document.getElementById("timerDigs").innerHTML="";return;}
   if(!timerData.lastChange){bl.className="timer-block";lb.textContent="Waiting for first change";mt.textContent='Timer starts at '+_timerStartsAt()+'.'; /* [373 · §269 T-6] */document.getElementById("timerDigs").innerHTML='<span class="pill p-blue">Waiting</span>';return;}
   const rem=getDurationMs()-(Date.now()-timerData.lastChange);
   bl.className="timer-block"+(rem<=0?" expired":" running")+(gLocked?" glocked":"");
   lb.textContent=rem<=0?"Timer expired":"Timer running";
-  mt.textContent=`Last reset: ${new Date(timerData.lastChange).toLocaleString()}`;
+  mt.textContent=rem<=0?`Bidding closed: ${new Date(timerData.lastChange+getDurationMs()).toLocaleString()}`:`Last reset: ${new Date(timerData.lastChange).toLocaleString()}`; // [429 · F3] closed: the last change + the timer's length (no stored field)
   renderTimerDigs();
 }
 function renderTimerDigs(){
@@ -13684,14 +13770,14 @@ window.biddingIsClosedFlag=biddingIsClosedFlag;
 // [build 254] The actual reopen write, shared by every path below. Re-arming the countdown
 // matters: leaving an expired timer would keep the auction closed by the OTHER server-side
 // gate (timerNotExpired), so clearing only the flag isn't enough.
-window._reopenCommit=async function(){
+window._reopenCommit=async function(beginLine){ // [429 · O14] beginLine: the Round-begin line, shown in place of "… bidding reopened"
   const cur=Number(phasesData.currentPhase||1);
   const _n=Date.now();
   const owr=getTimerRules().openingWindow;
   const payload={biddingClosed:false};
   // [394 · E1] Every phase (an RVA Round included) is begun by _commitBeginPhase, which arms the countdown and reads it back; a reopen re-arms.
   if(timerData?.enabled===true){ payload.lastChange=_n; payload.durationHours=(openingWindowActive()&&owr?owr.days*24:timerResetHours(timerPhaseStartMs(),_n)); }
-  try{ await setDoc(timerRef,payload,{merge:true}); toast(''+_phaseWindowLabel(cur)+' bidding reopened','ok'); }
+  try{ await setDoc(timerRef,payload,{merge:true}); toast(beginLine||(''+_phaseWindowLabel(cur)+' bidding reopened'),'ok'); }
   catch(e){ toast('Could not reopen bidding — '+(e?.message||e),'err'); }
 };
 // [build 263] The "reopen without changing locks" override was removed. Smart Lock (Fall phases)
@@ -13721,7 +13807,7 @@ window._reopenRoundMonths=function(_rmMonths,_rmBeginAgain,_rmOffIn){ // [383 ·
   if(!monthsWithRoom.length){
     openConfirm({ title:'Open '+phaseName(_cur)+' bidding',
       body:'<div>Every week is below its Smart Lock Control — no room to bid.</div><div class="cmodal-info" style="margin-top:8px">Nothing to open this round.</div>',
-      okText:'OK', onConfirm:()=>{} });
+      okText:'OK', okOnly:true, onConfirm:()=>{} });
     return;
   }
   // [383 · §287, owner 10:56 PM] TWO steps in the one confirm box. Step 1 = 382's month picker (its OK now reads "Next: check FTE →"; the
@@ -13760,6 +13846,7 @@ window._reopenRoundMonths=function(_rmMonths,_rmBeginAgain,_rmOffIn){ // [383 ·
       mondays.forEach(d=>{ const wk=dateKey(d); dotted['weeks.'+wk]=!unlock.has(wk); });
       try{ await mergeFields(locksRef,_withCloseLayout(dotted)); }
       catch(e){ toast('Could not set the week locks — '+(e&&e.message||e)+'. Bidding was NOT reopened.','err'); return; }
+      if(_rmBegin){ await window._reopenCommit('▶ '+phaseName(_cur)+' begun — bidding is open on '+unlock.size+' week'+(unlock.size!==1?'s':'')+' in '+picked.length+' month'+(picked.length!==1?'s':'')+'; all others locked.'); return; } // [429 · O14]
       toast('Opened '+unlock.size+' week'+(unlock.size!==1?'s':'')+' in '+picked.length+' month'+(picked.length!==1?'s':'')+'; all others locked'+(_rmAll.size>unlock.size?' ('+(_rmAll.size-unlock.size)+' unticked)':'')+'.','ok'); // [389 · §295]
       await window._reopenCommit();
     }
@@ -15263,7 +15350,7 @@ function _roundDownWeeks(){
 function _roundDownLine(r){ return _acFmtWkShort(r.wk)+': '+r.oldCap.toFixed(1)+' → '+r.newCap.toFixed(1)+' ('+r.left.toFixed(1)+' left → '+r.can.toFixed(1)+')'; }
 const ROUND_DOWN_GAP_TEXT="Round down capacity works between phases, once a phase's results are sent.";
 const ROUND_DOWN_NONE_TEXT='No week has capacity to round down.';
-function _roundDownInfo(text){ openConfirm({title:'Round down capacity',body:'<div>'+esc(text)+'</div>',okText:'OK',onConfirm:()=>{}}); }
+function _roundDownInfo(text){ openConfirm({title:'Round down capacity',body:'<div>'+esc(text)+'</div>',okText:'OK',okOnly:true,onConfirm:()=>{}}); }
 window.roundDownCapacity=function(){
   if(!_feedsHealthyOrExplain('Round down capacity')) return;
   if(!_phaseGapNow()){ _roundDownInfo(ROUND_DOWN_GAP_TEXT); return; }
@@ -15370,8 +15457,9 @@ window._fastAsk=function(kind,user,wk,type){
 };
 window.fastModeOn=()=>_fastMode; // exposed for testing
 
-window.openConfirm=function({title,body,okText='Confirm',danger=false,onConfirm,onCancel,alt}){
-  { const _okb=document.getElementById("cmOk"); if(_okb) _okb.disabled=false; } // [383 · §287] a dialog that greyed the OK (the unlock's typed word) never leaves it grey for the next one
+window.openConfirm=function({title,body,okText='Confirm',danger=false,onConfirm,onCancel,alt,okOnly}){
+  { const _okb=document.getElementById("cmOk"); if(_okb) _okb.disabled=false; }
+  { const _cc=document.getElementById("cmCancel"); if(_cc) _cc.style.display=okOnly?'none':''; } // [429 · O10] okOnly: a box whose OK and Cancel do the same shows one button; reset on every open // [383 · §287] a dialog that greyed the OK (the unlock's typed word) never leaves it grey for the next one
   { const _ab=document.getElementById("cmAlt"); if(_ab){ if(alt&&typeof alt.onClick==='function'){ _ab.textContent=alt.text||''; _ab.className='btn '+(alt.danger?'btn-danger':'btn-ghost'); _ab.style.display=''; _ab.onclick=async()=>{ const cb=alt.onClick; cmCancelCallback=null; closeConfirm(); try{ await cb(); }catch(err){ console.error('Confirm action failed:',err); try{ toast('Action failed: '+(err?.message||err),'err'); }catch(_){} } }; } else { _ab.style.display='none'; _ab.onclick=null; } } } // [383 · §287] the optional middle button, an OK of its own (only the Begin dialogs and the month picker's step 2 pass one)
   document.getElementById("cmTitle").innerHTML=title||'Confirm';
   document.getElementById("cmBody").innerHTML=body||'';
@@ -16125,7 +16213,7 @@ function _restoreUserFlow(f){
           body:`<div><strong>${esc(u)}</strong> is in this backup but no longer on the live roster.</div>
                 <div class="cmodal-warn" style="margin-top:8px">Restoring their bids alone would create an invisible bidder competing at FTE 1.0, with no login, no e-mail and no roster row.</div>
                 <div style="margin-top:8px">Re-add <strong>${esc(u)}</strong> on the Users page first, then run this restore again.</div>`,
-          okText:'OK', onConfirm:()=>{}
+          okText:'OK', okOnly:true, onConfirm:()=>{}
         });
         return;
       }
@@ -16300,9 +16388,13 @@ function _withTimeout(p,ms,label){
 }
 // Sticky on-screen counter for work that outlasts a normal toast. Returns an onProgress callback.
 function _bkProgressToast(label){
-  return function(done,total){
-    if(typeof toast==='function') toast(label+'… '+done+' of '+total+' documents','warn',true);
+  const f=function(done,total){
+    if(f.ended) return; // [429 · F7] a read that finishes after the end never puts the counter back
+    if(typeof toast==='function'){ f.line=label+'… '+done+' of '+total+' documents'; toast(f.line,'warn',true); }
   };
+  // [429 · F7] Take the counter down - only if it is still the line showing (as _resToastOff), so it never hides a newer message.
+  f.end=function(){ f.ended=true; try{ const el=document.getElementById('toast'); if(el&&f.line&&el.textContent===f.line) el.className=''; }catch(_){} };
+  return f;
 }
 async function _backupFetchAll(onProgress){
   const docs=_backupDocMap();
@@ -16498,14 +16590,15 @@ async function _cbFetchFile(id){
     const onP=_bkProgressToast('Reading backup'); let done=0;
     onP(0,names.length);
     let missing=null;
-    await Promise.all(names.map(async function(n){
+    try{ await Promise.all(names.map(async function(n){
       let s;
       try{ s=await _withTimeout(getDoc(doc(db,'backups',id,'docs',n)),BACKUP_FETCH_TIMEOUT_MS,n); }
       catch(e1){ s=await _withTimeout(getDoc(doc(db,'backups',id,'docs',n)),BACKUP_FETCH_TIMEOUT_MS,n); } // one retry
       if(!s.exists()){ missing=missing||n; }
       else data[n]=JSON.parse(s.data().j);
       done++; onP(done,names.length);
-    }));
+    })); }
+    finally{ if(typeof onP.end==='function') onP.end(); } // [429 · F7] the counter comes down however the reading ends (success, a missing piece, an error)
     if(missing){ toast('This cloud backup is INCOMPLETE ('+missing+' is missing) — not restoring. Use another backup.','err'); return null; }
     return {name:'cloud backup',data,ts:md.ts};
   }catch(e){ toast('Could not read that cloud backup ('+(e?.code||e?.message||e)+').','err'); return null; }
@@ -16623,7 +16716,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.21","kind":"new","html":"<b>Combination bids<\/b> — which of 1/2/3, 1/2, 2/3, 3/4 and 4/5 may be used (default 1/2/3 and 1/2). A switched-off combination cannot be placed and does not compete. Locked while a phase is running."},
 {"n":"2.22","kind":"new","html":"<b>Blinded bidding<\/b> — hides other people's initials on the staff site; the admin still sees names. No effect on decisions. Default off."},
 {"n":"2.24","kind":"new","html":"<b>NP Bids by Phase<\/b> — the phases where NP bids may be placed (default Phases 3 and 4). An NP bid counts only if NP was allowed in the phase it was placed. Can change at any time."},
-{"n":"2.25","kind":"new","html":"<b>Cumulative Bid Caps<\/b> — the most weeks a person may hold through each phase: weeks won earlier plus bids placed this phase. One value for all RVA rounds; a later cap cannot be lower than an earlier one. Locked while a phase is running."},
+{"n":"2.25","kind":"new","html":"<b>Cumulative Bid Caps<\/b> — the most weeks a person may hold through each phase: weeks won earlier plus bids placed this phase. One value for all RVA rounds; a later cap cannot be lower than an earlier one, and after a phase with no limit no later phase has a cap. Locked while a phase is running."},
 {"n":"2.26","kind":"new","html":"<b>FTE Overage Amount<\/b> — how far over a week's capacity a bid can go and be Under Review instead of Losing. 0 to 2; default 0.5. Locked while a phase is running."},
 {"n":"2.27","kind":"new","html":"<b>Last Bids<\/b> (Bids &amp; decisions) — each person's last bid on each week this phase. Clear removes one: that person's next bid on that week is not measured against it. Each Clear is logged in the Change Log with the admin's initials."},
 {"n":"2.28","kind":"new","html":"<b>Allowed lowerings per phase<\/b> (under Competition weeks) — for Loose rules: how many times each person may make a bid weaker than their last bid on the week, per phase (default Unlimited, which adds no rule). Off while Strict is on. Can change at any time; lowerings already used this phase still count."},
@@ -16968,7 +17061,7 @@ window.renderRulesPage=renderRulesPage; window._rulesLive=RULES_LIVE; // testing
 let toastT;
 // sticky=true leaves the message up until the NEXT toast replaces it — for work that outlasts the
 // 3-second window (the cloud/local backup progress counter). Every existing call omits it and is
-// unchanged; a sticky message is always cleared by the success or failure toast that follows it.
+// unchanged; a sticky message is cleared by the toast that follows it, or by its own end() (_bkProgressToast).
 window.toast=function(msg,type="ok",sticky){
   const el=document.getElementById("toast"); el.textContent=msg; el.className=`show t-${type}`;
   clearTimeout(toastT); if(!sticky) toastT=setTimeout(()=>el.className="",3000);
