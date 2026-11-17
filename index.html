@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 261;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 262;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -680,7 +680,7 @@ body{zoom:1.15}
     <div style="text-align:center;margin-bottom:8px;font-size:2.4rem"><svg class="lic" viewBox="0 0 24 24" aria-hidden="true" style="width:1.1em;height:1.1em;vertical-align:-.17em;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg></div>
     <div class="modal-title" style="color:#4a1911;text-align:center">Bid Limit Reached</div>
     <p id="bidLimitModalMsg" style="color:#1f2329;line-height:1.5;text-align:center;margin:6px 0 4px;font-size:.92rem"><strong style="color:#6f6a60">You've reached the per-phase bid limit.</strong></p>
-    <p style="color:#4a505a;line-height:1.5;text-align:center;font-size:.82rem;margin-bottom:14px">Remove a bid to bid here.</p><!-- [228 · §297] -->
+    <p id="bidLimitModalMore" style="color:#4a505a;line-height:1.5;text-align:center;font-size:.82rem;margin-bottom:14px">Remove a bid to bid here.</p><!-- [228 · §297] · [262 · §486 D22] hidden with no current bids (showBidLimitModal) -->
     <div class="modal-buttons" style="justify-content:center">
       <button class="btn-primary" onclick="document.getElementById('bidLimitModal').classList.remove('show')">Okay</button><!-- [228 · §297] item 75, as ruled 5:34 PM -->
     </div>
@@ -1781,6 +1781,12 @@ function blAllowance(ph){
 }
 function blUsed(user){ const e=(typeof bidLoweringsData!=='undefined'&&bidLoweringsData)?bidLoweringsData[user]:null; return Math.max(0,Number(e&&e.used)||0); }
 function blRemaining(user){ const a=blAllowance(Number(phasesData.currentPhase||1)); return a===Infinity?Infinity:Math.max(0,a-blUsed(user)); }
+// [262 · §486 D25 · §492 Q21] The lowering line's start, n lowerings used of rem left: "Uses your only lowering" (one allowed), "Uses your last
+// lowering", "Uses your last 2 lowerings" (all that are left, two or more), else "Uses 1 of your 3 lowerings". reviewBid, reviewSwap and its Why?.
+function _blUsesText(n,rem){ const a=blAllowance(Number(phasesData.currentPhase||1));
+  if(n===1&&rem===1) return 'Uses your '+(a===1?'only':'last')+' lowering';
+  if(n>=2&&n===rem) return 'Uses your last '+n+' lowerings';
+  return 'Uses '+n+' of your '+rem+' lowering'+(rem!==1?'s':''); }
 function _blWindowLabel(){ const c=Number(phasesData.currentPhase||1); return isRvaPhase(c)?'this round':phaseName(c); } // [230 · E1] base wording: "this round" in an RVA Round
 // [166] Twin of the admin's _phaseWindowLabel: the OPEN window's name ("Phase 2", "Phase 4: Round 3") - phaseName.
 function _phaseWindowLabel(){ return phaseName(Number(phasesData.currentPhase||1)); }
@@ -2112,7 +2118,10 @@ function _spHoldFte(u,wk){ return (typeof splitsData!=='undefined'&&!_spFor(u,wk
 // The switch, adminSettings.splitWeeksOn: only an explicit true is On (missing = Off). On this page it shows ONE Rules & Reminders line (A10)
 // and does nothing else: a split already recorded is in force whatever the switch says (Q8).
 function _splitWeeksOn(){ try{ return !!(adminSettings&&adminSettings.splitWeeksOn===true); }catch(_){ return false; } }
-function _splitRuleSync(){ try{ const li=document.getElementById('ruleSplit'); if(li){ const d=_splitWeeksOn()?'':'none'; if(li.style.display!==d) li.style.display=d; } }catch(_){} if(typeof _srSync==='function') _srSync(); } // [247 · S2a · §373] and the ☰ Split weeks entry
+// [262 · 430 · §486 D10] The split-weeks rule line: the staff Rules & Reminders line (#ruleSplit) and the welcome e-mail's bullet while
+// splits are on. Word for word the same on the staff and admin pages.
+function splitRuleLine(){ return 'Split weeks: two people can share a week. One bids for both, at their blended FTE. To share a week, open Split weeks in the menu.'; }
+function _splitRuleSync(){ try{ const li=document.getElementById('ruleSplit'); if(li){ const d=_splitWeeksOn()?'':'none'; if(li.style.display!==d) li.style.display=d; const t=splitRuleLine(); if(li.textContent!==t) li.textContent=t; } }catch(_){} if(typeof _srSync==='function') _srSync(); } // [247 · S2a · §373] and the ☰ Split weeks entry
 // [413 · S2a · §373] SPLIT REQUESTS (vacations/splitRequests: {"<initials>":{"<wk>":{h,ph,at}}}). These four helpers are identical on the staff and admin pages.
 // The stage: 1 = bidding open (requests for the current phase; before Phase 1 too) · 2 = bidding closed until the results are sent (frozen:
 // the current phase's requests, read-only) · 3 = results sent until the next phase begins (requests for the next phase) · 0 = the auction is over.
@@ -2213,6 +2222,8 @@ function _spAgreeState(me,q,mine,theirs,rec,live,ph,isPerson){
   // not recorded: a cancel older than the other side's fresh start is over (the two started again after an ending)
   if(M&&T&&T.cx&&!M.cx&&!M.rj&&M.at>T.at) T=null;
   if(M&&T&&M.cx&&!T.cx&&!T.rj&&T.at>M.at) M=null;
+  // [262 · 430 · §486 D1] two standing offers (both ok, neither a cancel) with different terms: the newer stands, the older is over
+  if(M&&T&&M.ok&&T.ok&&!M.cx&&!T.cx&&M.terms&&T.terms&&!_spSameTerms(_spTerms(me,M),_spTerms(q,T))){ if(M.at>T.at) T=null; else if(T.at>M.at) M=null; }
   const a=_spTerms(me,M), c=_spTerms(q,T);
   if(M&&T&&M.ok&&T.ok&&a&&c&&_spSameTerms(a,c)){
     const mx=M.cx&&!tRj('cancel'), tx=T.cx&&!mRj('cancel');
@@ -2512,6 +2523,11 @@ function _splitPartnerBidder(me,wk){ if(typeof splitsData==='undefined') return 
   // in place, or won / lost at Complete Phase (the results not yet sent) - never a split the admin removed
   const e=Object.values(splitsData||{}).find(x=>x&&x.p===me&&x.wk===wk&&Number(x.ph)===cur&&(x.st==='on'||x.st==='won'||(x.st==='off'&&x.why==='lost')));
   return (e&&isVisibleBid(e.b,wk))?e.b:null; }
+// [262 · §493 V5-O5] The partner of the split on wk that `me` bids for this phase, by the same test as _splitPartnerBidder (in place, or won /
+// lost at Complete Phase - never one the admin removed), or null. Your Bids & Projections names it on the bidder's row.
+function _splitBidderPartner(me,wk){ if(typeof splitsData==='undefined') return null; const cur=Number(phasesData.currentPhase||1);
+  const e=Object.values(splitsData||{}).find(x=>x&&x.b===me&&x.wk===wk&&Number(x.ph)===cur&&(x.st==='on'||x.st==='won'||(x.st==='off'&&x.why==='lost')));
+  return e?e.p:null; }
 function _splitOwnRow(u,wk,me){ const e=_spFor(u,wk); return !!(e&&typeof me==='string'&&me&&me===e.p); }
 // The won splits in force on wk that name u, as bidder or partner.
 function _splitsWonBy(u,wk){ return _spInForce().filter(e=>e.st==='won'&&e.wk===wk&&(e.b===u||e.p===u)); }
@@ -2790,7 +2806,7 @@ function renderTimerRulesInfo(){
   const r=getTimerRules(), st=r.stages;
   const li=(label,hours)=>`<li>${label}: resets to <strong>${hours} hours</strong></li>`;
   let items='';
-  st.forEach((s,i)=>{ items+= i===0 ? li('At the start of the round', s.hours) : li('After '+s.days+' days', s.hours); });
+  st.forEach((s,i)=>{ items+= i===0 ? li('At the start of the round', s.hours) : li('After '+s.days+' day'+(s.days===1?'':'s'), s.hours); });
   let quiet='';
   if(r.quietEnabled){ quiet=`<p style="margin:8px 0 0">Once the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the timer would run out between <strong>${fmtHour12(r.quietStart)}</strong> and <strong>${fmtHour12(r.quietEnd)}</strong> Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.</p>`; } // [399 · §306] L5 "timer"
   let owHtml='';
@@ -2996,7 +3012,7 @@ function npAllowedForPhase(ph){
 function _anyCumCap(){ return [1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||(p===4&&(typeof rvaOn!=='function'||rvaOn()))).some(p=>getCumulativeCap(p)!==null); } // [231 · E2] only the slots that run
 function npPhasesDescription(){
   const _sl=[1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||(p===4&&(typeof rvaOn!=='function'||rvaOn()))), on=_sl.filter(p=>npAllowedForPhase(p)); // [231 · E2] only the slots that run
-  const tail=', with no limit on how many can be used'+((typeof _anyCumCap!=='function'||_anyCumCap())?' (the running cap still applies)':'')+'.'; // [220 · 384 · fix round, review lane 3 L1] no cap in any phase: no cap clause (its line is hidden, plan §11e) · [229 / 393 · §297] item 195 (owner, 7:58 PM)
+  const tail=', with no limit on how many can be used'+((typeof _anyCumCap!=='function'||_anyCumCap())?' (the bid cap still applies)':'')+'.'; // [220 · 384 · fix round, review lane 3 L1] no cap in any phase: no cap clause (its line is hidden, plan §11e) · [229 / 393 · §297] item 195 (owner, 7:58 PM)
   if(on.length===_sl.length) return 'NP bids can be used in any phase'+tail;
   if(!on.length) return 'NP bids are not allowed in any phase';
   const _nm=on.map(p=>p===4?(typeof fallPhases==='function'?fallPhases():3)+1:p); // [230 · E1] slot 4 is the RVA: named by its phase number
@@ -3044,11 +3060,15 @@ function _newBidShare(user,wk,noPend){
 // A new bid on wk would put user over the cap (FP-safe, in tenths); with a share of 1 exactly bidLimitStatus(user).atLimit.
 function _newBidOver(user,wk,noPend){ const s=bidLimitStatus(user); return s.cap!==null&&s.cap!==undefined&&Math.round((Number(s.used)+_newBidShare(user,wk,noPend)-Number(s.cap))*10)/10>0; }
 // Show the "bid limit reached" modal with text that matches the current admin limit.
+// [262 · §486 D22 · §492 Q19 Q20] Has u a current bid of their own to remove (myCountedWeeks; a split partner's half is not one: the partner
+// cannot remove it)? wk (optional) = the week being bid on, never counted. With none, the cap lines leave out "Remove a bid …".
+function _capHasBids(u,wk){ return myCountedWeeks(u).some(x=>x!==wk); }
 function showBidLimitModal(){
   const cur=Number(phasesData.currentPhase||1);
   const u=getCurrentUser?.(); const st=u?bidLimitStatus(u):{lim:getMaxBidsPerPhase(),prior:0};
   const msg=document.getElementById('bidLimitModalMsg');
   if(msg) msg.innerHTML='<strong style="color:#6f6a60">You\'ve reached your cap of '+st.lim+' week'+(st.lim!==1?'s':'')+' through '+phaseShort(cur)+' ('+(typeof _capNum==='function'?_capNum(st.prior):st.prior)+' won + your current bids).</strong>'; // [228 · §297]
+  { const more=document.getElementById('bidLimitModalMore'); if(more) more.style.display=(u&&typeof _capHasBids==='function'&&!_capHasBids(u))?'none':''; } // [262 · §486 D22]
   document.getElementById('bidLimitModal').classList.add('show');
 }
 // ── Bid-number pool ──
@@ -3896,7 +3916,7 @@ async function persistScheduleChange(user, wk, bid, prevSnapshot, expect, rmMode
       if((typeof _newBidShare==='function'?Math.round((count+_newBidShare(user,wk)-lim)*10)/10>0:(typeof _capOver==='function'?_capOver(count,lim):count>=lim))){ // [410 · split weeks, Q3] · [249 · S2b · his 9 Nov 2026 9:54 PM] a split bid counts as its half
         if(data[user]&&prevSnapshot[user]?.[wk]===undefined) delete data[user][wk]; // undo optimistic add
         scheduleRender();
-        showCenterAlert("You've reached your bid cap. Remove a bid first."); // [228 · §297]
+        showCenterAlert((typeof _capHasBids!=='function'||_capHasBids(user,wk))?"You've reached your bid cap. Remove a bid first.":"You've reached your bid cap."); // [228 · §297] · [262 · §492 Q20]
         return false;
       }
     }
@@ -5027,7 +5047,7 @@ window.reviewBid=function(){
         const _rem=blRemaining(user);
         if(!(_rem>0)){ showError(blExhaustedMsg(_floor)); return; }
         if((typeof _blTextsOn!=='function'||_blTextsOn())&&blAllowance(Number(phasesData.currentPhase||1))!==Infinity){ // [221 · §292] at the defaults: no note · [405 · §342 · plan S2] unlimited: no line (no cost)
-          _blNote=_rem===1?'Uses your only lowering.':'Uses 1 of your '+_rem+' lowerings.'; // card 3 · [405 · §344 S5]
+          _blNote=_blUsesText(1,_rem)+'.'; // card 3 · [405 · §344 S5] · [262 · §486 D25]
           _blWhy='Your last bid here was '+blFmtBid(_floor)+', and '+blFmtBid(_parsed)+' is weaker. A weaker bid uses one of the lowerings allowed in '+_blWindowLabel()+'; with none left, your bid here can only stay the same or get stronger.'; }
       }
     }
@@ -5344,8 +5364,8 @@ window.reviewSwap=function(){
   // [405 · §342 · plan S5] card 6: the lowering line (limited lowerings only) and, per week, the Strict line - one "Why?" after them, its answer one line per week.
   const lines=[], ans=[], _rs=c.rem!==1?'s':'';
   if(lows.length&&(typeof _blTextsOn!=='function'||_blTextsOn())&&blAllowance(Number(phasesData.currentPhase||1))!==Infinity){
-    lines.push((c.rem===1?'Uses your only lowering':'Uses '+lows.length+' of your '+c.rem+' lowering'+_rs)+' ('+lows.map(_swapWeekName).join(', ')+').'); // [405 · §344 S5]
-    lows.forEach(w=>ans.push([_swapWeekName(w),'your last bid there was '+blFmtBid((bestBidsData[user]||{})[w])+', so a '+blFmtBid(c.inc[w])+(c.rem===1?' uses your only lowering.':' uses 1 of your '+c.rem+' lowering'+_rs+'.')]));
+    lines.push(_blUsesText(lows.length,c.rem)+' ('+((lows.length>=2&&lows.length===c.rem)?'Weeks '+lows.map(w=>weekMeta[w].weekNum).join(' and '):lows.map(_swapWeekName).join(', '))+').'); // [405 · §344 S5] · [262 · §486 D25 · §492 Q21]
+    lows.forEach(w=>ans.push([_swapWeekName(w),'your last bid there was '+blFmtBid((bestBidsData[user]||{})[w])+', so a '+blFmtBid(c.inc[w])+' u'+_blUsesText(1,c.rem).slice(1)+'.'])); // [262 · §486 D25]
   }
   // [219 · §287, owner Q25 option A] The Strict line, once for each week whose RECEIVED bid it applies to: Strict, not NP, a competition week (a swap
   // never changes who is on a week, so "would become one" never applies), and - with a Strict level set - a bid of that level or stronger. [405 · §342 · plan S5] card 6's words
@@ -5791,7 +5811,7 @@ function _mvLowNote(user,src,dst,bid){ // the lowering the destination would cos
   try{ const g=_mvGate(user,src,dst,_mvVal(bid)); if(!g||g.ok!==true||!g.blSpend) return ''; if(typeof _blTextsOn==='function'&&!_blTextsOn()) return ''; const _floor=g.blSpend.from, _rem=blRemaining(user); // [221 · §292] at the defaults: no note (plan §7 Q3)
     return (blAllowance(Number(phasesData.currentPhase||1))===Infinity)
       ?('This lowers your bid there from '+blFmtBid(_floor)+' to '+blFmtBid(bid)+'.') // [228 · §297] item 160
-      :('This lowers your bid there from '+blFmtBid(_floor)+' to '+blFmtBid(bid)+', using 1 of your '+_rem+' remaining bid lowering'+(_rem!==1?'s':'')+'.');
+      :('This lowers your bid there from '+blFmtBid(_floor)+' to '+blFmtBid(bid)+', '+(_rem===1?('using your '+(blAllowance(Number(phasesData.currentPhase||1))===1?'only':'last')+' bid lowering'):('using 1 of your '+_rem+' remaining bid lowerings'))+'.'); // [V5 fix 1 · D25] the Move box says it as reviewBid does
   }catch(_){ return ''; }
 }
 function _mvPaint(){
@@ -6425,7 +6445,9 @@ function renderSelections(user,ap){
   // rest — this is display truth, not a data change.)
   const _announced=currentPhaseAnnounced();
   const _card=document.getElementById('myBidsCard'); // [227 · §296]
-  if(_announced||!Object.keys(uw).length){
+  // [262 · §493 V5-O5] the weeks where this person is the partner of a split whose bidder's bid is placed (_splitPartnerBidder): wk → bidder
+  const pw={}; if(typeof splitsData!=='undefined') for(const x of Object.values(splitsData||{})){ if(!x||x.p!==user||!weekMeta[x.wk]||(x.wk in uw)) continue; const b=_splitPartnerBidder(user,x.wk); if(b) pw[x.wk]=b; }
+  if(_announced||(!Object.keys(uw).length&&!Object.keys(pw).length)){
     // [227 · §296] An EMPTY card shows only while the person can bid right now ("click a week below" is true then); otherwise it is hidden.
     const _canBid=biddingOpen()&&!isAuctionClosed()&&!_announced&&!locksData.globalLock; // isAuctionClosed = server flag OR expired timer · [227 · §296] and not under the admin's temporary lock
     if(_card) _card.hidden=!_canBid; // [227 · §296]
@@ -6434,16 +6456,17 @@ function renderSelections(user,ap){
   }
   if(_card) _card.hidden=false; // [227 · §296] a bid to list: the card shows
   const locked=wk=>locksData.globalLock||locksData.weeks?.[wk];
-  selectionsEl.innerHTML=Object.entries(uw).sort((a,b)=>new Date(a[0])-new Date(b[0])).map(([wk,p])=>{
+  selectionsEl.innerHTML=Object.keys(uw).concat(Object.keys(pw)).sort((a,b)=>new Date(a)-new Date(b)).map(wk=>{
+    const bu=pw[wk]||user, p=data[bu][wk], sw=pw[wk]||_splitBidderPartner(user,wk); // [262 · §493 V5-O5] a partner's row: the bidder's bid and projection
     // PRIVACY RULE: no DENIED (or APPROVED) shown mid-phase — projections only.
-    const o=getOutcome(wk,user,ap);
+    const o=getOutcome(wk,bu,ap);
     const label=outcomeText(o);
     const meta=weekMeta[wk];
     // Format: "Week 12 · Mar 21" — week number + short date of that SUNDAY · [228 · §297] item 55: no tooltip on the row
     const wkLabel=`Week ${meta?.weekNum||''} · ${formatShort(wk)}`;
     return `<div class="selection-item" onclick="scrollToWeek('${wk}')" style="cursor:pointer">
       <span class="selection-date">${wkLabel}</span>
-      <span style="color:#4a505a;font-size:.72rem">${escH(bidLbl(p))}</span>
+      <span style="color:#4a505a;font-size:.72rem">${escH(bidLbl(p))}${sw?' · split with '+escH(sw):''}</span>
       <span class="selection-outcome outcome-${uiOutcome(o)}">${label}</span>
 
     </div>`;
@@ -7014,7 +7037,7 @@ function _alStep3More(user,wk,bid){
       else if(on.length>1&&wks.length===1) out.push('Your bids '+and(on)+' are on Week '+wn(wks[0])+'. To use them here, change that week\'s bid first.');
       else if(on.length>1) out.push('Your bids '+and(on)+' are on Weeks '+and(wks.map(wn))+'. To use them here, change those bids first.');
     }
-    if(_newBidOver(user,wk)) out.push('Your bid cap is reached. Remove a bid to bid here.');
+    if(_newBidOver(user,wk)) out.push((typeof _capHasBids!=='function'||_capHasBids(user,wk))?'Your bid cap is reached. Remove a bid to bid here.':'Your bid cap is reached.'); // [262 · §492 Q19]
   }catch(_){}
   return out;
 }
@@ -7548,11 +7571,12 @@ function _alTilesGiveBack(){
   _alW.borrowed=false;
 }
 // Step 2's choices: the allowed ladder (combinations only when the admin allows them), nothing below the week's floor, NP only in a phase where NP
-// is on — every one of them open, whatever numbers the person holds (§11k). The window's own list, under the bid box's id while borrowed.
+// is on — every one of them open, whatever numbers the person holds (§11k). [262 · §486 D9 · §489 F-R11] Except a number won in an earlier
+// phase or withheld by the admin, and any combination holding one: left out (_giGone, the alert judge's own test). The window's own list, under the bid box's id while borrowed.
 function _alTilesPaint(wk,bid){
   const sel=document.getElementById('prioritySelect'); if(!sel) return false;
   const f=bfFloorFor(wk);
-  const vals=comboLadderVals().filter(v=>v==='NP'?(npAllowedNow()&&f==='none'):bfAllows(_bfParse(v),f));
+  const u=getCurrentUser(), vals=comboLadderVals().filter(v=>v==='NP'?(npAllowedNow()&&f==='none'):(bfAllows(_bfParse(v),f)&&!_giGone(u,_bfParse(v))));
   sel.innerHTML='<option value="">-- Select bid --</option>'+vals.map(v=>'<option value="'+escH(v)+'">'+escH(v==='NP'?'NP (No Priority)':comboLbl(v))+'</option>').join('');
   sel.value=(bid===null||bid===undefined)?'':(Array.isArray(bid)?bid.join(','):String(bid));
   if(!sel._alBound){ sel._alBound=true; sel.addEventListener('change',_alNextSync); }
@@ -8027,7 +8051,7 @@ function _saFormPaint(me,busy){
   document.querySelectorAll('#saForm [data-sa-h]').forEach(l=>{ const H=SA_HALVES[l.getAttribute('data-sa-h')], x=l.querySelector('span'); if(H&&x){ const t=_splitHalfLabel(F.wk,H.sp,H.mh); if(x.textContent!==t) x.textContent=t; } }); // [258 · §442] S2: each day choice with the box's week's dates
   document.querySelectorAll('#saForm input[name="saHalf"]').forEach(r=>{ r.checked=(r.value===F.half); r.disabled=busy; });
   { const hl=document.getElementById('saHalfL'), bm=document.getElementById('saBidsMe'), hd='Your days'; if(hl&&hl.textContent!==hd) hl.textContent=hd; if(bm&&bm.textContent!=='You') bm.textContent='You'; } // [257 · §436] Y8 / Y9
-  const bq=document.getElementById('saBidsQ'); if(bq){ const t=F.q||''; if(bq.textContent!==t) bq.textContent=t; } // [252 · T2] blank (and not choosable) before anyone is picked · [256 · §418–§419] D2 the other person's initials
+  const bq=document.getElementById('saBidsQ'); if(bq){ const t=F.q?(displayName(F.q)!==F.q?displayName(F.q)+' ('+F.q+')':F.q):''; /* [262 · §486 D27] full name, then initials */ if(bq.textContent!==t) bq.textContent=t; } // [252 · T2] blank (and not choosable) before anyone is picked · [256 · §418–§419] D2 the other person's initials
   document.querySelectorAll('#saForm input[name="saBids"]').forEach(r=>{ r.checked=(r.value===F.bids); r.disabled=busy||!!F.fixedB||(r.value==='p'&&!F.q); });
   if(ap) ap.disabled=busy||!_saFormTerms(me);
 }
@@ -8999,7 +9023,7 @@ function timerRulesEmailText(){
     return 'The timer is OFF: bidding stays open until the admin closes the phase.'; // [228 / 392 · §297] item 204 (OFF in capitals: the page's bold) · [399 · §306] L5 "timer"
   }
   const r=getTimerRules(), st=r.stages;
-  const lines=st.map((s,i)=> i===0 ? `At the start of the round: resets to ${s.hours} hours` : `After ${s.days} days: resets to ${s.hours} hours`);
+  const lines=st.map((s,i)=> i===0 ? `At the start of the round: resets to ${s.hours} hours` : `After ${s.days} day${s.days===1?'':'s'}: resets to ${s.hours} hours`);
   let quiet='';
   if(r.quietEnabled){ quiet=`\n\nOnce the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the timer would run out between ${fmtHour12(r.quietStart)} and ${fmtHour12(r.quietEnd)} Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.`; } // [399 · §306] L5 "timer"
   let owTxt='';
@@ -9061,6 +9085,7 @@ ${bullets([
   ...((typeof _ruleCompSetText==='function')?[_ruleCompSetText()].filter(Boolean):[]), // [220 · §288] straight below it: the Strict line, Strict only — under Standard no line at all (plan §11g); word for word as on the page
   ...bfRulesBullets(),
   ...((typeof blindOn==='function'&&blindOn())?[`Bidder names are hidden: only your own bids show initials.`]:[]), // [204 · §261] only while the Blinded bidding switch is on; word for word as on the page
+  ...((typeof _splitWeeksOn==='function'&&_splitWeeksOn())?[splitRuleLine()]:[]), // [262 · §486 D10] only while split weeks are on; word for word as on the page
 ])}
 
 ${B('TIMER RULES')}
