@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 431;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 432;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -560,7 +560,7 @@ thead th{color:var(--t2)}
              removed: they duplicated the guide and (the Complete one) bypassed the
              "bidding must be closed" gate. Every action lives in the guide instead. -->
         <div id="phaseNextStep" style="margin-bottom:12px"></div>
-        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)">
+        <div id="noBidsCard" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--b1)"><!-- [432 · C-2] hidden once bidding closes -->
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <div style="font-size:12px;font-weight:800;color:var(--t1)"><span id="noBidsCount">—</span> user<span id="noBidsPlural">s</span> without bids in Phase <span id="noBidsPhase">1</span></div>
             <button class="btn btn-ghost" style="font-size:11px;padding:3px 9px" id="noBidsViewBtn" onclick="var e=document.getElementById('noBidsList');var open=e.style.display!=='none';e.style.display=open?'none':'flex';this.textContent=open?'View users':'Hide users';">View users</button>
@@ -3534,7 +3534,8 @@ function _srOpenList(reqs,st,on,weeks,hasSplit){
 function _srAvailText(h){ return ({W1:'Thu–Sat available',W2:'Sun–Wed available',Wx:'either half available: Sun–Wed / Thu–Sat',T1:'Wed–Sat available',T2:'Sun–Tue available',Tx:'either half available: Sun–Tue / Wed–Sat',any:'any half available'})[h]||''; }
 function _srWantText(h){ return ({W1:'Sun–Wed',W2:'Thu–Sat',Wx:'Either half of Sun–Wed / Thu–Sat',T1:'Sun–Tue',T2:'Wed–Sat',Tx:'Either half of Sun–Tue / Wed–Sat',any:'Any half'})[h]||''; }
 // [S2b · §376–§378] SPLIT AGREEMENTS AND STAFF SPLITS - this block is identical on the staff and admin pages (begin).
-// vacations/splitAgreements {"<me>":{"<wk>":{p,sp,mh,b,ph,ok,cx,rj,at}}}: each person's own side. vacations/staffSplits {"<bidder>":{"<wk>":
+// vacations/splitAgreements {"<me>":{"<wk>":{p,sp,mh,b,ph,ok,cx,rj,at}}}: each person's own side; and "_ans" {"<wk>|<the person answered>":
+// {new:{at,ph},cancel:{at,ph}}}: the person's ANSWER RECORDS [264 · 432 · §518] - a Decline (new) / a Keep (cancel), never changed by a later tap. vacations/staffSplits {"<bidder>":{"<wk>":
 // {p,sp,bh,ph,st,why,at}},"_w":{b,wk}}: the split recorded in the bidder's bid save. A side as written: null when malformed. isPerson(u) = on the roster.
 function _spSideOk(me,s,isPerson){
   if(!s||typeof s!=='object'||typeof s.p!=='string'||!s.p||s.p===me||typeof s.ph!=='number'||!Number.isFinite(s.ph)) return null;
@@ -3563,14 +3564,18 @@ function _spMerge(adm,staff){
       out[k]=s; } }
   return out;
 }
-// The recorded split (merged) on wk for phase ph that names me as bidder or partner - one 'on' first - or null.
-function _spRecFor(sd,wk,ph,me){ let best=null;
+// The recorded split (merged) on wk for phase ph that names me as bidder or partner - one 'on' first, [264 · 432 · §517 A-3] else the newest
+// (its at: the admin's record an ISO string, the staff record a number; unknown = oldest) - or null.
+function _spRecFor(sd,wk,ph,me){ let best=null; const tm=e=>{ const t=typeof e.at==='string'?Date.parse(e.at):Number(e.at); return Number.isFinite(t)?t:-Infinity; };
   for(const k of Object.keys(sd||{})){ const e=sd[k]; if(!e||e.wk!==wk||Number(e.ph)!==Number(ph)||(e.b!==me&&e.p!==me)) continue;
-    if(!best||(e.st==='on'&&best.st!=='on')) best=e; }
+    if(!best||(e.st==='on'&&best.st!=='on')||(e.st!=='on'&&best.st!=='on'&&tm(e)>tm(best))) best=e; }
   return best; }
+// [264 · 432 · §518] THE TWO PEOPLE'S ANSWER RECORDS on wk (A = the agreements document): m = mine to q, t = q's to me, each {new, cancel} as
+// stored (_spAgreeState reads only well-formed ones of its phase).
+function _spAns(A,me,q,wk){ const g=(u,v)=>{ try{ const m=(A&&typeof A==='object'&&A[u]&&typeof A[u]==='object')?A[u]._ans:null, r=(m&&typeof m==='object')?m[wk+'|'+v]:null; return (r&&typeof r==='object')?r:null; }catch(_){ return null; } }; return {m:g(me,q),t:g(q,me)}; }
 // WHERE TWO PEOPLE STAND on wk (PLAN-S2b §1): me and q; mine / theirs = our two sides as stored; rec = _spRecFor(merged,wk,ph,me); live = the
 // bidder has a live bid on wk; ph = the stage's phase. Returns null (nothing to show) or {row, me, q, b, p, sp, bh, ph, k?, next?, was?}.
-function _spAgreeState(me,q,mine,theirs,rec,live,ph,isPerson){
+function _spAgreeState(me,q,mine,theirs,rec,live,ph,isPerson,ans){ // [264 · 432 · §518] ans = _spAns(...) for these two on the week (none: no records)
   const M0=_spSideOk(me,mine,isPerson), T0=_spSideOk(q,theirs,isPerson);
   let M=(M0&&M0.p===q&&M0.ph===ph)?M0:null, T=(T0&&T0.p===me&&T0.ph===ph)?T0:null;
   const out=(row,t,x)=>Object.assign({row:row,me:me,q:q,b:t?t.b:null,p:t?t.p:null,sp:t?t.sp:null,bh:t?t.bh:null,ph:ph},x||{});
@@ -3587,6 +3592,15 @@ function _spAgreeState(me,q,mine,theirs,rec,live,ph,isPerson){
     if(R.why==='staff'&&!fresh(M)&&!fresh(T)) return out('ended',_spRecTerms(R));
     R=null; }
   if(R&&R.st!=='on'&&R.st!=='won') R=null;
+  // [264 · 432 · §518 A-1 · R3-F1] AN ANSWER RECORD (Rules 6.34): the other's side written at or before my answer to them, this phase, is over for
+  // it - a declined proposal ('new') counts not at all (its writer reads "declined" until OK); a kept request to end ('cancel') is no request.
+  // While the answerer's side still holds that rj, today's rj reading.
+  const RN=(o,k)=>{ const r=o&&o[k]; return (r&&typeof r==='object'&&typeof r.at==='number'&&Number.isFinite(r.at)&&r.ph===ph)?r.at:null; }, hRj=(X,k)=>!!(X&&X.rj&&X.rj.k===k);
+  const mN=RN(ans&&ans.m,'new'), mC=RN(ans&&ans.m,'cancel'), tN=RN(ans&&ans.t,'new'), tC=RN(ans&&ans.t,'cancel'); let mDecl=false;
+  if(T&&mN!==null&&T.at<=mN&&!hRj(M,'new')) T=null;
+  if(T&&T.cx&&mC!==null&&T.at<=mC&&!hRj(M,'cancel')) T=Object.assign({},T,{cx:false});
+  if(M&&tN!==null&&M.at<=tN&&!hRj(T,'new')){ if(T) M=null; else mDecl=!!(M.ok&&!M.cx&&M.terms); }
+  if(M&&M.cx&&tC!==null&&M.at<=tC&&!hRj(T,'cancel')) M=Object.assign({},M,{cx:false});
   // a rejection newer than the side it answers cancels that side's ask (my rj answers their side; theirs answers mine)
   const mRj=k=>!!(M&&M.rj&&M.rj.k===k&&T&&M.rj.at>=T.at), tRj=k=>!!(T&&T.rj&&T.rj.k===k&&M&&T.rj.at>=M.at);
   const mT=_spTerms(me,M), tT=_spTerms(q,T);
@@ -3616,7 +3630,7 @@ function _spAgreeState(me,q,mine,theirs,rec,live,ph,isPerson){
     if(tx) return out('theyCancel',a);
     return out(live?'agreedLive':'agreed',a);
   }
-  if(M&&M.ok&&a&&!M.cx){ if(tRj('new')) return out('rejected',a,{k:'new'}); return out('iStarted',a); }
+  if(M&&M.ok&&a&&!M.cx){ if(tRj('new')||mDecl) return out('rejected',a,{k:'new'}); return out('iStarted',a); } // [264 · 432 · §518] mDecl: declined (the record)
   if(T&&T.ok&&c&&!T.cx){ if(mRj('new')) return null; return out('theyStarted',c); }
   return null;
 }
@@ -3635,7 +3649,7 @@ function _spSplitElsewhere(u,other,wk,ph,A,sd,isPerson){
       if((e.st==='on'&&Number(e.ph)===Number(ph))||e.st==='won') return true; }
     const m=(A&&typeof A==='object'&&A[u]&&typeof A[u]==='object')?A[u]:{}, s=m[wk], y=(s&&typeof s==='object')?s.p:null;
     if(typeof y!=='string'||!y||y===u||y===other) return false;
-    const n=(A[y]&&typeof A[y]==='object')?A[y]:{}, x=_spAgreeState(u,y,s,n[wk],_spRecFor(sd,wk,ph,u),false,ph,isPerson);
+    const n=(A[y]&&typeof A[y]==='object')?A[y]:{}, x=_spAgreeState(u,y,s,n[wk],_spRecFor(sd,wk,ph,u),false,ph,isPerson,_spAns(A,u,y,wk)); // [264 · §518] (staff; the admin twin sits outside the identical block: build-A-admin-twins.py)
     return !!x&&(['agreed','agreedLive','inEffect','inEffectNoBid','iChange','theyChange','changeAgreed','changeAgreedNoBid','iCancel','theyCancel','cancelAgreed','cancelNoBid','adminRecorded'].indexOf(x.row)>=0||(x.row==='rejected'&&x.k!=='new'));
   }catch(_){ return false; }
 }
@@ -4638,6 +4652,7 @@ window.renderOverview=renderOverview;
 // Users with zero current-phase bids — dashboard card + reminder button state.
 function renderNoBidders(){
   const el=document.getElementById('noBidsList'); if(!el) return;
+  { const _nbc=document.getElementById('noBidsCard'); if(_nbc) _nbc.style.display=(biddingIsClosedFlag()||_windowCompletedNow())?'none':''; } // [432 · C-2 · §517] closed, or complete and waiting: the whole line is not shown
   const cur=Number(phasesData.currentPhase||1);
   // [319 · P-1] GAP GUARD: a completed phase or round has no bidding window — the card must not count
   // "missing" bidders a day after results went out, and Send Reminders must not mail them (H-9 too:
@@ -6053,6 +6068,30 @@ function _populateCapsFromSaved(){ const el=document.getElementById('capsSum'); 
 // the number(s) with a live preview, Save caps. It refuses with a message, never a silent change, and writes the same stored shape
 // ({1..4: n|null}, _slotKeep), so nothing that enforces the caps changes. Locked while a phase is running.
 const CAPS_LOCKED_TEXT='Bid caps are locked while a phase is running — editable between phases, once results are sent.';
+const CAPS_DONE_TEXT='Bid caps can\'t change now — every phase has already run with its cap.'; // [432 · R1-3 + B-2 · §511, §517]
+// [432 · R1-3 + B-2 · §511, §517] A FINISHED cap slot: one that runs and whose phase has begun (slot 4: a round of it has begun). Finished
+// slots keep the caps they ran with: shown greyed, never edited or written; the draft is checked together with them (Rules 2.25). Before
+// Phase 1 none is finished.
+function _cbDone(p){ p=Number(p); if(!_slotRuns(p)||!phase1Started()) return false; const cur=Number(phasesData.currentPhase||1); return p===4?cur>fallPhases():p<=cur; }
+// The caps c with every finished slot at its saved cap: what the preview reads and the checks see.
+function _cbWithDone(c){ const o=Object.assign({},c), s=_savedCapsObj(); for(const p of [1,2,3,4]) if(_cbDone(p)) o[p]=s[p]; return o; }
+// The draft's caps checked with the finished ones (the builder's message shape): lower than a finished cap, or a cap after a finished
+// phase that had none. Returns the build's answer, its caps merged.
+function _cbDoneCheck(caps){
+  const ps=_capPhases(), pname=p=>phaseShort(p), c=_cbWithDone(caps);
+  if(!ps.some(_cbDone)) return {ok:true,caps:c};
+  let prev=null, prevP=null, nlP=null;
+  for(const p of ps){
+    const v=c[p];
+    if(v==null){ if(nlP==null) nlP=p; continue; }
+    if(nlP!=null) return {ok:false,msg:pname(nlP)+' ran with no limit, so no later phase can have a cap.'};
+    if(prev!=null&&v<prev) return {ok:false,msg:'Through '+pname(p)+' can’t be lower than '+(prevP===1?'Phase 1':'Through '+pname(prevP))+' ('+prev+').'};
+    prev=v; prevP=p;
+  }
+  return {ok:true,caps:c};
+}
+// A caps map about to be written: a finished slot keeps its stored raw value (or stays absent), as _slotKeep keeps a slot that does not run.
+function _cbKeepDone(stored,obj){ const m=(stored&&typeof stored==='object')?stored:{}, o=Object.assign({},obj); [1,2,3,4].forEach(k=>{ if(!_cbDone(k)) return; const raw=m[k]!==undefined?m[k]:m[String(k)]; if(raw===undefined) delete o[k]; else o[k]=raw; }); return o; }
 let _cbMode=null, _cbDraft=null;
 function _cbModeOf(c){
   const ps=_capPhases(), v=ps.map(p=>c[p]);
@@ -6064,6 +6103,7 @@ function _cbModeOf(c){
 }
 window.openCapsBuilder=function(){
   if(!cfgUnlockedNow()){ toast(CAPS_LOCKED_TEXT,'err'); return; } // [build 268 · FRZ8/GAP]
+  if(_capPhases().every(_cbDone)){ toast(CAPS_DONE_TEXT,'err'); return; } // [432 · R1-3 + B-2] every phase has run with its cap: nothing opens
   const saved=_savedCapsObj();
   _cbMode=_cbModeOf(saved); _cbDraft={...saved};
   // the "one cap" draft: its number and its last phase
@@ -6085,7 +6125,7 @@ window._cbPick=function(m){ _cbMode=m; _cbStep1(); };
 const _cbNONE={1:null,2:null,3:null,4:null};
 function _cbStepNone(){
   openConfirm({ title:'No cap',
-    body:'<div id="cb_prev" class="cmodal-info">'+esc('Preview: '+_capsSummaryLine(_cbNONE))+'</div>'+_cbLiveWarn(),
+    body:'<div id="cb_prev" class="cmodal-info">'+esc('Preview: '+_capsSummaryLine(_cbWithDone(_cbNONE)))+'</div>'+_cbLiveWarn(),
     okText:'Save caps', alt:{text:'← Back',onClick:()=>_cbStep1()},
     onConfirm:()=>_cbSave({..._cbNONE}) });
 }
@@ -6093,18 +6133,19 @@ function _cbStep2(){
   const ps=_capPhases(), pname=p=>phaseShort(p);
   let title, rows;
   if(_cbMode==='one'){
-    if(!ps.includes(_cbDraft._oneThrough)) _cbDraft._oneThrough=ps[ps.length-1];
+    const po=ps.filter(p=>!_cbDone(p)); // [432 · R1-3] "through" offers only the phases not yet run
+    if(!po.includes(_cbDraft._oneThrough)) _cbDraft._oneThrough=po[po.length-1];
     title='One cap, then no limit';
     rows='<div style="display:flex;align-items:center;gap:10px;padding:7px 0"><span>Up to</span><input type="number" id="cb_oneN" class="inp" style="width:74px" min="1" max="52" inputmode="numeric" value="'+esc(String(_cbDraft._oneN))+'" oninput="_cbLive()"><span>weeks through</span></div>'
-      +'<div style="display:flex;align-items:center;gap:10px;padding:7px 0"><select id="cb_oneT" class="sel" onchange="_cbLive()">'+ps.map(p=>'<option value="'+p+'"'+(p===_cbDraft._oneThrough?' selected':'')+'>'+esc(pname(p))+'</option>').join('')+'</select></div>';
+      +'<div style="display:flex;align-items:center;gap:10px;padding:7px 0"><select id="cb_oneT" class="sel" onchange="_cbLive()">'+po.map(p=>'<option value="'+p+'"'+(p===_cbDraft._oneThrough?' selected':'')+'>'+esc(pname(p))+'</option>').join('')+'</select></div>';
   } else {
     title='A cap for each phase';
     // first "no limit" row (never Phase 1): everything from it on is no limit
     const nlFrom=ps.find(p=>p!==ps[0]&&_cbDraft[p]==null);
     rows=ps.map(p=>{
-      const off=nlFrom!=null&&p>nlFrom;
+      const dn=_cbDone(p), off=dn||(nlFrom!=null&&p>nlFrom); // [432 · B-2] a finished phase: its saved cap, greyed, not editable
       return '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--b1)'+(off?';opacity:.45':'')+'"><span style="flex:1">'+esc(p===1?'Phase 1':'Through '+pname(p))+(p===4?' <span style="color:var(--t2);font-size:12px">(all rounds)</span>':'')+'</span>'
-        +'<input type="number" class="inp" style="width:74px" min="1" max="52" inputmode="numeric" data-cbp="'+p+'" value="'+(_cbDraft[p]==null?'':esc(String(_cbDraft[p])))+'"'+((nlFrom!=null&&p>=nlFrom)?' disabled':'')+' oninput="_cbLive()">'
+        +'<input type="number" class="inp" style="width:74px" min="1" max="52" inputmode="numeric" data-cbp="'+p+'" value="'+(_cbDraft[p]==null?'':esc(String(_cbDraft[p])))+'"'+((dn||(nlFrom!=null&&p>=nlFrom))?' disabled':'')+' oninput="_cbLive()">'
         +(p===ps[0]?'':'<label style="font-size:12px;color:var(--t2);display:flex;gap:4px;align-items:center;white-space:nowrap"><input type="checkbox" data-cbnl="'+p+'"'+(nlFrom===p?' checked':'')+(off?' disabled':'')+' onchange="_cbNoLimit('+p+',this.checked)"> No limit from here</label>')+'</div>';
     }).join('');
   }
@@ -6133,19 +6174,21 @@ function _cbBuild(){
   if(_cbMode==='one'){
     if(!okNum(_cbDraft._oneN)) return {ok:false,msg:'Enter a whole number from 1 to 52.'};
     for(const p of ps) caps[p]=p<=_cbDraft._oneThrough?Number(_cbDraft._oneN):null;
-    return {ok:true,caps};
+    return _cbDoneCheck(caps); // [432 · B-2] with the finished caps
   }
+  { const nd=ps.find(p=>_cbDone(p)&&_savedCapsObj()[p]==null); // [432 · B-2] a finished phase that ran with no limit: no later phase can have a cap
+    if(nd!=null&&ps.some(p=>p>nd&&!_cbDone(p)&&_cbDraft[p]!=null&&String(_cbDraft[p]).trim()!=='')) return {ok:false,msg:pname(nd)+' ran with no limit, so no later phase can have a cap.'}; }
   let prev=null, prevP=null, nl=false;
   for(const p of ps){
-    const v=_cbDraft[p];
+    const v=_cbDone(p)?_savedCapsObj()[p]:_cbDraft[p]; // [432 · B-2] a finished phase: the cap it ran with
     if(v==null||nl){ caps[p]=null; nl=true; continue; } // after a phase with no limit no later phase has a cap (Q9)
     if(!okNum(v)) return {ok:false,msg:(p===1?'Phase 1':'Through '+pname(p))+': enter a whole number from 1 to 52.'};
     const n=Number(v);
     if(prev!=null&&n<prev) return {ok:false,msg:'Through '+pname(p)+' can’t be lower than '+(prevP===1?'Phase 1':'Through '+pname(prevP))+' ('+prev+').'};
     caps[p]=n; prev=n; prevP=p;
   }
-  if(ps.every(p=>caps[p]==null)) return {ok:false,msg:'Enter a number for Phase 1, or choose No cap.'};
-  return {ok:true,caps};
+  if(ps.every(p=>caps[p]==null)&&!_cbDone(ps[0])) return {ok:false,msg:'Enter a number for Phase 1, or choose No cap.'}; // [432 · B-2] Phase 1 run: not asked
+  return _cbDoneCheck(caps); // [432 · B-2] with the finished caps
 }
 window._cbLive=function(){
   _cbRead(); const r=_cbBuild();
@@ -6157,10 +6200,10 @@ window._cbLive=function(){
 async function _cbSave(caps){
   if(!cfgUnlockedNow()){ toast(CAPS_LOCKED_TEXT,'err'); return; } // asked again at the click: a phase may have begun under the box
   const out=[caps[1],caps[2],caps[3],caps[4]];
-  for(let i=0;i<4;i++) if(!_slotRuns(i+1)) out[i]=_savedCaps()[i]; // [395 · E2] a slot that does not run: its saved value, left alone
+  for(let i=0;i<4;i++) if(!_slotRuns(i+1)||_cbDone(i+1)) out[i]=_savedCaps()[i]; // [395 · E2] a slot that does not run: its saved value, left alone · [432 · B-2] a finished slot too
   if(JSON.stringify(out)===JSON.stringify(_savedCaps())) return; // nothing changed
   const summary=[1,2,3,4].filter(_slotRuns).map(p=>{ const label=(p===1?'Phase 1':('Through '+phaseShort(p))); return label+': '+(out[p-1]===null?'no limit':(out[p-1]+' week'+(out[p-1]!==1?'s':''))); }).join('; ');
-  try{ await setDoc(adminRef,{maxBidsCumulative:_slotKeep(adminSettings&&adminSettings.maxBidsCumulative,{1:out[0],2:out[1],3:out[2],4:out[3]})},{merge:true}); } // [395 · E2] a slot that does not run: left alone
+  try{ await setDoc(adminRef,{maxBidsCumulative:_cbKeepDone(adminSettings&&adminSettings.maxBidsCumulative,_slotKeep(adminSettings&&adminSettings.maxBidsCumulative,{1:out[0],2:out[1],3:out[2],4:out[3]}))},{merge:true}); } // [395 · E2] a slot that does not run: left alone
   catch(e){ toast(_cfgDeniedMsg(e,'the bid caps')||('Bid caps NOT saved — nothing changed ('+(e?.message||e)+'). Try again.'),'err'); return; } // [build 268 · FRZ8]
   _cfgLog('Cumulative bid caps',summary); // [404 · §334 A1 · K-Q3]
   const el=document.getElementById('capsMsg'); if(el){ el.style.color='var(--green)'; el.textContent='✓ Saved'; setTimeout(()=>{ if(el&&el.textContent==='✓ Saved') el.textContent=''; },3000); }
@@ -6629,6 +6672,8 @@ function simHasUndecidedBids(){
   return false;
 }
 
+// [432 · R2-4 · §514] A phase or round begins (Begin Phase N, Begin Phase 4: Round N, the month picker's begin): the Simulator's log is emptied and hidden.
+function _simLogClear(){ const l=document.getElementById('simLog'); if(l){ l.innerHTML=''; l.style.display='none'; } }
 function renderSimPanel(){
   const btn=document.getElementById('runSimBtn');
   const banner=document.getElementById('simStatusBanner');
@@ -6642,11 +6687,12 @@ function renderSimPanel(){
     const pending=simHasUndecidedBids();
     apBtn.style.display=pending?'':'none';
     apBtn.textContent=`Auto-Approve/Deny Results (${_phaseWindowLabel()})`; // [319 · P-6]
+    const _apOn=adminSettings.simulatorEnabled===true; apBtn.disabled=!_apOn; apBtn.style.opacity=_apOn?'1':'.45'; apBtn.style.cursor=_apOn?'pointer':'not-allowed'; apBtn.title=_apOn?'':'Turn on Rehearsal Mode first'; // [432 · R1-5 · §511] as Run Simulation
   }
   const lockedCount=locksData?.weeks?Object.keys(locksData.weeks).filter(k=>locksData.weeks[k]).length:0;
   const globalLocked=!!locksData?.globalLock;
   // Existing bids no longer block the run — they count toward the per-user target.
-  const topUp=hasBids?' Existing bids count toward the "Bids per user" target — users already at it get none.':'';
+  const topUp=hasBids?'. Existing bids count toward the "Bids per user" target — users already at it get none.':'';
   if(globalLocked){
     btn.disabled=true; btn.style.opacity='0.4'; btn.style.cursor='not-allowed';
     banner.style.display='block';
@@ -7893,6 +7939,8 @@ function renderNextStep(){
         ? box(`${_phaseWindowLabel(cur)} bidding is <strong>CLOSED</strong> (server-side), but the timer or week locks were changed afterwards, so this screen looks half-open. Users cannot bid until you reopen it.`,
             btn('Reopen '+_phaseWindowLabel(cur)+' bidding','reopenBidding()','btn-ghost')
             + '&nbsp;' + btn('Re-close it properly','closePhaseBidding('+cur+')'))
+        : locksData.globalLock // [432 · C-1 · §517] Global Lock: bidding is not open - said so, with the OPEN box's Close button
+        ? box(`${_phaseWindowLabel(cur)} bidding is <strong>LOCKED</strong> — Global Lock is on; users can't place or change bids until it is turned off.`,btn('Close '+_phaseWindowLabel(cur)+' bidding','closePhaseBidding('+cur+')'))
         : (isRvaPhase(cur)&&!locksData.globalLock&&Array.isArray(mondays)&&mondays.length>0&&mondays.every(d=>!!locksData?.weeks?.[dateKey(d)])) // [429 · O14] the month picker closed without picking
         ? box('Every week is locked — pick the month(s) to open.',btn('Pick months','reopenBidding()'))
         : box(`${_phaseWindowLabel(cur)} bidding is OPEN — users can place and change bids. When bidding should end, close it (expires the timer and locks all weeks).`,btn('Close '+_phaseWindowLabel(cur)+' bidding','closePhaseBidding('+cur+')'));
@@ -8413,6 +8461,7 @@ async function _commitBeginPhase(next,lk){ // [430 · §492 Q7] lk (optional): {
              : '▶ '+phaseName(next)+' begun — bidding is open (timer reset to '+stage0Hours()+'h)'+_retireNote)
     : phaseName(next)+' begun, but the TIMER did NOT verifiably arm — users may see the auction as CLOSED and CANNOT BID. Open the Timer card and reset the timer NOW.',
     _t.ok?'ok':'err');
+  if(typeof _simLogClear==='function') _simLogClear(); // [432 · R2-4] (typeof = sandbox convention)
   try{ if(typeof _setupBeginNote==='function') _setupBeginNote('p'+next,lk); }catch(_){} // [383 · §287] the begin's Change Log row: reviewed (when, by whom) or without the review
   // [384 · §288 · plan §10e] Phase 1 has begun: welcome the roster. Not awaited — the begin is done; the loop starts after the begin's toast has had
   // its 3 seconds (the loop's progress replaces it). typeof = sandbox convention (a suite that lifts this function alone runs it as 383).
@@ -9336,7 +9385,7 @@ window.sendPhaseResultsEmails=function(){
   }).join('');
   openConfirm({
     title:'Send Phase Results E-mails',
-    body:`<div>Send ${phaseName(cur)} results to <strong>${usersWithResults.length}</strong> user${usersWithResults.length!==1?'s':''}, one e-mail each:</div>
+    body:`<div>Send ${phaseName(cur)} results to <strong>${usersWithResults.length}</strong> user${usersWithResults.length!==1?'s':''}:</div>
           <div style="margin:10px 0;max-height:220px;overflow-y:auto;font-size:12px">${previewRows}</div>
           <div class="cmodal-info">Users with no e-mail on file are skipped.</div>`,
     okText:'Send Results',
@@ -11212,7 +11261,7 @@ window._fixClosePhaseBiddingConfirmed=async function(cur){
   try{ await adminLog('ALL','ALL','admin-close-bidding',undefined,{choice:'p'+cur}); }catch(_){} // [430 · §486 D6] the Change Log says who closed bidding, and when
   toast((typeof countPendingDecisions==='function'&&countPendingDecisions()===0) // [430 · §486 D21] nothing left to decide (typeof = sandbox convention)
     ? _phaseWindowLabel(cur)+' bidding closed. Every bid is decided — use '+(isRvaPhase(cur)?'Complete Round':'Complete Phase')+' on the dashboard.'
-    : ''+_phaseWindowLabel(cur)+' bidding closed. This does NOT complete the '+(isRvaPhase(cur)?'round':'phase')+' — decide the bids below, then use '+(isRvaPhase(cur)?'Complete Round':'Complete Phase')+' on the dashboard.','ok');
+    : ''+_phaseWindowLabel(cur)+' bidding closed. This does NOT complete the '+(isRvaPhase(cur)?'round':'phase')+' — decide the bids in Approvals/Denials, then use '+(isRvaPhase(cur)?'Complete Round':'Complete Phase')+' on the dashboard.','ok');
   _refreshReadinessBox();
 };
 window._fixClosePhaseBidding=function(cur){
@@ -12309,7 +12358,7 @@ window._adminChangePriorityRaw=async function(u,wk,val,_atOpen){
   await updateDoc(approvalsRef,{[wk]:arrayRemove(u)}).catch(()=>{});
   await updateDoc(deniedRef,{[wk]:arrayRemove(u)}).catch(()=>{});
   await _reconcileStaleDenials(wk); // [H12] advisory only — warns if a denial now projects WIN/DRAW/REVIEW
-  await adminLog(u,wk,'admin-edit',scheduleData[u][wk]); toast(`${(typeof _splitMark==='function')?_splitMark(u,wk,null):u} ${wk} updated · last bid → ${String(val).replace(/,/g,'/')}`,"ok");
+  await adminLog(u,wk,'admin-edit',scheduleData[u][wk]); toast(`${(typeof _splitMark==='function')?_splitMark(u,wk,null):u} ${wLabel(wkDate(wk))} updated · last bid → ${String(val).replace(/,/g,'/')}`,"ok");
   queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
       _adminBidTimerReset(u,wk,_prev); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling) · [305 · §117] gated by the Timer Reset Mode
 };
@@ -12714,7 +12763,7 @@ function _saWaitList(A,sd,ph,weeks,isPerson,live){
         try{ const mine=(A[me]||{})[wk], theirs=(A[q]||{})[wk], rec=_spRecFor(sd,wk,ph,me);
           const pair=!!(rec&&rec.src==='staff'&&((rec.b===me&&rec.p===q)||(rec.b===q&&rec.p===me)));
           const bb=pair?rec.b:((mine&&mine.b)||(theirs&&theirs.b)||null);
-          x=_spAgreeState(me,q,mine,theirs,rec,!!live(bb,wk),ph,isPerson); }catch(_){ x=null; }
+          x=_spAgreeState(me,q,mine,theirs,rec,!!live(bb,wk),ph,isPerson,_spAns(A,me,q,wk)); }catch(_){ x=null; } // [432 · §518] the answer records
         if(x&&((x.row==='iStarted'&&_spSplitElsewhere(q,me,wk,ph,A,sd,isPerson))||(x.row==='theyStarted'&&_spSplitElsewhere(me,q,wk,ph,A,sd,isPerson)))) x=null; // [415 · S2b · §381] C: an offer passed over (the other person has a split there with someone else) waits for no one
         if(x&&SA_WAIT_ROWS[x.row]&&x.b&&x.p){ out.push(Object.assign({wk:wk},x)); break; } } } }
   out.sort((a,b)=>(order.get(a.wk)-order.get(b.wk))||(a.b<b.b?-1:a.b>b.b?1:0)||(a.p<b.p?-1:a.p>b.p?1:0));
@@ -12855,31 +12904,54 @@ window.createSplit=function(){
 // while bidding is open the bid is removed as Edit Selections removes one (adminRemove); once bidding has closed it is denied as Approvals /
 // Denials denies one (adDeny). That action's own box opens first, and the split is marked off only once its write has succeeded: a Cancel
 // or a failed write there leaves the split and the bid as they were [410 · split weeks · review]. A split won in an earlier phase (or with no live bid): the bidder keeps the week — no completed win is undone.
-async function _splitOff(k){
+// [432 · R1-1 · §511] The admin's removal, e-mailed: one alert request to each of the two who has an address (recipientsFor), one line
+// {k:'se', wk, w:<the other's initials>} - the mail server writes "<week> — the admin ended your split with <Full name>.". Written under the
+// gate of every admin alert line: nothing once bidding has closed (_alertsClosed, §486 D2). A request not written is said (N1, §328).
+async function _splitOffMail(e){
+  try{
+    if(typeof _alertsClosed==='function'&&_alertsClosed()) return 0;
+    const who=[], ps=[];
+    for(const [u,w] of [[e.b,e.p],[e.p,e.b]]){ if(!u||!w||!recipientsFor(u).length) continue; who.push(u); ps.push(_moWrite('a_'+_moRand(24),{kind:'alert',u:u,lines:[{k:'se',wk:e.wk,w:w}]})); }
+    const res=await Promise.all(ps);
+    const bad=who.filter((u,i)=>res[i]!=='ok');
+    if(bad.length) toast(_moNotWrittenLine(bad),'warn');
+    return res.filter(r=>r==='ok').length;
+  }catch(err){ console.warn('_splitOffMail failed:',err); return 0; }
+}
+// [432 · R1-1] mail === true: e-mail the two once the split is marked off (Keep the bid, the no-live-bid box); false from Remove the bid too / Deny the bid.
+async function _splitOff(k,mail){
   const e=(splitsData||{})[k]; if(!e||(e.st!=='on'&&e.st!=='won')){ renderSplitWeeks(); return false; }
+  // [432 · §519] the same write deletes the two people's split steps on the week (vacations/splitAgreements <b>.<wk>, <p>.<wk>; set-merge, so a
+  // missing document is no failure); their answer records (_ans) stay. One batch with the record's write: both land, or neither.
+  const _bt=writeBatch(db), _sd=splitAgreementsData||{}, _sides={}; // [432 · §519 · C2] a side goes only when it names the other of the two
+  for(const [u,v] of [[e.b,e.p],[e.p,e.b]]){ const s=(_sd[u]&&typeof _sd[u]==='object')?_sd[u][e.wk]:null; if(s&&typeof s==='object'&&s.p===v) _sides[u]={[e.wk]:deleteField()}; }
+  const _hasSides=Object.keys(_sides).length>0;
   if(e.src==='staff'){ // [415 · S2b · §376–§378] a split the staff recorded ends in the staff record, at its bidder and week
     // [416 · §388 B1] the Remove's time in the entry's own `at` (no new field: the rules take only the seven), after the record's and each side's
     // time - the sides written after it are a new start (_spAgreeState).
     const sa=((splitAgreementsData||{})[e.b]||{})[e.wk], sb=((splitAgreementsData||{})[e.p]||{})[e.wk], t=Math.max(Date.now(),(Number(e.at)||0)+1,(Number(sa&&sa.at)||0)+1,(Number(sb&&sb.at)||0)+1);
-    await updateDoc(staffSplitsRef,{[e.b+'.'+e.wk+'.st']:'off',[e.b+'.'+e.wk+'.why']:'admin',[e.b+'.'+e.wk+'.at']:t});
+    _bt.update(staffSplitsRef,{[e.b+'.'+e.wk+'.st']:'off',[e.b+'.'+e.wk+'.why']:'admin',[e.b+'.'+e.wk+'.at']:t}); if(_hasSides) _bt.set(splitAgreementsRef,_sides,{merge:true}); await _bt.commit(); // [432 · §519]
     const m=Object.assign({},_spStaff[e.b]); m[e.wk]=Object.assign({},m[e.wk],{st:'off',why:'admin',at:t}); _spStaff[e.b]=m;
   } else {
-    await updateDoc(splitsRef,{[k+'.st']:'off',[k+'.why']:'admin'});
+    _bt.update(splitsRef,{[k+'.st']:'off',[k+'.why']:'admin'}); if(_hasSides) _bt.set(splitAgreementsRef,_sides,{merge:true}); await _bt.commit(); // [432 · §519]
     _spAdm[k]=Object.assign({},e,{st:'off',why:'admin'});
   }
+  try{ const _a=Object.assign({},splitAgreementsData||{}); for(const u of Object.keys(_sides)){ const m=_a[u]; if(m&&typeof m==='object'&&Object.prototype.hasOwnProperty.call(m,e.wk)){ const n=Object.assign({},m); delete n[e.wk]; _a[u]=n; } } splitAgreementsData=_a; }catch(_){} // [432 · §519] local-first, as the records
   _spRebuild(); // [415 · S2b · §376–§378] each record patched in its own copy, the merge rebuilt
   try{ await adminLog(e.b,'ALL','admin-split-remove',undefined,{choice:e.wk,p:e.p,sp:e.sp,bh:e.bh,by:_setupWho()}); }catch(_){}
-  toast('Split removed','ok'); refreshAll(); return true;
+  toast('Split removed','ok'); refreshAll();
+  if(mail===true) await _splitOffMail(e); // [432 · R1-1]
+  return true;
 }
 window.removeSplit=function(k){
   const e=(splitsData||{})[k]; if(!e||!_splitRemovable(e)){ renderSplitWeeks(); return; } // [412 · §371] as its phase's result reads it
   const live=_splitDerived(e).st==='on'&&!!scheduleData[e.b]&&scheduleData[e.b][e.wk]!==undefined&&isCurrentPhaseBidAdmin(e.b,e.wk);
-  if(!live){ openConfirm({ title:'Remove split', body:'<div>'+esc(_splitDerived(e).st==='on'?'Remove this split? It has no bid on '+_splitWkName(e.wk)+'.':'Remove this split? '+_splitWkName(e.wk)+' stays '+e.b+'\'s alone, at '+e.b+'\'s FTE.')+'</div>', okText:'Remove', danger:true, onConfirm:()=>_splitOff(k) }); return; }
+  if(!live){ openConfirm({ title:'Remove split', body:'<div>'+esc(_splitDerived(e).st==='on'?'Remove this split? It has no bid on '+_splitWkName(e.wk)+'.':'Remove this split? '+_splitWkName(e.wk)+' stays '+e.b+'\'s alone, at '+e.b+'\'s FTE.')+'</div>', okText:'Remove', danger:true, onConfirm:()=>_splitOff(k,true) }); return; } // [432 · R1-1] e-mailed
   const open=biddingOpenOnServer();
-  openConfirm({ title:'Remove split', body:'<div>'+esc(_splitWkName(e.wk)+' · '+e.b+'/'+e.p+'. What happens to '+e.b+'\'s bid?')+'</div>', okText:'Keep '+e.b+'\'s bid', onConfirm:()=>_splitOff(k),
+  openConfirm({ title:'Remove split', body:'<div>'+esc(_splitWkName(e.wk)+' · '+e.b+'/'+e.p+'. What happens to '+e.b+'\'s bid?')+'</div>', okText:'Keep '+e.b+'\'s bid', onConfirm:()=>_splitOff(k,true), // [432 · R1-1] e-mailed
     alt:{ text:open?'Remove the bid too':'Deny the bid', danger:true, onClick:async()=>{
       const s=(splitsData||{})[k]; if(!s||s.st!=='on'){ renderSplitWeeks(); return; } // [410 · split weeks · review] ended meanwhile: no bid is touched
-      const done=()=>_splitOff(k); // marked off (and logged) only once the bid is removed or denied
+      const done=()=>_splitOff(k,false); // marked off (and logged) only once the bid is removed or denied · [432 · R1-1] not e-mailed (the bid's own lines go)
       if(open) return window.adminRemove(e.b,e.wk,done);
       return window.adDeny(e.b,e.wk,getOutcome(e.wk,e.b,computeApprovals()),done);
     } } });
@@ -13900,7 +13972,7 @@ window._reopenRoundMonths=function(_rmMonths,_rmBeginAgain,_rmOffIn){ // [383 ·
       mondays.forEach(d=>{ const wk=dateKey(d); dotted['weeks.'+wk]=!unlock.has(wk); });
       try{ await mergeFields(locksRef,_withCloseLayout(dotted)); }
       catch(e){ toast('Could not set the week locks — '+(e&&e.message||e)+'. Bidding was NOT reopened.','err'); return; }
-      if(_rmBegin){ await window._reopenCommit('▶ '+phaseName(_cur)+' begun — bidding is open on '+unlock.size+' week'+(unlock.size!==1?'s':'')+' in '+_rmMn+' month'+(_rmMn!==1?'s':'')+'; all others locked.'); return; } // [429 · O14] · [V5 D23]
+      if(_rmBegin){ await window._reopenCommit('▶ '+phaseName(_cur)+' begun — bidding is open on '+unlock.size+' week'+(unlock.size!==1?'s':'')+' in '+_rmMn+' month'+(_rmMn!==1?'s':'')+'; all others locked.'); if(typeof _simLogClear==='function') _simLogClear(); return; } // [429 · O14] · [V5 D23] · [432 · R2-4]
       toast('Opened '+unlock.size+' week'+(unlock.size!==1?'s':'')+' in '+_rmMn+' month'+(_rmMn!==1?'s':'')+'; all others locked'+(_rmAll.size>unlock.size?' ('+(_rmAll.size-unlock.size)+' unticked)':'')+'.','ok'); // [389 · §295]
       await window._reopenCommit();
     }
@@ -15309,7 +15381,7 @@ window.saveOneSlot=async function(wk){
     onConfirm:async()=>{
       await setDoc(slotsRef,{[wk]:r.value},{merge:true});
       await setDoc(slcRef,{[wk]:c.value},{merge:true});
-      toast(`${wLabel(wkDate(wk))}: availability ${r.value}, smart lock control ${c.value}`,"ok");
+      toast(`${wLabel(wkDate(wk))}: capacity ${r.value}, Smart Lock Control ${c.value}`,"ok");
     },
     // [build 232 · audit] Cancel reverts the inputs to what is actually stored, like every other
     // confirm-on-change in this file. The panel's H-7 guard suppresses redraws while the cursor
@@ -16735,6 +16807,7 @@ window.renderCloudBackups=async function(){
 // [426 · §436 · §438] 6.35 and 6.37: split wording in "you" (tests/docs/split-you/PLAN.md §3). 191 items, as above.
 // [427 · §442] 6.38 added at the end of section 6 (who sees a split's days; tests/docs/split-dates/PLAN.md §A R1). 192 items, [12,40,12,16,13,38,10,51].
 // [431 · R2 fix build · §501–§507] 2.29, 2.38, 2.43, 6.35, 6.36, 6.37 reworded; 6.40 added at the end of section 6 (tests/docs/r2-fix-build/BUILD-BRIEF.md B10). 195 items, [12,41,12,16,13,40,10,51].
+// [432 · final fix build · §511–§517] 2.4, 2.25, 2.38, 2.43, 6.29, 6.34, 6.36: a sentence appended to each; 6.32: a clause (tests/docs/final-fix-build/PLAN.md §6). 195 items, as above.
 // Each item: n (its number), kind (new / live / term), html (its approved words), and for a live line its label, the words shown
 // when the setting gives nothing (whenEmpty) and, for the timer mode, the name of each value.
 const RULES_TEXT={sub:"How the auction works: every setting, the decision engine, and the rules staff see. Current values are read each time this page opens.",sections:[
@@ -16756,7 +16829,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.1","kind":"new","html":"<b>When settings can change.<\/b> Seven settings are locked while a phase is running: Calendar and Phases, Bid numbers, Combination bids, Bid Floors by Week Category, Cumulative Bid Caps, FTE Overage Amount and Split weeks. They can change before Phase 1, and between phases once that phase's results are sent. Each RVA round counts as a phase. Every other setting can change at any time. The year and the phases plan are fixed once Phase 1 begins."},
 {"n":"2.2","kind":"new","html":"<b>Every change asks first.<\/b> Each settings change shows what changes (for example On → Off) and is saved only when confirmed; Cancel leaves the setting as it was. Each one is logged in the Change Log with the admin's initials. While bidding is open, a change to Competition weeks, Strict applies to, Allowed lowerings per phase or NP Bids by Phase changes the rules for everyone immediately."},
 {"n":"2.3","kind":"new","html":"<b>Bidding Timer<\/b> — turns the timer on or off for everyone. Off: bidding stays open until the admin closes it."},
-{"n":"2.4","kind":"new","html":"<b>Global Lock<\/b> — freezes all bidding: no one can add, change or remove a bid. Individually locked weeks stay locked when it is turned off."},
+{"n":"2.4","kind":"new","html":"<b>Global Lock<\/b> — freezes all bidding: no one can add, change or remove a bid. Individually locked weeks stay locked when it is turned off. While it is on, the Dashboard's Next step says bidding is locked."},
 {"n":"2.5","kind":"new","html":"<b>Lock All · Unlock All · Lock All Except High Demand · one week<\/b> — a locked week takes no new bids, changes or removals; its projection stands. During a high-demand-only Phase 1, unlocking any other week asks first."},
 {"n":"2.6","kind":"new","html":"<b>Smart Lock and Unlock<\/b> (Lock Weeks Summary) — locks every open week whose remaining FTE is below its Smart Lock Control, and unlocks every locked week at or above it. During a high-demand-only Phase 1 it unlocks high-demand weeks only."},
 {"n":"2.7","kind":"new","html":"<b>FTE (per person)<\/b> — 0.4 to 1.0, required, no default. It is the room a person's bid takes on a week, so it changes every decision. Bidding cannot begin until everyone has one."},
@@ -16775,7 +16848,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.21","kind":"new","html":"<b>Combination bids<\/b> — which of 1/2/3, 1/2, 2/3, 3/4 and 4/5 may be used (default 1/2/3 and 1/2). A switched-off combination cannot be placed and does not compete. Locked while a phase is running."},
 {"n":"2.22","kind":"new","html":"<b>Blinded bidding<\/b> — hides other people's initials on the staff site; the admin still sees names. No effect on decisions. Default off."},
 {"n":"2.24","kind":"new","html":"<b>NP Bids by Phase<\/b> — the phases where NP bids may be placed (default Phases 3 and 4). An NP bid counts only if NP was allowed in the phase it was placed. Can change at any time."},
-{"n":"2.25","kind":"new","html":"<b>Cumulative Bid Caps<\/b> — the most weeks a person may hold through each phase: weeks won earlier plus bids placed this phase. One value for all RVA rounds; a later cap cannot be lower than an earlier one, and after a phase with no limit no later phase has a cap. Locked while a phase is running."},
+{"n":"2.25","kind":"new","html":"<b>Cumulative Bid Caps<\/b> — the most weeks a person may hold through each phase: weeks won earlier plus bids placed this phase. One value for all RVA rounds; a later cap cannot be lower than an earlier one, and after a phase with no limit no later phase has a cap. Locked while a phase is running. Between phases, phases already run keep the caps they ran with; only phases still to come can change."},
 {"n":"2.26","kind":"new","html":"<b>FTE Overage Amount<\/b> — how far over a week's capacity a bid can go and be Under Review instead of Losing. 0 to 2; default 0.5. Locked while a phase is running."},
 {"n":"2.27","kind":"new","html":"<b>Last Bids<\/b> (Bids &amp; decisions) — each person's last bid on each week this phase. Clear removes one: that person's next bid on that week is not measured against it. Each Clear is logged in the Change Log with the admin's initials."},
 {"n":"2.28","kind":"new","html":"<b>Allowed lowerings per phase<\/b> (under Competition weeks) — for Loose rules: how many times each person may make a bid weaker than their last bid on the week, per phase (default Unlimited, which adds no rule). Off while Strict is on. Can change at any time; lowerings already used this phase still count."},
@@ -16788,12 +16861,12 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.35","kind":"new","html":"<b>Capacity (per week)<\/b> — the week's room, filled strongest bid first (section 6). Each row's Save sets one week. Set All Standard Weeks, Set All Summer Weeks and Set All High-Demand Weeks set every week of that kind at once; a summer week ticked high-demand counts as high-demand. Available = capacity minus approved winners, as on the Capacity page. A week with no saved value has 0 and cannot be won."},
 {"n":"2.36","kind":"new","html":"<b>Smart Lock Control<\/b> (per week, or Apply to All Weeks) — the least available FTE a week needs to stay open for the next phase when Smart Lock runs; −1.0 to 1.0. The Global box remembers the last value applied, also after Reset Auction; Use lowest FTE fills it with the lowest FTE staff. A week with no saved value uses the remembered value, or the lowest FTE staff when none has been applied. Remaining = capacity minus earlier winners and approved bids. No effect on the projection."},
 {"n":"2.37","kind":"new","html":"<b>Rehearsal Mode<\/b> — unlocks Run Simulation, Auto-Approve/Deny and the testing skip buttons for backups and results. Not a sandbox: real bids, real e-mails. Default off. After Phase 1 begins it asks first."},
-{"n":"2.38","kind":"new","html":"<b>Run Simulation<\/b> — tops each person up to \"Bids per user\" (1–10, default 3) with random bids; their own bids count and are never changed. Skips locked weeks; cannot run under Global Lock. Never puts anyone over their bid cap, a split partner's half included."},
+{"n":"2.38","kind":"new","html":"<b>Run Simulation<\/b> — tops each person up to \"Bids per user\" (1–10, default 3) with random bids; their own bids count and are never changed. Skips locked weeks; cannot run under Global Lock. Never puts anyone over their bid cap, a split partner's half included. Its log is cleared when a new phase or round begins."},
 {"n":"2.39","kind":"new","html":"<b>Auto-Approve/Deny Results<\/b> — writes real decisions: approves Winning and single Under Review bids, settles each tie at random (approving while the week stays within its capacity plus the overage), denies the rest."},
 {"n":"2.40","kind":"new","html":"<b>Users<\/b> — each person has initials, a full name, an FTE, a Google login e-mail and, if they want one, a KP e-mail. Initials cannot change. Adding a person needs every field but the KP e-mail. Add several users takes one person per line, fields in any order; a preview shows who will be added and why any line is not, and the people are added together or not at all. Each row has one Save: it refuses a blank full name or login e-mail, and changes FTE only before Phase 1 begins. Two people can never share a login e-mail. The login e-mail must be a Gmail address. A KP e-mail saved blank is off: that person is not asked for one. When a KP e-mail is turned off or replaced, the address that was on file gets one note saying so."},
 {"n":"2.41","kind":"new","html":"<b>Round down capacity<\/b> (Week Capacity, between phases) — for each week with more than 1.0 and less than 2.0 FTE left, lowers the capacity by the part that no group of people on the roster can win outright; a backup first, each change in the Change Log. No outright win changes."},
 {"n":"2.42","kind":"new","html":"<b>Split weeks<\/b> (On / Off) — two people can share a week; one bids for both. Can be changed before Phase 1 and between phases. Off: no new splits; splits already made stay. On the admin's lists a split shows on the bidder's row as both sets of initials, the bidder first (AF/BC). Each person's days show with their dates (Sun–Wed (Feb 14–17)). In the Change Log a bid made for a split shows the same way, as it stood when the bid was made."},
-{"n":"2.43","kind":"new","html":"<b>Users without bids<\/b> (Dashboard) and Send Reminders leave out anyone at their bid cap, and anyone with no bid number they can use on any open week: they cannot place another bid this phase."}
+{"n":"2.43","kind":"new","html":"<b>Users without bids<\/b> (Dashboard) and Send Reminders leave out anyone at their bid cap, and anyone with no bid number they can use on any open week: they cannot place another bid this phase. Once bidding closes, the Dashboard does not show the line."}
 ]},
 {n:"3",title:"Timer",items:[
 {"n":"3.1","kind":"new","html":"The timer decides when a phase's bidding ends. At 0, bidding closes for everyone."},
@@ -16871,14 +16944,14 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"6.26","kind":"new","html":"<span class=\"ex\"><b>Example 4 — combinations, numbers above 10, NP, a floor<\/b><br>(a) 1/2/3, 1/2 and 2/3 on; capacity 1.0. AF 1/2 vs BB 1 → AF Winning. CC 2/3 vs DD 2 → CC Winning.<br>(b) Bid numbers 1–12. AF 12 vs BB NP → AF Winning. CC 11 vs DD 10 → DD Winning.<br>(c) High-demand week, floor 4. AF 6, BB NP, CC 4 → CC Winning; AF and BB Losing (below the floor, they do not compete).<\/span>"},
 {"n":"6.27","kind":"new","html":"A split week's bid takes the pair's <b>blended FTE<\/b>: 0.6 × the FTE of whoever has the 4-day half + 0.4 × the other's, rounded up to 0.1."},
 {"n":"6.28","kind":"new","html":"Each person's half counts toward their own bid cap — 0.6 (Sun–Wed or Wed–Sat) or 0.4 (Thu–Sat or Sun–Tue) — while the bid is live and once it is won."},
-{"n":"6.29","kind":"new","html":"If the bid wins, each has their half. If it loses, neither has the week. Neither of them can bid on that week again. Either can take the other half in one more split, with someone else bidding. The admin can remove a split and either leave the bid with the bidder alone or cancel the bid. A split won in an earlier phase stays with the bidder. After the admin removes a split, either of the two can make a new split on that week, with each other or with someone else."},
+{"n":"6.29","kind":"new","html":"If the bid wins, each has their half. If it loses, neither has the week. Neither of them can bid on that week again. Either can take the other half in one more split, with someone else bidding. The admin can remove a split and either leave the bid with the bidder alone or cancel the bid. A split won in an earlier phase stays with the bidder. After the admin removes a split, either of the two can make a new split on that week, with each other or with someone else. When the admin removes a split and the bid stays with the bidder (or there is none), each of the two is e-mailed that the admin ended it."},
 {"n":"6.30","kind":"new","html":"The partner places no bid on that week and spends no bid number."},
 {"n":"6.31","kind":"new","html":"When the admin records a split, the admin can also place the bidder's bid on that week. That bid follows every rule a bid follows except the competition-week rules (4.9) and the last-bid limit."},
-{"n":"6.32","kind":"new","html":"Staff can tick \"Interested\" on a week to be listed as interested in a split. The list shows in that week's Split weeks box to everyone signed in, with each person's name, and as a small half-and-half square on the week's card. While bidding is open, locked weeks show no square and are not offered; a week someone won outright is not offered to them. The days and the bidder are chosen when a split is proposed. A listing made before a split on that week is not shown again once the split ends. The tick also works before Phase 1 begins and from results sent until the next phase begins; a tick made after results are sent is for the next phase."},
+{"n":"6.32","kind":"new","html":"Staff can tick \"Interested\" on a week to be listed as interested in a split. The list shows in that week's Split weeks box to everyone signed in, with each person's name, and as a small half-and-half square on the week's card. While bidding is open, locked weeks show no square and are not offered; a week someone won outright is not offered to them, and they can't be part of a split on it. The days and the bidder are chosen when a split is proposed. A listing made before a split on that week is not shown again once the split ends. The tick also works before Phase 1 begins and from results sent until the next phase begins; a tick made after results are sent is for the next phase."},
 {"n":"6.33","kind":"new","html":"Splits are made only while bidding is open. While bidding is closed, splits are frozen; only the admin can add or remove a split."},
-{"n":"6.34","kind":"new","html":"Either of two people can propose a split: the week, each person's days and the bidder. It takes effect when the other accepts it. To end it, one asks, and the other ends the split at once or keeps it. Either can decline the other's proposal, and either can withdraw their own before it is accepted. A newer proposal between the same two people on a week replaces the older one. To change a split, end it and propose a new one. Sending, accepting, declining, withdrawing, ending and keeping a split each ask first in a confirm box."},
+{"n":"6.34","kind":"new","html":"Either of two people can propose a split: the week, each person's days and the bidder. It takes effect when the other accepts it. To end it, one asks, and the other ends the split at once or keeps it. Either can decline the other's proposal, and either can withdraw their own before it is accepted. A newer proposal between the same two people on a week replaces the older one. To change a split, end it and propose a new one. Sending, accepting, declining, withdrawing, ending and keeping a split each ask first in a confirm box. A declined proposal is over: whatever either of them proposes next on that week is a new proposal that takes effect only when the other accepts. A request to end that the other kept is over; a later request to end is a new one."},
 {"n":"6.35","kind":"new","html":"When a split with a bid is proposed or accepted, each person's bid cap is checked; if either would go over, it is refused, naming who. A split with no bid counts toward no one's cap; when its bidder opens the bid box, they are told at once if the bid would put the partner over. When a split with a bid ends, the bid stays as the bidder's own whole-week bid, and the bidder is told so: \"Your bid remains active.\" — in the confirm box when the bidder ends it, in the e-mail when the partner does, and beside \"The admin removed this split.\" when the admin removes it while bidding is open and keeps the bid; the ending is refused if that would put the bidder over the bid cap. The partner can't hold their own bid on that week."},
-{"n":"6.36","kind":"new","html":"A split counts as part of the bid: alert e-mails and the timer follow the same rules as any bid change, whenever a split starts or ends on a week with a bid. The partner gets the same alert e-mails as the bidder for that week. Staff are e-mailed when the other person proposes a split or asks to end one, and when the other person answers theirs: accepts or declines the proposal, or ends or keeps the split. The ☰ menu shows how many splits wait for their tap. These e-mails follow the alert e-mail switch. The partner's “changes affecting your weeks” counts the split week as the bidder's does. The partner can't set a “Notify if a week opens up” alert on the split week; the bidder sets it."},
+{"n":"6.36","kind":"new","html":"A split counts as part of the bid: alert e-mails and the timer follow the same rules as any bid change, whenever a split starts or ends on a week with a bid. The partner gets the same alert e-mails as the bidder for that week. Staff are e-mailed when the other person proposes a split or asks to end one, and when the other person answers theirs: accepts or declines the proposal, or ends or keeps the split. The ☰ menu shows how many splits wait for their tap. These e-mails follow the alert e-mail switch. The partner's “changes affecting your weeks” counts the split week as the bidder's does. The partner can't set a “Notify if a week opens up” alert on the split week; the bidder sets it. A proposal or a request to end that is withdrawn before its e-mail goes out is not e-mailed."},
 {"n":"6.37","kind":"new","html":"In split wording, staff see the other person's full name in sentences and their initials in short labels (\"Waiting for CD\", \"Bidder: CD\"), and themselves as \"you\"; the bidder shows as \"Bidder: &lt;initials&gt;\" or \"Bidder: you\"."},
 {"n":"6.38","kind":"new","html":"Only the two people in a split and the admin see which days it covers. Someone proposing a split to a person who already has half of that week is told which half that person can take."},
 {"n":"6.39","kind":"new","html":"On Approvals/Denials and Under Review, each week's header shows Capacity, Winning (projected winners not denied, earlier winners and this phase's approvals) and Remaining."},
