@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 262;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 263;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -2397,6 +2397,9 @@ function _withSplits(sd,fn){ if(typeof splitsData==='undefined') return fn(); co
 // N4 / W8 / W9 for a save that split applies to; '' = none. N4: the other person holds a live bid on the week. W8 / W9: either person's bid cap
 // on the picture after, used over the cap (in tenths, FP-safe - the admin's partner test, not _capOver's one more whole bid), with this bid
 // tagged with the phase as the save will tag it. chg = the bid is new or its amount changed: W9; else W8.
+// [263 · §507 U1 / U2] Who would go over the bid cap, by name: the signed-in person "You" (first), anyone else by full name (displayName) -
+// "You", "Brian Cole", "You and Brian Cole", "Ana Alvarez and Brian Cole" (us in the caller's order: the bidder, then the partner).
+function _spOverWho(us){ const me=(typeof getCurrentUser==='function')?getCurrentUser():null, a=us.filter(u=>u===me).concat(us.filter(u=>u!==me)); return a.map(u=>u===me?'You':displayName(u)).join(' and '); }
 function _spCapRefusal(user,wk,pend,chg){
   try{
     const q=pend.q;
@@ -2406,11 +2409,11 @@ function _spCapRefusal(user,wk,pend,chg){
     const had=!!bidPhaseData[user], hk=had&&Object.prototype.hasOwnProperty.call(bidPhaseData[user],wk), was=hk?bidPhaseData[user][wk]:undefined;
     if(!bidPhaseData[user]) bidPhaseData[user]={};
     bidPhaseData[user][wk]=cur;
-    let over=false;
-    try{ over=_withSplits(_spAfterData(pend,wk),()=>[t.b,t.p].some(u=>Math.round(Number(bidLimitStatus(u).used)*10)>Math.round(Number(cap)*10))); }
+    let ov=[]; // [263 · §507 U1 / U2] which of the two would go over
+    try{ ov=_withSplits(_spAfterData(pend,wk),()=>[t.b,t.p].filter(u=>Math.round(Number(bidLimitStatus(u).used)*10)>Math.round(Number(cap)*10))); }
     finally{ if(!had) delete bidPhaseData[user]; else if(hk) bidPhaseData[user][wk]=was; else delete bidPhaseData[user][wk]; }
-    if(!over) return '';
-    const u1=(typeof getCurrentUser==='function'&&[t.b,t.p].indexOf(getCurrentUser())>=0)?getCurrentUser():user, who=(u1===(typeof getCurrentUser==='function'?getCurrentUser():null)?'You':u1)+' or '+(u1===t.b?t.p:t.b); // [257 · §436] Y18 / Y19: "You" first (the signed-in person), then the other's initials
+    if(!ov.length) return '';
+    const who=_spOverWho(ov); // [263 · §507 U1 / U2] exactly who: "You", the other's full name, or both
     return chg?"This bid can't be placed with this split. "+who+" would go over the bid cap.":"This split can't start. "+who+" would go over the bid cap."; // [252 · T4]
   }catch(_){ return ''; }
 }
@@ -2425,7 +2428,7 @@ function _spPartnerOver(user,wk,noPend){
     if(!noPend&&typeof _spPending==='function'&&_spPending(user,wk)) return '';
     const st=bidLimitStatus(e.p); if(st.cap===null||st.cap===undefined) return '';
     const x=Number(st.used)+_splitHalfWeight(e.sp,3-Number(e.bh));
-    return Math.round(x*10)>Math.round(Number(st.cap)*10)?"This bid can't be placed with this split. "+(user===(typeof getCurrentUser==='function'?getCurrentUser():null)?'You':user)+" or "+e.p+" would go over the bid cap.":''; // [252 · T4] · [257 · §436] Y18
+    return Math.round(x*10)>Math.round(Number(st.cap)*10)?"This bid can't be placed with this split. "+_spOverWho([e.p])+" would go over the bid cap.":''; // [252 · T4] · [263 · §507 U2] the partner, by name
   }catch(_){ return ''; }
 }
 // THE RECORD WRITE (§377 option A): its own batch, just before the bid - the staff record's entry with _w naming it, and its change-log row.
@@ -2966,6 +2969,7 @@ function capSentence(c){
   const F=(typeof fallPhases==='function'?fallPhases():3), rva=(typeof rvaOn!=='function'||rvaOn());
   const sl=[1,2,3,4].filter(p=>p<=F||(p===4&&rva)), ps=sl.map(p=>p===4?F+1:p), P4=rva?F+1:null; // the stored slots that run, and the phase each is named by
   const pname=p=>'Phase '+p;
+  const wks=n=>n+(n===1?' week':' weeks'); // [263 · §501 R2-O3] "up to 1 week"
   const nums=sl.map(p=>c[p]);
   if(nums.every(v=>v==null)) return '';
   // runs of the same number merge into the LAST phase of the run
@@ -2979,12 +2983,12 @@ function capSentence(c){
   }
   const p4tag=p=>p===P4?' (all its rounds together)':'';
   if(firstNull===-1&&runs.length===1){
-    return 'Bid cap: up to '+runs[0].n+' weeks in total across the whole auction'+(P4!==null?' ('+pname(P4)+'’s rounds together)':'')+'.';
+    return 'Bid cap: up to '+wks(runs[0].n)+' in total across the whole auction'+(P4!==null?' ('+pname(P4)+'’s rounds together)':'')+'.';
   }
   const parts=runs.map((r,i)=>{
     if(i===0){
-      if(r.last===1) return 'up to '+r.n+' weeks in Phase 1';
-      return 'up to '+r.n+' weeks in total through '+pname(r.last)+p4tag(r.last);
+      if(r.last===1) return 'up to '+wks(r.n)+' in Phase 1';
+      return 'up to '+wks(r.n)+' in total through '+pname(r.last)+p4tag(r.last);
     }
     return (i===1&&runs[0].last===1?r.n+' in total through ':r.n+' through ')+pname(r.last)+p4tag(r.last);
   });
@@ -3012,7 +3016,7 @@ function npAllowedForPhase(ph){
 function _anyCumCap(){ return [1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||(p===4&&(typeof rvaOn!=='function'||rvaOn()))).some(p=>getCumulativeCap(p)!==null); } // [231 · E2] only the slots that run
 function npPhasesDescription(){
   const _sl=[1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||(p===4&&(typeof rvaOn!=='function'||rvaOn()))), on=_sl.filter(p=>npAllowedForPhase(p)); // [231 · E2] only the slots that run
-  const tail=', with no limit on how many can be used'+((typeof _anyCumCap!=='function'||_anyCumCap())?' (the bid cap still applies)':'')+'.'; // [220 · 384 · fix round, review lane 3 L1] no cap in any phase: no cap clause (its line is hidden, plan §11e) · [229 / 393 · §297] item 195 (owner, 7:58 PM)
+  const tail=', with no limit on how many can be used'+(on.some(p=>getCumulativeCap(p)!==null)?' (the bid cap still applies)':'')+'.'; /* [263 · §501 R2-O4] a cap in a phase where NP can be used */ // [220 · 384 · fix round, review lane 3 L1] no cap in any phase: no cap clause (its line is hidden, plan §11e) · [229 / 393 · §297] item 195 (owner, 7:58 PM)
   if(on.length===_sl.length) return 'NP bids can be used in any phase'+tail;
   if(!on.length) return 'NP bids are not allowed in any phase';
   const _nm=on.map(p=>p===4?(typeof fallPhases==='function'?fallPhases():3)+1:p); // [230 · E1] slot 4 is the RVA: named by its phase number
@@ -4893,6 +4897,7 @@ function openPriorityModal(wk){
   // Alert as soon as the user tries to add a NEW bid beyond the per-phase limit —
   // before they even pick a priority.
   if(!isRebid&&(typeof _newBidOver==='function'?_newBidOver(user,wk):bidLimitStatus(user).atLimit)){ showBidLimitModal(); return; } // [249 · S2b · his 9 Nov 2026 9:54 PM] a split bid counts as its half
+  if(!isRebid){ const _po=(typeof _spPartnerOver==='function')?_spPartnerOver(user,wk):''; if(_po){ showCenterAlert(_po); return; } } // [263 · §503 R2-O9] the partner's cap, told when the box opens (_bidCheck keeps its own)
   // Priorities used in prior phases where the user WON are permanently unavailable to reuse.
   // Losses and denials return the bid to the user for the next phase.
   const _usedBy=Object.create(null); // [405 · §342 · plan S1] where each number in `used` came from: the first source that put it there
@@ -6368,11 +6373,13 @@ function renderNotifications(user,ap){
   // [230 · E1] "your weeks" for this chip: this phase's own bids (an earlier phase's or RVA Round's are not) - as the My Bids list.
   const myWeeks=new Set(myActiveWeeks(user));
   const userBidTimes=bidTimesData[user]||{};
+  const pw=Object.create(null); if(typeof splitsData!=='undefined'&&typeof _splitPartnerBidder==='function') for(const x of Object.values(splitsData||{})){ if(!x||x.p!==user||myWeeks.has(x.wk)) continue; const b=_splitPartnerBidder(user,x.wk); if(b) pw[x.wk]=b; } // [263 · §503 R2-O8] wk → the bidder
 
   function icon(e){ const a=e.action||e.type||''; return a.includes('add')?'<svg class="lic" viewBox="0 0 24 24" aria-hidden="true" style="width:1.1em;height:1.1em;vertical-align:-.17em;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none"><path d="M12 5v14M5 12h14"/></svg>':a.includes('remove')?'<svg class="lic" viewBox="0 0 24 24" aria-hidden="true" style="width:1.1em;height:1.1em;vertical-align:-.17em;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none"><path d="M5 12h14"/></svg>':'<svg class="lic" viewBox="0 0 24 24" aria-hidden="true" style="width:1.1em;height:1.1em;vertical-align:-.17em;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="m13.5 6.5 4 4"/></svg>'; }
 
   // Chip 1: changes on your weeks by others, since you placed your bid
   const mine=log48.filter(e=>{
+    const pb=pw[e.weekKey]; if(pb){ if(e.user===pb) return false; const pt=(bidTimesData[pb]||{})[e.weekKey]; return pt&&e.ts>=pt; } // [263 · §503 R2-O8] the bidder's chip's rows
     if(e.user===user||!myWeeks.has(e.weekKey)) return false;
     const bt=userBidTimes[e.weekKey];
     return bt&&e.ts>=bt;
@@ -7589,9 +7596,12 @@ function _alWeekState(user,wk){
   if(isVisibleBid(user,wk)&&data[user][wk]!==null) return 'bid';
   if(getPriorPhaseWinners(wk).has(user)) return 'won';
   if(locksData.globalLock||locksData.weeks?.[wk]||isAuctionClosed()) return 'locked';
+  if(_spPartner(user,wk).some(e=>e.st==='on')) return 'partner'; // [263 · §503 R2-O10] the split's bidder sets the alert (_alPartnerMsg)
   if(_alWatch(user,wk)) return 'alert';
   return 'open';
 }
+// [263 · §507 U3] The partner's split week: who has to set the alert - "Alice Barrow is the bidder on your Week 7 split and has to set this alert."
+function _alPartnerMsg(user,wk){ const e=_spPartner(user,wk).find(x=>x.st==='on'); return e?displayName(e.b)+' is the bidder on your Week '+weekMeta[wk].weekNum+' split and has to set this alert.':''; }
 function _alWeekName(wk){ const m=weekMeta[wk]; return 'Week '+m.weekNum+' · '+m.range; }
 // Step 1's row: "Week 24 · Jun 13 – Jun 19" (plan §11l item 2, test page v5) — the short dates of the week's Sunday and Saturday. [fix round, review lane 3 L3]
 function _alWeekShort(wk){ const m=weekMeta[wk]; const s=new Date(m.date); s.setDate(s.getDate()+6); return 'Week '+m.weekNum+' · '+m.shortDate+' – '+s.toLocaleDateString('en-US',{month:'short',day:'numeric'}); }
@@ -7615,7 +7625,7 @@ function _alWeeksHtml(user){
       else if(st==='won') tag='<span class="al-tag won">✓ Won</span>'; // [227 · §296]
       else if(st==='locked') tag='<span class="al-tag locked">Locked</span>'; // [227 · §296]
       else if(st==='alert') tag='<span class="al-tag alert">alert set</span>'; // [227 · §296]
-      else if(typeof _wwLabelOn==='function'&&_wwLabelOn(wk)){ const mb=_wwMinBid(wk); if(mb!==null) tag='<span class="al-tag min">Min. '+escH(bidLbl(mb))+'</span>'; } // [227 · §296]
+      else if(st!=='partner'&&typeof _wwLabelOn==='function'&&_wwLabelOn(wk)){ const mb=_wwMinBid(wk); if(mb!==null) tag='<span class="al-tag min">Min. '+escH(bidLbl(mb))+'</span>'; } // [227 · §296]
       h+='<button type="button" class="al-wrow'+((st==='bid'||st==='won'||st==='locked')?' off':'')+'" data-al-wk="'+escH(wk)+'" aria-pressed="'+(_alW.wk===wk?'true':'false')+'"><span class="al-wr-l"><span class="al-wr-d">'+escH(_alWeekShort(wk))+'</span>'+(lb?'<br><span class="al-wr-s">'+escH(String(lb).replace(/(?:\p{Extended_Pictographic}|\p{Regional_Indicator})[\uFE0E\uFE0F\u200D]*\s?/gu,''))+'</span>':'')+'</span><span class="al-wr-r">'+tag+'</span></button>';
     }
   }
@@ -7689,6 +7699,7 @@ function _alWeeksClick(ev){
     const t=ev&&ev.target, r=(t&&typeof t.closest==='function')?t.closest('[data-al-wk]'):null; if(!r) return;
     const user=getCurrentUser(), wk=r.getAttribute('data-al-wk'), st=_alWeekState(user,wk);
     if(AL_REFUSE[st]){ _alWinMsg(AL_REFUSE[st]); return; }
+    if(st==='partner'){ _alW.wk=null; document.querySelectorAll('#alWeeks .al-wrow').forEach(b=>b.setAttribute('aria-pressed','false')); const nx=document.querySelector('#alWinFoot .btn-primary'); if(nx) nx.disabled=true; _alWinMsg(_alPartnerMsg(user,wk)); return; } // [263 · §503 R2-O10] no step 2
     if(st==='alert'){ _alChange(wk); return; }
     _alW.wk=wk; _alW.bid=null; _alWinMsg('');
     document.querySelectorAll('#alWeeks .al-wrow').forEach(b=>b.setAttribute('aria-pressed',b===r?'true':'false'));
@@ -7719,6 +7730,7 @@ async function _alWinSet(){
   const user=getCurrentUser(), wk=_alW.wk, bid=_alW.bid, edit=_alW.edit;
   if(!user||!wk||!_alBidOk(bid)||_alBox.busy) return;
   const st=_alWeekState(user,wk); if(AL_REFUSE[st]){ _alWinMsg(AL_REFUSE[st]); return; }
+  if(st==='partner'){ _alWinMsg(_alPartnerMsg(user,wk)); return; } // [263 · §503 R2-O10] nothing saved
   if(!_alStampKnown()){ _alToast(AL_NOSAVE); return; }
   const was=_alWatch(user,wk);
   if(edit&&was&&JSON.stringify(was.bid)===JSON.stringify(bid)){ _alWinClose(true); return; }
@@ -7806,15 +7818,15 @@ window.openSplitBox=openSplitBox;
 function _srPaint(){
   try{
     const me=getCurrentUser(), m=document.getElementById('splitModal'); if(!me||!m||!_srBox.open) return;
-    const st=_srSt(), act=_srBiddingOpen(st), ro=!act, busy=_srBox.busy, /* [254 · §408] */ wk=(_srBox.wk&&weekMeta[_srBox.wk])?_srBox.wk:null;
-    if(_saF&&(!act||!wk||_saF.wk!==wk)) _saF=null;
+    const st=_srSt(), act=_srBiddingOpen(st), ro=!act, gl=!!locksData.globalLock, /* [263 · §505 R2-O11] Global Lock: no split buttons, no form, no frozen line */ busy=_srBox.busy, /* [254 · §408] */ wk=(_srBox.wk&&weekMeta[_srBox.wk])?_srBox.wk:null;
+    if(_saF&&(!act||gl||!wk||_saF.wk!==wk)) _saF=null;
     const tt=document.getElementById('srTitle'), ttl=wk?_srWeekOpt(wk):'Split weeks'; if(tt&&tt.textContent!==ttl) tt.textContent=ttl;
-    const F=!!_saF, n=(!F&&wk)?_saPaint(me,st,ro,busy):0;
+    const F=!!_saF, n=(!F&&wk)?_saPaint(me,st,ro||gl,busy):0;
     const show=(id,on)=>{ const e=document.getElementById(id); if(e&&e.hidden===on) e.hidden=!on; };
     const put=(id,k,h)=>{ const e=document.getElementById(id); if(e&&_srBox.html[k]!==h){ e.innerHTML=h; _srBox.html[k]=h; } };
     show('saList',!F&&!!wk); show('srWeekBox',!F&&!!wk&&!n); show('srListBox',!F&&!wk); show('srFrozen',!F&&ro);
     { const fz=document.getElementById('srFrozen'), ft=(ro&&_srTickOpen(st))?SR_NOTYET_TXT:SR_CLOSED_TXT; if(fz&&fz.textContent!==ft) fz.textContent=ft; } // [255 · §412]
-    if(!F){ if(wk){ if(!n) _srPaintWeek(me,wk,act,busy,put); } else _srPaintList(me,act,busy,_saCards(me),put); }
+    if(!F){ if(wk){ if(!n) _srPaintWeek(me,wk,act&&!gl,busy,put); } else _srPaintList(me,act&&!gl,busy,_saCards(me),put); }
     _saFormPaint(me,busy);
   }catch(_){}
 }
@@ -8051,7 +8063,7 @@ function _saFormPaint(me,busy){
   document.querySelectorAll('#saForm [data-sa-h]').forEach(l=>{ const H=SA_HALVES[l.getAttribute('data-sa-h')], x=l.querySelector('span'); if(H&&x){ const t=_splitHalfLabel(F.wk,H.sp,H.mh); if(x.textContent!==t) x.textContent=t; } }); // [258 · §442] S2: each day choice with the box's week's dates
   document.querySelectorAll('#saForm input[name="saHalf"]').forEach(r=>{ r.checked=(r.value===F.half); r.disabled=busy; });
   { const hl=document.getElementById('saHalfL'), bm=document.getElementById('saBidsMe'), hd='Your days'; if(hl&&hl.textContent!==hd) hl.textContent=hd; if(bm&&bm.textContent!=='You') bm.textContent='You'; } // [257 · §436] Y8 / Y9
-  const bq=document.getElementById('saBidsQ'); if(bq){ const t=F.q?(displayName(F.q)!==F.q?displayName(F.q)+' ('+F.q+')':F.q):''; /* [262 · §486 D27] full name, then initials */ if(bq.textContent!==t) bq.textContent=t; } // [252 · T2] blank (and not choosable) before anyone is picked · [256 · §418–§419] D2 the other person's initials
+  const bq=document.getElementById('saBidsQ'); if(bq){ const t=F.q?displayName(F.q):''; /* [263 · §507] the full name alone (displayName: the initials with no name on file) */ if(bq.textContent!==t) bq.textContent=t; } // [252 · T2] blank (and not choosable) before anyone is picked · [256 · §418–§419] D2 the other person's initials
   document.querySelectorAll('#saForm input[name="saBids"]').forEach(r=>{ r.checked=(r.value===F.bids); r.disabled=busy||!!F.fixedB||(r.value==='p'&&!F.q); });
   if(ap) ap.disabled=busy||!_saFormTerms(me);
 }
@@ -8070,7 +8082,7 @@ function _saFormFix(me){
 }
 function _saOpenStart(q){ // [254 · §408] q = the person Make an offer picked, kept only when _saWith holds them; else none
   const me=getCurrentUser(); if(!_saCanStart(me)) return;
-  const wk=_srBox.wk; if(!wk||!weekMeta[wk]||_srMyWeeks(me).indexOf(wk)<0){ _srPaint(); return; }
+  const wk=_srBox.wk; if(locksData.globalLock||!wk||!weekMeta[wk]||_srMyWeeks(me).indexOf(wk)<0){ _srPaint(); return; } // [263 · §505 R2-O11]
   if(typeof q!=='string'||!q||_saWith(me,wk).indexOf(q)<0) q=null;
   _saF={mode:'start',wk:wk,q:q,half:null,bids:null,halves:['W1','W2','T1','T2'],fixedB:false};
   _saFormFix(me); _srPaint();
@@ -8131,7 +8143,7 @@ function _saMail(me,q,wk,line){ try{ if(!me||!q||me===q||!line||(line.sp!=='W'&&
 // nothing is written (the caller repaints).
 function _saCheck(act,q,wk){
   const me=getCurrentUser(); if(!me||_srBox.busy) return null;
-  const st=_srSt(); if(!_splitWeeksOn()||!_srBiddingOpen(st)||!wk||!weekMeta[wk]||!q||q===me) return null; // [254 · §408]
+  const st=_srSt(); if(!_splitWeeksOn()||!_srBiddingOpen(st)||locksData.globalLock||!wk||!weekMeta[wk]||!q||q===me) return null; // [263 · §505 R2-O11] Global Lock: every card button does nothing // [254 · §408]
   const s=_spStateOf(me,q,wk); if(!s||!_saView(me,s,wk).acts.some(a=>a[0]===act)) return null;
   return {me:me,st:st,s:s};
 }
@@ -8184,7 +8196,7 @@ function _saEndInfo(me,q,wk){
 async function _saStart(go){
   const me=getCurrentUser(); if(!me||_srBox.busy) return;
   const st=_srSt(), F=_saF, t=_saFormTerms(me);
-  if(!F||F.mode!=='start'||!t||!_splitWeeksOn()||!_srBiddingOpen(st)||!_spIsPerson(F.q)||(_srHasSplit(me,F.wk)&&!_spWonHalf(me,F.wk))){ _srPaint(); return; } // [251 · §369] a half-holder may start, as the partner
+  if(!F||F.mode!=='start'||!t||!_splitWeeksOn()||!_srBiddingOpen(st)||locksData.globalLock||!_spIsPerson(F.q)||(_srHasSplit(me,F.wk)&&!_spWonHalf(me,F.wk))){ _srPaint(); return; } // [251 · §369] a half-holder may start, as the partner
   const q=F.q, wk=F.wk, qs=_spSideOk(q,_spSideOf(q,wk),_spIsPerson);
   if(_saOffersMe(me,q,wk)){ showCenterAlert(_saCrossText(q)); return; } // [249 · S2b · §381] B
   const mh=_spWonHalf(me,wk); // [251 · §369] one per half: I hold a half of a split won here - I may be the PARTNER, for its exact other half
@@ -8199,6 +8211,7 @@ async function _saStart(go){
   const pt=(t.b===me)?q:me;
   if(pt===me&&_spLive(me,wk)){ showCenterAlert('Your bid on Week '+weekMeta[wk].weekNum+' has to be removed first.'); return; } // [253 · §406 Q4] the non-bidder's own bid · [257 · §436] Y17
   if(_spLive(pt,wk)){ const n=displayName(pt); showCenterAlert("This split can't start while "+n+" has an active bid on this week."); return; } // [256] E7
+  if(_spLive(t.b,wk)){ const no=_spCapRefusal(t.b,wk,{act:'record',q:pt,wk:wk,t:{b:t.b,p:pt,sp:t.sp,bh:Number(t.b===me?t.mh:3-t.mh),ph:Number(st.ph)}},false); if(no){ showCenterAlert(no); return; } } // [263 · §501 R2-O5] told at Propose, as at Accept (_saApproveNo)
   if(go!==true){ showConfirm('Send the proposed split for Week '+weekMeta[wk].weekNum+'?',{yesText:'Send',noText:'Not now'}).then(y=>{ if(y) _saStart(true); }).catch(()=>{}); return; } // [255 · §411] · [255 · §416] Not now
   const side={p:q,sp:t.sp,mh:t.mh,b:t.b,ph:st.ph,ok:true,cx:false,rj:null,at:_saAt(me,q,wk)};
   if(await _saRun(me,wk,side,{a:'splitAgree',x:{p:q}},null,'Sent.')===true){ _saMail(me,q,wk,_saLine(wk,q,'new',null,{b:t.b,sp:t.sp,bh:t.b===me?t.mh:3-t.mh})); _saF=null; _srPaint(); } // [252 · T3 · T8]
