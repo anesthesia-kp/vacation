@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 265;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 266;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -720,7 +720,7 @@ body{zoom:1.15}
         <li id="ruleNpPhases">NP bids may only be used during the phases for which admin has turned them on</li>
         <li id="rulePrioLock" style="display:none">Bid priorities can only stay the same or get stronger — bid a 5 on a week, and any re-bid there must be 5 or better.</li>
         <li id="ruleSwap">To swap bids between two of your weeks, use ✎ Edit, then ⇄ Swap bids.</li><!-- [199 · §257] · [228 · §297] item 197 -->
-        <li id="ruleCompWeek">A week becomes a “Competition week” once the people bidding on it at the same time have a greater combined FTE than its capacity. It remains one for the rest of the phase.</li><!-- [196 · §251] his wording · [228 · §297] item 198 · [229 · §297] item 198 -->
+        <li id="ruleCompWeek">A week becomes a “Competition week” once the people bidding on it at the same time have a greater combined FTE than it has available. It remains one for the rest of the phase.</li><!-- [196 · §251] his wording · [228 · §297] item 198 · [229 · §297] item 198 · [266 · §523 · S1] -->
         <li id="ruleNoWeaken">On a competition week, a new bid must match or beat the weakest winning or under-review bid, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. If everyone leaves, a new bid must match or beat the last bid that was there.</li><!-- [194 · §248 · 196 · §251 · 197 · §254 · 198 · §255] · [220 · §288] the words both rule sets share (plan §11f item 2) -->
         <li id="ruleCompSet" style="display:none"></li><!-- [220 · §288] straight below it: the Strict line, Strict only (plan §11g) — filled and shown by _ruleCompSetSync; under Standard no line at all -->
         <li id="ruleBidFloors" style="display:none"></li><!-- [COPY-3] filled from the live floors at boot; hidden until then so no stale or invented floor text can flash, and it stays hidden when no floor is set -->
@@ -2169,14 +2169,16 @@ function _spTerms(me,s){ return (s&&s.terms)?{b:s.b,p:(s.b===me?s.p:me),sp:s.sp,
 function _spRecTerms(e){ return e?{b:e.b,p:e.p,sp:e.sp,bh:Number(e.bh),ph:Number(e.ph)}:null; }
 function _spSameTerms(x,y){ return !!(x&&y&&x.b===y.b&&x.p===y.p&&x.sp===y.sp&&Number(x.bh)===Number(y.bh)&&Number(x.ph)===Number(y.ph)); }
 // The merge every split reader reads (splitsData): the admin's record (vacations/splits, "<wk>|<b>" keys) and the staff record turned into
-// the same shape under the same key, src:'staff'. The same key in both: the later phase wins, a tie the admin's; an admin "won" always stays [260 · RA-13 F3 · §463].
+// the same shape under the same key, src:'staff'. The same key in both: a record in force or won (st 'on' / 'won') beats an ended one (st 'off',
+// any why) [266 · 434 · §524 · 2A-1: a removed split is dead]; both live or both ended: the later phase wins, a tie the admin's; an admin "won" always stays [260 · RA-13 F3 · §463].
 function _spMerge(adm,staff){
   const out={}; adm=(adm&&typeof adm==='object')?adm:{}; staff=(staff&&typeof staff==='object')?staff:{};
   for(const k of Object.keys(adm)) out[k]=adm[k];
   for(const b of Object.keys(staff)){ if(b==='_w') continue; const m=staff[b]; if(!m||typeof m!=='object') continue;
     for(const wk of Object.keys(m)){ const e=m[wk];
       if(!e||typeof e!=='object'||typeof e.p!=='string'||!e.p||e.p===b||(e.sp!=='W'&&e.sp!=='T')||(Number(e.bh)!==1&&Number(e.bh)!==2)||typeof e.ph!=='number'||!Number.isFinite(e.ph)) continue;
-      const k=wk+'|'+b, a=out[k]; if(a&&((a.src!=='staff'&&a.st==='won')||!(e.ph>Number(a.ph)))) continue; // [260 · RA-13 F3 · §463] an admin "won" is never replaced
+      const k=wk+'|'+b, a=out[k], lv=x=>x.st==='on'||x.st==='won'; // [266 · 434 · §524 · 2A-1] in force / won = live; anything else (st 'off') = ended
+      if(a&&((a.src!=='staff'&&a.st==='won')||(lv(a)!==lv(e)?lv(a):!(e.ph>Number(a.ph))))) continue; // [260 · RA-13 F3 · §463] an admin "won" is never replaced · [266 · 434 · §524 · 2A-1] live beats ended, else the later phase
       const s={wk:wk,b:b,p:e.p,sp:e.sp,bh:Number(e.bh),ph:e.ph,st:e.st,at:e.at,src:'staff'}; if(typeof e.why==='string') s.why=e.why;
       out[k]=s; } }
   return out;
@@ -2507,6 +2509,8 @@ function _spChangeFollowUps(actor,wk,snap,b4,bidder,af){ // [253 fix 1 · REVIEW
 }
 // The Remove box's notice when the saver bids for a split in force on wk (§376 6:30 / 6:33 (1)); '' otherwise.
 function _spRemoveNote(user,wk){ try{ const e=_spFor(user,wk); return e?'<div style="margin-top:8px;font-size:.85rem;color:#1f2329">This removes the bid only. The split with '+escH(displayName(e.p))+' stays until you both agree to end it.</div>' /* [252 · T4] · [257 · §436] Y14 */:''; }catch(_){ return ''; } }
+// [266 · §525 F1 · §526 · S4] The move box's line when the bid being moved is a split's (as _spRemoveNote decides: the saver bids for a split in force on wk); '' otherwise. Plain text (the box sets textContent).
+function _spMoveNote(user,wk){ try{ const e=_spFor(user,wk); return e?'This moves the bid only. The split with '+displayName(e.p)+' stays until you both agree to end it.':''; }catch(_){ return ''; } }
 // The partner of the split in force on wk whose bidder is u (on the picture after, sp.after, when given), or null - the partner's e-mails (§2.6).
 function _spPartnerOf(u,wk,sp){ try{ const f=()=>{ const e=_spFor(u,wk); return e?e.p:null; }; return (sp&&sp.after)?_withSplits(sp.after,f):f(); }catch(_){ return null; } }
 // THE ALERT CANCEL (§2.7): after a confirmed save of a new or changed bid, the saver's own alert on that week is deleted (their own entry,
@@ -2827,7 +2831,7 @@ function renderTimerRulesInfo(){
   const r=getTimerRules(), st=r.stages;
   const li=(label,hours)=>`<li>${label}: resets to <strong>${hours} hours</strong></li>`;
   let items='';
-  st.forEach((s,i)=>{ items+= i===0 ? li('At the start of the round', s.hours) : li('After '+s.days+' day'+(s.days===1?'':'s'), s.hours); });
+  st.forEach((s,i)=>{ items+= i===0 ? li('At the start of the phase', s.hours) : li('After '+s.days+' day'+(s.days===1?'':'s'), s.hours); }); // [266 · §525 · S5]
   let quiet='';
   if(r.quietEnabled){ quiet=`<p style="margin:8px 0 0">Once the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the timer would run out between <strong>${fmtHour12(r.quietStart)}</strong> and <strong>${fmtHour12(r.quietEnd)}</strong> Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.</p>`; } // [399 · §306] L5 "timer"
   let owHtml='';
@@ -2836,7 +2840,7 @@ function renderTimerRulesInfo(){
   // always see the rule actually in force. Mode 1 keeps the classic wording exactly.
   const resetSentence=(function(){
     const m=_timerResetMode();
-    if(m===2) return 'The timer resets only when a bid change alters someone else\'s projected outcome, weakens a competition week\'s minimum new bid, or opens a week to someone with a “notify if a week opens up” alert'; // [221 · §292] W1; mode 3's sentence gone · [228 · §297] item 207 · [229 · §297] the alert's name · [399 · §306] L5 "timer"
+    if(m===2) return 'The timer resets only when a bid change alters someone else\'s projected outcome, weakens a competition week\'s minimum new bid, or opens a week to someone with a “Notify if a week opens up” alert'; // [266 · §525 · S6] · [221 · §292] W1; mode 3's sentence gone · [228 · §297] item 207 · [229 · §297] the alert's name · [399 · §306] L5 "timer"
     return 'Every time anyone places or changes a bid, the timer resets'; // [399 · §306] L5 "timer"
   })();
   const endLine=`<p style="margin:0 0 6px"><strong>Each phase ends when the timer gets to 0.</strong></p>`; // [399 · §306] L5 "timer"
@@ -2844,7 +2848,7 @@ function renderTimerRulesInfo(){
   if(st.length<=1){ el.innerHTML=endLine+owHtml+(_timerResetMode()===1
     ?`<p style="margin:0 0 6px">Every time anyone places or changes a bid, the timer resets to <strong>${(st[0]||{}).hours||48} hours</strong>.</p>` // [399 · §306] L5 "timer"
     :`<p style="margin:0 0 6px">${resetSentence}. Each qualifying reset returns the timer to <strong>${(st[0]||{}).hours||48} hours</strong>.</p>`)+noReset+quiet; return; } // [399 · §306] L5 "timer"
-  el.innerHTML=endLine+owHtml+`<p style="margin:0 0 6px">${resetSentence}. How long it resets to gets shorter as the round goes on:</p><ul style="margin:0 0 0 18px;padding:0">${items}</ul>${noReset}${quiet}`;
+  el.innerHTML=endLine+owHtml+`<p style="margin:0 0 6px">${resetSentence}. How long it resets to gets shorter as the phase goes on:</p><ul style="margin:0 0 0 18px;padding:0">${items}</ul>${noReset}${quiet}`; // [266 · §525 · S5]
 }
 function isAuctionClosed(){
   // [FIX 25 Jul 2026 · delta-audit #8] The admin's explicit "close bidding" flag is
@@ -4967,7 +4971,7 @@ function openPriorityModal(wk){
     // strong as the floor. NP is the weakest bid, so any numeric floor disables it too.
     const _bfF=bfFloorFor(wk);
     if(v!=="NP"&&!bfAllows(_bfParse(v),_bfF)){opt.disabled=true;_na.by[v]={r:'floor',f:_bfF};return;} // [405 · §342 · plan S1] the reason, where it greys
-    if(v==="NP"){opt.disabled=_blCapBlocks||_bfF!=='none'||!npAllowedNow(); if(opt.disabled) _na.by[v]=_blCapBlocks?{r:'low'}:(_bfF!=='none'?{r:'floor',f:_bfF}:{r:'np'}); return;} // NP: below any numeric floor; and only in admin-enabled phases · [405 · §342 · plan S1] the first term that holds is the reason
+    if(v==="NP"){opt.disabled=_blCapBlocks||_bfF!=='none'||!npAllowedNow(); if(opt.disabled) _na.by[v]=!npAllowedNow()?{r:'np'}:(_bfF!=='none'?{r:'floor',f:_bfF}:{r:'low'}); return;} // [266 · §524 · S3] the reason: not allowed in this phase, then the floor, then the lowering // NP: below any numeric floor; and only in admin-enabled phases · [405 · §342 · plan S1] the first term that holds is the reason
     if(v.indexOf(',')>=0){ // [217 · §285] any combination (never saved: the same two, 1,2 and 1,2,3)
       const nums=v.split(',').map(Number);
       const _u=nums.filter(n=>used.includes(n)), _c=!_u.length&&_blCapBlocks&&priorityScore(nums)>capScore; // [405 · §342 · plan S1] the same two checks, in the same order
@@ -5849,7 +5853,7 @@ function _mvPaint(){
     if(lead&&!st.why){ lead.className='tp-short'; lead.style.marginTop='12px'; _whyPut('moveLead','moveWhy',[STRICT_SHORT],STRICT_W2); st.why=true; } // [405 · §342 · plan S6] card 8 (drawn once per opening: a tap on it is kept)
     if(to) to.style.display='none';
     if(rows){ rows.innerHTML=''; rows.style.display='none'; }
-    set('moveFreed','',false); set('moveLowering','',false); // [405 · §342 · plan S6] #moveWarn is gone
+    set('moveFreed','',false); set('moveLowering','',false); set('moveSplit','',false); // [405 · §342 · plan S6] #moveWarn is gone · [266 · §525 · S4] nothing moves here: no split line
     if(go){ go.style.display='none'; go.disabled=true; }
     if(cancel) cancel.textContent='Close';
     return;
@@ -5872,6 +5876,7 @@ function _mvPaint(){
   const has=!!(st.pick&&st.dstWas!==undefined&&st.dstWas!==null);
   set('moveFreed',has?_strictW1Freed(st.dstWas,weekMeta[st.pick].weekNum):'',has);
   set('moveLowering',st.lowNote||'',!!st.lowNote);
+  set('moveSplit',st.spNote||'',!!st.spNote); // [266 · §525 · S4] only for a split's bid
   if(go){ go.style.display=''; go.disabled=!st.pick||st.busy; go.textContent=st.busy?'Saving…':(st.pick?('Move to Week '+weekMeta[st.pick].weekNum):'Move bid'); }
   if(cancel) cancel.textContent='Cancel';
 }
@@ -5888,7 +5893,7 @@ function _mvOpen(user,wk){
   let ds;
   try{ ds=_mvDests(user,wk); }catch(_){ return false; }
   try{
-    _mvState={user:user,src:wk,bid:JSON.parse(JSON.stringify(data[user][wk])),dests:ds,pick:null,dstWas:undefined,lowNote:'',openedAt:performance.now(),busy:false};
+    _mvState={user:user,src:wk,bid:JSON.parse(JSON.stringify(data[user][wk])),dests:ds,pick:null,dstWas:undefined,lowNote:'',spNote:_spMoveNote(user,wk),openedAt:performance.now(),busy:false}; // [266 · §525 · S4] spNote
     _mvPaint();
     const m=_mvEl('moveModal'); if(m) m.classList.add('show');
     try{ const f=ds.length?document.querySelector('#moveRows .swap-row'):_mvEl('moveCancel'); if(f&&typeof f.focus==='function') f.focus(); }catch(_){}
@@ -8233,7 +8238,7 @@ async function _saStart(go){
   const wh=qBusy?null:_spWonHalf(q,wk); // [250 · §388 F2] one per half (§369): q holds a half of a won split there - I may bid for its exact other half, q the partner
   if(wh&&t.b!==me){ showCenterAlert(displayName(q)+" can't be the bidder on this week."); return; } // [250 · §390 LOW 1] the half-holder is never the bidder (§369): say so, not the half
   if(wh&&!_spOtherHalfOk(wk,q,t.sp,t.mh)){ const h=(wh.b===q)?Number(wh.bh):3-Number(wh.bh); showCenterAlert(displayName(q)+' can only take '+_splitHalfDays(wh.sp,3-h)+' on this week.'); return; }
-  if(qBusy||(!wh&&_srHasSplit(q,wk))){ showCenterAlert(displayName(q)+' already has a split on this week.'); return; } // [252 · T4]
+  if(qBusy||(!wh&&_srHasSplit(q,wk))){ showCenterAlert(displayName(q)+' already has a split or a proposal on this week.'); return; } // [252 · T4] · [266 · §524 · S2] the words name what is true
   if(_spWonOutright(me,wk)){ showCenterAlert('You already won this week.'); return; } // [264 · §517 A-4] Rules 6.32, the board's words
   if(_spWonOutright(q,wk)){ showCenterAlert(displayName(q)+' won this week in an earlier phase.'); return; } // [264 · §517 A-4] the admin's refusal, the full name
   const pt=(t.b===me)?q:me;
@@ -9064,7 +9069,7 @@ function timerRulesEmailText(){
     return 'The timer is OFF: bidding stays open until the admin closes the phase.'; // [228 / 392 · §297] item 204 (OFF in capitals: the page's bold) · [399 · §306] L5 "timer"
   }
   const r=getTimerRules(), st=r.stages;
-  const lines=st.map((s,i)=> i===0 ? `At the start of the round: resets to ${s.hours} hours` : `After ${s.days} day${s.days===1?'':'s'}: resets to ${s.hours} hours`);
+  const lines=st.map((s,i)=> i===0 ? `At the start of the phase: resets to ${s.hours} hours` : `After ${s.days} day${s.days===1?'':'s'}: resets to ${s.hours} hours`); // [266 · 434 · §525 · S5]
   let quiet='';
   if(r.quietEnabled){ quiet=`\n\nOnce the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the timer would run out between ${fmtHour12(r.quietStart)} and ${fmtHour12(r.quietEnd)} Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.`; } // [399 · §306] L5 "timer"
   let owTxt='';
@@ -9076,12 +9081,12 @@ function timerRulesEmailText(){
   // Mode 1 keeps the classic wording byte-for-byte.
   const _m=_timerResetMode();
   const resetSentence=_m===2 // [221 · §292] W1; mode 3's sentence gone
-    ?'The timer resets only when a bid change alters someone else\'s projected outcome, weakens a competition week\'s minimum new bid, or opens a week to someone with a “notify if a week opens up” alert' // [228 / 392 · §297] item 207 · [229 / 393 · §297] the alert's name · [399 · §306] L5 "timer"
+    ?'The timer resets only when a bid change alters someone else\'s projected outcome, weakens a competition week\'s minimum new bid, or opens a week to someone with a “Notify if a week opens up” alert' // [266 · §525 · S6] · [228 / 392 · §297] item 207 · [229 / 393 · §297] the alert's name · [399 · §306] L5 "timer"
     :'Every time anyone places or changes a bid, the timer resets'; // [399 · §306] L5 "timer"
   if(st.length<=1){ return endLine+(_m===1
     ?`Every time anyone places or changes a bid, the timer resets to ${(st[0]||{}).hours||48} hours.${noReset}${quiet}${owTxt}` // [399 · §306] L5 "timer"
     :`${resetSentence}. Each qualifying reset returns the timer to ${(st[0]||{}).hours||48} hours.${noReset}${quiet}${owTxt}`); } // [399 · §306] L5 "timer"
-  return endLine+`${resetSentence}. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${noReset}${quiet}${owTxt}`;
+  return endLine+`${resetSentence}. How long it resets to gets shorter as the phase goes on:\n${lines.map(l=>'• '+l).join('\n')}${noReset}${quiet}${owTxt}`; // [266 · 434 · §525 · S5]
 }
 function buildWelcomeEmailBody(user){ // [227 · §296] greets by the full name (displayName, initials when none is on file) · [229 · §297] item 8: by the first name (greetName)
   const _capTxt=cumulativeCapDescription();
@@ -9121,7 +9126,7 @@ ${bullets([
   ...((typeof _npAnyPhase!=='function'||_npAnyPhase())?[npPhasesDescription()]:[]), // [225 · §295] no NP line when NP is off in every phase (typeof = sandbox convention)
   ...prioLockBullets(), // [build 139 · BL/COPY] Option A wording, allowance-derived
   `To swap bids between two of your weeks, use ✎ Edit, then ⇄ Swap bids.`, // [199 · §257] word for word as on the page
-  `A week becomes a “Competition week” once the people bidding on it at the same time have a greater combined FTE than its capacity. It remains one for the rest of the phase.`, // [229 · §297] item 198 · [196 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
+  `A week becomes a “Competition week” once the people bidding on it at the same time have a greater combined FTE than it has available. It remains one for the rest of the phase.`, // [266 · §523 · S1] · [229 · §297] item 198 · [196 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
   ((typeof _ruleNoWeakenText==='function')?_ruleNoWeakenText():`On a competition week, a new bid must match or beat the weakest winning or under-review bid, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. If everyone leaves, a new bid must match or beat the last bid that was there.`), // [216 · §282] · [220 · §288] the words both rule sets share (plan §11f item 2; the fallback is for test sandboxes)
   ...((typeof _ruleCompSetText==='function')?[_ruleCompSetText()].filter(Boolean):[]), // [220 · §288] straight below it: the Strict line, Strict only — under Standard no line at all (plan §11g); word for word as on the page
   ...bfRulesBullets(),
@@ -9312,6 +9317,7 @@ document.addEventListener("keydown",e=>{
     <div id="moveRows" class="swap-rows" role="group" aria-label="Week to move to" style="display:none;margin-top:10px"></div>
     <div id="moveFreed" style="display:none;margin-top:2px;font-size:.85rem;color:#6f6a60;line-height:1.45"></div>
     <div id="moveLowering" style="display:none;margin-top:10px;background:rgba(74,79,90,.08);border:1px solid rgba(74,79,90,.35);border-radius:8px;padding:10px 12px;font-size:.82rem;color:#4a4f5a;font-weight:600"></div>
+    <div id="moveSplit" style="display:none;margin-top:10px;font-size:.85rem;color:#1f2329"></div><!-- [266 · §525 · S4] a split's bid: the split stays -->
     <div class="modal-buttons" style="margin-top:14px">
       <button class="btn-secondary" id="moveCancel" onclick="closeMoveBox()">Cancel</button>
       <button class="btn-primary" id="moveGo" onclick="confirmMove()" disabled style="display:none">Move bid</button>

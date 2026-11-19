@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 433;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 434;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -2342,7 +2342,7 @@ function _resultsCtxOf(key){
   if(typeof _splitResultsAdd==='function') _splitResultsAdd(summary,Number(k),arch.approvals||{},arch.denials||{}); // [410 · split weeks, Q10] the partner of a split won in this phase · [429 · F4] or lost (denied)
   const label=phaseName(k);
   return {key:k, label, summary, users:Object.keys(summary), schedSrc:arch.schedule||scheduleData,
-    subject:'Vacation Auction — '+phaseName(k)+' Results'};
+    subject:phaseName(k)+' Results'}; // [434 · §524 · A3] as the E-mail Log label (read by nothing; kept in step)
 }
 // One outbox document from the live view (A1's mirror: Map id -> data), or undefined. typeof = sandbox convention.
 function _outboxDoc(id){ return (typeof _moDocs!=='undefined'&&_moDocs&&typeof _moDocs.get==='function')?_moDocs.get(id):undefined; }
@@ -3553,14 +3553,16 @@ function _spTerms(me,s){ return (s&&s.terms)?{b:s.b,p:(s.b===me?s.p:me),sp:s.sp,
 function _spRecTerms(e){ return e?{b:e.b,p:e.p,sp:e.sp,bh:Number(e.bh),ph:Number(e.ph)}:null; }
 function _spSameTerms(x,y){ return !!(x&&y&&x.b===y.b&&x.p===y.p&&x.sp===y.sp&&Number(x.bh)===Number(y.bh)&&Number(x.ph)===Number(y.ph)); }
 // The merge every split reader reads (splitsData): the admin's record (vacations/splits, "<wk>|<b>" keys) and the staff record turned into
-// the same shape under the same key, src:'staff'. The same key in both: the later phase wins, a tie the admin's; an admin "won" always stays [260 · RA-13 F3 · §463].
+// the same shape under the same key, src:'staff'. The same key in both: a record in force or won (st 'on' / 'won') beats an ended one (st 'off',
+// any why) [266 · 434 · §524 · 2A-1: a removed split is dead]; both live or both ended: the later phase wins, a tie the admin's; an admin "won" always stays [260 · RA-13 F3 · §463].
 function _spMerge(adm,staff){
   const out={}; adm=(adm&&typeof adm==='object')?adm:{}; staff=(staff&&typeof staff==='object')?staff:{};
   for(const k of Object.keys(adm)) out[k]=adm[k];
   for(const b of Object.keys(staff)){ if(b==='_w') continue; const m=staff[b]; if(!m||typeof m!=='object') continue;
     for(const wk of Object.keys(m)){ const e=m[wk];
       if(!e||typeof e!=='object'||typeof e.p!=='string'||!e.p||e.p===b||(e.sp!=='W'&&e.sp!=='T')||(Number(e.bh)!==1&&Number(e.bh)!==2)||typeof e.ph!=='number'||!Number.isFinite(e.ph)) continue;
-      const k=wk+'|'+b, a=out[k]; if(a&&((a.src!=='staff'&&a.st==='won')||!(e.ph>Number(a.ph)))) continue; // [260 · RA-13 F3 · §463] an admin "won" is never replaced
+      const k=wk+'|'+b, a=out[k], lv=x=>x.st==='on'||x.st==='won'; // [266 · 434 · §524 · 2A-1] in force / won = live; anything else (st 'off') = ended
+      if(a&&((a.src!=='staff'&&a.st==='won')||(lv(a)!==lv(e)?lv(a):!(e.ph>Number(a.ph))))) continue; // [260 · RA-13 F3 · §463] an admin "won" is never replaced · [266 · 434 · §524 · 2A-1] live beats ended, else the later phase
       const s={wk:wk,b:b,p:e.p,sp:e.sp,bh:Number(e.bh),ph:e.ph,st:e.st,at:e.at,src:'staff'}; if(typeof e.why==='string') s.why=e.why;
       out[k]=s; } }
   return out;
@@ -4381,7 +4383,7 @@ function snapshotSchedule(){ try{ return JSON.parse(JSON.stringify(scheduleData|
 // [430 · §486 D2] Has bidding closed? The closed flag or an enabled timer run out (biddingOpenOnServer), the open phase completed, or the
 // auction finished. Then queueProjectionAlerts writes nothing - no alert e-mail once bidding has closed (Rules 7.8), whichever path called it.
 function _alertsClosed(){ const p=phasesData||{}, cur=Number(p.currentPhase||1); return !!p.finishedAt||!!(p.completedPhases||{})[cur]||!biddingOpenOnServer(); }
-async function queueProjectionAlerts(prevSched, excludeUser, newSchedOverride){
+async function queueProjectionAlerts(prevSched, excludeUser, newSchedOverride, noPtRm){ // [434 · §524 · A4] noPtRm {u,wk}: that removal's "your bid was removed" goes to the bidder only, never to the split's partner
   try{
     if(typeof _alertsClosed==='function'&&_alertsClosed()) return 0; // [430 · §486 D2] nothing written once bidding has closed (typeof = sandbox convention)
     // [401 · §317] Written whether or not "Projection-change alert e-mails" is on: the server reads the switch when it sends, and logs
@@ -4408,7 +4410,7 @@ async function queueProjectionAlerts(prevSched, excludeUser, newSchedOverride){
         // Bid no longer exists in the new state (admin removed it): that is a REMOVAL,
         // not a loss — getOutcome would misreport it as "changed to LOSE". Say what
         // actually happened, regardless of what the old projection was.
-        if(nu[wk]===undefined){ (lines[user]=lines[user]||[]).push({k:'rm',wk}); { const _pp=_ptOf(user,wk); if(_pp) (lines[_pp]=lines[_pp]||[]).push({k:'rm',wk}); } continue; } // [430 · §495] and to the split's partner
+        if(nu[wk]===undefined){ (lines[user]=lines[user]||[]).push({k:'rm',wk}); { const _pp=_ptOf(user,wk); if(_pp&&!(noPtRm&&noPtRm.u===user&&noPtRm.wk===wk)) (lines[_pp]=lines[_pp]||[]).push({k:'rm',wk}); } continue; } // [430 · §495] and to the split's partner · [434 · §524 · A4] not for the Splits page's "Remove the bid too"
         // [§147] The MERGED projection — the one the user can see. A tie forming or
         // dissolving is not a change, so it sends nothing. Matches the staff site exactly.
         const po=uiOutcome(getOutcome(wk,user,prevAp)), no=uiOutcome(getOutcome(wk,user,newAp));
@@ -7478,6 +7480,14 @@ function npAllowedForPhase(ph){
   return v===undefined?(Number(ph)>=3):v!==false;
 }
 window.npAllowedForPhase=npAllowedForPhase;
+// [434 · §525 · A6] The NP bids that count now and would stop counting if NP went off for slot p, by the engine's own tests (computeApprovals /
+// _bfEngineFilter): an NP bid placed in the current phase (an earlier phase's bids never compete) on a week whose floor allows NP - only when the
+// current phase reads slot p; else 0. Read from the live bids when the confirm box opens.
+function _npPlacedNow(p){ try{
+  const cur=Number(phasesData.currentPhase||1); if(settingSlot(cur)!==Number(p)) return 0; let n=0;
+  for(const u of Object.keys(scheduleData||{})){ const m=scheduleData[u]; if(!m||typeof m!=='object') continue;
+    for(const wk of Object.keys(m)){ if(m[wk]==='NP'&&!(getUserBidPhaseAdmin(u,wk)<cur)&&bfAllows('NP',bfFloorFor(wk))) n++; } }
+  return n; }catch(_){ return 0; } }
 // Exact NP availability from the admin's settings — shared wording with the user site.
 // Is a running cap set in any phase? (npPhasesDescription's last clause names it.) [fix round, review lane 3 L1]
 function _anyCumCap(){ return [1,2,3,4].filter(p=>p<=(typeof fallPhases==='function'?fallPhases():3)||(p===4&&(typeof rvaOn!=='function'||rvaOn()))).some(p=>_cumCap(p)!==null); } // [231 · E2] only the slots that run
@@ -7782,7 +7792,8 @@ window.toggleNpPhase=async function(p){ // [404 · §334 A1 · B] at any time ·
     _cfgLog('NP bids by phase',ch);
     toast(`NP bids ${next?'enabled':'disabled'} for ${phaseShort(p)}`, next?'ok':'warn');
   };
-  _cfgAsk({ name:'NP bids by phase', rule:true, change:ch, onConfirm:_write, onCancel:()=>syncControls() });
+  const _npN=next?0:_npPlacedNow(p); // [434 · §525 · A6] counted as the box opens; no clause when 0 or when switching On (the Change Log row keeps ch)
+  _cfgAsk({ name:'NP bids by phase', rule:true, change:ch+(_npN>0?' · '+_npN+' NP bid'+(_npN===1?'':'s')+' already placed in '+phaseShort(p)+' will stop counting.':''), onConfirm:_write, onCancel:()=>syncControls() });
 };
 // [AUDIT 2026-07-26 H6] Announcing results = stamping phase fields AND publishing every
 // staged completed-phase snapshot into the world-readable phases doc, in ONE atomic
@@ -9066,7 +9077,7 @@ function timerRulesEmailText(){
     return 'The timer is OFF: bidding stays open until the admin closes the phase.'; // [228 / 392 · §297] item 204 (OFF in capitals: the page's bold) · [399 · §306] L5 W41
   }
   const r=getTimerRules(), st=r.stages;
-  const lines=st.map((s,i)=> i===0 ? `At the start of the round: resets to ${s.hours} hours` : `After ${s.days} day${s.days===1?'':'s'}: resets to ${s.hours} hours`);
+  const lines=st.map((s,i)=> i===0 ? `At the start of the phase: resets to ${s.hours} hours` : `After ${s.days} day${s.days===1?'':'s'}: resets to ${s.hours} hours`); // [266 · 434 · §525 · S5]
   let quiet='';
   if(r.quietEnabled){ quiet=`\n\nOnce the reset is ${r.quietWhenHoursLE} hours or less, bidding won't close overnight: if the timer would run out between ${fmtHour12(r.quietStart)} and ${fmtHour12(r.quietEnd)} Pacific time, it's pushed to ${fmtHour12(r.quietEnd)}.`; }
   let owTxt='';
@@ -9079,12 +9090,12 @@ function timerRulesEmailText(){
   const _mRaw=parseInt(adminSettings?.timerResetMode,10);
   const _m=(_mRaw===2)?2:1; // [385 · §292] timer mode 3 removed: a stored 3 reads as mode 1
   const resetSentence=_m===2 // [385 · §292] W1; mode 3's sentence gone
-    ?'The timer resets only when a bid change alters someone else\'s projected outcome, weakens a competition week\'s minimum new bid, or opens a week to someone with a “notify if a week opens up” alert' // [228 / 392 · §297] item 207 · [229 / 393 · §297] the alert's name
+    ?'The timer resets only when a bid change alters someone else\'s projected outcome, weakens a competition week\'s minimum new bid, or opens a week to someone with a “Notify if a week opens up” alert' // [434 · §525 · A2] · [228 / 392 · §297] item 207 · [229 / 393 · §297] the alert's name
     :'Every time anyone places or changes a bid, the timer resets';
   if(st.length<=1){ return endLine+(_m===1
     ?`Every time anyone places or changes a bid, the timer resets to ${(st[0]||{}).hours||48} hours.${noReset}${quiet}${owTxt}`
     :`${resetSentence}. Each qualifying reset returns the timer to ${(st[0]||{}).hours||48} hours.${noReset}${quiet}${owTxt}`); }
-  return endLine+`${resetSentence}. How long it resets to gets shorter as the round goes on:\n${lines.map(l=>'• '+l).join('\n')}${noReset}${quiet}${owTxt}`;
+  return endLine+`${resetSentence}. How long it resets to gets shorter as the phase goes on:\n${lines.map(l=>'• '+l).join('\n')}${noReset}${quiet}${owTxt}`; // [266 · 434 · §525 · S5]
 }
 function _cumCap(phase){
   const m=adminSettings?.maxBidsCumulative;
@@ -9149,7 +9160,7 @@ ${bullets([
   ...((typeof _npAnyPhase!=='function'||_npAnyPhase())?[npPhasesDescription()]:[]), // [225 · §295] no NP line when NP is off in every phase (typeof = sandbox convention)
   ...prioLockBullets(), // [build 268 · BL/COPY] Option A wording, allowance-derived
   `To swap bids between two of your weeks, use ✎ Edit, then ⇄ Swap bids.`, // [361 · §257] word for word as on the staff page
-  `A week becomes a “Competition week” once the people bidding on it at the same time have a greater combined FTE than its capacity. It remains one for the rest of the phase.`, // [393 · §297] item 198 · [358 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
+  `A week becomes a “Competition week” once the people bidding on it at the same time have a greater combined FTE than it has available. It remains one for the rest of the phase.`, // [434 · §523 · A2] · [393 · §297] item 198 · [358 · §251] the welcome e-mail carries every rule (owner, 7 Oct 2026) - the two competition lines, word for word as on the page
   ((typeof _ruleNoWeakenText==='function')?_ruleNoWeakenText():`On a competition week, a new bid must match or beat the weakest winning or under-review bid, and you can only weaken your bid (re-bids included) if it would still win and is no lower than the lowest other winning bid. If everyone leaves, a new bid must match or beat the last bid that was there.`), // [380 · §282] · [384 · §288] the words both rule sets share (plan §11f item 2; the fallback is for test sandboxes)
   ...((typeof _ruleCompSetText==='function')?[_ruleCompSetText()].filter(Boolean):[]), // [384 · §288] straight below it: the Strict line, Strict only — under Standard no line at all (plan §11g); word for word as on the page
   ...bfRulesBullets(),
@@ -9276,7 +9287,7 @@ window.sendReminderEmails=function(){
       window._resultsSendInFlight=true;
       try{
       // [401 · server mail] one request per person, rem_<press>_<initials>; the server sends it to every address on file.
-      const subj=('Vacation Bidding Reminder — '+_phaseWindowLabel()).slice(0,40);
+      const subj=('Reminder — '+_phaseWindowLabel()).slice(0,40); // [434 · §524 · A3] the E-mail Log's Kind label: full words, fits 40
       let n=0, skipped=0, refused=0, wrote=0; const refusedWho=[];
       for(const u of noBidders){
         const rc=recipientsFor(u);
@@ -9407,7 +9418,7 @@ window.sendPhaseResultsEmails=function(){
       if(!aid||!/^[A-Za-z0-9_-]{1,40}$/.test(String(aid))||(!_fresh&&!(typeof _moArrived!=='undefined'&&_moArrived))){
         toast('Could not reach the server to start the send — nothing was sent. Try again in a moment.','err'); return;
       }
-      const subj=('Vacation Auction — '+phaseName(cur)+' Results').slice(0,40);
+      const subj=(phaseName(cur)+' Results').slice(0,40); // [434 · §524 · A3] the E-mail Log's Kind label: full words, fits 40
       const w={ids:[],retried:{}};
       let wrote=0, stop=false, retryBad=0;
       for(const u of usersWithResults){
@@ -12393,7 +12404,7 @@ async function _adminDeleteBidAtomic(u,wk){
     return {ok:false,partial:false,err:String(e?.code||e?.message||e)};
   }
 }
-window.adminRemove=function(u,wk,done){ // [410 · split weeks · review] done: called once the bid is removed (Split weeks' "Remove the bid too")
+window.adminRemove=function(u,wk,done,noPt){ // [410 · split weeks · review] done: called once the bid is removed (Split weeks' "Remove the bid too") · [434 · §524 · A4] noPt true (only from there): the partner gets no "your bid was removed"
   // [292 · RA-H4] Same missing C-4 guard as confirmAdminCancel — and this button was
   // reachable with NO staleness for announced Phase-4 round winners (row lock fixed in
   // renderEditTable, same build).
@@ -12432,7 +12443,7 @@ window.adminRemove=function(u,wk,done){ // [410 · split weeks · review] done: 
       delete scheduleData[u][wk];
       await _reconcileStaleDenials(wk); // [H12] advisory only — warns if a denial now projects WIN/DRAW/REVIEW
       await adminLog(u,wk,'admin-remove',oldBid); toast(`${_rmNm}'s bid on Wk ${_wkNumByISO[wk]||wk} removed · last bid cleared`,"warn"); // [R2-F1 · D20]
-      queueProjectionAlerts(_prev,null).catch(()=>{}); // outbid alerts for affected users
+      queueProjectionAlerts(_prev,null,undefined,noPt===true?{u:u,wk:wk}:null).catch(()=>{}); // outbid alerts for affected users · [434 · §524 · A4] noPt: not the partner's "your bid was removed"
       _adminBidTimerReset(u,wk,_prev); // [289 · AUD-H] admin bid activity resets the countdown (owner ruling) · [305 · §117] gated by the Timer Reset Mode
       if(typeof done==='function') await done(); // [410 · split weeks · review]
     }
@@ -12901,9 +12912,9 @@ window.createSplit=function(){
     refreshAll();
   } });
 };
-// Remove (the three boxes of mock v5, ANSWERS 10:59–11:04 PM). A split whose bid is live: keep the bid for the bidder alone, or cancel it —
-// while bidding is open the bid is removed as Edit Selections removes one (adminRemove); once bidding has closed it is denied as Approvals /
-// Denials denies one (adDeny). That action's own box opens first, and the split is marked off only once its write has succeeded: a Cancel
+// Remove (the three boxes of mock v5, ANSWERS 10:59–11:04 PM). A split whose bid is live: keep the bid for the bidder alone, or — while
+// bidding is open — cancel it, removed as Edit Selections removes one (adminRemove); once bidding has closed the box offers only Keep <b>'s bid
+// (a bid is decided on Approvals/Denials, [434 · §526 · A5]). That action's own box opens first, and the split is marked off only once its write has succeeded: a Cancel
 // or a failed write there leaves the split and the bid as they were [410 · split weeks · review]. A split won in an earlier phase (or with no live bid): the bidder keeps the week — no completed win is undone.
 // [432 · R1-1 · §511] The admin's removal, e-mailed: one alert request to each of the two who has an address (recipientsFor), one line
 // {k:'se', wk, w:<the other's initials>} - the mail server writes "<week> — the admin ended your split with <Full name>.". Written under the
@@ -12919,7 +12930,7 @@ async function _splitOffMail(e){
     return res.filter(r=>r==='ok').length;
   }catch(err){ console.warn('_splitOffMail failed:',err); return 0; }
 }
-// [432 · R1-1] mail === true: e-mail the two once the split is marked off (Keep the bid, the no-live-bid box); false from Remove the bid too / Deny the bid.
+// [432 · R1-1] mail === true: e-mail the two once the split is marked off (Keep the bid, the no-live-bid box, [434 · §524 · A4] Remove the bid too).
 async function _splitOff(k,mail){
   const e=(splitsData||{})[k]; if(!e||(e.st!=='on'&&e.st!=='won')){ renderSplitWeeks(); return false; }
   // [432 · §519] the same write deletes the two people's split steps on the week (vacations/splitAgreements <b>.<wk>, <p>.<wk>; set-merge, so a
@@ -12949,12 +12960,11 @@ window.removeSplit=function(k){
   const live=_splitDerived(e).st==='on'&&!!scheduleData[e.b]&&scheduleData[e.b][e.wk]!==undefined&&isCurrentPhaseBidAdmin(e.b,e.wk);
   if(!live){ openConfirm({ title:'Remove split', body:'<div>'+esc(_splitDerived(e).st==='on'?'Remove this split? It has no bid on '+_splitWkName(e.wk)+'.':'Remove this split? '+_splitWkName(e.wk)+' stays '+e.b+'\'s alone, at '+e.b+'\'s FTE.')+'</div>', okText:'Remove', danger:true, onConfirm:()=>_splitOff(k,true) }); return; } // [432 · R1-1] e-mailed
   const open=biddingOpenOnServer();
-  openConfirm({ title:'Remove split', body:'<div>'+esc(_splitWkName(e.wk)+' · '+e.b+'/'+e.p+'. What happens to '+e.b+'\'s bid?')+'</div>', okText:'Keep '+e.b+'\'s bid', onConfirm:()=>_splitOff(k,true), // [432 · R1-1] e-mailed
-    alt:{ text:open?'Remove the bid too':'Deny the bid', danger:true, onClick:async()=>{
+  openConfirm({ title:'Remove split', body:'<div>'+esc(_splitWkName(e.wk)+' · '+e.b+'/'+e.p+'. '+(open?'What happens to '+e.b+'\'s bid?':e.b+'\'s bid stays '+e.b+'\'s alone, at '+e.b+'\'s FTE.'))+'</div>'+/* [434 · BR-3] after bidding closes: one answer, stated */'', okText:'Keep '+e.b+'\'s bid', onConfirm:()=>_splitOff(k,true), // [432 · R1-1] e-mailed
+    alt:!open?null:{ text:'Remove the bid too', danger:true, onClick:async()=>{ // [434 · §526 · A5] no "Deny the bid": after bidding closes, Keep <b>'s bid / Cancel only
       const s=(splitsData||{})[k]; if(!s||s.st!=='on'){ renderSplitWeeks(); return; } // [410 · split weeks · review] ended meanwhile: no bid is touched
-      const done=()=>_splitOff(k,false); // marked off (and logged) only once the bid is removed or denied · [432 · R1-1] not e-mailed (the bid's own lines go)
-      if(open) return window.adminRemove(e.b,e.wk,done);
-      return window.adDeny(e.b,e.wk,getOutcome(e.wk,e.b,computeApprovals()),done);
+      const done=()=>_splitOff(k,true); // marked off (and logged) only once the bid is removed · [434 · §524 · A4] both e-mailed "…the admin ended your split with <Full name>." (the bidder's bid-removed line goes too)
+      return window.adminRemove(e.b,e.wk,done,true); // [434 · §524 · A4] the partner gets no "your bid was removed" for this removal
     } } });
 };
 // [REMOVED 25 Jul 2026] 'Remove ALL Bids & Locks' deleted at the admin's request — it was no
@@ -13844,7 +13854,7 @@ window.toggleTimerEnabled=function(){
       ? (()=>{ // [373 · §269 T-6] the old sentence promised a countdown that does not start until a qualifying bid
           let _owGo=false; try{ const owr=getTimerRules().openingWindow, began=_windowStartMs(); _owGo=!timerData.lastChange&&!!owr&&!!began&&(owr.days*86400000-(Date.now()-began))>stage0Hours()*3600000; }catch(_){ }
           if(timerData.lastChange) return `<div>Turn the timer <strong>on</strong>? It resumes from its last reset.</div>`;
-          if(_owGo) return `<div>Turn the timer <strong>on</strong>? It resumes at once, counted from the start of the round (the opening window is still running).</div>`;
+          if(_owGo) return `<div>Turn the timer <strong>on</strong>? It resumes at once, counted from the start of the phase (the opening window is still running).</div>`;
           return `<div>Turn the timer <strong>on</strong>? It <strong>won't</strong> start until ${esc(_timerStartsAt())} or ↺ Reset Timer.</div>`;
         })()
       // [297 · RA-3] The old text described only what disappears from the doctors' screen.
@@ -16809,6 +16819,7 @@ window.renderCloudBackups=async function(){
 // [427 · §442] 6.38 added at the end of section 6 (who sees a split's days; tests/docs/split-dates/PLAN.md §A R1). 192 items, [12,40,12,16,13,38,10,51].
 // [431 · R2 fix build · §501–§507] 2.29, 2.38, 2.43, 6.35, 6.36, 6.37 reworded; 6.40 added at the end of section 6 (tests/docs/r2-fix-build/BUILD-BRIEF.md B10). 195 items, [12,41,12,16,13,40,10,51].
 // [432 · final fix build · §511–§517] 2.4, 2.25, 2.38, 2.43, 6.29, 6.34, 6.36: a sentence appended to each; 6.32: a clause (tests/docs/final-fix-build/PLAN.md §6). 195 items, as above.
+// [434 · round 2 fix build · §523–§526] 2.24, 6.18, 6.29, 6.36: a sentence or a clause added to each (tests/docs/round2-fix-build/PLAN.md §5). 195 items, as above.
 // Each item: n (its number), kind (new / live / term), html (its approved words), and for a live line its label, the words shown
 // when the setting gives nothing (whenEmpty) and, for the timer mode, the name of each value.
 const RULES_TEXT={sub:"How the auction works: every setting, the decision engine, and the rules staff see. Current values are read each time this page opens.",sections:[
@@ -16848,7 +16859,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.20","kind":"new","html":"<b>Phases<\/b> — 1, 2 or 3 Fall phases, whether Phase 1 is high-demand weeks only or every week, and whether a Rolling Vacation Auction follows them. Default 3, high-demand only, with a Rolling Vacation Auction. Without one, the auction is complete once the last Fall phase's results are sent. Fixed once Phase 1 begins."},
 {"n":"2.21","kind":"new","html":"<b>Combination bids<\/b> — which of 1/2/3, 1/2, 2/3, 3/4 and 4/5 may be used (default 1/2/3 and 1/2). A switched-off combination cannot be placed and does not compete. Locked while a phase is running."},
 {"n":"2.22","kind":"new","html":"<b>Blinded bidding<\/b> — hides other people's initials on the staff site; the admin still sees names. No effect on decisions. Default off."},
-{"n":"2.24","kind":"new","html":"<b>NP Bids by Phase<\/b> — the phases where NP bids may be placed (default Phases 3 and 4). An NP bid counts only if NP was allowed in the phase it was placed. Can change at any time."},
+{"n":"2.24","kind":"new","html":"<b>NP Bids by Phase<\/b> — the phases where NP bids may be placed (default Phases 3 and 4). An NP bid counts only if NP was allowed in the phase it was placed. Switching NP off for a phase stops every NP bid already placed in that phase from counting; the confirm box says how many. Can change at any time."},
 {"n":"2.25","kind":"new","html":"<b>Cumulative Bid Caps<\/b> — the most weeks a person may hold through each phase: weeks won earlier plus bids placed this phase. One value for all RVA rounds; a later cap cannot be lower than an earlier one, and after a phase with no limit no later phase has a cap. Locked while a phase is running. Between phases, phases already run keep the caps they ran with; only phases still to come can change."},
 {"n":"2.26","kind":"new","html":"<b>FTE Overage Amount<\/b> — how far over a week's capacity a bid can go and be Under Review instead of Losing. 0 to 2; default 0.5. Locked while a phase is running."},
 {"n":"2.27","kind":"new","html":"<b>Last Bids<\/b> (Bids &amp; decisions) — each person's last bid on each week this phase. Clear removes one: that person's next bid on that week is not measured against it. Each Clear is logged in the Change Log with the admin's initials."},
@@ -16934,7 +16945,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"6.15","kind":"new","html":"A decision never changes the projection. A denied bid keeps its place, and the bids below it do not move up (Example 1)."},
 {"n":"6.16","kind":"new","html":"<b>Approve<\/b> records the person as getting the week, with a warning if it puts the week over its capacity. Refused for a bid that does not count (step 2) or is not a valid value."},
 {"n":"6.17","kind":"new","html":"<b>Deny<\/b> records \"not getting it\" and removes any approval. The bid number comes back to the person next phase."},
-{"n":"6.18","kind":"new","html":"Ties and Under Review are the admin's call: approve as many as the week can take, deny the rest. Wheel of Names (Under Review and Approvals/Denials pages) picks one tied person at random; the admin then decides."},
+{"n":"6.18","kind":"new","html":"Ties and Under Review are the admin's call: approve as many as the week can take, deny the rest. Wheel of Names (Under Review and Approvals/Denials pages) picks one tied person at random; the admin then decides. Bids are approved or denied only on Approvals/Denials and Under Review (the Simulator's Auto-Approve/Deny in Rehearsal Mode aside)."},
 {"n":"6.19","kind":"new","html":"<b>Complete Phase<\/b> needs bidding closed, every week locked (or Global Lock on), and every bid of the phase approved or denied."},
 {"n":"6.20","kind":"new","html":"Completing locks the approvals in. Each approved person becomes an earlier winner of that week (step 1) for the rest of the auction, and that bid's numbers are gone for good. Losing and denied bids end with the phase; their numbers come back. Last bids and the competition-week record start fresh."},
 {"n":"6.21","kind":"new","html":"Staff learn their results when the admin sends the phase results."},
@@ -16945,14 +16956,14 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"6.26","kind":"new","html":"<span class=\"ex\"><b>Example 4 — combinations, numbers above 10, NP, a floor<\/b><br>(a) 1/2/3, 1/2 and 2/3 on; capacity 1.0. AF 1/2 vs BB 1 → AF Winning. CC 2/3 vs DD 2 → CC Winning.<br>(b) Bid numbers 1–12. AF 12 vs BB NP → AF Winning. CC 11 vs DD 10 → DD Winning.<br>(c) High-demand week, floor 4. AF 6, BB NP, CC 4 → CC Winning; AF and BB Losing (below the floor, they do not compete).<\/span>"},
 {"n":"6.27","kind":"new","html":"A split week's bid takes the pair's <b>blended FTE<\/b>: 0.6 × the FTE of whoever has the 4-day half + 0.4 × the other's, rounded up to 0.1."},
 {"n":"6.28","kind":"new","html":"Each person's half counts toward their own bid cap — 0.6 (Sun–Wed or Wed–Sat) or 0.4 (Thu–Sat or Sun–Tue) — while the bid is live and once it is won."},
-{"n":"6.29","kind":"new","html":"If the bid wins, each has their half. If it loses, neither has the week. Neither of them can bid on that week again. Either can take the other half in one more split, with someone else bidding. The admin can remove a split and either leave the bid with the bidder alone or cancel the bid. A split won in an earlier phase stays with the bidder. After the admin removes a split, either of the two can make a new split on that week, with each other or with someone else. When the admin removes a split and the bid stays with the bidder (or there is none), each of the two is e-mailed that the admin ended it."},
+{"n":"6.29","kind":"new","html":"If the bid wins, each has their half. If it loses, neither has the week. Neither of them can bid on that week again. Either can take the other half in one more split, with someone else bidding. The admin can remove a split and either leave the bid with the bidder alone or cancel the bid. After bidding closes the box offers only to keep the bid; a bid is decided on Approvals/Denials. A removed split is history only: it never counts again in any phase. A split won in an earlier phase stays with the bidder. After the admin removes a split, either of the two can make a new split on that week, with each other or with someone else. When the admin removes a split, each of the two is e-mailed that the admin ended it; when the bid is cancelled too, the bidder is also told the bid was removed."},
 {"n":"6.30","kind":"new","html":"The partner places no bid on that week and spends no bid number."},
 {"n":"6.31","kind":"new","html":"When the admin records a split, the admin can also place the bidder's bid on that week. That bid follows every rule a bid follows except the competition-week rules (4.9) and the last-bid limit."},
 {"n":"6.32","kind":"new","html":"Staff can tick \"Interested\" on a week to be listed as interested in a split. The list shows in that week's Split weeks box to everyone signed in, with each person's name, and as a small half-and-half square on the week's card. While bidding is open, locked weeks show no square and are not offered; a week someone won outright is not offered to them, and they can't be part of a split on it. The days and the bidder are chosen when a split is proposed. A listing made before a split on that week is not shown again once the split ends. The tick also works before Phase 1 begins and from results sent until the next phase begins; a tick made after results are sent is for the next phase."},
 {"n":"6.33","kind":"new","html":"Splits are made only while bidding is open. While bidding is closed, splits are frozen; only the admin can add or remove a split."},
 {"n":"6.34","kind":"new","html":"Either of two people can propose a split: the week, each person's days and the bidder. It takes effect when the other accepts it. To end it, one asks, and the other ends the split at once or keeps it. Either can decline the other's proposal, and either can withdraw their own before it is accepted. A newer proposal between the same two people on a week replaces the older one. To change a split, end it and propose a new one. Sending, accepting, declining, withdrawing, ending and keeping a split each ask first in a confirm box. A declined proposal is over: whatever either of them proposes next on that week is a new proposal that takes effect only when the other accepts. A request to end that the other kept is over; a later request to end is a new one."},
 {"n":"6.35","kind":"new","html":"When a split with a bid is proposed or accepted, each person's bid cap is checked; if either would go over, it is refused, naming who. A split with no bid counts toward no one's cap; when its bidder opens the bid box, they are told at once if the bid would put the partner over. When a split with a bid ends, the bid stays as the bidder's own whole-week bid, and the bidder is told so: \"Your bid remains active.\" — in the confirm box when the bidder ends it, in the e-mail when the partner does, and beside \"The admin removed this split.\" when the admin removes it while bidding is open and keeps the bid; the ending is refused if that would put the bidder over the bid cap. The partner can't hold their own bid on that week."},
-{"n":"6.36","kind":"new","html":"A split counts as part of the bid: alert e-mails and the timer follow the same rules as any bid change, whenever a split starts or ends on a week with a bid. The partner gets the same alert e-mails as the bidder for that week. Staff are e-mailed when the other person proposes a split or asks to end one, and when the other person answers theirs: accepts or declines the proposal, or ends or keeps the split. The ☰ menu shows how many splits wait for their tap. These e-mails follow the alert e-mail switch. The partner's “changes affecting your weeks” counts the split week as the bidder's does. The partner can't set a “Notify if a week opens up” alert on the split week; the bidder sets it. A proposal or a request to end that is withdrawn before its e-mail goes out is not e-mailed."},
+{"n":"6.36","kind":"new","html":"A split counts as part of the bid: alert e-mails and the timer follow the same rules as any bid change, whenever a split starts or ends on a week with a bid. The partner gets the same alert e-mails as the bidder for that week, except when the admin removes the split and cancels its bid: the partner is told only that the split ended. Staff are e-mailed when the other person proposes a split or asks to end one, and when the other person answers theirs: accepts or declines the proposal, or ends or keeps the split. The ☰ menu shows how many splits wait for their tap. These e-mails follow the alert e-mail switch. The partner's “changes affecting your weeks” counts the split week as the bidder's does. The partner can't set a “Notify if a week opens up” alert on the split week; the bidder sets it. A proposal or a request to end that is withdrawn before its e-mail goes out is not e-mailed."},
 {"n":"6.37","kind":"new","html":"In split wording, staff see the other person's full name in sentences and their initials in short labels (\"Waiting for CD\", \"Bidder: CD\"), and themselves as \"you\"; the bidder shows as \"Bidder: &lt;initials&gt;\" or \"Bidder: you\"."},
 {"n":"6.38","kind":"new","html":"Only the two people in a split and the admin see which days it covers. Someone proposing a split to a person who already has half of that week is told which half that person can take."},
 {"n":"6.39","kind":"new","html":"On Approvals/Denials and Under Review, each week's header shows Capacity, Winning (projected winners not denied, earlier winners and this phase's approvals) and Remaining."},
