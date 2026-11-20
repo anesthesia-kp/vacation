@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 435;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 436;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1090,7 +1090,7 @@ thead th{color:var(--t2)}
             <div class="trow-desc">The weakest bid allowed on each kind of week. A number blocks NP there. A change affects new bids only.</div>
           </div>
           <div id="bfControls" style="display:grid;grid-template-columns:auto auto;gap:8px 14px;align-items:center">
-            <label style="font-size:12px;color:var(--t2);font-weight:600">High demand weeks</label><select id="bfHd" class="inp" style="width:236px" onchange="_bfChanged()"></select>
+            <label style="font-size:12px;color:var(--t2);font-weight:600">High-demand weeks</label><select id="bfHd" class="inp" style="width:236px" onchange="_bfChanged()"></select>
             <label style="font-size:12px;color:var(--t2);font-weight:600">Summer weeks</label><select id="bfSummer" class="inp" style="width:236px" onchange="_bfChanged()"></select>
             <label style="font-size:12px;color:var(--t2);font-weight:600">All other weeks</label><div style="font-size:12px;color:var(--t2)">No floor — all bids allowed · <i>always</i></div>
           </div>
@@ -2314,11 +2314,11 @@ function _resultsBodyFor(key,u,entry,schedSrc){ // [391 · §296] greets by the 
   const approved=(entry.approved||[]).slice(), denied=(entry.denied||[]).slice();
   approved.sort(); denied.sort();
   const appLines=approved.map(wk=>{const m=wkDate(wk); const _se=(typeof _splitWonIn==='function')?_splitWonIn(cur,u,wk):null; // [410 · split weeks, Q10]
-    if(_se&&_se.b!==u) return `  • ${wLabel(m)} — ${_splitHalfLabel(wk,_se.sp,3-Number(_se.bh))}, shared with ${displayName(_se.b)}`; // the partner placed no bid
+    if(_se&&_se.b!==u) return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[_se.b]?.[wk])}) — ${_splitHalfLabel(wk,_se.sp,3-Number(_se.bh))}, shared with ${displayName(_se.b)}`; // the partner placed no bid · [§537 T11] the bidder's bid, the bidder's form
     return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`+(_se?` — ${_splitHalfLabel(wk,_se.sp,Number(_se.bh))}, shared with ${displayName(_se.p)}`:'');}).join('\n');
   const _sl=wk=>(typeof _splitLostIn==='function')?_splitLostIn(cur,u,wk):null; // [429 · F4] a denied split names the split as an approved one does
   const denLines=denied.map(wk=>{const m=wkDate(wk), _sd=_sl(wk);
-    if(_sd&&_sd.b!==u) return `  • ${wLabel(m)} — ${_splitHalfLabel(wk,_sd.sp,3-Number(_sd.bh))}, shared with ${displayName(_sd.b)}`; // the partner placed no bid
+    if(_sd&&_sd.b!==u) return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[_sd.b]?.[wk])}) — ${_splitHalfLabel(wk,_sd.sp,3-Number(_sd.bh))}, shared with ${displayName(_sd.b)}`; // the partner placed no bid · [§537 T11]
     return `  • ${wLabel(m)} (bid ${bidLblAdmin(schedSrc[u]?.[wk])})`+(_sd?` — ${_splitHalfLabel(wk,_sd.sp,Number(_sd.bh))}, shared with ${displayName(_sd.p)}`:'');}).join('\n');
   const ownDenied=denied.some(wk=>{const _sd=_sl(wk); return !(_sd&&_sd.b!==u);}); // [429 · F4] "Denied bid numbers…" only to someone with a denied bid of their own
   return `Hi ${((typeof greetName==='function')?greetName(u):u)},
@@ -3123,9 +3123,9 @@ function bfRulesBullets(){
   // back EMPTY, so callers must cope with that.
   // [398 · §302] No high-demand line either when no holiday week is ticked (W44); summer weeks ticked high-demand are never named here.
   if(f.highDemand!=='none'&&f.highDemand===f.summer&&names){
-    return [`On the highest demand weeks (${names}) and all summer weeks, your bid must be ${f.highDemand} or better`];
+    return [`On the high-demand weeks (${names}) and all summer weeks, your bid must be ${f.highDemand} or better.`]; // [§537 T8]
   }
-  if(f.highDemand!=='none'&&names) out.push(`On the highest demand weeks (${names}), your bid must be ${f.highDemand} or better`);
+  if(f.highDemand!=='none'&&names) out.push(`On the high-demand weeks (${names}), your bid must be ${f.highDemand} or better.`); // [§537 T8]
   if(f.summer!=='none') out.push(`On summer weeks, your bid must be ${f.summer} or better`);
   return out;
 }
@@ -4653,9 +4653,12 @@ function updateStats(){
 // never re-renders — which is exactly "changing the phase does nothing".
 window.renderOverview=renderOverview;
 // Users with zero current-phase bids — dashboard card + reminder button state.
+// [§537 T1] A phase or round is OPEN for bidding: Phase 1 has begun, bidding is open on the server (not closed, timer not run out), and the
+// window is not complete. Only then do the Dashboard's users-without-bids line and Send Reminders show, and only then does Send Reminders send.
+function _remindWindowOpen(){ try{ return phase1Started()&&biddingOpenOnServer()&&!_windowCompletedNow(); }catch(_){ return false; } }
 function renderNoBidders(){
   const el=document.getElementById('noBidsList'); if(!el) return;
-  { const _nbc=document.getElementById('noBidsCard'); if(_nbc) _nbc.style.display=(biddingIsClosedFlag()||_windowCompletedNow())?'none':''; } // [432 · C-2 · §517] closed, or complete and waiting: the whole line is not shown
+  { const _nbc=document.getElementById('noBidsCard'); if(_nbc) _nbc.style.display=_remindWindowOpen()?'':'none'; } // [§537 T1] only while a phase or round is open · [432 · C-2 · §517] closed, or complete and waiting: the whole line is not shown
   const cur=Number(phasesData.currentPhase||1);
   // [319 · P-1] GAP GUARD: a completed phase or round has no bidding window — the card must not count
   // "missing" bidders a day after results went out, and Send Reminders must not mail them (H-9 too:
@@ -7288,7 +7291,7 @@ function _srValue(name){
     case 'timerResetMode': return esc(_timerModeCurrent()===2?'2 · Only when it affects others':'1 · Every bid'); // [404 · §334 A1 · A]
     case 'welcomeEmailsEnabled': return yn(adminSettings.welcomeEmailsEnabled!==false); // [404 · §334 A1 · A]
     case 'comboBids': return esc(comboNowText());
-    case 'bidFloors':{ const f=bfFloors(), s=v=>v==='none'?'no floor':v+' or better'; return L(['High demand weeks: '+s(f.highDemand),'Summer weeks: '+s(f.summer),'All other weeks: no floor']); }
+    case 'bidFloors':{ const f=bfFloors(), s=v=>v==='none'?'no floor':v+' or better'; return L(['High-demand weeks: '+s(f.highDemand),'Summer weeks: '+s(f.summer),'All other weeks: no floor']); }
     // [385 · §292] 'priorityLockEnabled' is no longer a review row (Archived settings)
     case 'blindedBidding': return yn(adminSettings.blindedBidding===true);
     case 'splitWeeksOn': return yn(adminSettings.splitWeeksOn===true); // [411 · split weeks, §371]
@@ -7569,7 +7572,7 @@ window._bfChanged=function(){
       const _was=bfFloors(); // [404 · §334 A1 · K-Q3] for the Change Log row
       try{ await setDoc(adminRef,{bidFloors:cfg},{merge:true}); toast('Bid floors saved','ok'); }
       catch(e){ toast(_cfgDeniedMsg(e,'the bid floors')||('Bid floors NOT saved — nothing changed ('+(e?.message||e)+'). Try again.'),'err'); renderBidFloorsCard(); return; } // [build 268 · FRZ] plain-language server-denial
-      _cfgLog('Bid floors',[['High demand weeks',_was.highDemand,cfg.highDemand],['Summer weeks',_was.summer,cfg.summer]].filter(x=>x[1]!==x[2]).map(x=>x[0]+': '+show(x[1])+' → '+show(x[2])).join('; '));
+      _cfgLog('Bid floors',[['High-demand weeks',_was.highDemand,cfg.highDemand],['Summer weeks',_was.summer,cfg.summer]].filter(x=>x[1]!==x[2]).map(x=>x[0]+': '+show(x[1])+' → '+show(x[2])).join('; '));
       renderBidFloorsCard();
     },
     onCancel:()=>renderBidFloorsCard()
@@ -9144,7 +9147,7 @@ ${bullets([
 ])}
 Alert e-mails are sent within a few minutes of a change.
 
-Choose which alerts you get under E-mail alerts at the top of the site. Results, reminders and messages from the admin are always sent.
+Choose which alerts you get in the ☰ menu → E-mail alerts. Results, reminders and messages from the admin are always sent.
 
 ${B('RULES AND REMINDERS OF THE AUCTION')}
 ${bullets([
@@ -9263,6 +9266,7 @@ window.sendReminderEmails=function(){
   if(!_feedsHealthyOrExplain('Send Reminders')) return;
   // [319 · P-1] No open window, no reminder: a completed phase or round (sent or not) refuses here.
   if(_windowCompletedNow()){ toast(''+_phaseWindowLabel()+' is complete — there is no open bidding window to remind anyone about.','err'); return; }
+  if(!_remindWindowOpen()){ toast('Bidding is not open — there is no bidding window to remind anyone about.','err'); return; } // [§537 T1] the guard (before Phase 1, closed, timer run out)
   const cur=Number(phasesData.currentPhase||1);
   const noBidders=[];
   // [319 · P-1] The same rule as the dashboard card, by construction (H-9: do NOT skip denied bids —
@@ -14870,7 +14874,7 @@ async function _sendWhitelistAsk(targetUsers,label,opts){
     okText:'Send to '+targets.length,
     onConfirm:async()=>{
       // [401 · §317] One request per person, wl_<press>_<initials>, to the Google login address only; the mail server sends it.
-      const subj='KP Anesthesia Vacation Auction — please add us to your contacts'.slice(0,40);
+      const subj='Whitelist ask'; // [§537 T12] the E-mail Log's Kind label
       let n=0; const refused=[];
       for(const u of targets){
         let r='error';
@@ -16877,7 +16881,7 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.40","kind":"new","html":"<b>Users<\/b> — each person has initials, a full name, an FTE, a Google login e-mail and, if they want one, a KP e-mail. Initials cannot change. Adding a person needs every field but the KP e-mail. Add several users takes one person per line, fields in any order; a preview shows who will be added and why any line is not, and the people are added together or not at all. Each row has one Save: it refuses a blank full name or login e-mail, and changes FTE only before Phase 1 begins. Two people can never share a login e-mail. The login e-mail must be a Gmail address. A KP e-mail saved blank is off: that person is not asked for one. When a KP e-mail is turned off or replaced, the address that was on file gets one note saying so."},
 {"n":"2.41","kind":"new","html":"<b>Round down capacity<\/b> (Week Capacity, between phases) — for each week with more than 1.0 and less than 2.0 FTE left, lowers the capacity by the part that no group of people on the roster can win outright; a backup first, each change in the Change Log. No outright win changes."},
 {"n":"2.42","kind":"new","html":"<b>Split weeks<\/b> (On / Off) — two people can share a week; one bids for both. Can be changed before Phase 1 and between phases. Off: no new splits; splits already made stay. On the admin's lists a split shows on the bidder's row as both sets of initials, the bidder first (AF/BC). Each person's days show with their dates (Sun–Wed (Feb 14–17)). In the Change Log a bid made for a split shows the same way, as it stood when the bid was made."},
-{"n":"2.43","kind":"new","html":"<b>Users without bids<\/b> (Dashboard) and Send Reminders leave out anyone at their bid cap, and anyone with no bid number they can use on any open week: they cannot place another bid this phase. Once bidding closes, the Dashboard does not show the line."}
+{"n":"2.43","kind":"new","html":"<b>Users without bids<\/b> (Dashboard) and Send Reminders leave out anyone at their bid cap, and anyone with no bid number they can use on any open week: they cannot place another bid this phase. The line and Send Reminders show only while a phase or round is open."}
 ]},
 {n:"3",title:"Timer",items:[
 {"n":"3.1","kind":"new","html":"The timer decides when a phase's bidding ends. At 0, bidding closes for everyone."},

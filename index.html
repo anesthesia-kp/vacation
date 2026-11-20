@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 267;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 268;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -678,7 +678,7 @@ body{zoom:1.15}
 <div id="bidLimitModal" class="modal">
   <div class="modal-content" style="max-width:380px;border-color:rgba(92,31,21,.4)">
     <div style="text-align:center;margin-bottom:8px;font-size:2.4rem"><svg class="lic" viewBox="0 0 24 24" aria-hidden="true" style="width:1.1em;height:1.1em;vertical-align:-.17em;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg></div>
-    <div class="modal-title" style="color:#4a1911;text-align:center">Bid Limit Reached</div>
+    <div class="modal-title" style="color:#4a1911;text-align:center">Bid Cap</div><!-- [§537 T10] -->
     <p id="bidLimitModalMsg" style="color:#1f2329;line-height:1.5;text-align:center;margin:6px 0 4px;font-size:.92rem"><strong style="color:#6f6a60">You've reached the per-phase bid limit.</strong></p>
     <p id="bidLimitModalMore" style="color:#4a505a;line-height:1.5;text-align:center;font-size:.82rem;margin-bottom:14px">Remove a bid to bid here.</p><!-- [228 · §297] · [262 · §486 D22] hidden with no current bids (showBidLimitModal) -->
     <div class="modal-buttons" style="justify-content:center">
@@ -1760,9 +1760,9 @@ function bfRulesBullets(){
   // back EMPTY, so callers must cope with that.
   // [398 · §302] No high-demand line either when no holiday week is ticked (W44); summer weeks ticked high-demand are never named here.
   if(f.highDemand!=='none'&&f.highDemand===f.summer&&names){
-    return [`On the highest demand weeks (${names}) and all summer weeks, your bid must be ${f.highDemand} or better`];
+    return [`On the high-demand weeks (${names}) and all summer weeks, your bid must be ${f.highDemand} or better.`]; // [§537 T8]
   }
-  if(f.highDemand!=='none'&&names) out.push(`On the highest demand weeks (${names}), your bid must be ${f.highDemand} or better`);
+  if(f.highDemand!=='none'&&names) out.push(`On the high-demand weeks (${names}), your bid must be ${f.highDemand} or better.`); // [§537 T8]
   if(f.summer!=='none') out.push(`On summer weeks, your bid must be ${f.summer} or better`);
   return out;
 }
@@ -7187,11 +7187,11 @@ const AL_NOSAVE='Could not save — try again in a moment.';
 const AL_REFUSE={bid:'You already have a bid on this week.',won:'You already won this week.',locked:'This week is locked right now.'};
 // A get-in alert as the confirmation e-mail lists it — the approved test page v5's form: "Jun 13 (a bid of 5)". (The box's own row reads
 // "Week 24 · Jun 13 — a bid of 5", §536 W5.) [fix round, review lane 1 L1 / lane 3 L2]
-function _alConfRow(x){ return formatShort(x.wk)+' (a bid of '+blFmtBid(x.bid)+')'; }
+function _alConfRow(x){ return (weekMeta[x.wk]?_srWeekOpt(x.wk):formatShort(x.wk))+' (a bid of '+blFmtBid(x.bid)+')'; } // [§537 T4] "Week 51 · Dec 19 (a bid of 4)"
 function _alConfBody(user){
   const w=_alWatches(user);
   return 'Hi '+((typeof greetName==='function')?greetName(user):user)+',\n\nYour e-mail alert choices have been saved.\n• '+AL_SW1+': '+(_alOn(user,'proj')?'ON':'OFF')+'\n• '+AL_SW2+': '+(_alOn(user,'chance')?'ON':'OFF')
-    +'\n• '+AL_GI+': '+(w.length?w.map(_alConfRow).join(' · '):'no custom alerts set')+_alConfKpLine(user)+'\n\n'+AL_ALWAYS+'\nChange these any time under E-mail alerts at the top of the site.'; // [227 · §296] the full name (displayName, initials when none is on file); the get-in line when none is set · [229 · §297] item 8: the first name (greetName)
+    +'\n• '+AL_GI+': '+(w.length?w.map(_alConfRow).join(' · '):'none set')+_alConfKpLine(user)+'\n\n'+AL_ALWAYS+'\nChange these any time in the ☰ menu → E-mail alerts.'; // [§537 T6] · [227 · §296] the full name (displayName, initials when none is on file); the get-in line when none is set · [229 · §297] item 8: the first name (greetName)
 }
 // [235 · §315] S2: the KP line - "\n• KP e-mail: ON (<address>)" (W5) or "\n• KP e-mail: OFF" (W6), from the address book at sending - only while the
 // KP row shows (the admin's "Ask users for their KP e-mail at login" not off, Q3: in every confirmation) and only once the address book has
@@ -7764,7 +7764,7 @@ async function _alWinSet(){
   const ok=await _alWrite(user,{watchSet:{[wk]:{bid:bid,ph:s.ph,rd:s.rd,since:s.since}}}); // [220 · §291] no e-mail when a late save lands: Done sends one for the visit
   if(ok===false){ _alToast(AL_NOSAVE); return; }
   if(ok===null){ _alWinClose(true); _alToast(AL_LATE); return; } // [fix round, review lane 3 M2] not confirmed yet · [220 · §291] the box's Done waits for it and sends the visit's one e-mail
-  _alAfterWindow(user,'Alert '+(edit?'changed':'set')+' for '+formatShort(wk)+'.');
+  _alAfterWindow(user,'Alert '+(edit?'changed':'set')+' for '+(weekMeta[wk]?_srWeekOpt(wk):formatShort(wk))+'.'); // [§537 T3] "Week 51 · Dec 19", the Notify list's form
 }
 window._alWinSet=_alWinSet;
 async function _alWinRemove(){
@@ -9110,7 +9110,7 @@ ${bullets([
 ])}
 Alert e-mails are sent within a few minutes of a change.
 
-Choose which alerts you get under E-mail alerts at the top of the site. Results, reminders and messages from the admin are always sent.
+Choose which alerts you get in the ☰ menu → E-mail alerts. Results, reminders and messages from the admin are always sent.
 
 ${B('RULES AND REMINDERS OF THE AUCTION')}
 ${bullets([
