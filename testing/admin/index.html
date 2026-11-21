@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 436;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 437;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -2645,7 +2645,7 @@ function _moKindLbl(d){
   if(k==='alert') return 'projection alert';
   if(k==='confirm') return 'alert settings';
   if(k==='welcome') return 'welcome';
-  if(k==='kpnote') return 'unsubscribe';
+  if(k==='kpnote') return 'KP note'; // [§539 W2]
   return String(x.subj||'admin mail').slice(0,40);
 }
 // NOT SENT: what Send again can send — this auction's requests (not Send agains) the server ended "not sent" after a failure it can try
@@ -2706,11 +2706,12 @@ async function _moRetry(rootId){
 }
 // E-mail Info's Send again (W5): asked again only for the addresses still owed at the moment of the press.
 const _moAgainBusy=new Set();
-window.moSendAgain=async function(btn){
+window.moSendAgain=async function(btn,go){
   const id=btn&&btn.getAttribute?btn.getAttribute('data-id'):String(btn||'');
   if(!id||_moAgainBusy.has(id)) return;
   const row=_moNotSentRows(_moCur()).find(r=>r.id===id);
   if(!row){ toast('Already sent — nothing to do.','ok'); _moPaint(); return; }
+  if(go!==true){ openConfirm({ title:'Send again', body:'<div>'+esc('Send this e-mail to '+row.owed.join(', ')+' again?'+(/^(not confirmed|interrupted)/.test(row.reason)?' It may already have arrived — check first.':''))+'</div>', okText:'Send again', onConfirm:()=>moSendAgain(btn,true) }); return; } // [§539 E1] a box first
   _moAgainBusy.add(id); if(btn&&'disabled' in btn) btn.disabled=true;
   let r='error';
   try{ r=await _moRetry(id); }finally{ _moAgainBusy.delete(id); }
@@ -3125,7 +3126,7 @@ function bfRulesBullets(){
     return [`On the high-demand weeks (${names}) and all summer weeks, your bid must be ${f.highDemand} or better.`]; // [§537 T8]
   }
   if(f.highDemand!=='none'&&names) out.push(`On the high-demand weeks (${names}), your bid must be ${f.highDemand} or better.`); // [§537 T8]
-  if(f.summer!=='none') out.push(`On summer weeks, your bid must be ${f.summer} or better`);
+  if(f.summer!=='none') out.push(`On summer weeks, your bid must be ${f.summer} or better.`); // [§537 6:16 (1)] the full stop
   return out;
 }
 // ── [build 265 · B5] Auction Calendar card + editor ─────────────────────────────
@@ -7987,7 +7988,7 @@ function renderNextStep(){
 // page's (13 Oct 2026): results not sent yet; "Phase N next" after a Fall phase; "Fall auction complete" after the last Fall phase;
 // "Phase 4: Round r complete" after Round r's results; "Auction complete" once finished (or after the last Round).
 function _phaseDoneLine(cur){
-  if(!(phasesData.resultsSent||{})[cur]) return '✓ Complete · results not sent yet';
+  if(!(phasesData.resultsSent||{})[cur]){ try{ const rs=(typeof _moArrived!=='undefined'&&_moArrived)?_resState(cur):null; if(rs&&rs.any&&rs.allSent&&!rs.gone) return '✓ Complete · results sent — press Publish to finish'; }catch(_){} return '✓ Complete · results not sent yet'; } // [§539 E2]
   if(phasesData.finishedAt||cur>=lastPhase()) return '✓ Auction complete'; // [407 · §350] no RVA: the last Fall phase
   if(cur===fallPhases()) return '✓ Fall auction complete';
   if(isRvaPhase(cur)) return '✓ '+phaseName(cur)+' complete'; // [435 · §536] "Phase 4: Round N complete"
@@ -9139,7 +9140,7 @@ This confirms you are enrolled in e-mail alerts. You will receive an e-mail:
 ${bullets([
   `When someone else's bid changes your projected outcome on a week you bid on`,
   `When a bid you withdrew from a week would now win there`,
-  `When a week you added under E-mail alerts could be won with the bid you chose`,
+  `When a week you added in the ☰ menu → E-mail alerts could be won with the bid you chose`,
   `When a phase or round ends and your results are sent`,
   `As an occasional reminder if you have not yet bid in an open phase`,
   `As a confirmation whenever you change your alert choices`
@@ -9178,8 +9179,8 @@ ${bullets([
   `Winning (W): Projected to be approved`, // [392 · §297] items 210, 212-215, word for word as on the page; 211 kept word for word (his ruling, 5:33 PM)
   `Under Review (R): Over capacity, alone or together with other bids; outcome uncertain`,
   `Losing (L): Projected not to be approved`,
-  `E-mail alerts tell you when someone else's bid changes your projection on a week you bid on, and when a bid you withdrew would now win. Turn either off under E-mail alerts.`, // [384 · §288] the two alert rules, in the same place as on the page (plan §11b line 1, §11k item 4)
-  `Week out of reach? Use “Notify if a week opens up” under E-mail alerts with the bid you'd place. If that bid could later win or be under review, you'll be e-mailed and the timer restarts so you have time to bid. Lasts until the phase ends.`, // [221 / 385 · §292] the get-in rule line, as ruled (10:26 AM) · [229 / 393 · §297] item 212 · [399 · §306] L5 W49
+  `E-mail alerts tell you when someone else's bid changes your projection on a week you bid on, and when a bid you withdrew would now win. Turn either off in the ☰ menu → E-mail alerts.`, // [384 · §288] the two alert rules, in the same place as on the page (plan §11b line 1, §11k item 4)
+  `Week out of reach? Use “Notify if a week opens up” in the ☰ menu → E-mail alerts with the bid you'd place. If that bid could later win or be under review, you'll be e-mailed and the timer restarts so you have time to bid. Lasts until the phase ends.`, // [221 / 385 · §292] the get-in rule line, as ruled (10:26 AM) · [229 / 393 · §297] item 212 · [399 · §306] L5 W49
   `Projections are not final — they can change as others bid or staffing needs change.`
 ])}
 
@@ -12713,7 +12714,7 @@ window.clearLastBid=function(u,wk){
 // no countdown (Q7). Change Log: SYSTEM rows (week 'ALL', the week in `choice`), action 'split'.
 const SPLIT_LOCKED_TEXT='Can be changed before Phase 1 and between phases.';
 function _splitWkName(wk){ let n=0; try{ n=wNum(wkDate(wk)); }catch(_){ n=0; } return n?('Week '+n):String(wk||''); }
-function _splitStatusHtml(e0){ const e=_splitDerived(e0), by=(e0&&e0.src==='staff')?' · by staff':''; if(e.st==='on') return 'In place'+by; if(e.st==='won') return '<span class="pill p-green">Won</span>'+by; return '<span style="color:var(--t2)">'+(e.why==='lost'?(_splitBidCell(e)==='No bid'?'Ended — no bid':'Ended — bid lost')+by:(by&&e.why==='staff'?'Ended by staff':(by&&e.why==='admin'?'Removed by admin'+by:'Removed'+by)))+'</span>'; } // [415 · S2b · §376–§378] a split the staff recorded: "· by staff" after its status · [415 · S2b · §381] F: one the admin removed "Removed by admin · by staff", one the two people ended "Ended by staff" · [433 · §521] a split that never had a bid in its phase: "Ended — no bid" (the Bid column's own reading)
+function _splitStatusHtml(e0){ const e=_splitDerived(e0), stf=!!(e0&&e0.src==='staff'), by=stf?' · by staff':' · by admin'; if(e.st==='on') return 'In place'+by; if(e.st==='won') return '<span class="pill p-green">Won</span>'+by; return '<span style="color:var(--t2)">'+(e.why==='lost'?(_splitBidCell(e)==='No bid'?'Ended — no bid':'Ended — bid lost')+by:(stf&&e.why==='staff'?'Ended by staff':(stf&&e.why==='admin'?'Removed by admin'+by:'Removed'+by)))+'</span>'; } // [§539 O-2] a split the admin made: "· by admin" // [415 · S2b · §376–§378] a split the staff recorded: "· by staff" after its status · [415 · S2b · §381] F: one the admin removed "Removed by admin · by staff", one the two people ended "Ended by staff" · [433 · §521] a split that never had a bid in its phase: "Ended — no bid" (the Bid column's own reading)
 // A drop-down's options, redrawn only when they differ (a snapshot never tears down an open drop-down); the choice is kept while still offered.
 function _swFill(id,first,opts){ const s=document.getElementById(id); if(!s) return; const prev=s.value;
   const h='<option value="">'+esc(first)+'</option>'+opts.map(o=>'<option value="'+esc(String(o[0]))+'">'+esc(String(o[1]))+'</option>').join('');
@@ -12920,11 +12921,11 @@ window.createSplit=function(){
 // (a bid is decided on Approvals/Denials, [434 · §526 · A5]). That action's own box opens first, and the split is marked off only once its write has succeeded: a Cancel
 // or a failed write there leaves the split and the bid as they were [410 · split weeks · review]. A split won in an earlier phase (or with no live bid): the bidder keeps the week — no completed win is undone.
 // [432 · R1-1 · §511] The admin's removal, e-mailed: one alert request to each of the two who has an address (recipientsFor), one line
-// {k:'se', wk, w:<the other's initials>} - the mail server writes "<week> — the admin ended your split with <Full name>.". Written under the
-// gate of every admin alert line: nothing once bidding has closed (_alertsClosed, §486 D2). A request not written is said (N1, §328).
+// {k:'se', wk, w:<the other's initials>} - the mail server writes "<week> — the admin ended your split with <Full name>.". Written at any
+// time, also after bidding has closed ([§539 S1]: not under §486 D2's gate). A request not written is said (N1, §328).
 async function _splitOffMail(e){
   try{
-    if(typeof _alertsClosed==='function'&&_alertsClosed()) return 0;
+    // [§539 S1] at any time: Rules 6.29 holds over §486 D2 for this e-mail (it changes a result, it is not a bidding alert)
     const who=[], ps=[];
     for(const [u,w] of [[e.b,e.p],[e.p,e.b]]){ if(!u||!w||!recipientsFor(u).length) continue; who.push(u); ps.push(_moWrite('a_'+_moRand(24),{kind:'alert',u:u,lines:[{k:'se',wk:e.wk,w:w}]})); }
     const res=await Promise.all(ps);
@@ -16958,14 +16959,14 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"6.26","kind":"new","html":"<span class=\"ex\"><b>Example 4 — combinations, numbers above 10, NP, a floor<\/b><br>(a) 1/2/3, 1/2 and 2/3 on; capacity 1.0. AF 1/2 vs BB 1 → AF Winning. CC 2/3 vs DD 2 → CC Winning.<br>(b) Bid numbers 1–12. AF 12 vs BB NP → AF Winning. CC 11 vs DD 10 → DD Winning.<br>(c) High-demand week, floor 4. AF 6, BB NP, CC 4 → CC Winning; AF and BB Losing (below the floor, they do not compete).<\/span>"},
 {"n":"6.27","kind":"new","html":"A split week's bid takes the pair's <b>blended FTE<\/b>: 0.6 × the FTE of whoever has the 4-day half + 0.4 × the other's, rounded up to 0.1."},
 {"n":"6.28","kind":"new","html":"Each person's half counts toward their own bid cap — 0.6 (Sun–Wed or Wed–Sat) or 0.4 (Thu–Sat or Sun–Tue) — while the bid is live and once it is won."},
-{"n":"6.29","kind":"new","html":"If the bid wins, each has their half. If it loses, neither has the week. Neither of them can bid on that week again. Either can take the other half in one more split, with someone else bidding. The admin can remove a split and either leave the bid with the bidder alone or cancel the bid. After bidding closes the box offers only to keep the bid; a bid is decided on Approvals/Denials. A removed split is history only: it never counts again in any phase. A split won in an earlier phase stays with the bidder. After the admin removes a split, either of the two can make a new split on that week, with each other or with someone else. When the admin removes a split, each of the two is e-mailed that the admin ended it; when the bid is cancelled too, the bidder is also told the bid was removed."},
+{"n":"6.29","kind":"new","html":"If the bid wins, each has their half. If it loses, neither has the week. Neither of them can bid on that week again. Either can take the other half in one more split, with someone else bidding. The admin can remove a split and either leave the bid with the bidder alone or cancel the bid. After bidding closes the box offers only to keep the bid; a bid is decided on Approvals/Denials. A removed split is history only: it never counts again in any phase. A split won in an earlier phase stays with the bidder. After the admin removes a split, either of the two can make a new split on that week, with each other or with someone else. When the admin removes a split, at any time, each of the two is e-mailed that the admin ended it; when the bid is cancelled too, the bidder is also told the bid was removed."},
 {"n":"6.30","kind":"new","html":"The partner places no bid on that week and spends no bid number."},
 {"n":"6.31","kind":"new","html":"When the admin records a split, the admin can also place the bidder's bid on that week. That bid follows every rule a bid follows except the competition-week rules (4.9) and the last-bid limit."},
 {"n":"6.32","kind":"new","html":"Staff can tick \"Interested\" on a week to be listed as interested in a split. The list shows in that week's Split weeks box to everyone signed in, with each person's name, and as a small half-and-half square on the week's card. While bidding is open, locked weeks show no square and are not offered; a week someone won outright is not offered to them, and they can't be part of a split on it. The days and the bidder are chosen when a split is proposed. A listing made before a split on that week is not shown again once the split ends. The tick also works before Phase 1 begins and from results sent until the next phase begins; a tick made after results are sent is for the next phase."},
 {"n":"6.33","kind":"new","html":"Splits are made only while bidding is open. While bidding is closed, splits are frozen; only the admin can add or remove a split."},
-{"n":"6.34","kind":"new","html":"Either of two people can propose a split: the week, each person's days and the bidder. It takes effect when the other accepts it. To end it, one asks, and the other ends the split at once or keeps it. Either can decline the other's proposal, and either can withdraw their own before it is accepted. A newer proposal between the same two people on a week replaces the older one. To change a split, end it and propose a new one. Sending, accepting, declining, withdrawing, ending and keeping a split each ask first in a confirm box. A declined proposal is over: whatever either of them proposes next on that week is a new proposal that takes effect only when the other accepts. A request to end that the other kept is over; a later request to end is a new one."},
+{"n":"6.34","kind":"new","html":"Either of two people can propose a split: the week, each person's days and the bidder. It takes effect when the other accepts it. To end it, one asks, and the other ends the split at once or keeps it. Either can decline the other's proposal, and either can withdraw their own before it is accepted. A newer proposal between the same two people on a week replaces the older one. To change a split, end it and propose a new one. Sending, accepting, declining, withdrawing, ending and keeping a split each ask first in a confirm box. A declined proposal is over: whatever either of them proposes next on that week is a new proposal that takes effect only when the other accepts. A request to end that the other kept is over; a later request to end is a new one. Under Blinded bidding a proposal is sent even when the other person has a bid on the week or the split would take one of them over the bid cap; those checks are made when it is accepted, and only the person accepting sees why."},
 {"n":"6.35","kind":"new","html":"When a split with a bid is proposed or accepted, each person's bid cap is checked; if either would go over, it is refused, naming who. A split with no bid counts toward no one's cap; when its bidder opens the bid box, they are told at once if the bid would put the partner over. When a split with a bid ends, the bid stays as the bidder's own whole-week bid, and the bidder is told so: \"Your bid remains active.\" — in the confirm box when the bidder ends it, in the e-mail when the partner does, and beside \"The admin removed this split.\" when the admin removes it while bidding is open and keeps the bid; the ending is refused if that would put the bidder over the bid cap. The partner can't hold their own bid on that week."},
-{"n":"6.36","kind":"new","html":"A split counts as part of the bid: alert e-mails and the timer follow the same rules as any bid change, whenever a split starts or ends on a week with a bid. The partner gets the same alert e-mails as the bidder for that week, except when the admin removes the split and cancels its bid: the partner is told only that the split ended. Staff are e-mailed when the other person proposes a split or asks to end one, and when the other person answers theirs: accepts or declines the proposal, or ends or keeps the split. The ☰ menu shows how many splits wait for their tap. These e-mails follow the alert e-mail switch. The partner's “changes affecting your weeks” counts the split week as the bidder's does. The partner can't set a “Notify if a week opens up” alert on the split week; the bidder sets it. A proposal or a request to end that is withdrawn before its e-mail goes out is not e-mailed."},
+{"n":"6.36","kind":"new","html":"A split counts as part of the bid: alert e-mails and the timer follow the same rules as any bid change, whenever a split starts or ends on a week with a bid. The partner gets the same alert e-mails as the bidder for that week, except when the admin removes the split and cancels its bid: the partner is told only that the split ended. Staff are e-mailed when the other person proposes a split or asks to end one, and when the other person answers theirs: accepts or declines the proposal, or ends or keeps the split, and when the person they proposed to splits with someone else on that week. The ☰ menu shows how many splits wait for their tap. These e-mails follow the alert e-mail switch. The partner's “changes affecting your weeks” counts the split week as the bidder's does. The partner can't set a “Notify if a week opens up” alert on the split week; the bidder sets it. A proposal or a request to end that is withdrawn before its e-mail goes out is not e-mailed."},
 {"n":"6.37","kind":"new","html":"In split wording, staff see the other person's full name in sentences and their initials in short labels (\"Waiting for CD\", \"Bidder: CD\"), and themselves as \"you\"; the bidder shows as \"Bidder: &lt;initials&gt;\" or \"Bidder: you\"."},
 {"n":"6.38","kind":"new","html":"Only the two people in a split and the admin see which days it covers. Someone proposing a split to a person who already has half of that week is told which half that person can take."},
 {"n":"6.39","kind":"new","html":"On Approvals/Denials and Under Review, each week's header shows Capacity, Winning (projected winners not denied, earlier winners and this phase's approvals) and Remaining."},
