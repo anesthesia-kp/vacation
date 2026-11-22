@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 269;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 270;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -725,7 +725,7 @@ body{zoom:1.15}
         <li id="ruleCompSet" style="display:none"></li><!-- [220 · §288] straight below it: the Strict line, Strict only (plan §11g) — filled and shown by _ruleCompSetSync; under Standard no line at all -->
         <li id="ruleBidFloors" style="display:none"></li><!-- [COPY-3] filled from the live floors at boot; hidden until then so no stale or invented floor text can flash, and it stays hidden when no floor is set -->
         <li id="ruleBlind" style="display:none">Bidder names are hidden: only your own bids show initials.</li><!-- [204 · §261] shown only while the admin's Blinded bidding switch is on (_blindSync) · [228 · §297] item 202 -->
-        <li id="ruleSplit" style="display:none">Split weeks: two people can share a week. One bids for both, at their blended FTE. To share a week, open Split weeks in the menu.</li><!-- [410 · split weeks] A10, shown only while adminSettings.splitWeeksOn is true (_splitRuleSync) -->
+        <li id="ruleSplit" style="display:none">Split weeks: two people can share a week. One bids for both, at their blended FTE. To share a week, open Split weeks in the ☰ menu.</li><!-- [410 · split weeks] A10, shown only while adminSettings.splitWeeksOn is true (_splitRuleSync) -->
         <!-- [220 · §288] the three strategy lines (plan §11e) and the bailing line (§11f item 1, §11g) were removed here -->
       </ul>
       <div style="margin-top:12px;color:#1f2329;font-weight:600">Timer Rules</div>
@@ -2120,7 +2120,7 @@ function _spHoldFte(u,wk){ return (typeof splitsData!=='undefined'&&!_spFor(u,wk
 function _splitWeeksOn(){ try{ return !!(adminSettings&&adminSettings.splitWeeksOn===true); }catch(_){ return false; } }
 // [262 · 430 · §486 D10] The split-weeks rule line: the staff Rules & Reminders line (#ruleSplit) and the welcome e-mail's bullet while
 // splits are on. Word for word the same on the staff and admin pages.
-function splitRuleLine(){ return 'Split weeks: two people can share a week. One bids for both, at their blended FTE. To share a week, open Split weeks in the menu.'; }
+function splitRuleLine(){ return 'Split weeks: two people can share a week. One bids for both, at their blended FTE. To share a week, open Split weeks in the ☰ menu.'; }
 function _splitRuleSync(){ try{ const li=document.getElementById('ruleSplit'); if(li){ const d=_splitWeeksOn()?'':'none'; if(li.style.display!==d) li.style.display=d; const t=splitRuleLine(); if(li.textContent!==t) li.textContent=t; } }catch(_){} if(typeof _srSync==='function') _srSync(); } // [247 · S2a · §373] and the ☰ Split weeks entry
 // [413 · S2a · §373] SPLIT REQUESTS (vacations/splitRequests: {"<initials>":{"<wk>":{h,ph,at}}}). These four helpers are identical on the staff and admin pages.
 // The stage: 1 = bidding open (requests for the current phase; before Phase 1 too) · 2 = bidding closed until the results are sent (frozen:
@@ -2417,6 +2417,32 @@ function _withSplits(sd,fn){ if(typeof splitsData==='undefined') return fn(); co
 // [263 · §507 U1 / U2] Who would go over the bid cap, by name: the signed-in person "You" (first), anyone else by full name (displayName) -
 // "You", "Brian Cole", "You and Brian Cole", "Ana Alvarez and Brian Cole" (us in the caller's order: the bidder, then the partner).
 function _spOverWho(us){ const me=(typeof getCurrentUser==='function')?getCurrentUser():null, a=us.filter(u=>u===me).concat(us.filter(u=>u!==me)); return a.map(u=>u===me?'You':displayName(u)).join(' and '); }
+// [§544 B1] EACH PERSON CHECKED FOR THEIR OWN BID AND CAP WHEN THEY ACT, told only about themselves. Would u go over the bid cap with
+// this split (t = {b,p,sp,bh,ph})? With the bidder's bid in: u on the picture after (as _spCapRefusal). With no bid yet: u's count plus u's
+// half (Rules 6.28's 0.6 / 0.4), counted even before a bid. Over = used over the cap, in tenths. false when there is no cap or on any doubt.
+function _spOwnCapOver(u,wk,t){
+  try{
+    const cap=getMaxBidsPerPhase(); if(cap===null||cap===undefined) return false;
+    const R=x=>Math.round(Number(x)*10);
+    if(_spLive(t.b,wk)){
+      const user=t.b, cur=Number(phasesData.currentPhase||1), pend={act:'record',q:t.p,wk:wk,t:t};
+      const had=!!bidPhaseData[user], hk=had&&Object.prototype.hasOwnProperty.call(bidPhaseData[user],wk), was=hk?bidPhaseData[user][wk]:undefined;
+      if(!bidPhaseData[user]) bidPhaseData[user]={};
+      bidPhaseData[user][wk]=cur;
+      try{ return _withSplits(_spAfterData(pend,wk),()=>R(bidLimitStatus(u).used)>R(cap)); }
+      finally{ if(!had) delete bidPhaseData[user]; else if(hk) bidPhaseData[user][wk]=was; else delete bidPhaseData[user][wk]; }
+    }
+    const h=_splitHalfWeight(t.sp,u===t.b?Number(t.bh):3-Number(t.bh));
+    return R(bidLimitStatus(u).used)+R(h)>R(cap);
+  }catch(_){ return false; }
+}
+// [§544 X1] My own bid on the week when I am not the split's bidder: a held bid (_strictHeld - a winning bid on a competition week) cannot be
+// removed, so the line says what does work; otherwise "has to be removed first" (§406 Q4 / §436 Y17). (Staff text never names the rule set, rule 28.)
+function _spOwnBidLine(me,wk){
+  const n=weekMeta[wk].weekNum;
+  let held=false; try{ held=(typeof _strictHeld==='function'&&_strictHeld(me,wk)===true); }catch(_){ held=false; }
+  return held?('Your winning bid on Week '+n+" can't be removed. To share this week, the split must name you as the bidder — your bid stays in place for both of you."):('Your bid on Week '+n+' has to be removed first.');
+}
 function _spCapRefusal(user,wk,pend,chg){
   try{
     const q=pend.q;
@@ -7975,9 +8001,9 @@ const SA_HALVES={W1:{sp:'W',mh:1},W2:{sp:'W',mh:2},T1:{sp:'T',mh:1},T2:{sp:'T',m
 function _saView(me,s,wk){
   const nm=displayName(s.q), oi=s.q, L=['Split with '+nm], A=[], row=s.row, t=s.was||s; // [256 · §418–§419] the other person: full name (nm) first, then initials (oi); me: my initials
   const terms=()=>{ if(t.sp&&t.b){ const my=(t.b===me)?Number(t.bh):3-Number(t.bh); L.push('You: '+_nbDays(_splitHalfLabel(wk,t.sp,my)),oi+': '+_nbDays(_splitHalfLabel(wk,t.sp,3-my)),'Bidder: '+(t.b===me?'you':t.b)); } }; // [256] A1 / A2 · [257 · §436] Y1 / Y2 · [§539 O1] three lines
-  if(row==='ended') return {lines:[],acts:[],note:''}; // [253 · §406 Q8] nothing to show
+  if(row==='ended'||row==='passedOver') return {lines:[],acts:[],note:''}; // [253 · §406 Q8] nothing to show · [§544 F-1] passed over: e-mail only, nothing in the box
   if(row==='rejected'&&s.k!=='change'){ terms(); return {lines:L,acts:[['ok','OK']],note:s.k==='cancel'?oi+' kept the split.':oi+' declined the split.',stay:true}; } // [254 · §410] · [256] A7 / A8
-  const gone={passedOver:nm+' has a split with someone else on this week.',adminRemoved:'The admin removed this split.'+((row==='adminRemoved'&&s.b===me&&_srBiddingOpen()&&_spLive(me,wk))?' Your bid remains active.':''),adminRecorded:'The admin recorded a split on this week.'}[row];
+  const gone={adminRemoved:'The admin removed this split.'+((row==='adminRemoved'&&s.b===me&&_srBiddingOpen()&&_spLive(me,wk))?' Your bid remains active.':''),adminRecorded:'The admin recorded a split on this week.'}[row];
   if(gone) return {lines:[],acts:[],note:gone,only:true}; // [255 fix · §415] the bidder whose bid the admin's Remove kept: "My bid remains active." - while bidding is open the Remove
   // keeps the bid or removes it (Remove the bid too), so a bid still on the week is the kept one; once bidding has closed a denial does not show on
   // this page (Deny the bid), so the note says nothing more then
@@ -8031,7 +8057,7 @@ function _saCards(me){
   try{
     const st=_srSt(), act=_srBiddingOpen(st), ws=_saWeeksOf(me), /* [254 · §408] */ seen=new Set(_saSeenList(me));
     for(const wk of _srWeekKeys()){ if(!weekMeta[wk]||!ws.has(wk)) continue;
-      for(const q of _spPairs(me,wk)){ const s=_spStateOf(me,q,wk); if(!s||s.row==='ended') continue; const v=_saView(me,s,wk); let key=null; // [253 · §406 Q8]
+      for(const q of _spPairs(me,wk)){ const s=_spStateOf(me,q,wk); if(!s||s.row==='ended'||s.row==='passedOver') continue; const v=_saView(me,s,wk); let key=null; // [253 · §406 Q8]
         if(v.note&&!v.stay){ key=_saNoteKey(me,q,wk,s); if(seen.has(key)){ if(v.only) continue; v.note=''; key=null; } } // [252 · fix] F1 a declined card stays until OK
         out.push({wk:wk,q:q,s:s,v:v,key:key,wait:act&&(['theyStarted','theyCancel'].indexOf(s.row)>=0||v.acts.some(a=>a[0]==='ok'))}); } } // [252 · fix] F1 OK waits for my tap · [253 · §405]
   }catch(_){}
@@ -8199,9 +8225,10 @@ function _saCrossText(q){ return 'A split on this week is waiting for your answe
 // bidder (Q4); with either bid in, both people's bid caps on the picture after (_spCapRefusal, as the bid save). The refusal's text, or ''.
 function _saApproveNo(me,s,wk){
   if(_spWonOutright(me,wk)) return 'You already won this week.'; // [264 · §517 A-4] Rules 6.32
-  if(s.b!==me&&_spLive(me,wk)) return 'Your bid on Week '+weekMeta[wk].weekNum+' has to be removed first.'; // [253 · §406 Q4] the non-bidder's own bid · [257 · §436] Y17
-  const pend={act:'record',q:s.p,wk:wk,t:{b:s.b,p:s.p,sp:s.sp,bh:Number(s.bh),ph:Number(s.ph)}};
-  if(_spLive(s.b,wk)||_spLive(s.p,wk)){ const no=_spCapRefusal(s.b,wk,pend,false); if(no) return no; }
+  if(s.b!==me&&_spLive(me,wk)) return _spOwnBidLine(me,wk); // [253 · §406 Q4] the non-bidder's own bid · [257 · §436] Y17 · [§544 X1]
+  const t={b:s.b,p:s.p,sp:s.sp,bh:Number(s.bh),ph:Number(s.ph)}, pr=(s.b===me)?s.p:s.b; // pr = the proposer
+  if(_spOwnCapOver(me,wk,t)) return 'You would go over the bid cap.'; // [§544 B1] my own cap, my half counted even before a bid
+  if((pr!==s.b&&_spLive(pr,wk))||_spOwnCapOver(pr,wk,t)) return "This split can't start as proposed. Ask "+displayName(pr)+' to propose it again.'; // [§544 B1 Q3] the proposer changed since proposing: nothing of their bids
   return '';
 }
 // [255 fix · L2] ACCEPT WHERE I HOLD A SPLIT (§388 F3): only the half-holder, as the partner, for the exact other half - null when that is
@@ -8242,9 +8269,8 @@ async function _saStart(go){
   if(_spWonOutright(me,wk)){ showCenterAlert('You already won this week.'); return; } // [264 · §517 A-4] Rules 6.32, the board's words
   if(_spWonOutright(q,wk)){ showCenterAlert(displayName(q)+' won this week in an earlier phase.'); return; } // [264 · §517 A-4] the admin's refusal, the full name
   const pt=(t.b===me)?q:me;
-  if(pt===me&&_spLive(me,wk)){ showCenterAlert('Your bid on Week '+weekMeta[wk].weekNum+' has to be removed first.'); return; } // [253 · §406 Q4] the non-bidder's own bid · [257 · §436] Y17
-  if(!blindOn()&&_spLive(pt,wk)){ const n=displayName(pt); showCenterAlert("This split can't start while "+n+" has an active bid on this week."); return; } // [256] E7 · [§539 B1] blinded: checked at Accept
-  if(!blindOn()&&_spLive(t.b,wk)){ const no=_spCapRefusal(t.b,wk,{act:'record',q:pt,wk:wk,t:{b:t.b,p:pt,sp:t.sp,bh:Number(t.b===me?t.mh:3-t.mh),ph:Number(st.ph)}},false); if(no){ showCenterAlert(no); return; } } // [263 · §501 R2-O5] told at Propose, as at Accept (_saApproveNo)
+  if(pt===me&&_spLive(me,wk)){ showCenterAlert(_spOwnBidLine(me,wk)); return; } // [253 · §406 Q4] the non-bidder's own bid · [257 · §436] Y17 · [§544 X1]
+  if(_spOwnCapOver(me,wk,{b:t.b,p:pt,sp:t.sp,bh:Number(t.b===me?t.mh:3-t.mh),ph:Number(st.ph)})){ showCenterAlert('You would go over the bid cap.'); return; } // [§544 B1] only the proposer is checked here (the other person at their Accept), her half counted even before a bid
   if(go!==true){ showConfirm('Send the proposed split for Week '+weekMeta[wk].weekNum+'?',{yesText:'Send',noText:'Not now'}).then(y=>{ if(y) _saStart(true); }).catch(()=>{}); return; } // [255 · §411] · [255 · §416] Not now
   const side={p:q,sp:t.sp,mh:t.mh,b:t.b,ph:st.ph,ok:true,cx:false,rj:null,at:_saAt(me,q,wk)};
   if(await _saRun(me,wk,side,{a:'splitAgree',x:{p:q}},null,'Sent.')===true){ _saMail(me,q,wk,_saLine(wk,q,'new',null,{b:t.b,sp:t.sp,bh:t.b===me?t.mh:3-t.mh})); _saF=null; _srPaint(); } // [252 · T3 · T8]
