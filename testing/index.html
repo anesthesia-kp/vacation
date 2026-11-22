@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 270;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 271;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -2442,6 +2442,16 @@ function _spOwnBidLine(me,wk){
   const n=weekMeta[wk].weekNum;
   let held=false; try{ held=(typeof _strictHeld==='function'&&_strictHeld(me,wk)===true); }catch(_){ held=false; }
   return held?('Your winning bid on Week '+n+" can't be removed. To share this week, the split must name you as the bidder — your bid stays in place for both of you."):('Your bid on Week '+n+' has to be removed first.');
+}
+// [§545 2 · S-b] My own proposal on wk, still waiting, that names the other person as the bidder: no bid of my own there (a new bid or a
+// move in) - the other's Accept would be refused ("can't start as proposed") and I would wait on a split that cannot start. '' = no refusal.
+function _spOwnOfferBlock(user,wk){
+  try{
+    if(isVisibleBid(user,wk)) return '';
+    const M=_spSideOk(user,_spSideOf(user,wk),_spIsPerson); if(!M||!M.terms||M.b!==M.p) return '';
+    const s=_spStateOf(user,M.p,wk); if(!s||s.row!=='iStarted') return '';
+    return 'Your proposed split on Week '+weekMeta[wk].weekNum+' names '+displayName(M.p)+' as the bidder. Withdraw it in Split weeks to bid here yourself.';
+  }catch(_){ return ''; }
 }
 function _spCapRefusal(user,wk,pend,chg){
   try{
@@ -4946,6 +4956,7 @@ function openPriorityModal(wk){
   // before they even pick a priority.
   if(!isRebid&&(typeof _newBidOver==='function'?_newBidOver(user,wk):bidLimitStatus(user).atLimit)){ showBidLimitModal(); return; } // [249 · S2b · his 9 Nov 2026 9:54 PM] a split bid counts as its half
   if(!isRebid){ const _po=(typeof _spPartnerOver==='function')?_spPartnerOver(user,wk):''; if(_po){ showCenterAlert(_po); return; } } // [263 · §503 R2-O9] the partner's cap, told when the box opens (_bidCheck keeps its own)
+  if(!isRebid){ const _ob=(typeof _spOwnOfferBlock==='function')?_spOwnOfferBlock(user,wk):''; if(_ob){ showCenterAlert(_ob); return; } } // [§545 2] told when the box opens (_bidCheck keeps its own)
   // Priorities used in prior phases where the user WON are permanently unavailable to reuse.
   // Losses and denials return the bid to the user for the next phase.
   const _usedBy=Object.create(null); // [405 · §342 · plan S1] where each number in `used` came from: the first source that put it there
@@ -5139,6 +5150,7 @@ function _bidCheck(user,wk,val,noPend){ // [249 · S2b · his 9 Nov 2026 9:54 PM
   if(locksData.globalLock||locksData.weeks?.[wk]) return no('error',"This week is locked.",true);
   if(!isVisibleBid(user,wk)&&(typeof _newBidOver==='function'?_newBidOver(user,wk,noPend):bidLimitStatus(user).atLimit)) return no('limit','',true); // [249 · S2b · his 9 Nov 2026 9:54 PM]
   { const _po=(typeof _spPartnerOver==='function')?_spPartnerOver(user,wk,noPend):''; if(_po) return no('center',_po,true); } // [249 · S2b · §381] A: the partner's cap (a split in force), shown as W9
+  { const _ob=(typeof _spOwnOfferBlock==='function')?_spOwnOfferBlock(user,wk):''; if(_ob) return no('center',_ob,true); } // [§545 2] a new bid or a move in; the server's re-check too
   if(val==="NP"&&!npAllowedNow()) return no('center',"NP bids aren't allowed in "+phaseShort(Number(phasesData.currentPhase||1))+".",true);
   // [217 · §285] W6: a combination the admin does not allow is refused (a stale page, a hand-edited list) - on the page's copy and on the server's.
   if(val!=="NP"&&typeof comboAllowed==='function'&&!comboAllowed(String(val).split(',').map(p=>parseInt(p.trim())).filter(p=>!isNaN(p)))) return no('center',"That combination bid is not available in this auction.",true);
