@@ -1,11 +1,26 @@
-// push-sw.js — the Vacation Auction's push alerts background file (build 547).
-// Its ONE job: when an alert arrives, show it, even while the site is closed. It keeps no copies of pages,
+// push-sw.js — the Vacation Auction's push alerts background file (build 547; the Home Screen badge, build 548).
+// Its job: when an alert arrives, show it, even while the site is closed, and keep the Home Screen icon's red number. It keeps no copies of pages,
 // loads nothing and has no "fetch" handler, so the site itself works exactly as it does without it.
 // The same file sits beside each staff page (/vacation/, /vacation/crna/, /vacation/testing/);
 // crna-stamp.mjs copies it byte for byte. There is no Firebase in here: the mail server sends a plain
 // web push whose words are { title, body, url }.
 
 var FALLBACK_TITLE = 'Vacation Auction';
+
+// [548] B1 The Home Screen icon's red number: how many of this site's alerts are showing. Only where the device has it
+// (setAppBadge); any failure is ignored, and it never stops an alert from showing or a tap from opening the site.
+function setBadge() {
+  try {
+    var nav = self.navigator;
+    if (!nav || typeof nav.setAppBadge !== 'function' || typeof self.registration.getNotifications !== 'function') return Promise.resolve();
+    return self.registration.getNotifications().then(function (list) {
+      var n = (list && list.length) || 0;
+      if (n > 0) return nav.setAppBadge(n);
+      if (typeof nav.clearAppBadge === 'function') return nav.clearAppBadge();
+      return nav.setAppBadge(0);
+    }).catch(function () {});
+  } catch (e) { return Promise.resolve(); }
+}
 
 // An alert arrives. ALWAYS show a notification, even when the message is empty or unreadable:
 // iPhones take away a site's permission when a push shows nothing.
@@ -23,7 +38,7 @@ self.addEventListener('push', function (event) {
   var title = (typeof d.title === 'string' && d.title.trim()) ? d.title : FALLBACK_TITLE;
   var body = (typeof d.body === 'string') ? d.body : '';
   var url = (typeof d.url === 'string') ? d.url : '';
-  event.waitUntil(self.registration.showNotification(title, { body: body, data: { url: url } }));
+  event.waitUntil(self.registration.showNotification(title, { body: body, data: { url: url } }).then(setBadge)); // [548] B1 the badge after it shows
 });
 
 // The alert is tapped: close it, then bring the site forward — the window already showing it,
@@ -42,13 +57,14 @@ self.addEventListener('notificationclick', function (event) {
     }
     return clean(a) === clean(b);
   }
-  event.waitUntil(
+  event.waitUntil(Promise.all([
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (list) {
       for (var i = 0; i < list.length; i++) {
         var c = list[i];
         if (c && c.url && samePage(c.url, target) && typeof c.focus === 'function') return c.focus();
       }
       if (self.clients.openWindow) return self.clients.openWindow(target);
-    })
-  );
+    }),
+    setBadge() // [548] B1 the badge lowered to the alerts still showing (cleared at none), beside the opening, never before it
+  ]));
 });

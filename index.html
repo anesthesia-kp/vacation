@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 272;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 273;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -7873,6 +7873,7 @@ const PU_IOS="On iPhone and iPad, push alerts work only from the Home Screen ico
 const PU_NONE="This browser can't show push alerts.";
 const PU_BLOCKED="Notifications for this site are off in this device's settings. Turn them on there, then come back here.";
 const PU_MAX=5; // devices per person (the rules allow no more)
+const PU_TRIES=3, PU_RETRY_MS=2000; // [548] A2 a turn-on asks for its push address up to 3 times in all, about 2 seconds apart
 // The box: open, a turn on / off under way, whose, which of the four it shows ('' while it is finding out), this device on or off, the person's
 // devices as read (null until read), and whether the last turn-on failed (the "can't show" line under a switch that is off).
 let _puBox={open:false,busy:false,user:'',st:'',on:false,devs:null,err:false};
@@ -7885,6 +7886,15 @@ function _puMenuSync(){
   try{ const b=document.getElementById('menuPush'); if(b) b.hidden=!PUSH_VAPID_KEY; }catch(_){}
 }
 _puMenuSync();
+// [548] B2 The Home Screen icon's red number (the alerts showing, set by push-sw.js) cleared when the site is opened or comes back to the
+// front. The alerts themselves stay. Only on a site with a push key; only where the device has it; a failure is ignored.
+function _puBadgeClear(){
+  try{ if(typeof navigator!=='undefined'&&navigator&&typeof navigator.clearAppBadge==='function'){ const p=navigator.clearAppBadge(); if(p&&typeof p.catch==='function') p.catch(()=>{}); } }catch(_){}
+}
+if(PUSH_VAPID_KEY){
+  _puBadgeClear();
+  try{ document.addEventListener('visibilitychange',()=>{ try{ if(document.visibilityState==='visible') _puBadgeClear(); }catch(_){} }); }catch(_){}
+}
 // This browser's device id: "d" and 16 lower-case hex characters, made once and kept in this browser's storage (kp_push_dev). When the
 // storage cannot be used, one id for this visit.
 // [547 · push fix2] G2: the device id as stored (or this visit's) — never made here: '' when this browser has none (push never turned on in it).
@@ -8037,11 +8047,23 @@ async function _puOn(){
       // it); failures ignored. Then a fresh address is asked for, so two people do not share one address through this browser (unless this
       // delete fails too), and a person turning on again just replaces their own entry. The discard is kept with the other clean-ups
       // (_puForgetP, H2): a later turn-on waits for it.
-      const dp=(async()=>{ await x.lib.getToken(x.m,{vapidKey:PUSH_VAPID_KEY,serviceWorkerRegistration:reg}); await x.lib.deleteToken(x.m); })();
-      _puForgetP=Promise.all([_puForgetP,dp.catch(()=>{})]); // [547 · push fix4] H2: added to the clean-ups still pending, never replacing them
-      try{ await dp; }catch(_){}
-      const token=await x.lib.getToken(x.m,{vapidKey:PUSH_VAPID_KEY,serviceWorkerRegistration:reg});
-      if(!token||typeof token!=='string') throw new Error('push-no-address');
+      // [548] A1: the discard runs only when this site's own registration holds a push subscription. With none (every first turn-on) there
+      // is no address to discard, so the fresh one is asked for straight away: an iPhone can refuse quick make-delete-make calls just after
+      // the "Allow". If the question itself fails, the discard runs.
+      let held=true; try{ held=!!(await reg.pushManager.getSubscription()); }catch(_){ held=true; }
+      if(held){
+        const dp=(async()=>{ await x.lib.getToken(x.m,{vapidKey:PUSH_VAPID_KEY,serviceWorkerRegistration:reg}); await x.lib.deleteToken(x.m); })();
+        _puForgetP=Promise.all([_puForgetP,dp.catch(()=>{})]); // [547 · push fix4] H2: added to the clean-ups still pending, never replacing them
+        try{ await dp; }catch(_){}
+      }
+      // [548] A2: the fresh address asked for up to PU_TRIES times, PU_RETRY_MS apart, the switch busy meanwhile; after the last failure the
+      // turn-on fails the usual way. The sign-in re-check below runs after the last try, just before the write.
+      let token='';
+      for(let i=0;i<PU_TRIES&&!token;i++){
+        if(i) await new Promise(r=>setTimeout(r,PU_RETRY_MS));
+        try{ const t=await x.lib.getToken(x.m,{vapidKey:PUSH_VAPID_KEY,serviceWorkerRegistration:reg}); token=(t&&typeof t==='string')?t:''; }catch(_){ token=''; }
+      }
+      if(!token) throw new Error('push-no-address');
       // [547 · push fix] F3: the person's devices read again just before the write, so a device turned on elsewhere while this box was open
       // is counted by the 5-device rule.
       const s=await getDoc(doc(db,'pushAlerts',user)); const devs=_puDevs(s.exists()?s.data():null); B.devs=devs;
