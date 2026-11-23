@@ -1015,6 +1015,46 @@ service cloud.firestore {
                     && moWriterOk(request.resource.data);
     }
 
+    // ── [547 · push] Push alerts: pushAlerts/{u} — one document per person, named by their initials ──
+    // The contract: tests/docs/push-alerts-plan/CONTRACT.md §1–§2. pushAlerts/AF = { devices: { <device id>: { t: <push address>, at: <time> } } }.
+    // ON = at least one device; OFF = no device (or no document) — there is no other on/off flag. THIS BLOCK IS THE WHOLE RULES CHANGE OF
+    // BUILD 547 — nothing above or below it changes. Without it the collection falls to the catch-all below: every read and write refused.
+    //
+    // What it allows, in plain words:
+    //   • A colleague READS only their OWN document (the Push alerts screen reads it once when it opens; no listener). An admin reads every
+    //     one, one at a time or as a list (Messaging → Push Alerts). Nobody else reads one — not another colleague: unlike vacations/alertPrefs,
+    //     which every colleague reads, a push address belongs to one person's device.
+    //   • A colleague WRITES only their OWN document, and it may hold nothing but `devices`, a map of at most 5 devices (switching this device
+    //     on adds it; switching it off removes it).
+    //   • An admin may only EMPTY a person's devices — `{ devices: {} }`, the admin's "Turn off" (one person, or a batch for everyone). An admin
+    //     cannot add, change or remove a single device, so only the person can turn push alerts on.
+    //   • Nobody DELETES a document from a page: no rule here allows it, and the catch-all refuses it. The mail server uses server credentials
+    //     that skip these rules (it removes a device the push service reports as gone).
+    //
+    // PRICE (cost is a security input, START-HERE §2): every check here is on a rare action of one person — the screen opening, a switch, the
+    // admin's list — never a listener and never a hot document. The shape is checked FIRST and reads no document, so a malformed write is
+    // refused before anything is billed. A colleague's own read or write: vacations/loginEmails (isRegisteredUser) + vacations/emailToUser
+    // (myInitials) = 2 document reads. An admin's: vacations/loginEmails, then (only for an admin who is also on the roster) vacations/emailToUser,
+    // then vacations/adminAccess (isAdmin; its exists() and get() are one document) = 2 or 3. A colleague refused at another person's document
+    // pays the same 3. Repeated lookups of one document in one request are cached, as the bid rules above rely on.
+    //
+    // WHAT THESE RULES CANNOT CHECK (a recorded residual, as alertPrefs' watch map): the inside of each device — the shape of its id, that `t`
+    // is a string of at most 400 characters, that `at` is a time. Rules cannot look inside every value of a map; the count (at most 5) bounds
+    // it. Only the writer's OWN document can be filled that way (Firestore's 1 MiB document ceiling is the hard limit); it is read only by the
+    // mail server (one read per e-mail to that person) and by the admin's Push Alerts list, and a device that is not a real push address fails
+    // at the push service, which makes the server remove it.
+    match /pushAlerts/{u} {
+      function paShapeOk() {   // only `devices`, and it is a map (an empty list or string is NOT an empty map) — reads no document
+        return request.resource.data.keys().hasOnly(['devices'])
+          && request.resource.data.get('devices', null) is map;
+      }
+      allow read: if (isRegisteredUser() && u == myInitials()[0])
+                  || isAdmin();
+      allow create, update: if paShapeOk() && (
+                                 (isRegisteredUser() && u == myInitials()[0] && request.resource.data.devices.size() <= 5)
+                              || (isAdmin() && request.resource.data.devices.size() == 0));
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

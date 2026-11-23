@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 440;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 441;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -89,6 +89,9 @@
 </script>
 <title>Testing Site — Vacation Auction Admin</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='10' width='52' height='48' rx='10' fill='%23ffffff' stroke='%231f2329' stroke-width='4'/%3E%3Cpath d='M6 20a10 10 0 0 1 10-10h32a10 10 0 0 1 10 10v8H6z' fill='%231f2329'/%3E%3Crect x='16' y='2' width='6' height='14' rx='3' fill='%231f2329'/%3E%3Crect x='42' y='2' width='6' height='14' rx='3' fill='%231f2329'/%3E%3Ccircle cx='20' cy='38' r='3.5' fill='%23cbc4b5'/%3E%3Ccircle cx='32' cy='38' r='3.5' fill='%23cbc4b5'/%3E%3Ccircle cx='44' cy='38' r='3.5' fill='%23cbc4b5'/%3E%3Ccircle cx='20' cy='49' r='3.5' fill='%23cbc4b5'/%3E%3Cpath d='M28 48l5 5 9-10' stroke='%2336694a' stroke-width='5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="../../img/app-icons/testing-admin-180.png"> <!-- [547 · icons] the Home Screen icon and name, and this page's own web-app settings file (one per site and page: crna-stamp.mjs gives each copy its own) -->
+<meta name="apple-mobile-web-app-title" content="Test Admin">
+<link rel="manifest" href="manifest.webmanifest">
 <!-- xlsx-js-style: SheetJS 0.18.5 API + cell styling (fills, fonts, borders) for color-coded Excel exports -->
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <style>
@@ -501,6 +504,7 @@ thead th{color:var(--t2)}
         <a onclick="nav('maillog',this)">E-mail Info</a>
         <a onclick="nav('messages',this)">Messages</a>
         <a onclick="nav('whitelist',this)">Whitelist Tracker</a>
+        <a onclick="nav('pushalerts',this)">Push Alerts</a><!-- [547 · push] -->
       </div></div>
       <div class="nav-grp"><button type="button" class="nav-head" aria-expanded="false" onclick="navGroup(this)"><span>Settings</span><span class="chev nav-chev" aria-hidden="true">▸</span></button><div class="nav-items">
         <a onclick="nav('setup',this)">Settings</a><!-- [404 · §334 A3 · D] -->
@@ -892,6 +896,20 @@ thead th{color:var(--t2)}
       </div>
       <div class="tbl-box" style="overflow-x:auto;max-height:560px;overflow-y:auto">
         <table><thead><tr><th>Initials</th><th>Full Name</th><th>Login e-mail (Google)</th><th>Confirmed?</th></tr></thead><tbody id="wlBody"></tbody></table>
+      </div>
+    </div>
+
+    <!-- [547 · push] PUSH ALERTS — who has push alerts on, and on how many devices. Read from the pushAlerts documents
+         when the page opens and after each Off (renderPushAlerts paints it). The admin can only turn push alerts off —
+         one person, or everyone — each through the page's own confirm box; only the person can turn them on. -->
+    <div class="panel" id="panel-pushalerts">
+      <div class="page-head"><div class="page-title">Push Alerts</div></div>
+      <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+        <div id="paCount" style="font-size:13px;color:var(--t1)"></div>
+        <button class="btn btn-ghost" id="paAllOff" style="font-size:11px;padding:3px 9px;margin-left:auto" onclick="pushAlertsOffAll()" disabled>Turn off for everyone</button>
+      </div>
+      <div class="tbl-box" style="overflow-x:auto;max-height:560px;overflow-y:auto">
+        <table><thead><tr><th>Name</th><th>Push alerts</th><th>Devices</th></tr></thead><tbody id="paBody"></tbody></table>
       </div>
     </div>
 
@@ -2759,6 +2777,7 @@ window.nav = function(id, el) {
   if(id==='changelog') renderChangelog();
   if(id==='users'&&typeof renderUsersCombined==='function') renderUsersCombined();
   if(id==='whitelist'&&typeof renderWhitelistTracker==='function') renderWhitelistTracker();
+  if(id==='pushalerts'&&typeof _paOpen==='function') _paOpen(); // [547 · push] read when the page opens, then painted
   if(id==='setup'&&typeof renderBidLowerings==='function') renderBidLowerings(); // [build 268 · BL] · [385 · §292 FIX ROUND, lane 2 MEDIUM-1] the usage table is on the Setup page: drawn fresh when it opens
   if(id==='userbids'&&typeof renderUserBids==='function') renderUserBids(); // [325 · §178]
   if(id==='activity'&&typeof renderUserActivity==='function') renderUserActivity(); // [330 · §189]
@@ -9191,6 +9210,7 @@ ${bullets([
   `Losing (L): Projected not to be approved`,
   `E-mail alerts tell you when someone else's bid changes your projection on a week you bid on, and when a bid you withdrew would now win. Turn either off in the ☰ menu → E-mail alerts.`, // [384 · §288] the two alert rules, in the same place as on the page (plan §11b line 1, §11k item 4)
   `Week out of reach? Use “Notify if a week opens up” in the ☰ menu → E-mail alerts with the bid you'd place. If that bid could later win or be under review, you'll be e-mailed and the timer restarts so you have time to bid. Lasts until the phase ends.`, // [221 / 385 · §292] the get-in rule line, as ruled (10:26 AM) · [229 / 393 · §297] item 212 · [399 · §306] L5 W49
+  `Push alerts: each person turns them on from the menu, on each device. Every e-mail from the auction also comes as a push alert on those devices. On iPhone and iPad they work only from the Home Screen icon. The admin can turn anyone's push alerts off; only the person can turn them on.`, // [547 · push] the push line, word for word as on the staff page (Rules & Reminders), beside the e-mail alert lines
   `Projections are not final — they can change as others bid or staffing needs change.`
 ])}
 
@@ -14833,6 +14853,83 @@ function renderWhitelistTracker(){
   }).join('')||`<tr><td colspan="4" style="text-align:center;color:var(--t2);padding:20px">No users on the roster yet.</td></tr>`;
 }
 window.renderWhitelistTracker=renderWhitelistTracker;
+// ── [547 · push] PUSH ALERTS (Messaging › Push Alerts) ──────────────────────────────────────────────────────────────────────
+// One document per person, pushAlerts/<initials> = { devices: { <device id>: { t, at } } }. On = at least one device; no document,
+// or no devices, = Off — there is no other on/off flag. Read when the page opens and again after each Off (getDocs, no listener,
+// so it costs nothing while the page is closed). The admin can only turn push alerts OFF: one person (Turn off on their row) or
+// everyone (Turn off for everyone), each through the page's own confirm box (rule 5); only the person can turn them on. The Off
+// write empties the devices — setDoc with devices:{} and NO merge (the rules let an admin write nothing else to these documents);
+// for everyone, one writeBatch over the documents that are On, read fresh at the moment of the write. People = the roster the
+// Users and Whitelist pages use (names); each shown by the full name on file (displayName, the initials when none). An On row's Turn off
+// sits in its Push alerts cell, beside On, so a phone shows it without scrolling the table sideways.
+let _paDocs=null, _paState='', _paSeq=0;
+function _paDevices(d){ const v=d&&d.devices; return (v&&typeof v==='object'&&!Array.isArray(v))?Object.keys(v).length:0; }
+function _paRows(){ return [...(names||[])].sort().map(u=>{ const n=_paDevices(_paDocs&&_paDocs[u]); return {u,name:displayName(u),n,on:n>0}; }); }
+// The whole collection, as a map initials -> document; null when it cannot be read.
+async function _paFetch(){
+  try{ const snap=await getDocs(collection(db,'pushAlerts')); const m={}; snap.forEach(d=>{ m[d.id]=d.data(); }); return m; }
+  catch(e){ console.warn('pushAlerts read failed',e); return null; }
+}
+// Read, then paint. A slower earlier read that lands after a later one is ignored (the sequence number).
+async function _paLoad(){
+  const seq=++_paSeq;
+  const m=await _paFetch();
+  if(seq!==_paSeq) return;
+  _paDocs=m; _paState=m?'ok':'err';
+  renderPushAlerts();
+}
+function _paOpen(){ _paDocs=null; _paState='load'; renderPushAlerts(); return _paLoad(); }
+function renderPushAlerts(){
+  const ready=_paState==='ok', rows=_paRows(), on=rows.filter(r=>r.on);
+  const cnt=document.getElementById('paCount'); if(cnt) cnt.textContent=ready?'On for '+on.length+' of '+rows.length+' people.':'';
+  const all=document.getElementById('paAllOff'); if(all) all.disabled=!ready||!on.length;
+  const tb=document.getElementById('paBody'); if(!tb) return;
+  if(!ready){ tb.innerHTML='<tr><td colspan="3" style="text-align:center;color:var(--t2);padding:20px">'+esc(_paState==='err'?LOAD_SLOW_TEXT:'Loading…')+'</td></tr>'; return; }
+  tb.innerHTML=rows.map(r=>'<tr><td>'+esc(r.name)+'</td>'
+    +'<td style="white-space:nowrap">'+(r.on?'<span class="pill p-green">On</span> <button class="btn btn-ghost" style="font-size:11px;padding:3px 9px;margin-left:8px" onclick="pushAlertsOff(\''+_jsq(r.u)+'\')">Turn off</button>':'<span style="color:var(--t2)">Off</span>')+'</td>'
+    +'<td class="mono">'+r.n+'</td></tr>').join('')
+    ||'<tr><td colspan="3" style="text-align:center;color:var(--t2);padding:20px">No users on the roster yet.</td></tr>';
+}
+window.renderPushAlerts=renderPushAlerts;
+function _paRefused(e){ toast('Not turned off — the write was refused ('+(e?.code||e?.message||e)+'). Nothing changed.','err'); }
+// One person. The GUARD at the moment of the write (rule 5): only a person who is On in what this page read is written.
+window.pushAlertsOff=function(u){
+  const r=_paState==='ok'?_paRows().find(x=>x.u===u):null;
+  if(!r||!r.on){ renderPushAlerts(); return; }
+  openConfirm({
+    title:'Turn off push alerts for '+esc(r.name)+'?',
+    body:'<div>E-mails still go. They can turn push alerts on again themselves.</div>',
+    okText:'Turn off', danger:true,
+    onConfirm:async()=>{
+      const r2=_paState==='ok'?_paRows().find(x=>x.u===u):null;
+      if(!r2||!r2.on){ renderPushAlerts(); return; }
+      try{ await setDoc(doc(db,'pushAlerts',u),{devices:{}}); }
+      catch(e){ _paRefused(e); }
+      return _paLoad();
+    }
+  });
+};
+// Everyone. The GUARD at the moment of the write: the documents read fresh, and only those that are On go in the one batch.
+window.pushAlertsOffAll=function(){
+  if(_paState!=='ok'||!_paRows().some(r=>r.on)){ renderPushAlerts(); return; }
+  openConfirm({
+    title:'Turn off push alerts for everyone?',
+    body:'<div>E-mails still go. Each person can turn push alerts on again themselves.</div>',
+    okText:'Turn off for everyone', danger:true,
+    onConfirm:async()=>{
+      const m=await _paFetch();
+      if(!m){ toast('Not turned off — the push alerts could not be read. Nothing changed.','err'); return _paLoad(); }
+      _paDocs=m; _paState='ok';
+      const on=_paRows().filter(r=>r.on);
+      if(!on.length){ renderPushAlerts(); return; }
+      const b=writeBatch(db);
+      on.forEach(r=>b.set(doc(db,'pushAlerts',r.u),{devices:{}}));
+      try{ await b.commit(); }
+      catch(e){ _paRefused(e); }
+      return _paLoad();
+    }
+  });
+};
 
 // The friendly ask e-mail body (plain text; the mail server sends it through the shared template's {{changes}} param,
 // so it shares that template's subject line). Personalized per user.
@@ -16838,6 +16935,7 @@ window.renderCloudBackups=async function(){
 // [432 · final fix build · §511–§517] 2.4, 2.25, 2.38, 2.43, 6.29, 6.34, 6.36: a sentence appended to each; 6.32: a clause (tests/docs/final-fix-build/PLAN.md §6). 195 items, as above.
 // [434 · round 2 fix build · §523–§526] 2.24, 6.18, 6.29, 6.36: a sentence or a clause added to each (tests/docs/round2-fix-build/PLAN.md §5). 195 items, as above.
 // [439 · §545] 2.24 and 6.34: a sentence appended to each (tests/docs/build-545/PLAN.md). 195 items, as above.
+// [547 · push] 7.11 added at the end of section 7: push alerts (tests/docs/push-alerts-plan/CONTRACT.md §5, §6). 196 items, [12,41,12,16,13,40,11,51].
 // Each item: n (its number), kind (new / live / term), html (its approved words), and for a live line its label, the words shown
 // when the setting gives nothing (whenEmpty) and, for the timer mode, the name of each value.
 const RULES_TEXT={sub:"How the auction works: every setting, the decision engine, and the rules staff see. Current values are read each time this page opens.",sections:[
@@ -16997,7 +17095,8 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"7.7","kind":"new","html":"<b>KP e-mail under E-mail alerts<\/b> (☰ menu) — shown only while \"Ask users for their KP e-mail at login\" is on. It is an on / off switch. Off stops every copy to that address, and the person is not asked for one at sign-in. On asks for the address and checks it as the sign-in question does; from Phase 1 on, an address not yet welcomed gets the welcome e-mail. At Done, the confirmation e-mail lists the KP e-mail with the alert choices; when it is turned off or replaced, the address that was on file gets one note saying so. It is the same KP e-mail the Users page shows."},
 {"n":"7.8","kind":"new","html":"<b>Bidding alert e-mails<\/b> are sent within a few minutes of a change. Every change for a person in the 90 seconds after the first goes in one e-mail, each line with the time it happened; a projection that changed and changed back sends nothing. None are sent once bidding has closed."},
 {"n":"7.9","kind":"new","html":"Staff see a split bid as both sets of initials, the bidder first (AF/BC); two silhouettes under Blinded bidding. Only the two people and the admin see who has which days. A split partner's Your Bids &amp; Projections lists the split week, with the bidder's bid and projection."},
-{"n":"7.10","kind":"new","html":"Placing a bid on a week cancels your alert on that week."}
+{"n":"7.10","kind":"new","html":"Placing a bid on a week cancels your alert on that week."},
+{"n":"7.11","kind":"new","html":"Push alerts: each person turns them on from the menu, on each device. Every e-mail from the auction also comes as a push alert on those devices. On iPhone and iPad they work only from the Home Screen icon. The admin can turn anyone's push alerts off; only the person can turn them on."}
 ]},
 {n:"8",title:"Glossary",items:[
 {"n":"8.1","kind":"term","html":"The admin's decision that a person gets the week. Possible only once bidding is closed.","term":"Approve"},
