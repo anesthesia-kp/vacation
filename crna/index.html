@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 273;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 274;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -443,6 +443,13 @@ select:focus{outline:none;border-color:#1f2329}
 #pushModal .modal-title+.al-sw{border-top:none}
 #pushModal .pu-line{font-size:.9rem;line-height:1.45;color:#1f2329;margin:6px 0 0}
 #pushModal .modal-buttons{margin-top:16px}
+/* [549] THE AUCTION ALERT BOX (a tapped push alert's whole e-mail) in the Push alerts box's look: the title, the e-mail's words with their
+   line breaks (they scroll inside the box; Done stays in sight), Done. Above every other box: it shows when the site comes forward. */
+#aaModal{z-index:1002}
+#aaModal .modal-content{max-width:460px;display:flex;flex-direction:column;overflow:hidden;max-height:90vh;max-height:90dvh}
+#aaModal .aa-text{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;font-size:.9rem;line-height:1.45;color:#1f2329;white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0 0}
+#aaModal .aa-text:focus{outline:none}
+#aaModal .modal-buttons{flex:0 0 auto;margin-top:16px}
 /* [247 · S2a · §373] THE SPLIT WEEKS BOX in the E-mail alerts box's look (its rows are .al-gi-row, its sub-headings .al-gi-h); the ☰ entry while hidden;
    ICON E on a week's card: a 29 px button with its own border and fill in the card's top-right corner, a 12 px mark inside (§375); placed
    absolutely (the card is position:relative), so the week-number row, the minimum-bid line and the date line keep room on their right while
@@ -807,6 +814,15 @@ body{zoom:1.15}
     </div>
     <p class="pu-line" id="puLine" role="status" hidden></p>
     <div class="modal-buttons"><button type="button" class="btn-primary" id="puDone" onclick="_puDone()">Done</button></div>
+  </div>
+</div>
+<!-- [549] THE AUCTION ALERT BOX — shown when a tapped push alert opens or brings forward the site: the e-mail's whole text (set as text,
+     never as HTML), Done. Painted by _aaShow. -->
+<div id="aaModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="aaTitle" aria-describedby="aaText">
+  <div class="modal-content">
+    <h2 class="modal-title" id="aaTitle">Auction Alert</h2>
+    <div class="aa-text" id="aaText" tabindex="-1"></div>
+    <div class="modal-buttons"><button type="button" class="btn-primary" id="aaDone" onclick="_aaDone()">Done</button></div>
   </div>
 </div>
 <!-- [220 · §288 · plan §11l with §11m] The alert window: its own full screen over the page, three steps (Change: two). Header and button row
@@ -3350,6 +3366,7 @@ onSnapshot(userListRef, snap=>{
     const _pl=document.getElementById("personLabel"); if(_pl) _pl.style.display="none";
     if(typeof mainContainer!=='undefined' && mainContainer) mainContainer.style.display="none";
     try{ document.querySelectorAll('.notif-popover.open').forEach(p=>p.classList.remove('open')); }catch(_){} // [211] the same on a roster removal
+    if(typeof _aaClose==='function') _aaClose(); // [549 · F2] and the Auction Alert box, which must never sit over the sign-in screen
     document.getElementById("accountSelectModal").classList.add("show");
     if(typeof refreshLoginUsers==='function') refreshLoginUsers();
     showSigninError("Your account was changed by an admin. Please sign in again.");
@@ -8771,6 +8788,63 @@ async function sendEmailNotifications(prevSnap,newSnap,actor,sp){ // [249 · S2b
   }catch(e){ console.error("Email failed:",e); }
 }
 
+// ── [549] THE AUCTION ALERT BOX ──────────────────────────────────────────────────────────────────────────────────────────────────────
+// A tapped push alert opens (or brings forward) this site, and push-sw.js hands the page the e-mail's whole text: kept in this site's own
+// store (Cache Storage, named by this site's address: the MD, CRNA and testing sites each read only their own) for a page that opens
+// fresh, and sent as a message to a page already open. The page shows it in the Auction Alert box once the person is past sign-in. The
+// stored text is read once and deleted, so a page opened any other way shows nothing; a text older than AA_MAX_AGE_MS (a tap that never
+// reached a page) is deleted unread. Only on a site with a push key.
+const AA_STORE='kp-auction-alert ', AA_MAX_AGE_MS=10*60*1000;
+let _aaPend='', _aaIn=false, _aaPrev=null; // the text waiting for sign-in · past sign-in · where focus was before the box
+// This site's address, as push-sw.js's scope names it (the page's folder).
+function _aaScope(){ try{ return new URL('./',location.href).href; }catch(_){ return ''; } }
+// The stored text, read and deleted ('' when there is none, it is too old, or anything fails). A store that is not there is not made.
+async function _aaTake(){
+  try{
+    const sc=_aaScope(); if(!sc||typeof caches==='undefined'||!caches) return '';
+    if(!(await caches.has(AA_STORE+sc))) return '';
+    const c=await caches.open(AA_STORE+sc), k=sc+'auction-alert';
+    const r=await c.match(k); if(!r) return '';
+    await c.delete(k);
+    const j=await r.json();
+    return (j&&typeof j.text==='string'&&typeof j.at==='number'&&Math.abs(Date.now()-j.at)<AA_MAX_AGE_MS)?j.text:'';
+  }catch(_){ return ''; }
+}
+// Show the text in the box (the text set as text, never as HTML); focus on Done.
+function _aaShow(t){
+  _aaPend='';
+  try{
+    const m=document.getElementById('aaModal'), x=document.getElementById('aaText'); if(!m||!x) return;
+    x.textContent=t; x.scrollTop=0;
+    if(!m.classList.contains('show')){ _aaPrev=document.activeElement||null; m.classList.add('show'); }
+    const d=document.getElementById('aaDone'); if(d) d.focus({preventScroll:true});
+  }catch(_){}
+}
+// A text arrived: shown now when the person is past sign-in, otherwise kept until then.
+function _aaGot(t){ if(typeof t!=='string'||!t) return; _aaPend=t; if(_aaIn) _aaShow(t); }
+// completeSignIn: the person is past sign-in; a waiting text shows.
+function _aaSignedIn(){ _aaIn=true; if(_aaPend) _aaShow(_aaPend); }
+// Done (or Escape): the box closes; focus back where it was.
+function _aaDone(){
+  try{ const m=document.getElementById('aaModal'); if(m) m.classList.remove('show'); }catch(_){}
+  try{ const p=_aaPrev; _aaPrev=null; if(p&&p!==document.body&&p.isConnected&&typeof p.focus==='function') p.focus({preventScroll:true}); }catch(_){}
+}
+window._aaDone=_aaDone;
+// A sign-out: the box closes and its text is forgotten.
+function _aaClose(){
+  _aaIn=false; _aaPend=''; _aaPrev=null;
+  try{ const m=document.getElementById('aaModal'); if(m) m.classList.remove('show'); }catch(_){}
+}
+if(PUSH_VAPID_KEY){
+  _aaTake().then(_aaGot);
+  try{ if(navigator.serviceWorker&&typeof navigator.serviceWorker.addEventListener==='function') navigator.serviceWorker.addEventListener('message',ev=>{ try{
+    const d=ev&&ev.data; if(!d||d.type!=='kp-auction-alert'||d.scope!==_aaScope()||typeof d.text!=='string') return;
+    _aaTake(); _aaGot(d.text); // the stored copy is deleted too, so a later opening shows nothing
+  }catch(_){} }); }catch(_){}
+  // Escape closes this box only (it is the box on top).
+  try{ document.addEventListener('keydown',ev=>{ try{ if(ev.key!=='Escape') return; const m=document.getElementById('aaModal'); if(!m||!m.classList.contains('show')) return; ev.stopImmediatePropagation(); _aaDone(); }catch(_){} },true); }catch(_){}
+}
+
 // ── Sign-in ──
 let selectedSignInName="";        // resolved INITIALS (internal account id)
 let _pendingLogin=null, _rememberedName=null;
@@ -8885,6 +8959,7 @@ function _unsubscribeSensitive(){
   alertPrefsData={}; _alLoaded=false; // [220 · §288] the alert choices too: nothing survives into the next session
   if(typeof _alCloseAll==='function') _alCloseAll(); // [220 · §288] and the 🔔 box and alert window close
   if(typeof _puClose==='function') _puClose(); // [547 · push] and the Push alerts box
+  if(typeof _aaClose==='function') _aaClose(); // [549] and the Auction Alert box
   welcomeLogData={}; whitelistConfirmData={}; _whitelistLoaded=false;
   // [build 152] batch 2's caches — same rule. slots also re-zeroes weekMeta capacity.
   locksData={globalLock:false,weeks:{}}; fteData={}; bidPhaseData={}; slotsData={}; splitsData={}; _spAdm={}; _spStaff={}; // [410 · split weeks] · [249 · S2b · §376–§378] and the two records it is merged from
@@ -9357,6 +9432,7 @@ function completeSignIn(){
   startCountdownTick();
   _recordLogin(selectedSignInName); // [170 · §189] last-login record — fire-and-forget, after the board is shown
   if(typeof _visitNote==='function') _visitNote(false); // [203 · §260] the sign-in is also the start of a visit (unless one began in this browser inside the last 30 minutes)
+  if(typeof _aaSignedIn==='function') _aaSignedIn(); // [549] a tapped alert's Auction Alert box, once the board shows
   // Google-account welcome: the FIRST login with a given Google address gets exactly
   // one welcome to that address. It is keyed by the address, so if admin later changes
   // a user's Google account, the new account is welcomed on its first login. Reset
