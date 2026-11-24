@@ -3,7 +3,7 @@
 // loads nothing and has no "fetch" handler, so the site itself works exactly as it does without it.
 // The same file sits beside each staff page (/vacation/, /vacation/crna/, /vacation/testing/);
 // crna-stamp.mjs copies it byte for byte. There is no Firebase in here: the mail server sends a plain
-// web push whose words are { title, body, url, text }.
+// web push whose words are { title, body, url, text, aid }.
 
 var FALLBACK_TITLE = 'Auction Alert'; // [551 · §551]
 
@@ -46,6 +46,27 @@ function storeAlert(text) {
   } catch (e) { return Promise.resolve(); }
 }
 
+// [552 · §554] Every alert that arrives is also kept for this site's page ("Recent alerts"): { text, at, aid } in this site's own store,
+// newest first, the last 20; the site's open pages are told. Any failure is ignored: the alert still shows.
+var ALERTS_STORE = 'kp-auction-alerts ';
+function saveAlert(text, aid) {
+  try {
+    if (typeof text !== 'string' || !text || !self.caches) return Promise.resolve();
+    var scope = self.registration.scope, key = scope + 'auction-alerts';
+    return self.caches.open(ALERTS_STORE + scope).then(function (c) {
+      return c.match(key).then(function (r) { return r ? r.json() : []; }).catch(function () { return []; }).then(function (a) {
+        a = Array.isArray(a) ? a : [];
+        a.unshift({ text: text, at: Date.now(), aid: (typeof aid === 'string') ? aid : '' });
+        return c.put(key, new Response(JSON.stringify(a.slice(0, 20)), { headers: { 'Content-Type': 'application/json' } }));
+      });
+    }).then(function () {
+      return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (l) {
+        (l || []).forEach(function (w) { try { w.postMessage({ type: 'kp-auction-alerts', scope: scope }); } catch (e) {} });
+      });
+    }).catch(function () {});
+  } catch (e) { return Promise.resolve(); }
+}
+
 // An alert arrives. ALWAYS show a notification, even when the message is empty or unreadable:
 // iPhones take away a site's permission when a push shows nothing.
 self.addEventListener('push', function (event) {
@@ -63,7 +84,8 @@ self.addEventListener('push', function (event) {
   var body = (typeof d.body === 'string') ? d.body : '';
   var url = (typeof d.url === 'string') ? d.url : '';
   var text = (typeof d.text === 'string') ? d.text : ''; // [549] the e-mail's whole text, kept with the alert for its tap
-  event.waitUntil(self.registration.showNotification(title, { body: body, data: { url: url, text: text } }).then(setBadge)); // [548] B1 the badge after it shows
+  var shown = self.registration.showNotification(title, { body: body, data: { url: url, text: text } }).then(setBadge); // [548] B1 the badge after it shows
+  event.waitUntil(Promise.all([shown, saveAlert(text || body, d.aid)])); // [552 · §554] kept for Recent alerts, after showing starts
 });
 
 // The alert is tapped: close it, then bring the site forward — the window already showing it,
