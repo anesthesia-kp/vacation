@@ -5,7 +5,7 @@
 // crna-stamp.mjs copies it byte for byte. There is no Firebase in here: the mail server sends a plain
 // web push whose words are { title, body, url, text }.
 
-var FALLBACK_TITLE = 'Vacation Auction';
+var FALLBACK_TITLE = 'Auction Alert'; // [551 · §551]
 
 // [548] B1 The Home Screen icon's red number: how many of this site's alerts are showing. Only where the device has it
 // (setAppBadge); any failure is ignored, and it never stops an alert from showing or a tap from opening the site.
@@ -20,6 +20,16 @@ function setBadge() {
       return nav.setAppBadge(0);
     }).catch(function () {});
   } catch (e) { return Promise.resolve(); }
+}
+
+// [551 · §552] A tap clears the icon's red number outright (alerts stay listed); a new alert sets it again. Failures ignored.
+function clearBadge() {
+  try {
+    var nav = self.navigator;
+    if (nav && typeof nav.clearAppBadge === 'function') return nav.clearAppBadge().catch(function () {});
+    if (nav && typeof nav.setAppBadge === 'function') return nav.setAppBadge(0).catch(function () {});
+  } catch (e) {}
+  return Promise.resolve();
 }
 
 // [549] The tapped alert's whole e-mail, for this site's page (its "Auction Alert" box). It is kept in a store named by THIS
@@ -86,6 +96,6 @@ self.addEventListener('notificationclick', function (event) {
       }
       if (self.clients.openWindow) return self.clients.openWindow(target);
     }),
-    setBadge() // [548] B1 the badge lowered to the alerts still showing (cleared at none), beside the opening, never before it
+    clearBadge() // [551 · §552] the number cleared outright, beside the opening (548 B1 lowered it to the alerts still listed)
   ]));
 });

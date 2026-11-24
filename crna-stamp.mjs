@@ -72,7 +72,7 @@ const REQUIRED = ['apiKey', 'authDomain', 'projectId', 'storageBucket', 'messagi
 const COPIES = [
   { name: 'CRNA',    folder: 'crna',    config: 'crna-config.json',    prefix: 'crna', site: 'CRNA',    color: null,      provider: 'ReCaptchaV3Provider',
     labels: ['CRNA Vacation Auction — Department of Anesthesia', 'Dashboard CRNA Vacation Auction', 'CRNA Vacation Auction Admin'],
-    app: { staff: { name: 'CRNA Vac', icon: 'crna-staff', color: '#2F6690' }, admin: { name: 'CRNA Admin', icon: 'crna-admin', color: '#2E343C' } } }, // [547 · icons] the owner's names, 22 Nov 2026
+    app: { staff: { name: 'CRNA Vacay', icon: 'crna-staff', color: '#2F6690' }, admin: { name: 'CRNA Admin', icon: 'crna-admin', color: '#2E343C' } } }, // [547 · icons] the owner's names, 22 Nov 2026
   { name: 'TESTING', folder: 'testing', config: 'testing-config.json', prefix: 'tst',  site: 'Testing', color: '#5C1F15', provider: 'ReCaptchaEnterpriseProvider',
     labels: ['Testing Site — Vacation Auction', 'Dashboard Testing Site', 'Testing Site — Vacation Auction Admin'],
     app: { staff: { name: 'Testing', icon: 'testing-staff', color: '#C98A2E' }, admin: { name: 'Test Admin', icon: 'testing-admin', color: '#2E343C' } } }, // [547 · icons]
