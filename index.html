@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 274;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 275;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -7884,7 +7884,7 @@ try{ document.addEventListener('keydown',ev=>{ try{ if(ev.key!=='Escape') return
 // One switch for THIS device. Turning it on asks the device's own "Allow" (from the person's tap: Apple and the browsers ask only then), starts
 // the background file push-sw.js, gets this device's push address from Firebase and writes it into the person's own pushAlerts/{initials}
 // document under this device's id. Turning it off removes this device's entry. ON = this device's id is in that document and the device allows
-// notifications; there is no other on/off flag. The document is read once each time the box opens (no listener: no standing cost). The Firebase
+// notifications; there is no other on/off flag (this phone's memory of it, _puOnSaved [550 · §548], only paints the box until its read confirms). The document is read once each time the box opens (no listener: no standing cost). The Firebase
 // push library loads only from here, so a person who never opens the box loads nothing, and an empty PUSH_VAPID_KEY runs none of it.
 const PU_IOS="On iPhone and iPad, push alerts work only from the Home Screen icon. In Safari or Chrome, tap Share, then Add to Home Screen, then open the site from that icon.";
 const PU_NONE="This browser can't show push alerts.";
@@ -7935,6 +7935,16 @@ function _puDevId(){
 function _puDevSave(v){
   _puDevMem=v;
   try{ localStorage.setItem('kp_push_dev',v); }catch(_){}
+}
+// [550 · §548] Whether push is on for this phone, as this phone remembers it: the initials of the person it is on for, or '' — kept by a turn-on
+// or turn-off that saved, cleared by a deliberate Sign out. The box opens in that position; its read of the person's list confirms it.
+function _puOnSaved(user){
+  let v='';
+  try{ v=String(localStorage.getItem('kp_push_on')||''); }catch(_){ v=''; }
+  return !!user&&v===user&&!!_puStoredId();
+}
+function _puOnSave(v){
+  try{ localStorage.setItem('kp_push_on',String(v||'')); }catch(_){}
 }
 // What this device is: an iPhone or iPad (an iPad can say "MacIntel" with a touch screen), opened from the Home Screen icon or not; whether it has
 // what push needs (a background worker, push, notifications); and what it allows (Notification.permission).
@@ -8006,25 +8016,30 @@ function _puPaint(){
 // Open the box (the ☰ menu's Push alerts item): what this device can do, then, where push can work, the person's document, read once.
 async function openPushBox(){
   const user=getCurrentUser(); const m=document.getElementById('pushModal'); if(!user||!m||!PUSH_VAPID_KEY) return;
-  const B={open:true,busy:false,user:user,st:'',on:false,devs:null,err:false}; _puBox=B;
+  const B={open:true,busy:false,user:user,st:'',on:false,devs:null,err:false,taps:0}; _puBox=B;
   const e=_puEnv(); let st=_puState(e,null);
-  if(st==='ios'||st==='none') B.st=st;
+  // [550 · §548] At once, from this device alone: which of the four the box shows and, where the switch shows, the position this phone
+  // remembers (_puOnSaved) — so the switch is right and takes taps the moment the box opens. The library's answer and the person's list, below,
+  // only confirm it; a read that does not answer leaves the remembered position, and a tap meanwhile keeps its own result.
+  B.st=st; B.on=st==='ok'&&e.perm==='granted'&&_puOnSaved(user);
   _puPaint(); m.classList.add('show');
   try{ const d=document.getElementById('puDone'); if(d) d.focus({preventScroll:true}); }catch(_){}
-  if(B.st) return;
+  if(st==='ios'||st==='none') return;
   const x=await _puMsg(); if(_puBox!==B) return;
   if(!x) st='none';
   let devs=null;
   if(st==='ok'){ try{ const s=await getDoc(doc(db,'pushAlerts',user)); devs=_puDevs(s.exists()?s.data():null); }catch(_){ devs=null; } }
-  if(_puBox!==B) return;
-  B.st=st; B.devs=devs;
-  B.on=st==='ok'&&!!devs&&Object.prototype.hasOwnProperty.call(devs,_puStoredId())&&e.perm==='granted'; // [547 · push fix2] G2: read, never made here
+  if(_puBox!==B||B.taps||B.busy) return;
+  B.devs=devs;
+  if(st!==B.st){ B.st=st; if(st!=='ok') B.on=false; }
+  if(st==='ok'&&devs){ B.on=Object.prototype.hasOwnProperty.call(devs,_puStoredId())&&e.perm==='granted'; _puOnSave(B.on?user:''); } // [547 · push fix2] G2: read, never made here
   _puPaint();
 }
 window.openPushBox=openPushBox;
 // The switch.
 async function _puToggle(){
   const B=_puBox; if(!B.open||B.busy||B.st!=='ok') return;
+  B.taps=(B.taps||0)+1; // [550 · §548] so the box's confirming read never repaints over a tap
   if(B.on) return _puOff(); return _puOn();
 }
 window._puToggle=_puToggle;
@@ -8081,9 +8096,9 @@ async function _puOn(){
         try{ const t=await x.lib.getToken(x.m,{vapidKey:PUSH_VAPID_KEY,serviceWorkerRegistration:reg}); token=(t&&typeof t==='string')?t:''; }catch(_){ token=''; }
       }
       if(!token) throw new Error('push-no-address');
-      // [547 · push fix] F3: the person's devices read again just before the write, so a device turned on elsewhere while this box was open
-      // is counted by the 5-device rule.
-      const s=await getDoc(doc(db,'pushAlerts',user)); const devs=_puDevs(s.exists()?s.data():null); B.devs=devs;
+      // [550 · §548] the person's devices as the box read them when it opened ({} when that read has not answered) count for the 5-device rule —
+      // never read again here: on an iPhone a read can wait half a minute, so the turn-on waits on nothing but the push address and the save.
+      const devs=(B.devs&&typeof B.devs==='object')?B.devs:{};
       // [547 · push fix3] the same person, with the same sign-in, still signed in — checked here, with no wait between this and the write: after a
       // sign-out (or a new sign-in) the turn-on fails and writes nothing, so it never saves an address the sign-out's clean-up has missed.
       if(getCurrentUser()!==user||((typeof auth!=='undefined'&&auth)?auth.currentUser:null)!==cu) throw new Error('push-signed-out');
@@ -8098,7 +8113,7 @@ async function _puOn(){
   if(_puBox!==B) return;
   B.busy=false;
   if(res==='on'||res==='late'){
-    B.on=true;
+    B.on=true; _puOnSave(user); // [550 · §548]
     try{ const d=Object.assign({},B.devs||{}); for(const k of drop) delete d[k]; d[id]={t:'',at:null}; B.devs=d; }catch(_){}
     if(res==='late') _alToast(AL_LATE);
   }
@@ -8117,7 +8132,7 @@ async function _puOff(){
   if(_puBox!==B) return;
   B.busy=false;
   if(res==='fail'){ B.on=true; _alToast(AL_NOSAVE); }
-  else{ try{ if(B.devs){ const d=Object.assign({},B.devs); delete d[id]; B.devs=d; } }catch(_){} if(res==='late') _alToast(AL_LATE); }
+  else{ _puOnSave(''); try{ if(B.devs){ const d=Object.assign({},B.devs); delete d[id]; B.devs=d; } }catch(_){} if(res==='late') _alToast(AL_LATE); } // [550 · §548] _puOnSave
   _puPaint();
 }
 // This device's push address deleted with Firebase (best effort, after a turn-off). The library is told THIS site's own background file
@@ -8150,6 +8165,7 @@ function _puForgetWait(p){
 // (no push library, no network). Never throws, never waited for: nothing here can delay or stop the sign-out or the next sign-in.
 function _puSignedOut(){
   try{
+    if(PUSH_VAPID_KEY) _puOnSave(''); // [550 · §548] the remembered position forgotten with the sign-in
     if(!PUSH_VAPID_KEY||!_puStoredId()) return;
     _puDevSave('');
     let granted=false; try{ granted=typeof Notification!=='undefined'&&Notification.permission==='granted'; }catch(_){ granted=false; }

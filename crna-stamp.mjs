@@ -156,6 +156,7 @@ const KEYS = [
   ["'vacVisit'", 1, 0, p => `'${p}VacVisit'`],         // staff: VISIT_LS, the visit record
   ["'srSeen.'", 2, 0, p => `'${p}SrSeen.'`],
   ["'kp_push_dev'", 2, 0, p => `'${p}_kp_push_dev'`], // [547 · push] staff: this browser's push alerts device id
+  ["'kp_push_on'", 2, 0, p => `'${p}_kp_push_on'`],   // [550 · §548] staff: whether push is on for this phone, as it remembers it
 ];
 
 // [stamp guard v2 · audit LOW, 20 Aug 2026] variable-keyed storage calls, pinned by count …
@@ -369,7 +370,7 @@ function stampCopy(copy) {
   const FORBIDDEN = ['<span id="siteLabel">MD</span>', MD_FB.projectId, MD_FB.appId, MD_FB.authDomain, MD_FB.apiKey, MD_FB.messagingSenderId, MD_APPCHECK,
     "'auctionConfigV1'", '"vk_lastUser"', "'adminRemembered'", "'insightsView'",
     "'acReloadedFor'", '"vrl-"', "'rbgate-'", "'reportsView'", "'vacVisit'",
-    MD_VAPID, "'kp_push_dev'"];   // [547 · push] the MD push key (when set — "" is filtered out below) and the push device id's key
+    MD_VAPID, "'kp_push_dev'", "'kp_push_on'"];   // [547 · push] the MD push key (when set — "" is filtered out below) and the push device id's key
   for (const o of others) {
     const ofb = (CFG[o.name].firebase || {});
     FORBIDDEN.push(ofb.projectId, ofb.appId, ofb.apiKey, ofb.authDomain, CFG[o.name].appCheckSiteKey, `'${o.prefix}AuctionConfigV1'`, `"${o.prefix}-vrl-"`,
