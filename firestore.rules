@@ -1055,6 +1055,43 @@ service cloud.firestore {
                               || (isAdmin() && request.resource.data.devices.size() == 0));
     }
 
+    // ── [554 · §557] Recent alerts: alertFeed/{u} and alertSeen/{u} — one document each per person, named by their initials ──
+    // alertFeed/AF = { items: [ { at, text, aid }, … ] }: the auction e-mails that reached the person's Google address, newest first, the
+    // last 20, this auction's only. Only the mail server writes it (its server credentials skip these rules), in the same step as the
+    // e-mail's own record. alertSeen/AF = { at }: the time of the newest alert the person has viewed, on any of their devices (the "not
+    // viewed" dot and number are the items newer than it). Without these blocks both fall to the catch-all below: everything refused.
+    //
+    // What it allows, in plain words:
+    //   • A colleague READS only their OWN two documents (the staff page listens to both while signed in, so every device shows the same
+    //     list and the same "not viewed"). An admin reads every one. Nobody else — not another colleague: the list holds that person's
+    //     e-mails.
+    //   • Nobody WRITES alertFeed from a page, not even an admin: no create, update or delete rule exists for it.
+    //   • A colleague WRITES only their OWN alertSeen, and it may hold nothing but `at`, a whole number (milliseconds), never later than the
+    //     server's clock + 1 minute, and never earlier than the one already there (viewed alerts never come back as not viewed). An admin
+    //     cannot write it. Nobody DELETES either document from a page.
+    //
+    // PRICE (cost is a security input, START-HERE §2): the shape of an alertSeen write is checked FIRST and reads no document, so a
+    // malformed write is refused before anything is billed. A colleague's own read (each listener, once when it starts) or write:
+    // vacations/loginEmails (isRegisteredUser) + vacations/emailToUser (myInitials) = 2 document reads, the same as pushAlerts above. An
+    // admin's read: 2 or 3 (as pushAlerts). The documents themselves: one read per listener at sign-in, then one per change (one new
+    // e-mail to that person, one "viewed" from any of their devices) — never a hot document: each person has their own.
+    match /alertFeed/{u} {
+      allow read: if (isRegisteredUser() && u == myInitials()[0])
+                  || isAdmin();
+    }
+    match /alertSeen/{u} {
+      function asShapeOk() {   // only `at`, a whole number, not in the future (1 minute's grace for a device's clock), never moved back — reads no document
+        return request.resource.data.keys().hasOnly(['at'])
+          && request.resource.data.at is int
+          && request.resource.data.at <= request.time.toMillis() + 60000
+          && (resource == null || request.resource.data.at >= resource.data.at);
+      }
+      allow read: if (isRegisteredUser() && u == myInitials()[0])
+                  || isAdmin();
+      allow create, update: if asShapeOk()
+                            && isRegisteredUser() && u == myInitials()[0];
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

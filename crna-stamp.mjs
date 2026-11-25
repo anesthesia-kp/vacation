@@ -157,7 +157,7 @@ const KEYS = [
   ["'srSeen.'", 2, 0, p => `'${p}SrSeen.'`],
   ["'kp_push_dev'", 2, 0, p => `'${p}_kp_push_dev'`], // [547 · push] staff: this browser's push alerts device id
   ["'kp_push_on'", 2, 0, p => `'${p}_kp_push_on'`],
-  ["'kp_push_seen'", 2, 0, p => `'${p}_kp_push_seen'`], // [552 · §554] staff: the time this phone's alerts are viewed up to   // [550 · §548] staff: whether push is on for this phone, as it remembers it
+  ["'kp_push_seen'", 0, 0, p => `'${p}_kp_push_seen'`], // [554] gone from the staff page: "viewed up to" is kept on the server (alertSeen) // [552 · §554] staff: the time this phone's alerts are viewed up to   // [550 · §548] staff: whether push is on for this phone, as it remembers it
 ];
 
 // [stamp guard v2 · audit LOW, 20 Aug 2026] variable-keyed storage calls, pinned by count …
