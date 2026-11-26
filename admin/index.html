@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 447;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 448;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -4360,6 +4360,37 @@ function _alGiRows(){
     if(e.watch&&typeof e.watch==='object'&&roster.includes(u)) for(const wk of Object.keys(e.watch).sort()) if(Object.prototype.hasOwnProperty.call(weeks,wk)&&_alLive(e.watch[wk],st)) rows.push({u:u,wk:wk,bid:e.watch[wk].bid}); // [fix round, review lane 1 L5] only live alerts on a week of the auction, of people on the roster
   }
   return rows; // a week key is YYYY-MM-DD, so its sort is date order
+}
+// [567 · §577] WHO COULD MISS AN ALERT WHEN AN ADMIN EDIT OPENS A WEEK. Admin changes send no "Week opened up" (the staff page's
+// _giOpenings) and no "Your withdrawn bid would win again" (_lwReturns), and restart the timer only on a projection change (§576). When an
+// admin removal of u's bid on wk, or a change of it to a weaker one (next: the new value, as the Edit Selections <select> gives it or as
+// stored), could open the week, the box names the people who COULD have had one of those alerts - not who would (that needs the staff
+// page's whole check, set aside by him, §577): a "Notify if a week opens up" alert in force on wk (_alGiRows, the list E-mail Sending
+// Controls shows), or their own last change on wk this phase was taking their bid off it (the change log since the reset stamp) with
+// switch 2 on. Never u; never someone with a bid on wk now or who won it in an earlier phase; nothing while bidding is closed or the week
+// is locked. Rows [{u, why:[...]}] by person; [] when none or when anything throws. Read-only.
+function _aamRows(u,wk,next){
+  try{
+    if(typeof _alertsClosed==='function'&&_alertsClosed()) return [];
+    if(locksData&&(locksData.globalLock||(locksData.weeks||{})[wk])) return [];
+    const cur=(scheduleData[u]||{})[wk]; if(cur===undefined||cur===null) return [];
+    if(next!==undefined&&next!==null){ const nx=typeof next==='string'?(next==='NP'?'NP':next.includes(',')?next.split(',').map(Number):Number(next)):next; if(!(pScore(nx)>pScore(cur))) return []; } // a change: only a weaker bid can open the week
+    const has=v=>{ const p=(scheduleData[v]||{})[wk]; return p!==undefined&&p!==null; };
+    const won=getPriorPhaseWinners(wk), by={}, add=(v,t)=>{ (by[v]=by[v]||[]).push(t); };
+    for(const r of _alGiRows()) if(r.wk===wk&&r.u!==u&&!has(r.u)&&!won.has(r.u)) add(r.u,'“Notify if a week opens up”, bid '+bidLblAdmin(r.bid));
+    const since=Number(changesResetAt)||0, last={};
+    for(const e of (Array.isArray(changesLog)?changesLog:[])) if(e&&e.weekKey===wk&&e.user&&e.user!==u&&e.actor==='user'&&typeof e.ts==='number'&&e.ts>=since&&(!last[e.user]||e.ts>=last[e.user].ts)) last[e.user]=e;
+    for(const v of Object.keys(last)) if(last[v].action==='removed'&&!has(v)&&!won.has(v)&&names.includes(v)&&_alOn(v,'chance')) add(v,'“Your withdrawn bid would win again”, bid '+bidLblAdmin(last[v].bidValue));
+    return Object.keys(by).sort().map(v=>({u:v,why:by[v]}));
+  }catch(_){ return []; }
+}
+// [567 · §577] The block the four boxes add (adminRemove, adminChangePriority's "Change this bid?", guardAdminBid when not a new bid,
+// confirmAdminCancel): '' when it names no one.
+function _aamHtml(u,wk,next){
+  const rows=_aamRows(u,wk,next); if(!rows.length) return '';
+  return '<div class="cmodal-warn" style="margin-top:8px"><strong>Admin changes don\'t send these alerts:</strong><ul style="margin:6px 0 6px 18px;line-height:1.6">'
+    +rows.map(r=>'<li>'+esc(r.u)+' — '+r.why.map(esc).join(' · ')+'</li>').join('')
+    +'</ul>It\'s unknown whether this change would trigger them. Consider messaging these people or resetting the timer if needed.</div>';
 }
 // [385 · §292, plan §12] "Show by person ▾" / "Hide ▴": open or closed is this page's own (closed on load, never stored); it closes by itself
 // when the count drops to 0, and every repaint (_alOptOutPaint) keeps it.
@@ -12244,7 +12275,7 @@ function guardAdminBid(u,wk,val,isNew,proceed,onCancel){
     title:'This bid breaks the rules users follow',
     body:`<div>Setting <strong>${esc((typeof _splitMark==='function')?_splitMark(u,wk,null):u)}</strong> to <strong style="font-family:var(--mono)">${esc(String(val))}</strong> on <strong>${esc(wLabel(wkDate(wk)))}</strong> would:</div>
           <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">${issues.map(i=>'<li>'+i+'</li>').join('')}</ul>
-          <div class="cmodal-danger">These are not checked for the admin. Continue only if deliberate.</div>${(typeof _bdFootHtml==='function')?_bdFootHtml(u):''}`, // [393 · §297 Build D] C: the footer
+          <div class="cmodal-danger">These are not checked for the admin. Continue only if deliberate.</div>${(!isNew&&typeof _aamHtml==='function')?_aamHtml(u,wk,String(val)):''}${(typeof _bdFootHtml==='function')?_bdFootHtml(u):''}`, // [393 · §297 Build D] C: the footer · [567 · §577] who could miss an alert
     okText:'Save anyway', danger:true,
     onConfirm:()=>proceed(),
     // [FIX 25 Jul 2026 · delta-audit #7] On cancel nothing is written, but the Edit Selections
@@ -12302,7 +12333,7 @@ window.adminChangePriority=async function(u,wk,val){
     body:`<div>Change <strong>${esc((typeof _splitMark==='function')?_splitMark(u,wk,null):u)}</strong> on <strong>${esc(wLabel(wkDate(wk)))}</strong> from
             <strong style="font-family:var(--mono)">${esc(bidLblAdmin(_cur))}</strong> to
             <strong style="font-family:var(--mono)">${esc(String(val))}</strong>?</div>
-          <div class="cmodal-warn" style="margin-top:8px">Any approval or denial is removed; colleagues whose projection changes may be e-mailed.</div>`,
+          <div class="cmodal-warn" style="margin-top:8px">Any approval or denial is removed; colleagues whose projection changes may be e-mailed.</div>${(typeof _aamHtml==='function')?_aamHtml(u,wk,String(val)):''}`, // [567 · §577]
     okText:'Save change', danger:true,
     onConfirm:()=>window._adminChangePriorityRaw(u,wk,val,_ds), // [M4 · 234] promise returned → failures surface
 
@@ -12457,12 +12488,13 @@ window.adminRemove=function(u,wk,done,noPt){ // [410 · split weeks · review] d
   const cur=scheduleData[u]?.[wk]; const curLbl=Array.isArray(cur)?cur.join('/'):cur;
   const _rmIss=(typeof adminRemoveIssues==='function')?adminRemoveIssues(u,wk):[]; // [393 · §297 Build D] B: none = the plain box below, exactly as before
   const _rmMk=(typeof _splitMark==='function')?_splitMark(u,wk,null):u; // [R2-F1 · §505] a split's bid: both people (D19 / Q22)
+  const _aam=(typeof _aamHtml==='function')?_aamHtml(u,wk):''; // [567 · §577] who could miss an alert (typeof = sandbox convention)
   openConfirm({
     title:_rmIss.length?'⚠️ This removal breaks the rules users follow':'Remove Bid',
     body:_rmIss.length?(`<div>Removing <strong>${esc(_rmMk)}</strong>'s bid <strong style="font-family:var(--mono)">${esc(String(curLbl))}</strong> on <strong>${esc(wLabel(m))}</strong> would:</div>
-          <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">${_rmIss.map(i=>'<li>'+i+'</li>').join('')}</ul>`+((typeof _bdFootHtml==='function')?_bdFootHtml(u):''))
+          <ul style="margin:8px 0 8px 18px;color:var(--t2);font-size:12.5px;line-height:1.7">${_rmIss.map(i=>'<li>'+i+'</li>').join('')}</ul>`+_aam+((typeof _bdFootHtml==='function')?_bdFootHtml(u):''))
       :`<div>Remove <strong>${esc(_rmMk)}</strong>'s bid (<strong style="font-family:var(--mono)">${esc(String(curLbl))}</strong>) on <strong>${wLabel(m)}</strong>?</div>
-          <div class="cmodal-danger">Their last bid is erased; the number returns to ${_rmMk!==u?esc(u):'them'}.</div>`,
+          <div class="cmodal-danger">Their last bid is erased; the number returns to ${_rmMk!==u?esc(u):'them'}.</div>${_aam}`,
     okText:_rmIss.length?'Remove anyway':'Remove',
     danger:true,
     onConfirm:async()=>{
@@ -16115,7 +16147,7 @@ window.confirmAdminCancel=function(user,wk){
     // text already said the bid would be REMOVED, so the button says that too.
     title:'✕ Remove bid',
     body:`<div>Remove <strong>${esc((typeof _splitMark==='function')?_splitMark(user,wk,null):user)}</strong>'s bid (<strong style="font-family:var(--mono)">${esc(String(curLbl))}</strong>) on <strong>${wLabel(m)}</strong> (${wRange(m)})?</div>
-          <div class="cmodal-danger">The bid is removed and their last bid is erased; the bid number returns to ${esc(user)}.</div>`,
+          <div class="cmodal-danger">The bid is removed and their last bid is erased; the bid number returns to ${esc(user)}.</div>${(typeof _aamHtml==='function')?_aamHtml(user,wk):''}`, // [567 · §577]
     okText:'Remove bid',
     danger:true,
     onConfirm:async()=>{
@@ -17139,7 +17171,8 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"7.10","kind":"new","html":"Placing a bid on a week cancels your alert on that week."},
 {"n":"7.11","kind":"new","html":"Push alerts: each person turns them on from the menu, on each device. Every e-mail from the auction also comes as a push alert on those devices."},
 {"n":"7.12","kind":"live","html":"In Rules &amp; Reminders this part opens with one more line, on the e-mail alerts; the welcome e-mail lists every e-mail it sends in its first part instead.","label":"Alerts"},
-{"n":"7.13","kind":"new","html":"When every alert has been viewed, on any device, opening the auction on a device clears that device's push alerts."}
+{"n":"7.13","kind":"new","html":"When every alert has been viewed, on any device, opening the auction on a device clears that device's push alerts."},
+{"n":"7.14","kind":"new","html":"<b>Alerts and admin changes<\/b> — an admin change sends no \"Notify if a week opens up\" or \"Your withdrawn bid would win again\" e-mail. When an admin removal or a weaker bid could open a week, its box lists the people with either alert on that week, so the admin can message them or reset the timer."}
 ]},
 {n:"8",title:"Glossary",items:[
 {"n":"8.1","kind":"term","html":"The admin's decision that a person gets the week. Possible only once bidding is closed.","term":"Approve"},
