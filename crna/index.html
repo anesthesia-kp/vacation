@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 282;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 283;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -9046,7 +9046,7 @@ async function sendEmailNotifications(prevSnap,newSnap,actor,sp){ // [249 · S2b
 // [554] A tapped Recent alerts row shows its e-mail here too (with or without a push key). The box shows alone: the Alerts box or the full
 // list it was opened over steps aside, and Done goes back to it (_aaFrom); the page stays locked while it shows (_alLockSync).
 const AA_STORE='kp-auction-alert ', AA_MAX_AGE_MS=10*60*1000;
-let _aaPend='', _aaIn=false, _aaPrev=null, _aaFrom=''; // the text waiting for sign-in · past sign-in · where focus was before the box · [554] the box it came from ('ra', 'al' or '')
+let _aaPend='', _aaIn=false, _aaPrev=null, _aaFrom='', _aaLast=''; // the text waiting for sign-in · past sign-in · where focus was before the box · [554] the box it came from ('ra', 'al' or '') · [560 · §570] the text the open box was given
 // [558 · §568] A tapped alert's text is the e-mail cut to fit a push alert, '…' at its end (the mail server's pushContent). The whole
 // e-mail is in Recent alerts (_paList: this auction's, newest first), its text starting with the same words. While the box shows a cut
 // text (_aaCut), it shows the whole e-mail as soon as the list holds it (_aaSync, called by _paSync), the scroll kept where it is. Not
@@ -9091,7 +9091,7 @@ async function _aaTake(){
 }
 // Show the text in the box (the text set as text, never as HTML); focus on Done.
 function _aaShow(t){
-  _aaPend='';
+  _aaPend=''; _aaLast=t; // [560 · §570]
   try{
     const m=document.getElementById('aaModal'), x=document.getElementById('aaText'); if(!m||!x) return;
     x.textContent=_aaWords(t); // [558 · §568] the whole e-mail when Recent alerts holds it
@@ -9108,12 +9108,14 @@ function _aaShow(t){
   }catch(_){}
 }
 // A text arrived: shown now when the person is past sign-in, otherwise kept until then.
-function _aaGot(t){ if(typeof t!=='string'||!t) return; _aaPend=t; if(_aaIn) _aaShow(t); if(typeof _paViewed==='function') _paViewed(Date.now()); } // [552 · §554] a tapped alert: all viewed
+// [560 · §570] One tap reaches the page twice (push-sw.js's message and the stored copy read on coming to the front): the text the open
+// box already shows is not shown again.
+function _aaGot(t){ if(typeof t!=='string'||!t) return; try{ const m=document.getElementById('aaModal'); if(t===_aaLast&&m&&m.classList.contains('show')) return; }catch(_){} _aaPend=t; if(_aaIn) _aaShow(t); if(typeof _paViewed==='function') _paViewed(Date.now()); } // [552 · §554] a tapped alert: all viewed
 // completeSignIn: the person is past sign-in; a waiting text shows.
 function _aaSignedIn(){ _aaIn=true; if(_aaPend) _aaShow(_aaPend); }
 // Done (or Escape): the box closes; back to the box it came from ([554]), focus back where it was.
 function _aaDone(){
-  _aaCut=''; // [558]
+  _aaCut=''; _aaLast=''; // [558] · [560]
   try{ const m=document.getElementById('aaModal'); if(m) m.classList.remove('show'); }catch(_){}
   const f=_aaFrom; _aaFrom='';
   try{ if(f==='ra'||(f==='al'&&typeof _alBox!=='undefined'&&_alBox.open)){ if(typeof _paPaint==='function') _paPaint(); document.getElementById(f==='ra'?'raModal':'alertsModal').classList.add('show'); } }catch(_){}
@@ -9123,7 +9125,7 @@ function _aaDone(){
 window._aaDone=_aaDone;
 // A sign-out: the box closes and its text is forgotten.
 function _aaClose(){
-  _aaIn=false; _aaPend=''; _aaPrev=null; _aaFrom=''; _aaCut=''; // [558] _aaCut
+  _aaIn=false; _aaPend=''; _aaPrev=null; _aaFrom=''; _aaCut=''; _aaLast=''; // [558] _aaCut · [560] _aaLast
   try{ const m=document.getElementById('aaModal'); if(m) m.classList.remove('show'); }catch(_){}
   if(typeof _alLockSync==='function') _alLockSync(); // [554]
 }
@@ -9134,6 +9136,9 @@ if(PUSH_VAPID_KEY){
     if(!d||d.type!=='kp-auction-alert'||d.scope!==_aaScope()||typeof d.text!=='string') return;
     _aaTake(); _aaGot(d.text); // the stored copy is deleted too, so a later opening shows nothing
   }catch(_){} }); }catch(_){}
+  // [560 · §570] Brought to the front (the web app open in the background): the stored copy is read, as on a fresh opening - the
+  // message above may never reach a paused page. Nothing stored: nothing happens.
+  try{ const _aaFront=()=>{ try{ if(document.visibilityState==='visible') _aaTake().then(_aaGot); }catch(_){} }; document.addEventListener('visibilitychange',_aaFront); window.addEventListener('pageshow',_aaFront); }catch(_){}
 }
 // Escape closes this box only (it is the box on top). [554] With or without a push key (a Recent alerts row opens it too).
 try{ document.addEventListener('keydown',ev=>{ try{ if(ev.key!=='Escape') return; const m=document.getElementById('aaModal'); if(!m||!m.classList.contains('show')) return; ev.stopImmediatePropagation(); _aaDone(); }catch(_){} },true); }catch(_){}
