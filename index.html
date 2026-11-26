@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 286;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 287;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -9049,38 +9049,20 @@ async function sendEmailNotifications(prevSnap,newSnap,actor,sp){ // [249 · S2b
   }catch(e){ console.error("Email failed:",e); }
 }
 
-// ── [549] THE AUCTION ALERT BOX ──────────────────────────────────────────────────────────────────────────────────────────────────────
-// A tapped push alert opens (or brings forward) this site, and push-sw.js hands the page the e-mail's whole text: kept in this site's own
-// store (Cache Storage, named by this site's address: the MD, CRNA and testing sites each read only their own) for a page that opens
-// fresh, and sent as a message to a page already open. The page shows it in the Auction Alert box once the person is past sign-in. The
-// stored text is read once and deleted, so a page opened any other way shows nothing; a text older than AA_MAX_AGE_MS (a tap that never
-// reached a page) is deleted unread. Only on a site with a push key.
-// [554] A tapped Recent alerts row shows its e-mail here too (with or without a push key). The box shows alone: the Alerts box or the full
+// ── [549] THE AUCTION ALERT BOX ──────────────────────────────────────────────────────────────────────────
+// [554] A tapped Recent alerts row shows its e-mail here, whole (with or without a push key). The box shows alone: the Alerts box or the full
 // list it was opened over steps aside, and Done goes back to it (_aaFrom); the page stays locked while it shows (_alLockSync).
-const AA_STORE='kp-auction-alert ', AA_MAX_AGE_MS=10*60*1000;
-let _aaPend='', _aaIn=false, _aaPrev=null, _aaFrom=''; // the text waiting for sign-in · past sign-in · where focus was before the box · [554] the box it came from ('ra', 'al' or '')
+// [564 · §571] A TAPPED PHONE ALERT opens ☰ → Alerts, like every other way in (his 26 Nov 2026 8:06 AM pick "Always the Alerts box"): the
+// page does not use push-sw.js's hand-off (its stored copy, its message) — the iPhone often never delivers it to an open app, and it carried
+// only the e-mail cut to fit a push. Coming to the front with an alert not viewed opens the Alerts box ([563], _alAuto below).
+let _aaIn=false, _aaPrev=null, _aaFrom=''; // past sign-in · where focus was before the box · [554] the box it came from ('ra', 'al' or '')
 // This site's address, as push-sw.js's scope names it (the page's folder).
 function _aaScope(){ try{ return new URL('./',location.href).href; }catch(_){ return ''; } }
-// The stored text, read and deleted ('' when there is none, it is too old, or anything fails). A store that is not there is not made.
-async function _aaTake(){
-  try{
-    const sc=_aaScope(); if(!sc||typeof caches==='undefined'||!caches) return '';
-    if(!(await caches.has(AA_STORE+sc))) return '';
-    const c=await caches.open(AA_STORE+sc), k=sc+'auction-alert';
-    const r=await c.match(k); if(!r) return '';
-    await c.delete(k);
-    const j=await r.json();
-    return (j&&typeof j.text==='string'&&typeof j.at==='number'&&Math.abs(Date.now()-j.at)<AA_MAX_AGE_MS)?j.text:'';
-  }catch(_){ return ''; }
-}
 // Show the text in the box (the text set as text, never as HTML); focus on Done.
-// [562 · §571] A tapped alert's text is the e-mail cut to fit a push alert, '…' at its end (the mail server's pushContent): the line under it.
-const AA_REST="The rest is in your e-mail.";
 function _aaShow(t){
-  _aaPend='';
   try{
     const m=document.getElementById('aaModal'), x=document.getElementById('aaText'); if(!m||!x) return;
-    x.textContent=(typeof t==='string'&&t.endsWith('\u2026'))?t+'\n\n'+AA_REST:t; x.scrollTop=0; // [562 · §571] a cut alert points to the e-mail
+    x.textContent=t; x.scrollTop=0;
     if(!m.classList.contains('show')){
       _aaPrev=document.activeElement||null;
       const sh=id=>{ const e=document.getElementById(id); return !!e&&e.classList.contains('show'); }; // [554] the box under it steps aside
@@ -9092,10 +9074,8 @@ function _aaShow(t){
     const d=document.getElementById('aaDone'); if(d) d.focus({preventScroll:true});
   }catch(_){}
 }
-// A text arrived: shown now when the person is past sign-in, otherwise kept until then.
-function _aaGot(t){ if(typeof t!=='string'||!t) return; _aaPend=t; if(_aaIn) _aaShow(t); if(typeof _paViewed==='function') _paViewed(Date.now()); } // [552 · §554] a tapped alert: all viewed
-// completeSignIn: the person is past sign-in; a waiting text shows.
-function _aaSignedIn(){ _aaIn=true; if(_aaPend) _aaShow(_aaPend); if(typeof _alAuto==='function') _alAuto(); } // [563] the Alerts box watch
+// completeSignIn: the person is past sign-in; the Alerts box watch starts ([563]).
+function _aaSignedIn(){ _aaIn=true; if(typeof _alAuto==='function') _alAuto(); }
 // [563] THE ALERTS BOX OPENS BY ITSELF while an alert is not yet viewed (his 26 Nov 2026 7:24 AM: "Could we have the page open to the alerts
 // menu anytime there are unviewed alerts?" · "no matter how the app is opened" · every device and browser). When the person gets past
 // sign-in, and whenever the page comes to the front, a watch of AL_AUTO_MS: once Recent alerts and "viewed up to" have both answered, an
@@ -9124,19 +9104,13 @@ function _aaDone(){
 window._aaDone=_aaDone;
 // A sign-out: the box closes and its text is forgotten.
 function _aaClose(){
-  _aaIn=false; _aaPend=''; _aaPrev=null; _aaFrom=''; _alAutoTo=0; // [563] the watch ends at sign-out
+  _aaIn=false; _aaPrev=null; _aaFrom=''; _alAutoTo=0; // [563] the watch ends at sign-out
   try{ const m=document.getElementById('aaModal'); if(m) m.classList.remove('show'); }catch(_){}
   if(typeof _alLockSync==='function') _alLockSync(); // [554]
 }
-if(PUSH_VAPID_KEY){
-  _aaTake().then(_aaGot);
-  try{ if(navigator.serviceWorker&&typeof navigator.serviceWorker.addEventListener==='function') navigator.serviceWorker.addEventListener('message',ev=>{ try{
-    const d=ev&&ev.data;
-    if(!d||d.type!=='kp-auction-alert'||d.scope!==_aaScope()||typeof d.text!=='string') return;
-    _aaTake(); _aaGot(d.text); // the stored copy is deleted too, so a later opening shows nothing
-  }catch(_){} }); }catch(_){}
-}
-// Escape closes this box only (it is the box on top). [554] With or without a push key (a Recent alerts row opens it too).
+// [564] push-sw.js still stores a tapped alert's text for the page (no longer read): that copy is cleared as the page opens.
+if(PUSH_VAPID_KEY){ try{ const sc=_aaScope(); if(sc&&typeof caches!=='undefined'&&caches) caches.delete('kp-auction-alert '+sc).catch(()=>{}); }catch(_){} }
+// Escape closes this box only (it is the box on top). [554] With or without a push key.
 try{ document.addEventListener('keydown',ev=>{ try{ if(ev.key!=='Escape') return; const m=document.getElementById('aaModal'); if(!m||!m.classList.contains('show')) return; ev.stopImmediatePropagation(); _aaDone(); }catch(_){} },true); }catch(_){}
 
 // ── Sign-in ──
