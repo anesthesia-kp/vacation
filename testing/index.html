@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 285;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 286;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -7857,6 +7857,7 @@ function _alAnyBox(){
 function _alLockSync(){
   const on=_alAnyBox();
   _alLock(on);
+  if(!on&&typeof _alAutoCheck==='function') _alAutoCheck(); // [563] a box closed: the Alerts box may open now (within its watch)
 }
 window._alLockSync=_alLockSync;
 // [555 · §557] The iPhone Home Screen app scrolls the page even under overflow:hidden, so the page is also pinned where it is: the body
@@ -7900,10 +7901,22 @@ function _alMore(c,fresh){
     if(c.classList.contains('more-below')!==on) c.classList.toggle('more-below',on);
   }catch(_){}
 }
+// [563] HIS STANDING RULE (26 Nov 2026 7:27 AM): "every pop up always opens scrolled to the top". A box that was not showing and now is - the
+// box, its content and every area inside it that scrolls - goes to its top, once, as it opens (this watcher runs after the change, when the box
+// shows: a hidden box's scroll cannot be set). Coming back to a box after a box on top of it closes counts as opening it again.
+let _alOpenSet=new Set();
+function _alTopNew(){
+  try{
+    const now=new Set(document.querySelectorAll('.modal.show'));
+    now.forEach(m=>{ if(_alOpenSet.has(m)) return; try{ m.scrollTop=0; m.querySelectorAll('*').forEach(e=>{ if(e.scrollTop>0) e.scrollTop=0; }); }catch(_){} });
+    _alOpenSet=now;
+  }catch(_){}
+}
 function _alBoxWatch(){
   try{
     const on=_alAnyBox(), mc=document.getElementById('mainContainer'), k=on+'|'+!!(mc&&mc.querySelector('.notif-popover.open'));
-    if(k!==_alBoxWatchKey){ _alBoxWatchKey=k; _alLock(on); }
+    if(k!==_alBoxWatchKey){ _alBoxWatchKey=k; _alLock(on); if(!on&&typeof _alAutoCheck==='function') _alAutoCheck(); } // [563] the last box closed: the Alerts box may open now
+    _alTopNew(); // [563] every box opens at its top
     if(!_alMoreRaf&&document.querySelector('.modal.show')) _alMoreRaf=requestAnimationFrame(()=>{ _alMoreRaf=0; document.querySelectorAll('.modal.show .modal-content').forEach(c=>_alMore(c,true)); });
   }catch(_){}
 }
@@ -8303,14 +8316,15 @@ function _puClose(){
 // list (#raList). The dots in an open box stay as they were when it opened (_paBoxSeen), but for a row tapped since. Viewed: Done in either
 // box, or a tapped alert, writes alertSeen/{me} = the newest listed (never back, never past now + 1 minute). Works with or without push.
 var _paList=[], _paBoxSeen=0, _paN=0, _paFeed=[], _paSeenAt=0, _paMe='', _paPend=0, _paTapped=new Set();
+var _paFeedIn=false, _paSeenIn=false; // [563] each listener has answered since sign-in (the Alerts box never opens on half the picture)
 // The listeners' arrivals: the feed's items, and "viewed up to" (0 when none).
 function _paOnFeed(snap){
   let it=[]; try{ const d=(snap&&snap.exists())?snap.data():null; it=(d&&Array.isArray(d.items))?d.items:[]; }catch(_){ it=[]; }
-  _paFeed=it; _paSync();
+  _paFeed=it; _paFeedIn=true; _paSync(); // [563] _paFeedIn
 }
 function _paOnSeen(snap){
   let v=0; try{ const d=(snap&&snap.exists())?snap.data():null; v=(d&&typeof d.at==='number'&&isFinite(d.at))?d.at:0; }catch(_){ v=0; }
-  _paSeenAt=Math.max(v,_paSeenAt); _paSync();
+  _paSeenAt=Math.max(v,_paSeenAt); _paSeenIn=true; _paSync(); // [563] _paSeenIn
   if(_paPend){ const t=_paPend; _paPend=0; _paViewed(t); } // a phone alert tapped before the sign-in
 }
 // The list again from what the listeners brought; the ☰ number and, while a box shows, the lists follow.
@@ -8322,6 +8336,7 @@ function _paSync(){
   }catch(_){ _paList=[]; _paN=0; }
   _menuCountPaint();
   _paPaint();
+  if(typeof _alAutoCheck==='function') _alAutoCheck(); // [563] the Alerts box opens by itself
 }
 // The rows' times and first lines.
 function _paWhen(at){
@@ -8377,7 +8392,7 @@ function _paViewed(t){
 }
 // A sign-out: the list, its number and whose it was forgotten (the listeners are gone with _sensitiveUnsubs).
 function _paReset(){
-  _paFeed=[]; _paSeenAt=0; _paMe=''; _paPend=0; _paList=[]; _paN=0; _paTapped=new Set();
+  _paFeed=[]; _paSeenAt=0; _paMe=''; _paPend=0; _paList=[]; _paN=0; _paTapped=new Set(); _paFeedIn=false; _paSeenIn=false; // [563]
   _menuCountPaint(); _paPaint();
 }
 // The full list (Show all): the Alerts box steps aside (it stays open: the page stays locked); Done goes back to it.
@@ -9080,7 +9095,24 @@ function _aaShow(t){
 // A text arrived: shown now when the person is past sign-in, otherwise kept until then.
 function _aaGot(t){ if(typeof t!=='string'||!t) return; _aaPend=t; if(_aaIn) _aaShow(t); if(typeof _paViewed==='function') _paViewed(Date.now()); } // [552 · §554] a tapped alert: all viewed
 // completeSignIn: the person is past sign-in; a waiting text shows.
-function _aaSignedIn(){ _aaIn=true; if(_aaPend) _aaShow(_aaPend); }
+function _aaSignedIn(){ _aaIn=true; if(_aaPend) _aaShow(_aaPend); if(typeof _alAuto==='function') _alAuto(); } // [563] the Alerts box watch
+// [563] THE ALERTS BOX OPENS BY ITSELF while an alert is not yet viewed (his 26 Nov 2026 7:24 AM: "Could we have the page open to the alerts
+// menu anytime there are unviewed alerts?" · "no matter how the app is opened" · every device and browser). When the person gets past
+// sign-in, and whenever the page comes to the front, a watch of AL_AUTO_MS: once Recent alerts and "viewed up to" have both answered, an
+// alert not yet viewed (_paN) opens ☰ → Alerts (openAlertsBox) — not while another box is open (it waits for it). Done counts them viewed
+// (_alDone → _paViewed), so it opens once per new alert. A new alert while the page is in use opens nothing (the ☰ number shows it).
+var _alAutoTo=0; const AL_AUTO_MS=30*1000;
+function _alAuto(){ try{ if(!_aaIn) return; _alAutoTo=Date.now()+AL_AUTO_MS; _alAutoCheck(); }catch(_){} }
+function _alAutoCheck(){
+  try{
+    if(!_alAutoTo) return;
+    if(Date.now()>_alAutoTo){ _alAutoTo=0; return; }
+    if(!_aaIn||!_paFeedIn||!_paSeenIn||!(_paN>0)) return;
+    if(typeof _alAnyBox==='function'&&_alAnyBox()) return; // another box is open: wait for it
+    _alAutoTo=0; openAlertsBox();
+  }catch(_){}
+}
+try{ const _alFront=()=>{ try{ if(document.visibilityState==='visible') _alAuto(); }catch(_){} }; document.addEventListener('visibilitychange',_alFront); window.addEventListener('pageshow',_alFront); }catch(_){}
 // Done (or Escape): the box closes; back to the box it came from ([554]), focus back where it was.
 function _aaDone(){
   try{ const m=document.getElementById('aaModal'); if(m) m.classList.remove('show'); }catch(_){}
@@ -9092,7 +9124,7 @@ function _aaDone(){
 window._aaDone=_aaDone;
 // A sign-out: the box closes and its text is forgotten.
 function _aaClose(){
-  _aaIn=false; _aaPend=''; _aaPrev=null; _aaFrom='';
+  _aaIn=false; _aaPend=''; _aaPrev=null; _aaFrom=''; _alAutoTo=0; // [563] the watch ends at sign-out
   try{ const m=document.getElementById('aaModal'); if(m) m.classList.remove('show'); }catch(_){}
   if(typeof _alLockSync==='function') _alLockSync(); // [554]
 }
