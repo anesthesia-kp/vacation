@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 289;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 290;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -7291,13 +7291,14 @@ function _giOpenings(prevSnap,newSnap,actor,evenIfOff,sp){ // [249 · S2b · §3
         if((pu[wk]!==undefined&&pu[wk]!==null)||(nu[wk]!==undefined&&nu[wk]!==null)) continue; // a bid there: the projection lines speak for it
         if(getPriorPhaseWinners(wk).has(user)) continue;
         const before=sp?_withSplits(sp.before,()=>_giJudge(prevSnap,user,wk,w.bid)):_giJudge(prevSnap,user,wk,w.bid); // [249 · S2b · §376–§378] each picture with its own splits
-        if(before!=='refused'&&before!=='lose') continue;
+        if(before!=='refused'&&before!=='lose'&&before!=='review') continue; // [569 · §579] under review counts too: it e-mails only if the bid could then win (below)
         const _lg=(changesData&&Array.isArray(changesData.log))?changesData.log:null, _rows=[]; let after;
         try{
           if(_lg) for(const x of Object.keys(pa)){ if(pa[x]!==undefined&&pa[x]!==null&&(na[x]===undefined||na[x]===null)&&!_lentHas(_lg,actor,x,pa[x])){ const e={user:actor,weekKey:x,action:'removed',actor:'user',ts:Date.now(),bidValue:JSON.parse(JSON.stringify(pa[x]))}; _lg.push(e); _rows.push(e); } }
           after=sp?_withSplits(sp.after,()=>_giJudge(newSnap,user,wk,w.bid,just)):_giJudge(newSnap,user,wk,w.bid,just);
         } finally { for(const e of _rows){ const i=_lg.lastIndexOf(e); if(i>=0) _lg.splice(i,1); } }
         if(after!=='win'&&after!=='review') continue;
+        if(before==='review'&&after!=='win') continue; // [569 · §579] from under review, only a step up to win (owner 27 Nov 2026: "an alert if it would be winning")
         (res[user]=res[user]||{})[wk]={how:how,bid:w.bid,out:after}; // [236 · §317] no text: the alert carries the line as data
       }
     }
@@ -7786,9 +7787,9 @@ function _alPanelHtml(wk){
   return h;
 }
 function _alWeeksHtml(user){
-  let h='';
+  let h='', top='', lk=''; // [569 · §579] h: every week in its month; top: the months without their locked weeks; lk: the locked weeks, in date order
   for(const [month,dates] of Object.entries(groupByMonth())){
-    h+='<div class="al-wmonth">'+escH(month)+'</div>';
+    const mh='<div class="al-wmonth">'+escH(month)+'</div>'; let mr='', mo='';
     for(const d of dates){
       const wk=dateKey(d); if(!weekMeta[wk]) continue;
       const st=_alWeekState(user,wk), lb=_alWeekLabel(wk);
@@ -7798,10 +7799,13 @@ function _alWeeksHtml(user){
       else if(st==='locked') tag='<span class="al-tag locked">Locked</span>'; // [227 · §296]
       else if(st==='alert') tag='<span class="al-tag alert">alert set</span>'; // [227 · §296]
       else if(st!=='partner'&&typeof _wwLabelOn==='function'&&_wwLabelOn(wk)){ const mb=_wwMinBid(wk); if(mb!==null) tag='<span class="al-tag min">Min. '+escH(bidLbl(mb))+'</span>'; } // [227 · §296]
-      h+='<button type="button" class="al-wrow'+((st==='bid'||st==='won'||st==='locked')?' off':'')+'" data-al-wk="'+escH(wk)+'" aria-pressed="'+(_alW.wk===wk?'true':'false')+'"><span class="al-wr-l"><span class="al-wr-d">'+escH(_alWeekShort(wk))+'</span>'+(lb?'<br><span class="al-wr-s">'+escH(String(lb).replace(/(?:\p{Extended_Pictographic}|\p{Regional_Indicator})[\uFE0E\uFE0F\u200D]*\s?/gu,''))+'</span>':'')+'</span><span class="al-wr-r">'+tag+'</span></button>';
+      const row='<button type="button" class="al-wrow'+((st==='bid'||st==='won'||st==='locked')?' off':'')+'" data-al-wk="'+escH(wk)+'" aria-pressed="'+(_alW.wk===wk?'true':'false')+'"><span class="al-wr-l"><span class="al-wr-d">'+escH(_alWeekShort(wk))+'</span>'+(lb?'<br><span class="al-wr-s">'+escH(String(lb).replace(/(?:\p{Extended_Pictographic}|\p{Regional_Indicator})[\uFE0E\uFE0F\u200D]*\s?/gu,''))+'</span>':'')+'</span><span class="al-wr-r">'+tag+'</span></button>';
+      mr+=row; if(st==='locked') lk+=row; else mo+=row; // [569 · §579]
     }
+    h+=mh+mr; if(mo) top+=mh+mo; // [569 · §579] a month whose weeks are all locked has no heading above
   }
-  return h;
+  if(!top||!lk) return h; // [569 · §579] nothing locked, or nothing left above it (every week locked: the Freeze, the auction closed): every week in its month
+  return top+'<div class="al-wmonth al-wlocked">Locked Weeks</div>'+lk; // [569 · §579] owner 27 Nov 2026: "Maybe at the bottom?"
 }
 function _alBtn(cls,txt,fnName,dis){ return '<button type="button" class="'+cls+'" onclick="'+fnName+'()"'+(dis?' disabled':'')+'>'+txt+'</button>'; }
 function _alWinMsg(t){ try{ const el=document.getElementById('alWinMsg'); if(el) el.textContent=t||''; }catch(_){} }
@@ -7828,10 +7832,11 @@ function _alWinPaint(){
     $('alPanel').innerHTML=_alPanelHtml(w.wk);
     const b=escH(blFmtBid(w.bid)), now=_giJudge(data,user,w.wk,w.bid);
     let _gone=null; try{ _gone=_giGone(user,w.bid); }catch(_){ _gone=null; } // [261 · rehearsal O9] a won / withheld number: its own line in place of the "already" line
-    $('alConfirm').innerHTML='<p class="al-conf">You\'ll be e-mailed if a bid of <b>'+b+'</b> on <b>'+escH(_alWeekName(w.wk))+'</b> could win or be under review. Lasts until the phase ends.</p>' // [228 · §297] item 181
+    const _have=!_gone&&now==='win'; // [569 · §579] the bid would already win: no alert to set ("1 and go" · "go as you say", 27 Nov 2026)
+    $('alConfirm').innerHTML=(_have?'':'<p class="al-conf">You\'ll be e-mailed if a bid of <b>'+b+'</b> on <b>'+escH(_alWeekName(w.wk))+'</b> could win'+(!_gone&&now==='review'?'':' or be under review')+'. Lasts until the phase ends.</p>') // [228 · §297] item 181 · [569 · §579] none when no alert can be set; "could win." for a bid under review now
       +(_gone?'<p class="al-conf">'+escH('Your bid '+_gone.n+(_gone.r==='won'?' was won in an earlier phase and can\'t be used again.':' is withheld by the admin.'))+'</p>'
-      :((now==='win'||now==='review')?'<p class="al-true">Right now, a bid of '+b+' would already be projected '+(now==='win'?'to win':'under review')+' here.</p>'+_alStep3More(user,w.wk,w.bid).map(t=>'<p class="al-conf">'+escH(t)+'</p>').join(''):''));
-    $('alWinFoot').innerHTML=_alBtn('btn-secondary','← Back','_alWinBack')+_alBtn('btn-secondary','Cancel','_alWinCancel')+_alBtn('btn-primary',w.edit?'Save':'Set alert','_alWinSet');
+      :((now==='win'||now==='review')?'<p class="al-true">Right now, a bid of '+b+' would already be projected '+(now==='win'?'to win':'under review')+' here.</p>'+_alStep3More(user,w.wk,w.bid).map(t=>'<p class="al-conf">'+escH(t)+'</p>').join(''):'')); // [569 · §579] nothing added under it ("just drop the line entirely")
+    $('alWinFoot').innerHTML=_alBtn('btn-secondary','← Back','_alWinBack')+_alBtn('btn-secondary','Cancel','_alWinCancel')+_alBtn('btn-primary',w.edit?'Save':'Set alert','_alWinSet',_have); // [569 · §579] greyed when no alert can be set
   }
   try{ $('alWinBody').scrollTop=0; }catch(_){}
 }
@@ -7975,6 +7980,7 @@ async function _alWinSet(){
   if(!user||!wk||!_alBidOk(bid)||_alBox.busy) return;
   const st=_alWeekState(user,wk); if(AL_REFUSE[st]){ _alWinMsg(AL_REFUSE[st]); return; }
   if(st==='partner'){ _alWinMsg(_alPartnerMsg(user,wk)); return; } // [263 · §503 R2-O10] nothing saved
+  if(_giJudge(data,user,wk,bid)==='win'){ _alWinPaint(); return; } // [569 · §579] the bid would already win (the board may have moved since step 3 was drawn): nothing saved, step 3 drawn again (greyed)
   if(!_alStampKnown()){ _alToast(AL_NOSAVE); return; }
   const was=_alWatch(user,wk);
   if(edit&&was&&JSON.stringify(was.bid)===JSON.stringify(bid)){ _alWinClose(true); return; }
