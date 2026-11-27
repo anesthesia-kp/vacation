@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 448;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 449;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -504,7 +504,7 @@ thead th{color:var(--t2)}
         <a onclick="nav('maillog',this)">E-mail Info</a>
         <a onclick="nav('messages',this)">Messages</a>
         <a onclick="nav('whitelist',this)">Whitelist Tracker</a>
-        <a onclick="nav('pushalerts',this)">Push Alerts</a><!-- [547 · push] -->
+        <a onclick="nav('pushalerts',this)">Alerts</a><!-- [547 · push] · [568 · §578] the Alerts page -->
       </div></div>
       <div class="nav-grp"><button type="button" class="nav-head" aria-expanded="false" onclick="navGroup(this)"><span>Settings</span><span class="chev nav-chev" aria-hidden="true">▸</span></button><div class="nav-items">
         <a onclick="nav('setup',this)">Settings</a><!-- [404 · §334 A3 · D] -->
@@ -899,17 +899,18 @@ thead th{color:var(--t2)}
       </div>
     </div>
 
-    <!-- [547 · push] PUSH ALERTS — who has push alerts on, and on how many devices. Read from the pushAlerts documents
-         when the page opens and after each Off (renderPushAlerts paints it). The admin can only turn push alerts off —
-         one person, or everyone — each through the page's own confirm box; only the person can turn them on. -->
+    <!-- [547 · push] · [568 · §578] ALERTS — one row per person: push alerts (on how many devices), the two alert switches and every
+         "Notify if a week opens up" alert in force. View only, except push: the pushAlerts documents are read when the page opens and
+         after each Off (renderPushAlerts paints it); the admin can only turn push alerts off — one person, or everyone — each through the
+         page's own confirm box; only the person can turn them on. The alert choices come from vacations/alertPrefs (its listener repaints). -->
     <div class="panel" id="panel-pushalerts">
-      <div class="page-head"><div class="page-title">Push Alerts</div></div>
+      <div class="page-head"><div class="page-title">Alerts</div></div>
       <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
         <div id="paCount" style="font-size:13px;color:var(--t1)"></div>
-        <button class="btn btn-ghost" id="paAllOff" style="font-size:11px;padding:3px 9px;margin-left:auto" onclick="pushAlertsOffAll()" disabled>Turn off for everyone</button>
+        <button class="btn btn-ghost" id="paAllOff" style="font-size:11px;padding:3px 9px;margin-left:auto" onclick="pushAlertsOffAll()" disabled>Turn off push for everyone</button>
       </div>
       <div class="tbl-box" style="overflow-x:auto;max-height:560px;overflow-y:auto">
-        <table><thead><tr><th>Name</th><th>Push alerts</th><th>Devices</th></tr></thead><tbody id="paBody"></tbody></table>
+        <table><thead><tr><th>Name</th><th>Push alerts</th><th>Changes to your projections</th><th>Your withdrawn bid would win again</th><th>Notify if a week opens up</th></tr></thead><tbody id="paBody"></tbody></table>
       </div>
     </div>
 
@@ -1220,7 +1221,6 @@ thead th{color:var(--t2)}
           <div>
             <div class="trow-label">Projection-change alert e-mails</div>
             <div class="trow-desc">OFF = no bidding alert e-mails: projection changes, "withdrawn bid would win again" and "week opened up". Turn off while testing.</div>
-            <div class="trow-desc" id="alOptOut" style="display:none;margin-top:6px"></div><!-- [384 · §288 · plan §3f] the one line of people's own choices: painted by _alOptOutPaint -->
           </div>
           <div class="tog" id="emailNotifsToggle" onclick="toggleEmailNotifs()"></div>
         </div>
@@ -1234,7 +1234,7 @@ thead th{color:var(--t2)}
         <div class="trow" style="margin-top:10px;padding-top:12px;border-top:1px solid var(--b1)"><!-- [385 · §292] 10:45 AM: the "KP E-mail Prompt on Login" card's one row, now this card's third row (ids and toggleKpPrompt unchanged) -->
           <div>
             <div class="trow-label">Ask users for their KP e-mail at login</div>
-            <div class="trow-desc">Asks anyone with no KP e-mail on file for one after sign-in — not someone who answered No thanks or whose KP e-mail is off — and lets each person turn theirs off and on under Alerts. Off: no one is asked and that option is hidden. A KP e-mail on file gets every e-mail the login address gets either way.</div>
+            <div class="trow-desc">ON = asks for a KP e-mail at sign-in if none is on file. OFF = no one is asked; staff can't add or remove one. A KP e-mail on file always gets every e-mail.</div><!-- [568 · §578] -->
           </div>
           <div class="tog" id="kpPromptToggle" onclick="toggleKpPrompt()"></div>
         </div>
@@ -2278,7 +2278,7 @@ onSnapshot(metaRef,     snap=>{ const d=snap.exists()?snap.data():{};  metaData=
 onSnapshot(changesRef,  snap=>{
   changesLog=snap.exists()?(snap.data().log||[]):[];
   changesResetAt=snap.exists()?(snap.data().resetAt||0):0;
-  if(typeof _alOptOutPaint==='function') _alOptOutPaint(); // [384 · §288] the count of get-in alerts in force follows the phase's record stamp
+  if(typeof renderPushAlerts==='function') renderPushAlerts(); // [384 · §288] · [568 · §578] the Alerts table's get-in alerts in force follow the phase's record stamp
   const p=document.getElementById("panel-changelog");
   if(p&&p.classList.contains("on")) renderChangelog();
   if(typeof renderInsights==='function') renderInsights(); // keep Popcornometer in sync
@@ -2496,7 +2496,7 @@ let whitelistConfirmData={};
 onSnapshot(whitelistConfirmRef, snap=>{ whitelistConfirmData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-whitelist'); if(p&&p.classList.contains('on')&&typeof renderWhitelistTracker==='function') renderWhitelistTracker(); if(typeof renderNextStep==='function') renderNextStep(); });
 // [384 · §288 · plan §3e] The alert choices, alongside the other vacations listeners. Until they arrive every switch reads ON.
 let alertPrefsData={}, _alLoaded=false;
-onSnapshot(alertPrefsRef, snap=>{ alertPrefsData=snap.exists()?(snap.data()||{}):{}; _alLoaded=true; if(typeof _alOptOutPaint==='function') _alOptOutPaint(); });
+onSnapshot(alertPrefsRef, snap=>{ alertPrefsData=snap.exists()?(snap.data()||{}):{}; _alLoaded=true; if(typeof renderPushAlerts==='function') renderPushAlerts(); }); // [568 · §578] the Alerts table
 onSnapshot(bidLoweringsRef, snap=>{ bidLoweringsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-setup'); /* [385 · §292] the usage table is on the Setup page now */ if(p&&p.classList.contains('on')&&typeof renderBidLowerings==='function') renderBidLowerings(); }); // [build 268 · BL]
 onSnapshot(bidHoldsRef, snap=>{ bidHoldsData=snap.exists()?snap.data():{}; const p=document.getElementById('panel-userbids'); if(p&&p.classList.contains('on')&&typeof renderUserBids==='function') renderUserBids(); }); // [327 · §180]
 // [330 · §189] The two activity logs — admin-read docs, painted only while User Activity is open.
@@ -2509,7 +2509,7 @@ onSnapshot(usernamesRef,snap=>{ usernamesData=snap.exists()?snap.data():{}; cons
 onSnapshot(approvalsRef, snap=>{ approvalsData=normalizeWkArrayMap(snap.exists()?snap.data():{}); _approvalsReady=true; refreshAll(); });
 // (Removed a duplicate emails listener here — emailsDataAdmin is now kept in sync
 // inside the single emails listener above, mirroring the loginEmails pattern.)
-onSnapshot(phasesRef,   snap=>{ _phasesReady=true; phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{},phaseHistory:{}}; _publishedCompletedPhases=phasesData.completedPhases||{}; _mergeCompletedPhasesView(); if(typeof _alOptOutPaint==='function') _alOptOutPaint(); /* [384 · §288] a new phase lapses get-in alerts */ refreshAll(); if(typeof _moAidChanged==='function') _moAidChanged(); /* [401 · §317] the outbox view follows the auction's mail id */ }); // [H6] keep the staged+published merged view
+onSnapshot(phasesRef,   snap=>{ _phasesReady=true; phasesData=snap.exists()?snap.data():{currentPhase:1,completedPhases:{},phaseHistory:{}}; _publishedCompletedPhases=phasesData.completedPhases||{}; _mergeCompletedPhasesView(); if(typeof renderPushAlerts==='function') renderPushAlerts(); /* [384 · §288] a new phase lapses get-in alerts · [568 · §578] the Alerts table */ refreshAll(); if(typeof _moAidChanged==='function') _moAidChanged(); /* [401 · §317] the outbox view follows the auction's mail id */ }); // [H6] keep the staged+published merged view
 onSnapshot(deniedRef,   snap=>{ deniedData=normalizeWkArrayMap(snap.exists()?snap.data():{}); _deniedReady=true; refreshAll(); });
 onSnapshot(bidPhaseRef, snap=>{ bidPhaseData=normalizeUserWkMap(snap.exists()?snap.data():{}); refreshAll(); }); // L-1: bid-phase tag changes must refresh dependent views (pending counts, projections, complete-phase gate)
 onSnapshot(slotsRef,    snap=>{ slotsData=snap.exists()?snap.data():{}; _slotsReady=true; refreshAll(); });
@@ -4390,33 +4390,6 @@ function _aamHtml(u,wk,next){
   return '<div class="cmodal-warn" style="margin-top:8px"><strong>Admin changes don\'t send these alerts:</strong><ul style="margin:6px 0 6px 18px;line-height:1.6">'
     +rows.map(r=>'<li>'+esc(r.u)+' — '+r.why.map(esc).join(' · ')+'</li>').join('')
     +'</ul>It\'s unknown whether this change would trigger them. Consider messaging these people or resetting the timer if needed.</div>';
-}
-// [385 · §292, plan §12] "Show by person ▾" / "Hide ▴": open or closed is this page's own (closed on load, never stored); it closes by itself
-// when the count drops to 0, and every repaint (_alOptOutPaint) keeps it.
-let _alByPerson=false;
-window._alByPersonToggle=function(){ _alByPerson=!_alByPerson; _alOptOutPaint(); try{ const b=document.getElementById('alByPersonBtn'); if(b) b.focus(); }catch(_){} };
-// The one line under the projection switch (plan §3f, switch 2's name of §10a): who turned which switch off, and how many get-in alerts are in
-// force now (a lapsed one — an earlier phase or round, or before a reset — is not counted). '' until the choices have arrived. [385 · §292] The
-// count is _alGiRows' length; from 1 up a button follows it, and while open the list goes under the line: person — week — the bid they would place.
-function _alOptOutLine(){
-  try{
-    if(!_alLoaded) return '';
-    const off={proj:[],chance:[]};
-    for(const u of Object.keys(alertPrefsData||{}).sort()){
-      const e=alertPrefsData[u]; if(!e||typeof e!=='object') continue;
-      if(e.proj===false) off.proj.push(u);
-      if(e.chance===false) off.chance.push(u);
-    }
-    const rows=_alGiRows(), n=rows.length;
-    if(!n) _alByPerson=false;
-    const who=a=>a.length?a.map(esc).join(', '):'none';
-    return '<strong>Turned off by people (their own choice):</strong> Changes to your projections — '+who(off.proj)+' · Your withdrawn bid would win again — '+who(off.chance)+' · “Notify if a week opens up” alerts set now: '+n
-      +(n?' <button type="button" class="btn btn-ghost" id="alByPersonBtn" aria-expanded="'+(_alByPerson?'true':'false')+'" style="padding:5px 12px;font-size:11px;margin-left:4px;min-height:28px;min-width:44px" onclick="_alByPersonToggle()">'+(_alByPerson?'Hide ▴':'Show by person ▾')+'</button>':'')
-      +(n&&_alByPerson?'<div id="alByPersonList" style="margin-top:6px;line-height:1.6">'+rows.map(r=>'<div>'+esc(r.u)+' — '+esc(wLabel(wkDate(r.wk)))+' — bid '+esc(bidLblAdmin(r.bid))+'</div>').join('')+'</div>':'');
-  }catch(_){ return ''; }
-}
-function _alOptOutPaint(){
-  try{ const el=document.getElementById('alOptOut'); if(!el) return; const h=_alOptOutLine(); el.innerHTML=h; el.style.display=h?'':'none'; }catch(_){}
 }
 
 // ── Outbid alerts for ADMIN-side bid changes ────────────────────────────────
@@ -14202,7 +14175,7 @@ onSnapshot(userListRef, snap=>{
     userListData.forEach(n=>names.push(n));
     names.sort();
     refreshAll();
-    if(typeof _alOptOutPaint==='function') _alOptOutPaint(); // [384 · §288 · fix round, lane 1 L5] the count of get-in alerts follows the roster
+    if(typeof renderPushAlerts==='function') renderPushAlerts(); // [384 · §288 · fix round, lane 1 L5] · [568 · §578] the Alerts table follows the roster
   }
   renderUserPanel();
 });
@@ -14916,16 +14889,29 @@ async function _paLoad(){
   renderPushAlerts();
 }
 function _paOpen(){ _paDocs=null; _paState='load'; renderPushAlerts(); return _paLoad(); }
+// [568 · §578] One person's alert choices, for the Alerts table: {proj, chance} true = On (no entry, or anything but false, is On, as the
+// staff page reads it) and gi = their "Notify if a week opens up" alerts in force, from _alGiRows (THE ONE SOURCE: the same rows build
+// 567's edit boxes read), in date order. null until the alert choices have arrived (_alLoaded).
+function _paAlertCells(u){
+  if(!_alLoaded) return null;
+  const e=alertPrefsData&&alertPrefsData[u], ok=e&&typeof e==='object';
+  return { proj:!(ok&&e.proj===false), chance:!(ok&&e.chance===false), gi:_alGiRows().filter(r=>r.u===u) };
+}
+function _paOnOff(on){ return on?'<span style="color:var(--t3)">On</span>':'<strong>Off</strong>'; }
+function _paGiCell(gi){ return gi.length?gi.map(r=>esc(fmtWk(r.wk))+', bid '+esc(bidLblAdmin(r.bid))).join(' · '):'<span style="color:var(--t3)">—</span>'; }
 function renderPushAlerts(){
   const ready=_paState==='ok', rows=_paRows(), on=rows.filter(r=>r.on);
-  const cnt=document.getElementById('paCount'); if(cnt) cnt.textContent=ready?'On for '+on.length+' of '+rows.length+' people.':'';
+  const cnt=document.getElementById('paCount'); if(cnt) cnt.textContent=ready?'Push alerts on for '+on.length+' of '+rows.length+' people.':''; // [568 · §578]
   const all=document.getElementById('paAllOff'); if(all) all.disabled=!ready||!on.length;
   const tb=document.getElementById('paBody'); if(!tb) return;
-  if(!ready){ tb.innerHTML='<tr><td colspan="3" style="text-align:center;color:var(--t2);padding:20px">'+esc(_paState==='err'?LOAD_SLOW_TEXT:'Loading…')+'</td></tr>'; return; }
-  tb.innerHTML=rows.map(r=>'<tr><td>'+esc(r.name)+'</td>'
-    +'<td style="white-space:nowrap">'+(r.on?'<span class="pill p-green">On</span> <button class="btn btn-ghost" style="font-size:11px;padding:3px 9px;margin-left:8px" onclick="pushAlertsOff(\''+_jsq(r.u)+'\')">Turn off</button>':'<span style="color:var(--t2)">Off</span>')+'</td>'
-    +'<td class="mono">'+r.n+'</td></tr>').join('')
-    ||'<tr><td colspan="3" style="text-align:center;color:var(--t2);padding:20px">No users on the roster yet.</td></tr>';
+  if(!ready){ tb.innerHTML='<tr><td colspan="5" style="text-align:center;color:var(--t2);padding:20px">'+esc(_paState==='err'?LOAD_SLOW_TEXT:'Loading…')+'</td></tr>'; return; }
+  const wait='<span style="color:var(--t2)">Loading…</span>';
+  tb.innerHTML=rows.map(r=>{ const a=_paAlertCells(r.u); return '<tr><td>'+esc(r.name)+'</td>'
+    +'<td style="white-space:nowrap">'+(r.on?'<span class="pill p-green">On</span> · '+r.n+' '+(r.n===1?'device':'devices')+' <button class="btn btn-ghost" style="font-size:11px;padding:3px 9px;margin-left:8px" onclick="pushAlertsOff(\''+_jsq(r.u)+'\')">Turn off</button>':'<span style="color:var(--t2)">Off</span>')+'</td>'
+    +'<td>'+(a?_paOnOff(a.proj):wait)+'</td>'
+    +'<td>'+(a?_paOnOff(a.chance):wait)+'</td>'
+    +'<td style="min-width:160px">'+(a?_paGiCell(a.gi):wait)+'</td></tr>'; }).join('')
+    ||'<tr><td colspan="5" style="text-align:center;color:var(--t2);padding:20px">No users on the roster yet.</td></tr>';
 }
 window.renderPushAlerts=renderPushAlerts;
 function _paRefused(e){ toast('Not turned off — the write was refused ('+(e?.code||e?.message||e)+'). Nothing changed.','err'); }
