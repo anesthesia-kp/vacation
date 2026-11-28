@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 454;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 455;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -1421,8 +1421,8 @@ thead th{color:var(--t2)}
     <!-- [573 · §583] FILE SIZES: how full each document this page listens to is, of Firestore's 1 MiB limit (_ffAll); painted by renderFileSizes. -->
     <div class="panel" id="panel-filesizes">
       <div class="page-head"><div class="page-title">File Sizes</div><div class="page-sub">How full each shared file is, of its size limit. A file over 75% also shows a warning band on every admin page.</div></div>
-      <div class="tbl-box" style="overflow-x:auto"><table><thead><tr><th>File</th><th style="text-align:right">Full</th></tr></thead><tbody id="fsBody"></tbody></table></div>
-      <details id="fsRest" class="page-sub" style="margin-top:10px;display:none"><summary style="cursor:pointer">Every other file is under 1% full.</summary><div id="fsRestList" style="margin-top:6px"></div></details>
+      <div class="tbl-box" id="fsBox" style="overflow-x:auto;display:none"><table><thead><tr><th>File</th><th style="text-align:right">Full</th></tr></thead><tbody id="fsBody"></tbody></table></div>
+      <details id="fsRest" class="page-sub" style="margin-top:10px;display:none"><summary id="fsRestSum" style="cursor:pointer">Every other file is under 1% full.</summary><div id="fsRestList" style="margin-top:6px"></div></details>
     </div>
 
     <!-- SIMULATOR -->
@@ -2235,8 +2235,8 @@ function _ffCheck(path,snap){
     if(typeof path!=='string'||!path||path==='?'||!snap||typeof snap.data!=='function') return; // a document only (not a query)
     const data=(typeof snap.exists==='function'&&!snap.exists())?null:snap.data();
     const bytes=(data&&typeof data==='object')?_ffDocBytes(path,data):0;
-    { const was=_ffAll.get(path), pct=Math.floor(100*bytes/FF_LIMIT); _ffAll.set(path,{path:path,doc:path.split('/').pop(),bytes:bytes,pct:pct});
-      if(!was||was.pct!==pct) _ffPaintSizesIfOpen(); }
+    { const was=_ffAll.get(path), pct=Math.floor(100*bytes/FF_LIMIT), t10=Math.floor(1000*bytes/FF_LIMIT); _ffAll.set(path,{path:path,doc:path.split('/').pop(),bytes:bytes,pct:pct,t10:t10});
+      if(!was||was.t10!==t10) _ffPaintSizesIfOpen(); } // [575] repainted when its tenth of a percent changes (the opened list shows tenths)
     if(bytes>FF_LIMIT*FF_WARN){
       const top=_ffBiggest(data);
       const e={path:path,doc:path.split('/').pop(),bytes:bytes,pct:Math.floor(100*bytes/FF_LIMIT),topKey:top?String(top[0]):null,list:false,innerKey:null,who:null,wk:null};
@@ -2297,24 +2297,31 @@ function openFullFileBox(){
   }catch(_){}
 }
 window.openFullFileBox=openFullFileBox;
+// [575 · §583] A file under 1%, to one decimal: "0.4%"; below 0.1%, "under 0.1%" (the opened list; his 8:41 AM "this looks weird").
+function _ffTenths(e){ const t=Math.floor(1000*e.bytes/FF_LIMIT)/10; return t<0.1?'under 0.1%':t.toFixed(1)+'%'; }
 // Settings → File Sizes: every file at 1% or more, fullest first; the rest in one line that opens to list them, A to Z (his 6:51 AM:
 // "Can the under 1% line expand to list what they are?"). Painted when the page opens and whenever a file's whole-number percentage
 // changes while it is open; the line keeps its open or closed state. Text only.
 function renderFileSizes(){
   try{
     const body=document.getElementById('fsBody'), rest=document.getElementById('fsRest'), list=document.getElementById('fsRestList'); if(!body||!rest||!list) return;
+    const box=document.getElementById('fsBox'), sum=document.getElementById('fsRestSum'); // [575] no file at 1% or more: no empty table, and the line says "Every file"
+    let rows=0;
     const L=Array.from(_ffAll.values()).sort((a,b)=>b.bytes-a.bytes||(_ffFile(a)<_ffFile(b)?-1:1));
     body.textContent='';
     const under=[];
     for(const e of L){
-      if(e.pct<1){ under.push(_ffFile(e)); continue; }
+      if(e.pct<1){ under.push(e); continue; }
+      rows++;
       const tr=document.createElement('tr'), a=document.createElement('td'), b=document.createElement('td');
       a.textContent=_ffFile(e); b.textContent=e.pct+'%'; b.style.textAlign='right'; if(e.bytes>FF_LIMIT*FF_WARN) b.style.color='var(--red)';
       tr.appendChild(a); tr.appendChild(b); body.appendChild(tr);
     }
     list.textContent='';
-    under.sort((a,b)=>a.localeCompare(b)).forEach(n=>{ const d=document.createElement('div'); d.textContent=n; list.appendChild(d); });
+    under.sort((a,b)=>_ffFile(a).localeCompare(_ffFile(b))).forEach(e=>{ const d=document.createElement('div'); d.textContent=_ffFile(e)+' · '+_ffTenths(e); list.appendChild(d); });
     rest.style.display=under.length?'':'none';
+    if(box) box.style.display=rows?'':'none';
+    if(sum) sum.textContent=rows?'Every other file is under 1% full.':'Every file is under 1% full.';
   }catch(_){}
 }
 function _ffPaintSizesIfOpen(){ try{ const p=document.getElementById('panel-filesizes'); if(p&&p.classList.contains('on')) renderFileSizes(); }catch(_){} }
