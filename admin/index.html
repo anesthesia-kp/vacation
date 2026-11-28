@@ -19,7 +19,7 @@
       is poked, arming the push-driven build gate (adminSettings.requiredBuilds). */
 (function () {
   var PAGE = "admin";  // this page's key in versions.json
-  var BUILD = 453;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 454;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; // exposed for exportBackup and diagnostics — BUILD itself is IIFE-scoped
   window.PAGE = PAGE;   // [build 268 · GATE] page key for the module-side gate
   var lastCheck = 0;
@@ -470,6 +470,12 @@ thead th{color:var(--t2)}
 .cmodal{padding:var(--sa-tt) max(24px,var(--sa-r)) var(--sa-b) max(24px,var(--sa-l))} /* top and bottom: the covered edges only - a tall dialog is the full height (100dvh), so the old 24px there never showed; centred in the uncovered screen */
 .cmodal-box{max-height:calc(100dvh - var(--sa-y))}
 #toast{bottom:max(24px,var(--sa-b))}
+/* [573 · §583] THE FULL-FILE BAND (#fullFileBanner, _syncFullBanner): while it shows, --ffb is how far down its bottom edge reaches, and the
+   page, the side menu and the phone's menu button move down by it, so the band covers nothing. Unset (the band hidden) it is 0: nothing moves. */
+.shell{padding-top:var(--ffb,0px)} /* padding, not margin: a margin would collapse through the body and jump when a box pins it (_pgPin) */
+.bar{top:var(--ffb,0px);height:calc(100vh - var(--ffb,0px))}
+#navToggle{top:calc(max(12px,var(--sa-tt)) + var(--ffb,0px))}
+#fullFileBanner{padding:calc(8px + var(--sa-tt)) max(14px,var(--sa-r)) 8px max(14px,var(--sa-l))}
 </style>
 </head>
 <body>
@@ -480,6 +486,9 @@ thead th{color:var(--t2)}
 <div id="feedStaleBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:3000;align-items:center;gap:10px;justify-content:center;padding:8px 14px;background:#4a1911;color:#ffffff;font-weight:800;font-size:13px;box-shadow:0 2px 12px rgba(31,35,41,.35)">
   LIVE CONNECTION LOST — this page may show STALE data (<span id="feedStaleCount">1</span> feed(s) down). Reconnecting automatically… if this stays up, reload the page. Do not make phase decisions until it clears.
 </div>
+<!-- [573 · §583] THE FULL-FILE WARNING: shown while a document the page listens to is over 75% of Firestore's 1 MiB limit (_ffCheck).
+     One line per file, the fullest first; a tap opens the box with the file's largest entry and what to do (openFullFileBox). -->
+<div id="fullFileBanner" role="button" tabindex="0" onclick="openFullFileBox()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openFullFileBox();}" style="display:none;position:fixed;top:0;left:0;right:0;z-index:1900;cursor:pointer;text-align:center;background:#4a1911;color:#ffffff;font-weight:800;font-size:13px;line-height:1.45;box-shadow:0 2px 12px rgba(31,35,41,.35)"></div>
 <div id="load"><div class="spin"></div><div id="loadText" role="status" aria-live="polite"></div></div>
 
 <div class="shell">
@@ -525,6 +534,7 @@ thead th{color:var(--t2)}
         <a onclick="nav('controls',this)">Backups &amp; Reset</a>
         <a onclick="nav('slots',this)">Week Capacity</a>
         <a onclick="nav('rules',this)">Rules</a><!-- [397 · §299] -->
+        <a onclick="nav('filesizes',this)">File Sizes</a><!-- [573 · §583] -->
         <a onclick="nav('simulator',this)">Simulator</a>
       </div></div>
       <div class="nav-section">Other Systems</div>
@@ -1408,6 +1418,13 @@ thead th{color:var(--t2)}
       <div id="rulesSpacer" aria-hidden="true"></div>
     </div>
 
+    <!-- [573 · §583] FILE SIZES: how full each document this page listens to is, of Firestore's 1 MiB limit (_ffAll); painted by renderFileSizes. -->
+    <div class="panel" id="panel-filesizes">
+      <div class="page-head"><div class="page-title">File Sizes</div><div class="page-sub">How full each shared file is, of its size limit. A file over 75% also shows a warning band on every admin page.</div></div>
+      <div class="tbl-box" style="overflow-x:auto"><table><thead><tr><th>File</th><th style="text-align:right">Full</th></tr></thead><tbody id="fsBody"></tbody></table></div>
+      <details id="fsRest" class="page-sub" style="margin-top:10px;display:none"><summary style="cursor:pointer">Every other file is under 1% full.</summary><div id="fsRestList" style="margin-top:6px"></div></details>
+    </div>
+
     <!-- SIMULATOR -->
     <div class="panel" id="panel-simulator">
       <div class="page-head">
@@ -2154,7 +2171,155 @@ function _syncFeedBanner(){
   const el=document.getElementById('feedStaleBanner'); if(!el) return;
   el.style.display=_deadFeeds.size?'flex':'none';
   const n=document.getElementById('feedStaleCount'); if(n) n.textContent=String(_deadFeeds.size);
+  try{ _syncFullBanner(); }catch(_){} // [573 · §583] the full-file band moves below this one, or back up
 }
+// [573 · §583] THE FULL-FILE WARNING (owner, 28 Nov 2026 6:30 AM: "yes, just the warning for now though, plus a rules line about it on
+// admin page"; 6:38 AM: a short band, the details in a box). Every Firestore document has a 1 MiB limit, and several hold everyone's
+// entries in ONE document (the bids, the change log, alert settings and others): the rules bound WHICH entry a colleague writes, never
+// how big it is, so one oversized entry can fill a document and refuse every later save to it. Every document this page listens to
+// arrives through onSnapshot (below), which calls _ffCheck after the page's own handler. _ffCheck measures it by Firestore's published
+// size rule (string = its UTF-8 bytes + 1; number and timestamp 8; boolean and null 1; a list = its values; a map = its keys + values;
+// a document = its name + its fields + 32). Over 75% the document goes on _ffList and the band (#fullFileBanner) shows one line per
+// file; a tap opens the box (openConfirm) with the file's largest entry and what to do. It reads and writes nothing, and every part
+// catches its own errors: if it fails, the feed and the page behave as without it.
+const FF_LIMIT=1048576, FF_WARN=0.75;
+const _ffList=new Map(); // document path -> the entry _ffCheck made for it
+// [573 · §583 · 6:48 AM] Settings → File Sizes lists every measured document (_ffAll): its plain name and how full it is, fullest first.
+const _ffAll=new Map(); // document path -> {path, doc, bytes, pct} for every document measured, full or not
+const FF_NAMES={'vacations/schedule':'Bids','vacations/bestBids':'Best bids','vacations/bidTimes':'Bid times','vacations/bidPhase':'Bid phases','vacations/bidLowerings':'Bid lowerings','vacations/bidLoweringsArchive':'Bid lowerings archive','vacations/bidHolds':'Withheld numbers','vacations/changes':'Change log','vacations/changesArchive':'Change log archive','vacations/changesDecisions':'Decisions log','vacations/approvals':'Approvals','vacations/denials':'Denials','vacations/phases':'Phases','vacations/phaseStaging':'Phase results waiting','vacations/locks':'Week locks','vacations/slots':'Week capacity','vacations/slcMap':'Smart Lock Control','vacations/fteMap':'FTE','vacations/userList':'User list','vacations/usernames':'Names','vacations/emails':'KP e-mail addresses','vacations/loginEmails':'Sign-in addresses','vacations/emailToUser':'Sign-in map','vacations/adminAccess':'Admin list','vacations/adminSettings':'Settings','vacations/adminMessages':'Messages','vacations/alertPrefs':'Alert settings','vacations/splitRequests':'Split requests','vacations/splitAgreements':'Split agreements','vacations/staffSplits':'Staff split records','vacations/splits':'Split weeks','vacations/timer':'Timer','vacations/meta':'Meta','vacations/passcodes':'Passcodes','vacations/welcomeLog':'Welcome e-mail record','vacations/whitelistConfirm':'Whitelist confirmations','vacations/mailStats':'E-mail meter','vacations/mailLog':'Last e-mail record','vacations/loginLog':'Sign-in record','vacations/signInMisses':'Sign-in misses','dailysched/adminAccess':'Schedule admin list'};
+// The UTF-8 length of a string: the browser's own encoder for a long one (fast; a lone surrogate counts 3, as written), else counted here.
+const _ffEnc=(typeof TextEncoder!=='undefined')?new TextEncoder():null;
+function _ffU8(s){
+  if(s.length>64&&_ffEnc) return _ffEnc.encode(s).length;
+  let n=0;
+  for(let i=0;i<s.length;i++){
+    const c=s.charCodeAt(i);
+    if(c<0x80) n+=1;
+    else if(c<0x800) n+=2;
+    else if(c>=0xD800&&c<=0xDBFF&&i+1<s.length&&s.charCodeAt(i+1)>=0xDC00&&s.charCodeAt(i+1)<=0xDFFF){ n+=4; i++; }
+    else n+=3;
+  }
+  return n;
+}
+function _ffStr(s){ return _ffU8(String(s))+1; }
+// A document's name: each part of its path as a string, plus 16.
+function _ffName(path){ let n=16; for(const p of String(path).split('/')) n+=_ffStr(p); return n; }
+// One value's size.
+function _fsBytes(v){
+  if(v===null||v===undefined) return 1;
+  const t=typeof v;
+  if(t==='string') return _ffStr(v);
+  if(t==='number'||t==='bigint') return 8;
+  if(t==='boolean') return 1;
+  if(Array.isArray(v)){ let n=0; for(const x of v) n+=_fsBytes(x); return n; }
+  if(t==='object'){
+    if(v instanceof Date||typeof v.toMillis==='function') return 8; // a timestamp
+    if(typeof v.toUint8Array==='function'){ try{ return v.toUint8Array().length; }catch(_){ return 0; } } // bytes
+    if(typeof v.latitude==='number'&&typeof v.longitude==='number'&&typeof v.isEqual==='function') return 16; // a map point
+    if(typeof v.path==='string'&&v.firestore) return _ffName(v.path); // a reference to a document
+    let n=0; for(const k of Object.keys(v)) n+=_ffStr(k)+_fsBytes(v[k]); return n; // a map
+  }
+  return 8;
+}
+function _ffDocBytes(path,data){ return _ffName(path)+_fsBytes(data||{})+32; }
+// The biggest part of a map (its key and value) or of a list (its place and item); null when there is none.
+function _ffBiggest(o){
+  let best=null;
+  if(Array.isArray(o)){ for(let i=0;i<o.length;i++){ const z=_fsBytes(o[i]); if(!best||z>best[2]) best=[i,o[i],z]; } }
+  else if(o&&typeof o==='object'&&!(o instanceof Date)&&typeof o.toMillis!=='function'){ for(const k of Object.keys(o)){ const z=_ffStr(k)+_fsBytes(o[k]); if(!best||z>best[2]) best=[k,o[k],z]; } }
+  return best;
+}
+// Measure one arriving document; put it on the list, take it off, or leave the list as it is.
+function _ffCheck(path,snap){
+  try{
+    if(typeof path!=='string'||!path||path==='?'||!snap||typeof snap.data!=='function') return; // a document only (not a query)
+    const data=(typeof snap.exists==='function'&&!snap.exists())?null:snap.data();
+    const bytes=(data&&typeof data==='object')?_ffDocBytes(path,data):0;
+    { const was=_ffAll.get(path), pct=Math.floor(100*bytes/FF_LIMIT); _ffAll.set(path,{path:path,doc:path.split('/').pop(),bytes:bytes,pct:pct});
+      if(!was||was.pct!==pct) _ffPaintSizesIfOpen(); }
+    if(bytes>FF_LIMIT*FF_WARN){
+      const top=_ffBiggest(data);
+      const e={path:path,doc:path.split('/').pop(),bytes:bytes,pct:Math.floor(100*bytes/FF_LIMIT),topKey:top?String(top[0]):null,list:false,innerKey:null,who:null,wk:null};
+      if(top&&Array.isArray(top[1])){ // a list (the change log's entries): its biggest item names the person and the week when it can
+        e.list=true; const it=_ffBiggest(top[1]);
+        if(it&&it[1]&&typeof it[1]==='object'){ if(typeof it[1].user==='string') e.who=it[1].user; if(typeof it[1].weekKey==='string') e.wk=it[1].weekKey; }
+      } else if(top){ const inner=_ffBiggest(top[1]); if(inner) e.innerKey=String(inner[0]); }
+      _ffList.set(path,e);
+    } else if(_ffList.has(path)){ _ffList.delete(path); }
+    else return;
+    _syncFullBanner();
+  }catch(_){}
+}
+function _ffSorted(){ return Array.from(_ffList.values()).sort((a,b)=>b.bytes-a.bytes); }
+function _ffFile(e){ return FF_NAMES[e.path]||e.doc; }
+function _ffCut(k){ const t=String(k); return t.length>40?t.slice(0,40)+'…':t; }
+function _ffPerson(k){ try{ return (typeof k==='string'&&typeof usernamesData!=='undefined'&&usernamesData&&usernamesData[k])?String(usernamesData[k]):null; }catch(_){ return null; } }
+function _ffIsWeek(k){ try{ return typeof k==='string'&&wNum(k)>0; }catch(_){ return false; } }
+function _ffWeek(k){ try{ return wLabel(wkDate(k)); }catch(_){ return String(k); } }
+// "Aaron Frankel, Wk 10 · Sun Mar 7" — the person and the week where there are ones; with no person, the stored key.
+function _ffLabel(e){
+  const whoKey=e.list?e.who:e.topKey, wkKey=e.list?e.wk:e.innerKey;
+  const name=_ffPerson(whoKey)||_ffCut(whoKey!=null?whoKey:(e.topKey!=null?e.topKey:''));
+  return name+(_ffIsWeek(wkKey)?', '+_ffWeek(wkKey):'');
+}
+function _ffTodo(e){
+  if(e.doc==='schedule'&&!e.list&&_ffPerson(e.topKey)&&_ffIsWeek(e.innerKey)) return 'What to do: take a backup, then remove that bid in Edit Selections.';
+  if(e.doc==='changes'||e.doc==='changesArchive') return 'What to do: this file grows with normal use and needs a change to the site before it fills.';
+  const keys=[e.topKey].concat((!e.list&&e.innerKey!=null)?[e.innerKey]:[]).filter(k=>k!=null).map(_ffCut);
+  return 'What to do: take a backup, then delete this entry in the Firebase console: Firestore → '+e.path.split('/').concat(keys).join(' → ')+'.';
+}
+// The band: one line per file, the fullest first, set as text; below the connection band when that one shows.
+function _syncFullBanner(){
+  try{
+    const el=document.getElementById('fullFileBanner'); if(!el) return;
+    const L=_ffSorted();
+    el.textContent='';
+    if(!L.length){ el.style.display='none'; document.documentElement.style.removeProperty('--ffb'); return; }
+    L.forEach((e,i)=>{ const d=document.createElement('div'); d.textContent='FILE NEARLY FULL — '+_ffFile(e)+' is '+e.pct+'% of its size limit.'+(i===L.length-1?' Tap for details.':''); el.appendChild(d); });
+    const fb=document.getElementById('feedStaleBanner');
+    const top=(fb&&fb.style.display&&fb.style.display!=='none')?fb.offsetHeight:0;
+    el.style.top=top+'px'; el.style.display='block';
+    document.documentElement.style.setProperty('--ffb',(top+el.offsetHeight)+'px');
+  }catch(_){}
+}
+try{ window.addEventListener('resize',function(){ if(_ffList.size) _syncFullBanner(); }); }catch(_){}
+// The box: each file's block, in the site's usual box (openConfirm: opens at its top, Close pinned, the page behind held). Never over
+// another box. Every value a colleague controls goes through esc().
+function openFullFileBox(){
+  try{
+    if(document.querySelector('.cmodal.show')) return;
+    const L=_ffSorted(); if(!L.length) return;
+    const body=L.map(e=>'<p style="margin:0 0 14px"><strong>'+esc(_ffFile(e))+' — '+e.pct+'% of its size limit.</strong><br>'
+      +'Largest entry: '+esc(_ffLabel(e))+'.<br>'
+      +'When it is full, no one can save to it. A large entry is not always a mistake — check it before removing anything.<br>'
+      +esc(_ffTodo(e))+'</p>').join('');
+    openConfirm({title:'File nearly full',body:body,okText:'Close',okOnly:true});
+  }catch(_){}
+}
+window.openFullFileBox=openFullFileBox;
+// Settings → File Sizes: every file at 1% or more, fullest first; the rest in one line that opens to list them, A to Z (his 6:51 AM:
+// "Can the under 1% line expand to list what they are?"). Painted when the page opens and whenever a file's whole-number percentage
+// changes while it is open; the line keeps its open or closed state. Text only.
+function renderFileSizes(){
+  try{
+    const body=document.getElementById('fsBody'), rest=document.getElementById('fsRest'), list=document.getElementById('fsRestList'); if(!body||!rest||!list) return;
+    const L=Array.from(_ffAll.values()).sort((a,b)=>b.bytes-a.bytes||(_ffFile(a)<_ffFile(b)?-1:1));
+    body.textContent='';
+    const under=[];
+    for(const e of L){
+      if(e.pct<1){ under.push(_ffFile(e)); continue; }
+      const tr=document.createElement('tr'), a=document.createElement('td'), b=document.createElement('td');
+      a.textContent=_ffFile(e); b.textContent=e.pct+'%'; b.style.textAlign='right'; if(e.bytes>FF_LIMIT*FF_WARN) b.style.color='var(--red)';
+      tr.appendChild(a); tr.appendChild(b); body.appendChild(tr);
+    }
+    list.textContent='';
+    under.sort((a,b)=>a.localeCompare(b)).forEach(n=>{ const d=document.createElement('div'); d.textContent=n; list.appendChild(d); });
+    rest.style.display=under.length?'':'none';
+  }catch(_){}
+}
+function _ffPaintSizesIfOpen(){ try{ const p=document.getElementById('panel-filesizes'); if(p&&p.classList.contains('on')) renderFileSizes(); }catch(_){} }
+window.renderFileSizes=renderFileSizes;
+
 // Phase-freezing actions must never run on possibly-stale data: Complete Phase freezes winners
 // FROM THIS PAGE'S LOCAL STATE, so a dead schedule feed would freeze an old board permanently.
 function _feedsHealthyOrExplain(label){
@@ -2271,6 +2436,7 @@ function onSnapshot(ref, next, error) {
       }
       const _first = _feedMark(_fid, snap); // [368 · §265] a first real arrival — the cover is repainted after the page's own repaint
       try { next(snap); } finally { if (_first) _loadCoverSoon(); }
+      if (typeof _ffCheck === 'function') _ffCheck(path, snap); // [573 · §583] the full-file warning: measured after the handler; it catches its own errors
     }, e => {
       console.error('[Firestore listener]', path, e && e.code, e && e.message);
       _deadFeeds.add(path); _syncFeedBanner();
@@ -2785,6 +2951,7 @@ window.nav = function(id, el) {
   if(id==='locks') renderLockPanel();
   if(id==='edits') renderEditTable();
   if(id==='simulator') renderSimPanel();
+  if(id==='filesizes'&&typeof renderFileSizes==='function') renderFileSizes(); // [573 · §583]
   if(id==='appdenials') renderAppDenials();
   if(id==='lastbids') renderLastBids(); // [404 · §334 G]
   if(id==='splitweeks') renderSplitWeeks(); // [410 · split weeks · admin-page]
@@ -8859,6 +9026,7 @@ function _msgStatsLine(st){ return st.sent+' of '+st.n+' sent · '+st.notsent+' 
 async function _msgLoad(){
   try{
     const s=await getDoc(adminMessagesRef); const d=s.exists()?s.data():{};
+    if(typeof _ffCheck==='function') _ffCheck(adminMessagesRef.path, s); // [573 · §583] measured at this read (no listener): File Sizes and the full-file band
     _msgData={drafts:_msgObj(d.drafts), sent:_msgObj(d.sent)}; _msgLoaded=true; _msgLoadErr='';
   }catch(e){ _msgLoadErr=String((e&&e.message)||e||'could not load'); }
 }
@@ -17067,7 +17235,8 @@ const RULES_TEXT={sub:"How the auction works: every setting, the decision engine
 {"n":"2.40","kind":"new","html":"<b>Users<\/b> — each person has initials, a full name, an FTE, a Google login e-mail and, if they want one, a KP e-mail. Initials cannot change. Adding a person needs every field but the KP e-mail. Add several users takes one person per line, fields in any order; a preview shows who will be added and why any line is not, and the people are added together or not at all. Each row has one Save: it refuses a blank full name or login e-mail, and changes FTE only before Phase 1 begins. Two people can never share a login e-mail. The login e-mail must be a Gmail address. A KP e-mail saved blank is off: that person is not asked for one. When a KP e-mail is turned off or replaced, the address that was on file gets one note saying so."},
 {"n":"2.41","kind":"new","html":"<b>Round down capacity<\/b> (Week Capacity, between phases) — for each week with more than 1.0 and less than 2.0 FTE left, lowers the capacity by the part that no group of people on the roster can win outright; a backup first, each change in the Change Log. No outright win changes."},
 {"n":"2.42","kind":"new","html":"<b>Split weeks<\/b> (On / Off) — two people can share a week; one bids for both. Can be changed before Phase 1 and between phases. Off: no new splits; splits already made stay. On the admin's lists a split shows on the bidder's row as both sets of initials, the bidder first (AF/BC). Each person's days show with their dates (Sun–Wed (Feb 14–17)). In the Change Log a bid made for a split shows the same way, as it stood when the bid was made."},
-{"n":"2.43","kind":"new","html":"<b>Users without bids<\/b> (Dashboard) and Send Reminders leave out anyone at their bid cap, and anyone with no bid number they can use on any open week: they cannot place another bid this phase. The line and Send Reminders show only while a phase or round is open."}
+{"n":"2.43","kind":"new","html":"<b>Users without bids<\/b> (Dashboard) and Send Reminders leave out anyone at their bid cap, and anyone with no bid number they can use on any open week: they cannot place another bid this phase. The line and Send Reminders show only while a phase or round is open."},
+{"n":"2.44","kind":"new","html":"<b>Full-file warning<\/b> — the auction keeps each kind of record (all bids, the change log, alert settings and others) in one shared file with a size limit. When a file passes three quarters of its limit, a band across the top of every admin page says which file and how full it is; tapping it shows the file's largest entry and what to do. A full file refuses every further save to it, for everyone. Settings → File Sizes lists how full each file is."}
 ]},
 {n:"3",title:"Timer",items:[
 {"n":"3.1","kind":"new","html":"The timer decides when a phase's bidding ends. At 0, bidding closes for everyone."},

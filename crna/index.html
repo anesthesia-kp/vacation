@@ -17,7 +17,7 @@
    push-driven gate (adminSettings.requiredBuilds — armed by the admin page). */
 (function () {
   var PAGE = "index";  // this page's key in versions.json
-  var BUILD = 293;    // bump this AND versions.json[PAGE] on each deploy of this file
+  var BUILD = 295;    // bump this AND versions.json[PAGE] on each deploy of this file
   window.BUILD = BUILD; window.PAGE = PAGE; // [build 139 · GATE]
   var lastCheck = 0;
   function check() {
@@ -2664,13 +2664,20 @@ function _spMoveNote(user,wk){ try{ const e=_spFor(user,wk); return e?'This move
 // The partner of the split in force on wk whose bidder is u (on the picture after, sp.after, when given), or null - the partner's e-mails (§2.6).
 function _spPartnerOf(u,wk,sp){ try{ const f=()=>{ const e=_spFor(u,wk); return e?e.p:null; }; return (sp&&sp.after)?_withSplits(sp.after,f):f(); }catch(_){ return null; } }
 // THE ALERT CANCEL (§2.7): after a confirmed save of a new or changed bid, the saver's own alert on that week is deleted (their own entry,
-// _alWrite), and the line says so. No e-mail (R5: an alert write sends none).
+// _alWrite), and the line says so — [573 · §583] in the OK pop-up (showCenterAlert), pressed to close (his 28 Nov 2026 6:56 AM: "that alert
+// message was very brief, barely had time to read it.  Can it turn into a pop up that must be clicked ok?"). No e-mail (R5: an alert write sends none).
 function _spAlertCancel(user,wk){
   try{
     if(typeof _alWatch!=='function'||!_alWatch(user,wk)) return;
     const n=weekMeta[wk].weekNum;
-    Promise.resolve(_alWrite(user,{watchDel:[wk]})).then(ok=>{ if(ok===true) _alToast('Your alert on Week '+n+' is cancelled: you have a bid there now.'); else if(ok===null) _alToast(AL_LATE); }).catch(()=>{});
+    Promise.resolve(_alWrite(user,{watchDel:[wk]})).then(ok=>{ if(ok===true) _spAlertCancelPop('Your alert on Week '+n+' is cancelled: you have a bid there now.'); else if(ok===null) _alToast(AL_LATE); }).catch(()=>{});
   }catch(_){}
+}
+// [573 · §583] The alert-cancel line in the OK pop-up. It waits while another pop-up of the same save is open ("Your change was saved after
+// all.", the lowering line) - showCenterAlert replaces an open one - checking every 0.4 s, at most a minute, then shows.
+function _spAlertCancelPop(msg,k){
+  try{ if((k||0)<150&&document.getElementById('centerAlertOverlay')){ setTimeout(()=>_spAlertCancelPop(msg,(k||0)+1),400); return; } }catch(_){}
+  showCenterAlert(msg);
 }
 // THE BID CAP'S SHARES (PLAN §3, Q3). A place on a week counts 1, or the person's own half (0.6 / 0.4) when they bid for a split in force there.
 function _splitCapShare(u,wk){ const e=_spFor(u,wk); return e?_splitHalfWeight(e.sp,Number(e.bh)):1; }
@@ -8342,7 +8349,7 @@ function _puClose(){
 
 // ── [554] RECENT ALERTS (FROM THE SERVER) ─────────────────────────────────────────────────────────────────────────────────────────────
 // The mail server keeps each auction e-mail sent to the person's Google address in alertFeed/{initials} ({ items: [{ at, text, aid }] },
-// newest first, the last 20); alertSeen/{initials} ({ at }) is "viewed up to", shared by every device. Two listeners attached at sign-in
+// newest first, the last 100 [574 · §583]); alertSeen/{initials} ({ at }) is "viewed up to", shared by every device. Two listeners attached at sign-in
 // (_subscribeSensitiveOnce, in _sensitiveUnsubs) bring both here. Listed: only the CURRENT auction's (aid = phasesData.mailAuctionId, so a
 // Reset empties the list), newest first, at most 20: the 3 newest in the Alerts box (#puList, Show all when more), every one in the full
 // list (#raList). The dots in an open box stay as they were when it opened (_paBoxSeen), but for a row tapped since. Viewed: Done in either
@@ -8363,7 +8370,7 @@ function _paOnSeen(snap){
 function _paSync(){
   try{
     const aid=(typeof _moAid==='function')?_moAid():'';
-    _paList=aid?(Array.isArray(_paFeed)?_paFeed:[]).filter(x=>x&&typeof x.text==='string'&&x.text&&typeof x.at==='number'&&isFinite(x.at)&&x.aid===aid).sort((p,q)=>q.at-p.at).slice(0,20):[];
+    _paList=aid?(Array.isArray(_paFeed)?_paFeed:[]).filter(x=>x&&typeof x.text==='string'&&x.text&&typeof x.at==='number'&&isFinite(x.at)&&x.aid===aid).sort((p,q)=>q.at-p.at).slice(0,100):[];
     _paN=_paList.filter(x=>x.at>_paSeenAt).length;
   }catch(_){ _paList=[]; _paN=0; }
   _menuCountPaint();
